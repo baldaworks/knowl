@@ -1,0 +1,7 @@
+.config/knowl/config.yaml
+.config/knowl/*.local.yaml
+.knowl/
+/knowl
+*.db
+*.db-wal
+*.db-shm
