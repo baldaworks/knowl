@@ -174,6 +174,16 @@ Each embeds a dialect-specific Goose migration and runs it during `Open`:
 - PostgreSQL uses `pgx`, a bounded connection pool, PostgreSQL full-text search,
   and the configured DSN. The DSN is never returned in redacted diagnostics.
 
+The positive PostgreSQL adapter contract can run against an isolated
+Testcontainers instance without requiring a checked-in DSN:
+
+```bash
+go test -tags=integration ./pkg/knowl/store/postgres -run TestStoreContractWithTestcontainers -count=1
+```
+
+This integration command requires a Docker- or Podman-compatible container
+runtime. Ordinary `go test ./...` does not start containers.
+
 The SQL schema contains operation state, leases, page/link projections, and
 projection metadata. A canonical `WorkspaceSnapshot` can rebuild the
 projection through `SearchIndex.Rebuild`; startup performs this when the stored

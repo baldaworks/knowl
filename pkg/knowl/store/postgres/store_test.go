@@ -28,6 +28,11 @@ func TestStoreContract(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set KNOWL_POSTGRES_DSN to run PostgreSQL integration tests")
 	}
+	runStoreContract(t, dsn)
+}
+
+func runStoreContract(t *testing.T, dsn string) {
+	t.Helper()
 	ctx := context.Background()
 	store, err := Open(ctx, dsn)
 	if err != nil {
