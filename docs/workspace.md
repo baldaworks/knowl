@@ -78,7 +78,8 @@ The enforced and linted conventions are:
   accepted raw source.
 - Wiki links use `[[page/id]]`. A `|label` or `#fragment` may follow a link;
   graph extraction records the page target. Broken and malformed links are
-  lint findings.
+  rejected before canonical mutation, and deterministic lint reports the same
+  classes against the committed workspace.
 - Edit plans may target `wiki/**/*.md` except `wiki/log.md`. The plan must
   carry the current schema digest, cite the accepted source, use unique paths,
   and stay within the configured file/count limits.
@@ -91,8 +92,10 @@ staged plan is committed.
 
 ## Control pages
 
-`wiki/index.md` is the human-facing catalog. Lint recognizes wiki links and
-simple `- page/id` entries, reports missing or stale entries, and does not treat
+`wiki/index.md` is the human-facing catalog. It remains a control document
+without ordinary-page frontmatter, but its wiki links and simple `- page/id`
+entries are still validated against the prospective canonical page set before
+commit. Lint also reports missing or stale catalog entries and does not treat
 the SQL projection as the catalog.
 
 `wiki/log.md` is maintained by the application. Each committed operation adds
