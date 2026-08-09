@@ -46,8 +46,8 @@ func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	if applied.Operation.Status != knowl.StatusCommitted {
 		t.Fatalf("applied status = %q, want committed", applied.Operation.Status)
 	}
-	if applied.Commit == nil || len(applied.Commit.Files) != 2 {
-		t.Fatalf("commit = %#v, want page and log", applied.Commit)
+	if applied.Commit == nil || len(applied.Commit.Files) != 3 {
+		t.Fatalf("commit = %#v, want two pages and log", applied.Commit)
 	}
 	page, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "entities", "one.md"))
 	if err != nil {
@@ -111,6 +111,7 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	maintainer.mu.Lock()
 	maintainer.plan.Edits = []knowl.FileEdit{
 		{Path: testPagePath, Content: planPageContent},
+		{Path: "wiki/entities/two.md", Content: planSupportingContent},
 		{Path: "wiki/index.md", ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n- entities/one\n")...)},
 	}
 	maintainer.mu.Unlock()
@@ -122,8 +123,8 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if result.Operation.Status != knowl.StatusCommitted || len(result.Commit.Files) != 3 {
-		t.Fatalf("index commit result = %#v, want page, index, and log", result)
+	if result.Operation.Status != knowl.StatusCommitted || len(result.Commit.Files) != 4 {
+		t.Fatalf("index commit result = %#v, want two pages, index, and log", result)
 	}
 	indexAfter, err := os.ReadFile(indexPath)
 	if err != nil {
@@ -169,7 +170,7 @@ func TestIngestRejectsStaleReviewedPlan(t *testing.T) {
 		return knowl.ModelEditPlan{
 			SchemaDigest: schema.Digest,
 			SourceRefs:   []string{testSourceRef},
-			Edits:        []knowl.FileEdit{{Path: "wiki/entities/stale.md", ExpectedDigest: digest([]byte("before")), Content: []byte("after")}},
+			Edits:        []knowl.FileEdit{{Path: "wiki/entities/stale.md", ExpectedDigest: digest([]byte("before")), Content: []byte("---\nid: entities/stale\ntitle: Stale\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Stale\n\nafter\n")}},
 		}
 	})
 	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "stale.md"), []byte("before"), 0o600); err != nil {
@@ -270,7 +271,10 @@ func TestAutoApplyIsExplicit(t *testing.T) {
 
 const testSourceRef = "fixture:source-1@1"
 
-var planPageContent = []byte("---\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[[entities/two]]\n")
+var (
+	planPageContent       = []byte("---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[[entities/two]]\n")
+	planSupportingContent = []byte("---\nid: entities/two\ntitle: Two\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n")
+)
 
 type countingMaintainer struct {
 	mu      sync.Mutex
@@ -334,7 +338,10 @@ func newWorkflow(t *testing.T, autoApply bool, indexOverride app.SearchIndex, fa
 	maintainer := &countingMaintainer{plan: knowl.ModelEditPlan{
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testSourceRef},
-		Edits:        []knowl.FileEdit{{Path: testPagePath, Content: planPageContent}},
+		Edits: []knowl.FileEdit{
+			{Path: testPagePath, Content: planPageContent},
+			{Path: "wiki/entities/two.md", Content: planSupportingContent},
+		},
 	}}
 	if len(factory) > 0 && factory[0] != nil {
 		maintainer.factory = factory[0]

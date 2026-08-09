@@ -60,6 +60,7 @@ func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
 func TestExplicitQueryFilingUsesTheStandardPlanApplyGate(t *testing.T) {
 	ctx := context.Background()
 	workspace, store, ingester, maintainer := newWorkflow(t, false, nil)
+	prepareCanonicalQueryWorkspace(t, workspace, store)
 	queryService, err := app.NewQueryService(workspace, store, store, ingester, app.QueryOptions{})
 	if err != nil {
 		t.Fatalf("new query service: %v", err)
@@ -71,7 +72,7 @@ func TestExplicitQueryFilingUsesTheStandardPlanApplyGate(t *testing.T) {
 	request := app.FilingRequest{
 		Query:  "file this result",
 		Result: app.QueryResult{Scope: "local", Query: "file this result", Pages: []knowl.PageReference{{ID: "entities/source", Path: "wiki/entities/source.md", Title: "Source", Untrusted: true}}, Citations: []app.Citation{{Kind: "raw", Reference: testSourceRef, SourceRef: testSourceRef, Untrusted: true}}},
-		Plan:   knowl.ModelEditPlan{SchemaDigest: schema.Digest, Edits: []knowl.FileEdit{{Path: "wiki/entities/filed.md", Content: []byte("# Filed\n")}}},
+		Plan:   knowl.ModelEditPlan{SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef}, Edits: []knowl.FileEdit{{Path: "wiki/entities/filed.md", Content: []byte("---\nid: entities/filed\ntitle: Filed\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Filed\n")}}},
 	}
 	planned, err := queryService.File(ctx, "local", request)
 	if err != nil {

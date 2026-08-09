@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	internalwiki "github.com/baldaworks/knowl/internal/wiki"
 	"github.com/baldaworks/knowl/pkg/knowl"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -116,7 +116,7 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 			findings = append(findings, knowl.LintFinding{Code: "page.duplicate_id", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "multiple canonical pages use the same page ID"})
 		}
 		pageIDs[page.ID] = struct{}{}
-		metadata, err := parseFrontmatter(page.Content)
+		metadata, err := internalwiki.ParseFrontmatter(page.Content)
 		if err != nil {
 			findings = append(findings, knowl.LintFinding{Code: "frontmatter.malformed", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "page frontmatter is missing or malformed"})
 		} else {
@@ -140,7 +140,7 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 				}
 			}
 		}
-		targets, malformed := markdownTargets(page.Content)
+		targets, malformed := internalwiki.MarkdownTargets(page.Content)
 		if malformed {
 			findings = append(findings, knowl.LintFinding{Code: "link.malformed", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "page contains an unterminated wiki link"})
 		}
@@ -150,7 +150,7 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 			}
 		}
 	}
-	indexTargets, malformed := indexPageTargets(index.Content)
+	indexTargets, malformed := internalwiki.IndexTargets(index.Content)
 	if malformed {
 		findings = append(findings, knowl.LintFinding{Code: "index.malformed", Severity: lintError, Path: index.Path, Message: "index contains an unterminated wiki link"})
 	}
@@ -178,91 +178,6 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 		}
 	}
 	return findings
-}
-
-func indexPageTargets(content string) ([]string, bool) {
-	targets, malformed := markdownTargets(content)
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "- ") {
-			continue
-		}
-		if target := normalizePageTarget(strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))); target != "" {
-			targets = append(targets, target)
-		}
-	}
-	return targets, malformed
-}
-
-type frontmatter struct {
-	ID         string   `yaml:"id"`
-	Title      string   `yaml:"title"`
-	Type       string   `yaml:"type"`
-	SourceRefs []string `yaml:"source_refs"`
-}
-
-func parseFrontmatter(content string) (frontmatter, error) {
-	lines := strings.Split(content, "\n")
-	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "---" {
-		return frontmatter{}, fmt.Errorf("frontmatter opening delimiter is missing")
-	}
-	end := -1
-	for index := 1; index < len(lines); index++ {
-		if strings.TrimSpace(lines[index]) == "---" {
-			end = index
-			break
-		}
-	}
-	if end < 0 {
-		return frontmatter{}, fmt.Errorf("frontmatter closing delimiter is missing")
-	}
-	var metadata frontmatter
-	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:end], "\n")), &metadata); err != nil {
-		return frontmatter{}, err
-	}
-	metadata.ID = strings.TrimSpace(metadata.ID)
-	metadata.Title = strings.TrimSpace(metadata.Title)
-	metadata.Type = strings.TrimSpace(metadata.Type)
-	for index := range metadata.SourceRefs {
-		metadata.SourceRefs[index] = strings.TrimSpace(metadata.SourceRefs[index])
-	}
-	return metadata, nil
-}
-
-func markdownTargets(content string) ([]string, bool) {
-	targets := make([]string, 0)
-	malformed := false
-	for offset := 0; offset < len(content); {
-		start := strings.Index(content[offset:], "[[")
-		if start < 0 {
-			break
-		}
-		start += offset + 2
-		end := strings.Index(content[start:], "]]")
-		if end < 0 {
-			malformed = true
-			break
-		}
-		target := strings.TrimSpace(content[start : start+end])
-		if separator := strings.IndexAny(target, "|#"); separator >= 0 {
-			target = target[:separator]
-		}
-		target = normalizePageTarget(target)
-		if target != "" {
-			targets = append(targets, target)
-		}
-		offset = start + end + 2
-	}
-	return targets, malformed
-}
-
-func normalizePageTarget(target string) string {
-	target = strings.TrimSpace(strings.TrimPrefix(target, "wiki/"))
-	target = strings.TrimSuffix(target, ".md")
-	if target == "" || target == "." || strings.HasPrefix(target, "/") || strings.HasPrefix(target, "../") || strings.Contains(target, "/../") {
-		return ""
-	}
-	return target
 }
 
 type logRecord struct {

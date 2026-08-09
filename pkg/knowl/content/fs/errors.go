@@ -9,6 +9,7 @@ var (
 	ErrDigestMismatch   = errors.New("source digest mismatch")
 	ErrWorkspaceInvalid = errors.New("invalid Knowl workspace")
 	ErrPathRejected     = errors.New("workspace path rejected")
+	ErrContentInvalid   = errors.New("workspace content validation failed")
 	ErrPlanConflict     = errors.New("staged plan conflict")
 	ErrPrecondition     = errors.New("workspace file precondition failed")
 )

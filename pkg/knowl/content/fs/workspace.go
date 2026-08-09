@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	internalwiki "github.com/baldaworks/knowl/internal/wiki"
 	"github.com/baldaworks/knowl/pkg/knowl"
 	"gopkg.in/yaml.v3"
 )
@@ -338,6 +339,13 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
 			return knowl.StagedChange{}, err
 		}
+		stagedEdits, stagedErr := readStagedPlanEdits(stageDir, manifest.Entries)
+		if stagedErr != nil {
+			return knowl.StagedChange{}, stagedErr
+		}
+		if err := workspace.validateProspectivePlanLocked(plan.Scope, stagedEdits); err != nil {
+			return knowl.StagedChange{}, err
+		}
 		return stagedChangeFromManifest(stageDir, manifest)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return knowl.StagedChange{}, fmt.Errorf("stat staging directory: %w", err)
@@ -389,7 +397,10 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		}
 		entries = append(entries, stageEntry{Target: edit.Path, ExpectedDigest: edit.ExpectedDigest, Digest: digestBytes(edit.Content)})
 	}
-	manifest := stageManifest{OperationID: plan.OperationID, SchemaDigest: plan.SchemaDigest, SourceRefs: append([]string(nil), plan.SourceRefs...), Entries: entries}
+	if err := workspace.validateProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan)); err != nil {
+		return knowl.StagedChange{}, err
+	}
+	manifest := stageManifest{OperationID: plan.OperationID, Scope: string(plan.Scope), SchemaDigest: plan.SchemaDigest, SourceRefs: append([]string(nil), plan.SourceRefs...), Entries: entries}
 	coreMetadata, err := yaml.Marshal(manifest)
 	if err != nil {
 		return knowl.StagedChange{}, fmt.Errorf("marshal staging manifest: %w", err)
@@ -459,6 +470,13 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	}
 	if manifest.SchemaDigest != "" && digestBytes(schema) != manifest.SchemaDigest {
 		return knowl.ContentCommit{}, fmt.Errorf("schema changed after staging: %w", ErrPrecondition)
+	}
+	stagedEdits, err := readStagedPlanEdits(stageDir, manifest.Entries)
+	if err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	if err := workspace.validateProspectivePlanLocked(manifestScope(manifest), stagedEdits); err != nil {
+		return knowl.ContentCommit{}, err
 	}
 	journalDir := filepath.Join(workspace.root, knowlDir, "recovery", token(staged.OperationID))
 	if err := rejectSymlinkPath(workspace.root, journalDir); err != nil {
@@ -700,7 +718,7 @@ func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) 
 		if relative == filepath.ToSlash(filepath.Join(workspaceWikiDir, "index.md")) || relative == filepath.ToSlash(filepath.Join(workspaceWikiDir, "log.md")) {
 			return nil
 		}
-		pageID := knowl.PageID(strings.TrimSuffix(strings.TrimPrefix(relative, workspaceWikiDir+"/"), markdownExt))
+		pageID, _ := internalwiki.PageIDFromPath(relative)
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			return infoErr
@@ -771,6 +789,10 @@ func (workspace *Workspace) inspectRawSources(ctx context.Context, scope knowl.S
 	}
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
+	return workspace.inspectRawSourcesLocked(scope)
+}
+
+func (workspace *Workspace) inspectRawSourcesLocked(scope knowl.ScopeRef) ([]knowl.RawSourceRecord, error) {
 	rawRoot := filepath.Join(workspace.root, workspaceRawDir)
 	if err := rejectSymlinkPath(workspace.root, rawRoot); err != nil {
 		return nil, err
@@ -905,6 +927,7 @@ type stageEntry struct {
 
 type stageManifest struct {
 	OperationID       string       `yaml:"operation_id"`
+	Scope             string       `yaml:"scope,omitempty"`
 	SchemaDigest      string       `yaml:"schema_digest"`
 	SourceRefs        []string     `yaml:"source_refs,omitempty"`
 	Entries           []stageEntry `yaml:"entries"`
@@ -1007,6 +1030,9 @@ func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
 	if manifest.OperationID != plan.OperationID || manifest.SchemaDigest != plan.SchemaDigest || len(manifest.SourceRefs) != len(plan.SourceRefs) || len(manifest.Entries) != len(plan.Edits) {
 		return false
 	}
+	if scope := manifestScope(manifest); scope != "" && scope != plan.Scope {
+		return false
+	}
 	for index, sourceRef := range manifest.SourceRefs {
 		if sourceRef != plan.SourceRefs[index] {
 			return false
@@ -1022,12 +1048,184 @@ func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
 }
 
 func stageGeneration(manifest stageManifest) string {
-	core := stageManifest{OperationID: manifest.OperationID, SchemaDigest: manifest.SchemaDigest, SourceRefs: manifest.SourceRefs, Entries: manifest.Entries}
+	core := stageManifest{OperationID: manifest.OperationID, Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, SourceRefs: manifest.SourceRefs, Entries: manifest.Entries}
 	metadata, err := yaml.Marshal(core)
 	if err != nil {
 		return ""
 	}
 	return digestBytes(metadata)
+}
+
+type prospectiveEdit struct {
+	Target  string
+	Content string
+}
+
+func prospectiveEditsFromPlan(plan knowl.ValidatedEditPlan) []prospectiveEdit {
+	edits := make([]prospectiveEdit, 0, len(plan.Edits))
+	for _, edit := range plan.Edits {
+		edits = append(edits, prospectiveEdit{Target: edit.Path, Content: string(edit.Content)})
+	}
+	return edits
+}
+
+func readStagedPlanEdits(stageDir string, entries []stageEntry) ([]prospectiveEdit, error) {
+	edits := make([]prospectiveEdit, 0, len(entries))
+	for _, entry := range entries {
+		content, err := os.ReadFile(filepath.Join(stageDir, filepath.FromSlash(entry.Target)))
+		if err != nil {
+			return nil, fmt.Errorf("read staged file %q: %w", entry.Target, err)
+		}
+		edits = append(edits, prospectiveEdit{Target: entry.Target, Content: string(content)})
+	}
+	return edits, nil
+}
+
+func manifestScope(manifest stageManifest) knowl.ScopeRef {
+	if scope := strings.TrimSpace(manifest.Scope); scope != "" {
+		return knowl.ScopeRef(scope)
+	}
+	scope, _, ok := strings.Cut(strings.TrimSpace(manifest.OperationID), ":")
+	if !ok || scope == "" {
+		return ""
+	}
+	return knowl.ScopeRef(scope)
+}
+
+func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, edits []prospectiveEdit) error {
+	pageTargets, err := workspace.currentPageTargetsLocked()
+	if err != nil {
+		return err
+	}
+	for _, edit := range edits {
+		pageID, ok := internalwiki.PageIDFromPath(edit.Target)
+		if ok {
+			pageTargets[pageID] = struct{}{}
+		}
+	}
+	rawRefs, err := workspace.acceptedRawSourceKeysLocked(scope)
+	if err != nil {
+		return err
+	}
+	indexPath := filepath.ToSlash(filepath.Join(workspaceWikiDir, "index.md"))
+	for _, edit := range edits {
+		if edit.Target == indexPath {
+			targets, malformed := internalwiki.IndexTargets(edit.Content)
+			if malformed {
+				return contentInvalidError(edit.Target, "index.malformed")
+			}
+			for _, target := range targets {
+				if _, exists := pageTargets[knowl.PageID(target)]; !exists {
+					return contentInvalidError(edit.Target, "index.broken_page")
+				}
+			}
+			continue
+		}
+		pageID, ok := internalwiki.PageIDFromPath(edit.Target)
+		if !ok {
+			continue
+		}
+		if err := validateOrdinaryPageEdit(edit.Target, pageID, edit.Content, rawRefs, pageTargets); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateOrdinaryPageEdit(target string, pageID knowl.PageID, content string, rawRefs map[string]struct{}, pageTargets map[knowl.PageID]struct{}) error {
+	metadata, err := internalwiki.ParseFrontmatter(content)
+	if err != nil {
+		return contentInvalidError(target, "frontmatter.malformed")
+	}
+	if metadata.ID == "" {
+		return contentInvalidError(target, "frontmatter.id_missing")
+	}
+	if metadata.ID != string(pageID) {
+		return contentInvalidError(target, "frontmatter.id_mismatch")
+	}
+	if metadata.Title == "" {
+		return contentInvalidError(target, "frontmatter.title_missing")
+	}
+	if metadata.Type == "" {
+		return contentInvalidError(target, "frontmatter.type_missing")
+	}
+	nonEmptySourceRefs := 0
+	for _, sourceRef := range metadata.SourceRefs {
+		if sourceRef == "" {
+			continue
+		}
+		nonEmptySourceRefs++
+		if _, exists := rawRefs[sourceRef]; !exists {
+			return contentInvalidError(target, "citation.unknown_source")
+		}
+	}
+	if nonEmptySourceRefs == 0 {
+		return contentInvalidError(target, "citation.missing")
+	}
+	targets, malformed := internalwiki.MarkdownTargets(content)
+	if malformed {
+		return contentInvalidError(target, "link.malformed")
+	}
+	for _, linkedTarget := range targets {
+		if _, exists := pageTargets[knowl.PageID(linkedTarget)]; !exists {
+			return contentInvalidError(target, "link.broken")
+		}
+	}
+	return nil
+}
+
+func (workspace *Workspace) acceptedRawSourceKeysLocked(scope knowl.ScopeRef) (map[string]struct{}, error) {
+	records, err := workspace.inspectRawSourcesLocked(scope)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		if record.Valid {
+			keys[sourceRefKey(record.Source)] = struct{}{}
+		}
+	}
+	return keys, nil
+}
+
+func (workspace *Workspace) currentPageTargetsLocked() (map[knowl.PageID]struct{}, error) {
+	wikiRoot := filepath.Join(workspace.root, workspaceWikiDir)
+	if err := rejectSymlinkPath(workspace.root, wikiRoot); err != nil {
+		return nil, err
+	}
+	targets := make(map[knowl.PageID]struct{})
+	err := filepath.WalkDir(wikiRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink in wiki: %w", ErrPathRejected)
+		}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != markdownExt {
+			return nil
+		}
+		relative, relErr := filepath.Rel(workspace.root, path)
+		if relErr != nil {
+			return relErr
+		}
+		pageID, ok := internalwiki.PageIDFromPath(filepath.ToSlash(relative))
+		if ok {
+			targets[pageID] = struct{}{}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("enumerate canonical pages: %w", err)
+	}
+	return targets, nil
+}
+
+func sourceRefKey(source knowl.AcceptedSource) string {
+	return source.Source.Adapter + ":" + source.Source.ID + "@" + source.Version.Version
+}
+
+func contentInvalidError(target, rule string) error {
+	return fmt.Errorf("content validation failed for %q (%s): %w", target, rule, ErrContentInvalid)
 }
 
 func stagedFilesMatch(stageDir string, entries []stageEntry) bool {
@@ -1152,63 +1350,11 @@ func markdownTitle(content []byte) string {
 }
 
 func markdownSourceRefs(content []byte) []string {
-	lines := strings.Split(string(content), "\n")
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return nil
-	}
-	end := -1
-	for index := 1; index < len(lines); index++ {
-		if strings.TrimSpace(lines[index]) == "---" {
-			end = index
-			break
-		}
-	}
-	if end < 0 {
-		return nil
-	}
-	var metadata struct {
-		SourceRefs []string `yaml:"source_refs"`
-	}
-	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:end], "\n")), &metadata); err != nil {
-		return nil
-	}
-	refs := append([]string(nil), metadata.SourceRefs...)
-	sort.Strings(refs)
-	return uniqueStrings(refs)
+	return internalwiki.SourceRefs(string(content))
 }
 
 func markdownLinks(from knowl.PageID, content []byte) []knowl.LinkReference {
-	text := string(content)
-	links := make([]knowl.LinkReference, 0)
-	seen := make(map[string]struct{})
-	for offset := 0; offset < len(text); {
-		start := strings.Index(text[offset:], "[[")
-		if start < 0 {
-			break
-		}
-		start += offset + 2
-		end := strings.Index(text[start:], "]]")
-		if end < 0 {
-			break
-		}
-		target := strings.TrimSpace(text[start : start+end])
-		if separator := strings.IndexAny(target, "|#"); separator >= 0 {
-			target = target[:separator]
-		}
-		target = strings.TrimSpace(strings.TrimPrefix(target, workspaceWikiDir+"/"))
-		target = strings.TrimSuffix(target, markdownExt)
-		if target != "" {
-			if _, err := pageRelativePath(target); err == nil {
-				key := target + "\x00wiki"
-				if _, exists := seen[key]; !exists {
-					seen[key] = struct{}{}
-					links = append(links, knowl.LinkReference{From: from, To: knowl.PageID(target), Relation: "wiki"})
-				}
-			}
-		}
-		offset = start + end + 2
-	}
-	return links
+	return internalwiki.Links(from, string(content))
 }
 
 func uniqueLinks(links []knowl.LinkReference) []knowl.LinkReference {
