@@ -9,43 +9,43 @@ import (
 
 // ContentStore owns canonical workspace content and recovery.
 type ContentStore interface {
-	AcceptSource(context.Context, knowl.SourceEnvelope) (knowl.AcceptedSource, error)
-	Schema(context.Context, knowl.ScopeRef) (knowl.SchemaDocument, error)
-	ReadPages(context.Context, knowl.ScopeRef, []knowl.PageID, knowl.ReadLimits) ([]knowl.PageSnapshot, error)
-	StagePlan(context.Context, knowl.ValidatedEditPlan) (knowl.StagedChange, error)
-	Commit(context.Context, knowl.StagedChange) (knowl.ContentCommit, error)
-	Recover(context.Context) ([]knowl.RecoveryResult, error)
-	Snapshot(context.Context, knowl.ScopeRef) (knowl.WorkspaceSnapshot, error)
+	AcceptSource(ctx context.Context, envelope knowl.SourceEnvelope) (knowl.AcceptedSource, error)
+	Schema(ctx context.Context, scope knowl.ScopeRef) (knowl.SchemaDocument, error)
+	ReadPages(ctx context.Context, scope knowl.ScopeRef, ids []knowl.PageID, limits knowl.ReadLimits) ([]knowl.PageSnapshot, error)
+	StagePlan(ctx context.Context, plan knowl.ValidatedEditPlan) (knowl.StagedChange, error)
+	Commit(ctx context.Context, staged knowl.StagedChange) (knowl.ContentCommit, error)
+	Recover(ctx context.Context) ([]knowl.RecoveryResult, error)
+	Snapshot(ctx context.Context, scope knowl.ScopeRef) (knowl.WorkspaceSnapshot, error)
 }
 
 // OperationStore owns durable operation state, leases, and redacted outcomes.
 type OperationStore interface {
-	Reserve(context.Context, knowl.OperationKey, knowl.OperationMeta) (knowl.Operation, error)
-	SavePlan(context.Context, knowl.OperationID, knowl.PlanSummary) error
-	MarkAwaitingReview(context.Context, knowl.OperationID) error
-	MarkApplying(context.Context, knowl.OperationID, knowl.Lease) error
-	CommitOutcome(context.Context, knowl.OperationID, knowl.ContentCommit) error
-	Fail(context.Context, knowl.OperationID, knowl.Failure) error
-	Operation(context.Context, knowl.ScopeRef, knowl.OperationID) (knowl.Operation, error)
+	Reserve(ctx context.Context, key knowl.OperationKey, meta knowl.OperationMeta) (knowl.Operation, error)
+	SavePlan(ctx context.Context, id knowl.OperationID, summary knowl.PlanSummary) error
+	MarkAwaitingReview(ctx context.Context, id knowl.OperationID) error
+	MarkApplying(ctx context.Context, id knowl.OperationID, lease knowl.Lease) error
+	CommitOutcome(ctx context.Context, id knowl.OperationID, commit knowl.ContentCommit) error
+	Fail(ctx context.Context, id knowl.OperationID, failure knowl.Failure) error
+	Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error)
 }
 
 // SearchIndex owns rebuildable context, text, and link projections.
 type SearchIndex interface {
-	SelectContext(context.Context, knowl.ScopeRef, knowl.SourceSummary, knowl.ReadLimits) ([]knowl.PageID, error)
-	Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits) ([]knowl.PageReference, error)
-	Links(context.Context, knowl.ScopeRef, knowl.PageID, knowl.ReadLimits) ([]knowl.LinkReference, error)
-	Project(context.Context, knowl.ContentCommit) error
-	Rebuild(context.Context, knowl.WorkspaceSnapshot) error
+	SelectContext(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, error)
+	Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits) ([]knowl.PageReference, error)
+	Links(ctx context.Context, scope knowl.ScopeRef, page knowl.PageID, limits knowl.ReadLimits) ([]knowl.LinkReference, error)
+	Project(ctx context.Context, commit knowl.ContentCommit) error
+	Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error
 }
 
 // Maintainer produces structured data-only edit plans.
 type Maintainer interface {
-	Plan(context.Context, knowl.MaintenanceInput) (knowl.ModelEditPlan, error)
+	Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error)
 }
 
 // ScopeAuthorizer enforces the host's trusted scope boundary.
 type ScopeAuthorizer interface {
-	Authorize(context.Context, knowl.ScopeRef, OperationKind) error
+	Authorize(ctx context.Context, scope knowl.ScopeRef, operation OperationKind) error
 }
 
 // OperationKind identifies the policy operation being authorized.
