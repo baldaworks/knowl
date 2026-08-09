@@ -1,2 +1,3 @@
-// Package postgres will provide the PostgreSQL operational store and search projection.
+// Package postgres implements Knowl operational state and search projections
+// with PostgreSQL-native transactions and full-text search.
 package postgres

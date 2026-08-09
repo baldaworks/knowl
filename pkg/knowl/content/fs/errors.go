@@ -4,6 +4,7 @@ import "errors"
 
 var (
 	ErrInvalidSource    = errors.New("invalid source envelope")
+	ErrSourceNotFound   = errors.New("source not found")
 	ErrSourceConflict   = errors.New("source version digest conflict")
 	ErrDigestMismatch   = errors.New("source digest mismatch")
 	ErrWorkspaceInvalid = errors.New("invalid Knowl workspace")

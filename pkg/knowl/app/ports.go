@@ -10,12 +10,14 @@ import (
 // ContentStore owns canonical workspace content and recovery.
 type ContentStore interface {
 	AcceptSource(ctx context.Context, envelope knowl.SourceEnvelope) (knowl.AcceptedSource, error)
+	ReadSource(ctx context.Context, source knowl.AcceptedSource, limits knowl.ReadLimits) ([]byte, error)
 	Schema(ctx context.Context, scope knowl.ScopeRef) (knowl.SchemaDocument, error)
 	ReadPages(ctx context.Context, scope knowl.ScopeRef, ids []knowl.PageID, limits knowl.ReadLimits) ([]knowl.PageSnapshot, error)
 	StagePlan(ctx context.Context, plan knowl.ValidatedEditPlan) (knowl.StagedChange, error)
 	Commit(ctx context.Context, staged knowl.StagedChange) (knowl.ContentCommit, error)
 	Recover(ctx context.Context) ([]knowl.RecoveryResult, error)
 	Snapshot(ctx context.Context, scope knowl.ScopeRef) (knowl.WorkspaceSnapshot, error)
+	Inspect(ctx context.Context, scope knowl.ScopeRef) (knowl.WorkspaceInspection, error)
 }
 
 // OperationStore owns durable operation state, leases, and redacted outcomes.

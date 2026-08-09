@@ -74,8 +74,8 @@ func newValidateCommand() *cobra.Command {
 }
 
 func newStartCommand() *cobra.Command {
-	return &cobra.Command{Use: "start", Short: "Start the Knowl service", RunE: func(_ *cobra.Command, _ []string) error {
-		return fmt.Errorf("knowl service runtime is not implemented yet")
+	return &cobra.Command{Use: "start", Short: "Start the Knowl service", RunE: func(cmd *cobra.Command, _ []string) error {
+		return runStart(cmd)
 	}}
 }
 

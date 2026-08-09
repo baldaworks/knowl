@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl"
@@ -11,6 +12,10 @@ type fakeContentStore struct{}
 
 func (fakeContentStore) AcceptSource(context.Context, knowl.SourceEnvelope) (knowl.AcceptedSource, error) {
 	return knowl.AcceptedSource{}, nil
+}
+
+func (fakeContentStore) ReadSource(context.Context, knowl.AcceptedSource, knowl.ReadLimits) ([]byte, error) {
+	return nil, errors.New("fake content store does not implement ReadSource")
 }
 
 func (fakeContentStore) Schema(context.Context, knowl.ScopeRef) (knowl.SchemaDocument, error) {
@@ -35,6 +40,10 @@ func (fakeContentStore) Recover(context.Context) ([]knowl.RecoveryResult, error)
 
 func (fakeContentStore) Snapshot(context.Context, knowl.ScopeRef) (knowl.WorkspaceSnapshot, error) {
 	return knowl.WorkspaceSnapshot{}, nil
+}
+
+func (fakeContentStore) Inspect(context.Context, knowl.ScopeRef) (knowl.WorkspaceInspection, error) {
+	return knowl.WorkspaceInspection{}, nil
 }
 
 func TestFakeCanConstructContentPort(t *testing.T) {

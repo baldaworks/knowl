@@ -58,6 +58,7 @@ type PageSnapshot struct {
 	Title      string    `json:"title"`
 	Content    string    `json:"content"`
 	SourceRefs []string  `json:"source_refs,omitempty"`
+	Untrusted  bool      `json:"untrusted"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
@@ -202,6 +203,52 @@ type WorkspaceSnapshot struct {
 	Pages        []PageSnapshot    `json:"pages"`
 	Links        []LinkReference   `json:"links"`
 	CapturedAt   time.Time         `json:"captured_at"`
+}
+
+// RawSourceRecord is a bounded, metadata-only inspection of one raw source version.
+type RawSourceRecord struct {
+	Path          string         `json:"path"`
+	Source        AcceptedSource `json:"source"`
+	ContentDigest string         `json:"content_digest,omitempty"`
+	Valid         bool           `json:"valid"`
+	ErrorClass    string         `json:"error_class,omitempty"`
+}
+
+// WorkspaceInspection combines canonical projections needed by deterministic lint.
+type WorkspaceInspection struct {
+	Scope      ScopeRef          `json:"scope"`
+	Snapshot   WorkspaceSnapshot `json:"snapshot"`
+	Index      PageSnapshot      `json:"index"`
+	Log        PageSnapshot      `json:"log"`
+	RawSources []RawSourceRecord `json:"raw_sources"`
+}
+
+// LintFinding is one deterministic or suggestion-only workspace diagnostic.
+type LintFinding struct {
+	Code       string   `json:"code"`
+	Severity   string   `json:"severity"`
+	Path       string   `json:"path,omitempty"`
+	PageID     PageID   `json:"page_id,omitempty"`
+	Message    string   `json:"message"`
+	Suggestion bool     `json:"suggestion,omitempty"`
+	SourceRefs []string `json:"source_refs,omitempty"`
+}
+
+// LintReport contains bounded, redacted workspace health findings.
+type LintReport struct {
+	Scope     ScopeRef      `json:"scope"`
+	Findings  []LintFinding `json:"findings"`
+	CheckedAt time.Time     `json:"checked_at"`
+}
+
+// Healthy reports whether lint found no error or warning findings.
+func (report LintReport) Healthy() bool {
+	for _, finding := range report.Findings {
+		if finding.Severity == "error" || finding.Severity == "warning" {
+			return false
+		}
+	}
+	return true
 }
 
 // MaintenanceInput is the bounded data supplied to a maintainer provider.
