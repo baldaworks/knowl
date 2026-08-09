@@ -52,12 +52,13 @@ type PageID string
 
 // PageSnapshot is a bounded read of a canonical Markdown page.
 type PageSnapshot struct {
-	ID        PageID    `json:"id"`
-	Path      string    `json:"path"`
-	Digest    string    `json:"digest"`
-	Title     string    `json:"title"`
-	Content   string    `json:"content"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         PageID    `json:"id"`
+	Path       string    `json:"path"`
+	Digest     string    `json:"digest"`
+	Title      string    `json:"title"`
+	Content    string    `json:"content"`
+	SourceRefs []string  `json:"source_refs,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // ReadLimits bounds context and retrieval operations.
@@ -95,10 +96,11 @@ type StagedChange struct {
 
 // ContentCommit describes a canonical workspace commit.
 type ContentCommit struct {
-	OperationID string    `json:"operation_id"`
-	Generation  string    `json:"generation"`
-	Files       []string  `json:"files"`
-	CommittedAt time.Time `json:"committed_at"`
+	OperationID string            `json:"operation_id"`
+	Generation  string            `json:"generation"`
+	Files       []string          `json:"files"`
+	Snapshot    WorkspaceSnapshot `json:"snapshot"`
+	CommittedAt time.Time         `json:"committed_at"`
 }
 
 // RecoveryResult describes recovery of one interrupted content operation.
@@ -197,6 +199,8 @@ type WorkspaceSnapshot struct {
 	Scope        ScopeRef          `json:"scope"`
 	SchemaDigest string            `json:"schema_digest"`
 	PageDigests  map[string]string `json:"page_digests"`
+	Pages        []PageSnapshot    `json:"pages"`
+	Links        []LinkReference   `json:"links"`
 	CapturedAt   time.Time         `json:"captured_at"`
 }
 
