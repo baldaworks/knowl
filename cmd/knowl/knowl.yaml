@@ -1,0 +1,29 @@
+runtime:
+  providers:
+    opencode:
+      type: opencode_acp
+      opencode_acp:
+        model: opencode/big-pickle
+
+knowl:
+  provider: opencode
+  workspace:
+    path: .
+  # Select exactly one typed backend in an on-disk config. The embedded
+  # default leaves this section absent so a Postgres override cannot inherit
+  # the SQLite block through YAML merge; the loader supplies SQLite by default.
+  # storage:
+  #   type: sqlite
+  #   sqlite:
+  #     path: .knowl/knowl.sqlite
+  # Or:
+  #   type: postgres
+  #   postgres:
+  #     dsn: ${KNOWL_POSTGRES_DSN}
+  scope: local
+  server:
+    listen_addr: 127.0.0.1:8080
+  operator:
+    token: ""
+  maintenance:
+    review: true

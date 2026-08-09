@@ -40,10 +40,26 @@ transports. No implicit synchronization or ownership transfer is provided.
 ## Maintainer provider boundary
 
 `app.Maintainer` is the only application dependency needed to produce a model
-edit plan. The independent `provider.Config` describes model ID, model name,
-endpoint, credential reference, reasoning settings, timeout, and input/output
-limits. `Config.Validate` rejects incomplete or unsafe settings, and
-`Config.Redacted` is suitable for diagnostics without exposing credentials.
+edit plan. The standalone CLI uses the same Norma runtime document and
+provider registry as Balda:
+
+```yaml
+runtime:
+  providers:
+    codex:
+      type: codex_acp
+      codex_acp:
+        model: gpt-5-codex
+knowl:
+  provider: codex
+```
+
+`knowl.provider` names one `runtime.providers` entry; Knowl does not define a
+second provider schema or translate a Knowl-only model configuration. Shared
+runtime validation runs before host side effects. The selected provider is
+adapted by `pkg/knowl/provider.NewRuntimeMaintainer`, which builds it lazily,
+uses an isolated in-memory session for each plan, grants no MCP servers or
+tools, and closes provider resources with the host lifecycle.
 
 The provider receives a bounded `MaintenanceInput` containing schema, accepted
 source metadata/text, selected pages, and read limits. It returns data-only
@@ -52,10 +68,10 @@ citations, allowed paths, file count/size, and rationale limits before staging.
 Provider code never receives unrestricted filesystem authority and never edits
 schema, raw sources, or log files.
 
-The current `knowl start` command does not select a remote provider by default.
-Embedding code or a later provider configuration layer must make that choice
-explicit; this prevents credentials and reasoning policy from being inherited
-implicitly from Balda.
+Embedding callers may still pass an explicit `app.Maintainer` to the host
+constructor for deterministic tests or an application-owned adapter. The
+standalone CLI requires an explicit valid selector and never installs an
+unavailable maintainer in its place.
 
 ## Out of scope
 

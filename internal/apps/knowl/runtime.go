@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -14,24 +15,26 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
+	runtimeprovider "github.com/baldaworks/knowl/pkg/knowl/provider"
 	"github.com/baldaworks/knowl/pkg/knowl/store/postgres"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	"go.uber.org/fx"
 )
 
-var ErrMaintainerUnavailable = errors.New("knowl maintainer is unavailable")
-
 // Options supplies the host configuration and an independent maintainer boundary.
 type Options struct {
-	Config     Config
-	Maintainer app.Maintainer
+	Config         Config
+	Maintainer     app.Maintainer
+	RuntimeFactory runtimeprovider.RuntimeFactory
+	ProviderID     string
 }
 
 // Host composes canonical content, operational state, application services, HTTP, and MCP.
 type Host struct {
-	config    Config
-	workspace *contentfs.Workspace
-	closer    io.Closer
+	config           Config
+	workspace        *contentfs.Workspace
+	closer           io.Closer
+	maintainerCloser io.Closer
 
 	operations app.OperationStore
 	index      app.SearchIndex
@@ -57,6 +60,23 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if options.Maintainer == nil {
+		return nil, fmt.Errorf("knowl maintainer is required")
+	}
+	maintainerCloser, _ := options.Maintainer.(io.Closer)
+	var operationalCloser io.Closer
+	keep := false
+	defer func() {
+		if keep {
+			return
+		}
+		if maintainerCloser != nil {
+			_ = maintainerCloser.Close()
+		}
+		if operationalCloser != nil {
+			_ = operationalCloser.Close()
+		}
+	}()
 	config, err := options.Config.normalized()
 	if err != nil {
 		return nil, err
@@ -72,16 +92,8 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	keep := false
-	defer func() {
-		if !keep {
-			_ = closer.Close()
-		}
-	}()
+	operationalCloser = closer
 	maintainer := options.Maintainer
-	if maintainer == nil {
-		maintainer = unavailableMaintainer{}
-	}
 	ingestOptions := config.IngestOptions
 	if ingestOptions.ReadLimits == (domain.ReadLimits{}) {
 		ingestOptions.ReadLimits = config.ReadLimits
@@ -113,17 +125,18 @@ func New(ctx context.Context, options Options) (*Host, error) {
 		return nil, fmt.Errorf("compose MCP service: %w", err)
 	}
 	host := &Host{
-		config:     config,
-		workspace:  workspace,
-		closer:     closer,
-		operations: operations,
-		index:      index,
-		worker:     NewWorker(config.WorkerQueueSize),
-		service:    service,
-		query:      query,
-		lint:       lint,
-		mcp:        mcpServer,
-		serverErr:  make(chan error, 1),
+		config:           config,
+		workspace:        workspace,
+		closer:           closer,
+		maintainerCloser: maintainerCloser,
+		operations:       operations,
+		index:            index,
+		worker:           NewWorker(config.WorkerQueueSize),
+		service:          service,
+		query:            query,
+		lint:             lint,
+		mcp:              mcpServer,
+		serverErr:        make(chan error, 1),
 	}
 	host.handler = NewHTTPHandler(HTTPDependencies{
 		Scope:         config.Scope,
@@ -154,7 +167,28 @@ func NewApp(ctx context.Context, options Options, additional ...fx.Option) *fx.A
 	return fx.New(
 		fx.Module("knowl.host",
 			fx.Provide(
-				func() (*Host, error) { return New(ctx, options) },
+				func() (Config, error) { return options.Config.normalized() },
+				func(config Config) (app.Maintainer, error) {
+					if options.Maintainer != nil {
+						return options.Maintainer, nil
+					}
+					providerID := strings.TrimSpace(options.ProviderID)
+					if providerID == "" {
+						return nil, fmt.Errorf("knowl.provider is required")
+					}
+					if options.RuntimeFactory == nil {
+						return nil, fmt.Errorf("runtime provider factory is required")
+					}
+					if validator, ok := options.RuntimeFactory.(runtimeprovider.RuntimeFactoryValidator); ok {
+						if err := validator.ValidateAgent(providerID); err != nil {
+							return nil, fmt.Errorf("validate knowl.provider: %w", err)
+						}
+					}
+					return runtimeprovider.NewRuntimeMaintainer(options.RuntimeFactory, providerID, config.Workspace)
+				},
+				func(config Config, maintainer app.Maintainer) (*Host, error) {
+					return New(ctx, Options{Config: config, Maintainer: maintainer})
+				},
 				func(host *Host) hostLifecycle { return host },
 			),
 			fx.Invoke(registerHostLifecycle),
@@ -289,6 +323,11 @@ func (host *Host) Stop(ctx context.Context) error {
 	if _, err := host.service.Recover(ctx); err != nil {
 		shutdownErrs = append(shutdownErrs, fmt.Errorf("recover Knowl workspace during shutdown: %w", err))
 	}
+	if host.maintainerCloser != nil {
+		if err := host.maintainerCloser.Close(); err != nil {
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("close Knowl maintainer: %w", err))
+		}
+	}
 	if err := host.closer.Close(); err != nil {
 		shutdownErrs = append(shutdownErrs, fmt.Errorf("close Knowl operational store: %w", err))
 	}
@@ -376,13 +415,4 @@ func ensureProjection(ctx context.Context, index app.SearchIndex, checker projec
 
 type projectionChecker interface {
 	CheckProjection(ctx context.Context, snapshot domain.WorkspaceSnapshot) error
-}
-
-type unavailableMaintainer struct{}
-
-func (unavailableMaintainer) Plan(ctx context.Context, _ domain.MaintenanceInput) (domain.ModelEditPlan, error) {
-	if err := ctx.Err(); err != nil {
-		return domain.ModelEditPlan{}, err
-	}
-	return domain.ModelEditPlan{}, ErrMaintainerUnavailable
 }

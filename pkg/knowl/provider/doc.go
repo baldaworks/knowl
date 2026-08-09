@@ -1,2 +1,3 @@
-// Package provider will provide replaceable maintainer-provider adapters.
+// Package provider contains adapters from the shared runtime provider registry
+// to Knowl's structured maintainer boundary.
 package provider

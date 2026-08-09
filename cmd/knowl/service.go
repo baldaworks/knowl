@@ -3,26 +3,36 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	apphost "github.com/baldaworks/knowl/internal/apps/knowl"
-	domain "github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/normahq/runtime/v2/agentfactory"
+	"github.com/normahq/runtime/v2/mcpregistry"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"go.uber.org/fx"
 )
 
 func runStart(cmd *cobra.Command) error {
-	config, err := hostConfig()
+	runtimeFactory, providerID, err := selectedRuntimeProvider(cmd.Context())
+	if err != nil {
+		return err
+	}
+	config, err := hostConfig(cmd.Context())
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var host *apphost.Host
-	application := apphost.NewApp(ctx, apphost.Options{Config: config}, fx.Populate(&host))
+	application := apphost.NewApp(ctx, apphost.Options{
+		Config:         config,
+		RuntimeFactory: runtimeFactory,
+		ProviderID:     providerID,
+	}, fx.Populate(&host))
 	cleanupHost := func() error {
 		if host == nil {
 			return nil
@@ -47,37 +57,56 @@ func runStart(cmd *cobra.Command) error {
 	return errors.Join(runErr, stopErr)
 }
 
-func hostConfig() (apphost.Config, error) {
-	workspace, err := workspacePath()
+func hostConfig(ctx context.Context) (apphost.Config, error) {
+	loaded, err := configFromContext(ctx)
 	if err != nil {
 		return apphost.Config{}, err
 	}
-	driver, err := storeDriver()
+	workspace, err := workspacePath(ctx)
+	if err != nil {
+		return apphost.Config{}, err
+	}
+	storage, err := storageSettings(ctx)
 	if err != nil {
 		return apphost.Config{}, err
 	}
 	config := apphost.DefaultConfig()
 	config.Workspace = workspace
-	config.StoreDriver = driver
-	if value := viper.GetString("scope"); value != "" {
-		config.Scope = domain.ScopeRef(value)
+	config.StoreDriver = storage.Driver
+	if value := loaded.Document.Knowl.Scope; value != "" {
+		config.Scope = value
 	}
-	if value := viper.GetString("server.listen_addr"); value != "" {
+	if value := loaded.Document.Knowl.Server.ListenAddr; value != "" {
 		config.ListenAddr = value
 	}
-	if value := viper.GetString("operator.token"); value != "" {
+	if value := loaded.Document.Knowl.Operator.Token; value != "" {
 		config.OperatorToken = value
 	}
-	if value := viper.GetString("store.path"); value != "" {
-		config.StorePath = value
-	}
-	if value := viper.GetString("store.postgres_dsn"); value != "" {
-		config.PostgresDSN = value
-	}
-	if viper.IsSet("maintenance.auto_apply") {
-		config.IngestOptions.AutoApply = viper.GetBool("maintenance.auto_apply")
-	} else if viper.IsSet("maintenance.review") {
-		config.IngestOptions.AutoApply = !viper.GetBool("maintenance.review")
+	config.StorePath = storage.Path
+	config.PostgresDSN = storage.DSN
+	if value := loaded.Document.Knowl.Maintenance.AutoApply; value != nil {
+		config.IngestOptions.AutoApply = *value
+	} else if value := loaded.Document.Knowl.Maintenance.Review; value != nil {
+		config.IngestOptions.AutoApply = !*value
 	}
 	return config, nil
+}
+
+func selectedRuntimeProvider(ctx context.Context) (*agentfactory.Factory, string, error) {
+	loaded, err := configFromContext(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	providerID := strings.TrimSpace(loaded.Document.Knowl.Provider)
+	if providerID == "" {
+		return nil, "", fmt.Errorf("knowl.provider is required")
+	}
+	factory := agentfactory.New(
+		loaded.Document.Runtime.Providers,
+		mcpregistry.New(loaded.Document.Runtime.MCPServers),
+	)
+	if err := factory.ValidateAgent(providerID); err != nil {
+		return nil, "", fmt.Errorf("validate knowl.provider: %w", err)
+	}
+	return factory, providerID, nil
 }

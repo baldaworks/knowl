@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 const (
@@ -26,23 +25,19 @@ func newInitCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   initCommandName,
 		Short: "Initialize a Knowl workspace and config",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			workspace, err := workspacePath()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			config, err := configFromContext(cmd.Context())
+			if err != nil {
+				return err
+			}
+			workspace, err := workspacePath(cmd.Context())
 			if err != nil {
 				return err
 			}
 			if err := initWorkspace(workspace); err != nil {
 				return err
 			}
-			configPath := viper.ConfigFileUsed()
-			if configPath == "" {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return fmt.Errorf("get working directory: %w", err)
-				}
-				configPath = filepath.Join(cwd, configRelative)
-			}
-			if err := writeConfig(configPath, workspace); err != nil {
+			if err := writeConfig(configOutputPath(config), workspace); err != nil {
 				return err
 			}
 			fmt.Printf("initialized Knowl workspace at %s\n", workspace)
@@ -55,15 +50,18 @@ func newValidateCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate",
 		Short: "Validate Knowl configuration and workspace",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			workspace, err := workspacePath()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, _, err := selectedRuntimeProvider(cmd.Context()); err != nil {
+				return err
+			}
+			workspace, err := workspacePath(cmd.Context())
 			if err != nil {
 				return err
 			}
 			if err := validateWorkspace(workspace); err != nil {
 				return err
 			}
-			driver, err := storeDriver()
+			driver, err := storeDriver(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -156,7 +154,7 @@ func writeConfig(path, workspace string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat config %q: %w", path, err)
 	}
-	contents := fmt.Sprintf("workspace:\n  path: %q\nstore:\n  driver: sqlite\nmaintenance:\n  review: true\n", workspace)
+	contents := fmt.Sprintf("runtime:\n  providers:\n    opencode:\n      type: opencode_acp\n      opencode_acp:\n        model: opencode/big-pickle\nknowl:\n  provider: opencode\n  workspace:\n    path: %q\n  storage:\n    type: sqlite\n    sqlite:\n      path: .knowl/knowl.sqlite\n  maintenance:\n    review: true\n", workspace)
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		return fmt.Errorf("write config %q: %w", path, err)
 	}

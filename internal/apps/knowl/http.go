@@ -342,7 +342,7 @@ func classifyServiceError(err error) (int, string) {
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, app.ErrQueryInvalid), errors.Is(err, app.ErrFilingInvalid):
 		return http.StatusBadRequest, "invalid_request"
-	case errors.Is(err, app.ErrProjection), errors.Is(err, ErrMaintainerUnavailable):
+	case errors.Is(err, app.ErrProjection):
 		return http.StatusServiceUnavailable, "service_unavailable"
 	case errors.Is(err, app.ErrOperationNotApplyable):
 		return http.StatusConflict, "operation_not_applyable"

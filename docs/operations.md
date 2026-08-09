@@ -6,37 +6,67 @@ embeddable `pkg/knowl/app` services.
 
 ## Configuration
 
-The CLI reads `.config/knowl/config.yaml` by default. `--config` selects another
-file. Viper also accepts `KNOWL_*` environment variables, with dots and hyphens
-converted to underscores. A complete local example is:
+The CLI reads `.config/knowl/config.yaml` by default. `--config-dir` selects an
+additional config root and `--profile` selects a top-level profile using the
+same loader semantics as Balda. The document has two sections: the shared
+Norma runtime registry and the Knowl application settings. A complete SQLite
+example is:
 
 ```yaml
-workspace:
-  path: ./knowledge
-scope: local
-store:
-  driver: sqlite
-  path: .knowl/knowl.sqlite
-  # postgres_dsn: postgres://knowl:secret@127.0.0.1:5432/knowl?sslmode=disable
-server:
-  listen_addr: 127.0.0.1:8080
-operator:
-  token: replace-with-a-local-secret
-maintenance:
-  review: true
-  # auto_apply: false
+runtime:
+  providers:
+    opencode:
+      type: opencode_acp
+      opencode_acp:
+        model: opencode/big-pickle
+
+knowl:
+  provider: opencode
+  workspace:
+    path: ./knowledge
+  storage:
+    type: sqlite
+    sqlite:
+      path: .knowl/knowl.sqlite
+  scope: local
+  server:
+    listen_addr: 127.0.0.1:8080
+  operator:
+    token: replace-with-a-local-secret
+  maintenance:
+    review: true
+    # auto_apply: false
 ```
 
-The equivalent important environment names are
-`KNOWL_WORKSPACE_PATH`, `KNOWL_SCOPE`, `KNOWL_STORE_DRIVER`,
-`KNOWL_STORE_PATH`, `KNOWL_STORE_POSTGRES_DSN`, `KNOWL_SERVER_LISTEN_ADDR`,
-`KNOWL_OPERATOR_TOKEN`, `KNOWL_MAINTENANCE_REVIEW`, and
-`KNOWL_MAINTENANCE_AUTO_APPLY`.
+For PostgreSQL, replace only the typed storage selection with:
 
-SQLite is the default. PostgreSQL requires `store.driver: postgres` and a
-non-empty `store.postgres_dsn`. The listener must be loopback (`localhost`,
-`127.0.0.1`, or another loopback IP); remote/shared deployment is outside this
-local contract. A relative SQLite path is resolved below the workspace.
+```yaml
+  storage:
+    type: postgres
+    postgres:
+      dsn: ${KNOWL_POSTGRES_DSN}
+```
+
+`knowl.provider` is only a selector; it must name an entry in
+`runtime.providers`. Runtime entries retain Balda's discriminated shape:
+`type` plus the matching type-specific block. Knowl storage follows the same
+pattern: `knowl.storage.type` selects one backend, and only the matching
+optional block (`sqlite` or `postgres`) may be present. The CLI defaults to
+SQLite when the storage section is omitted, and `knowl init` writes the
+explicit SQLite block. A selected PostgreSQL block requires a non-empty DSN.
+
+The loader applies `KNOWL_*` overrides to leaf keys present in the loaded
+document; common application keys include `KNOWL_WORKSPACE_PATH`,
+`KNOWL_PROVIDER`, `KNOWL_STORAGE_TYPE`, `KNOWL_STORAGE_SQLITE_PATH`,
+`KNOWL_STORAGE_POSTGRES_DSN`, `KNOWL_SERVER_LISTEN_ADDR`,
+`KNOWL_OPERATOR_TOKEN`, `KNOWL_MAINTENANCE_REVIEW`, and
+`KNOWL_MAINTENANCE_AUTO_APPLY`. Provider credentials should be supplied through
+the shared runtime configuration's normal environment expansion, not printed
+in diagnostics.
+
+The listener must be loopback (`localhost`, `127.0.0.1`, or another loopback
+IP); remote/shared deployment is outside this local contract. A relative
+SQLite path is resolved below the workspace.
 
 `maintenance.review: true` is the conservative default. Setting
 `maintenance.auto_apply: true` (or `review: false`) permits normal ingest to
@@ -44,18 +74,18 @@ apply after validation. Preview always forces `awaiting_review`, even when
 auto-apply is configured. Writes also require a configured operator token and a
 matching `Authorization: Bearer ...` header.
 
-The current CLI host intentionally does not choose a remote model or credential.
-With no injected maintainer it remains useful for reads, lint, projection
-inspection, and operation status; write planning returns a stable unavailable-
-provider error. An embedding or a future provider adapter supplies
-`app.Maintainer` after validating an independent `provider.Config`.
+Startup validates the selected runtime provider before opening the workspace,
+SQL store, worker, or listener. Provider execution remains lazy: `validate` and
+`start` do not contact the model, while ingest planning invokes the selected
+provider through Knowl's structured maintainer adapter. There is no silent
+read-only `unavailableMaintainer` fallback.
 
 ## Start and lifecycle
 
 ```bash
-./knowl --workspace ./knowledge init
-./knowl --workspace ./knowledge validate
-./knowl --config .config/knowl/config.yaml start
+./knowl init
+./knowl validate
+./knowl --profile default start
 ```
 
 Host construction performs, in order, workspace validation, selected SQL
@@ -68,7 +98,7 @@ host lifecycle is:
 2. The service waits for cancellation or a fatal HTTP server error.
 3. `Stop` marks readiness false, stops accepting new work, drains or interrupts
    queued writes within the shutdown deadline, shuts down HTTP, recovers the
-   workspace, and closes the SQL store.
+   workspace, closes the provider-backed maintainer, and closes the SQL store.
 
 The same lifecycle is available to embedding callers through
 `internal/apps/knowl.NewApp` inside the repository. Core policy does not depend

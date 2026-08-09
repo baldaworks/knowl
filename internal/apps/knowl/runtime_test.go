@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,9 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
+	"github.com/normahq/runtime/v2/agentfactory"
+	"go.uber.org/fx"
+	adkagent "google.golang.org/adk/v2/agent"
 )
 
 const hostSourceRef = "fixture:source-1@1"
@@ -172,6 +177,83 @@ func TestHostPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if operation.Status != domain.StatusCommitted {
 		t.Fatalf("reopened operation status = %q, want committed", operation.Status)
 	}
+}
+
+func TestNewRejectsNilMaintainerBeforeOpeningStore(t *testing.T) {
+	workspace := t.TempDir()
+	config := DefaultConfig()
+	config.Workspace = workspace
+	config.StorePath = filepath.Join(workspace, ".knowl", "state.db")
+
+	_, err := New(context.Background(), Options{Config: config})
+	if err == nil || !strings.Contains(err.Error(), "maintainer") {
+		t.Fatalf("New() error = %v, want required maintainer", err)
+	}
+	if _, statErr := os.Stat(config.StorePath); !os.IsNotExist(statErr) {
+		t.Fatalf("store stat error = %v, want store unopened", statErr)
+	}
+}
+
+func TestNewAppBuildsRuntimeMaintainerThroughFx(t *testing.T) {
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	config := DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = "127.0.0.1:0"
+	factory := &validatingRuntimeFactory{providerID: "provider"}
+	var host *Host
+	application := NewApp(context.Background(), Options{
+		Config:         config,
+		RuntimeFactory: factory,
+		ProviderID:     "provider",
+	}, fx.Populate(&host))
+	if err := application.Err(); err != nil {
+		t.Fatalf("Fx composition error: %v", err)
+	}
+	startCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := application.Start(startCtx); err != nil {
+		t.Fatalf("Fx start error: %v", err)
+	}
+	if host == nil || !host.Ready() {
+		t.Fatalf("host = %#v, want ready host", host)
+	}
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	if err := application.Stop(stopCtx); err != nil {
+		t.Fatalf("Fx stop error: %v", err)
+	}
+	if factory.validations != 1 {
+		t.Fatalf("provider validations = %d, want one", factory.validations)
+	}
+	if factory.builds != 0 {
+		t.Fatalf("provider builds = %d, want lazy provider", factory.builds)
+	}
+}
+
+type validatingRuntimeFactory struct {
+	providerID  string
+	validations int
+	builds      int
+}
+
+func (factory *validatingRuntimeFactory) ValidateAgent(providerID string) error {
+	factory.validations++
+	if providerID != factory.providerID {
+		return errors.New("unexpected provider ID")
+	}
+	return nil
+}
+
+func (factory *validatingRuntimeFactory) Build(context.Context, agentfactory.BuildRequest) (adkagent.Agent, error) {
+	factory.builds++
+	return nil, errors.New("provider build should remain lazy")
 }
 
 const hostPageContent = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + hostSourceRef + "\n---\n# One\n"

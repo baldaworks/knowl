@@ -14,22 +14,23 @@ Uber Fx for lifecycle ownership; canonical application policy remains in
 
 ```bash
 go build -o knowl ./cmd/knowl
-./knowl --workspace ./knowledge init
-./knowl --workspace ./knowledge validate
-./knowl --workspace ./knowledge start
+./knowl init
+./knowl validate
+./knowl start
 ```
 
 `start` listens on `127.0.0.1:8080` by default. Configuration is loaded from
-`.config/knowl/config.yaml`, then `KNOWL_*` environment overrides, with the
-`--workspace`, `--store-driver`, and `--config` flags available from Cobra. See
-[local operations](docs/operations.md) for a complete configuration example and
-the HTTP/MCP surfaces.
+`.config/knowl/config.yaml`, then the shared profile and `KNOWL_*` overrides.
+Use `--config-dir` or `--profile` to select another config source. The config
+must select a valid `knowl.provider` from `runtime.providers`; provider startup
+is lazy and begins when ingest planning needs it. See [local
+operations](docs/operations.md) for the complete Balda-compatible provider and
+typed SQLite/PostgreSQL examples.
 
 The `ingest` and `lint` Cobra command names are present for the command contract;
-the current operator workflows are the HTTP API and the public Go packages. A
-standalone host started by the CLI is read-only until an independent maintainer
-is supplied through the embedding boundary; this avoids silently selecting a
-model, endpoint, credential, or reasoning policy.
+the current operator workflows are the HTTP API and the public Go packages.
+The standalone host uses the selected shared runtime provider for maintenance
+planning; deterministic embedding tests can inject an explicit maintainer.
 
 ## Workspace
 
