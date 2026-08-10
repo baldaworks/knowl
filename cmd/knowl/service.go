@@ -85,10 +85,8 @@ func hostConfig(ctx context.Context) (knowl.Config, error) {
 	}
 	config.StorePath = storage.Path
 	config.PostgresDSN = storage.DSN
-	if value := loaded.Document.Knowl.Maintenance.AutoApply; value != nil {
+	if value := loaded.Document.Knowl.Ingest.AutoApply; value != nil {
 		config.IngestOptions.AutoApply = *value
-	} else if value := loaded.Document.Knowl.Maintenance.Review; value != nil {
-		config.IngestOptions.AutoApply = !*value
 	}
 	return config, nil
 }

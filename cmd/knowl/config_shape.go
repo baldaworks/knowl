@@ -11,13 +11,13 @@ import (
 
 // AppConfig is the Knowl section of the Balda-compatible config document.
 type AppConfig struct {
-	Provider    string              `mapstructure:"provider"`
-	Workspace   WorkspaceConfig     `mapstructure:"workspace"`
-	Storage     StorageConfig       `mapstructure:"storage"`
-	Scope       knowltypes.ScopeRef `mapstructure:"scope"`
-	Server      ServerConfig        `mapstructure:"server"`
-	Operator    OperatorConfig      `mapstructure:"operator"`
-	Maintenance MaintenanceConfig   `mapstructure:"maintenance"`
+	Provider  string              `mapstructure:"provider"`
+	Workspace WorkspaceConfig     `mapstructure:"workspace"`
+	Storage   StorageConfig       `mapstructure:"storage"`
+	Scope     knowltypes.ScopeRef `mapstructure:"scope"`
+	Server    ServerConfig        `mapstructure:"server"`
+	Operator  OperatorConfig      `mapstructure:"operator"`
+	Ingest    IngestConfig        `mapstructure:"ingest"`
 }
 
 // WorkspaceConfig controls the workspace root used by Knowl.
@@ -108,10 +108,76 @@ type OperatorConfig struct {
 	Token string `mapstructure:"token"`
 }
 
+// IngestConfig controls whether normal ingest stops for review or auto-applies.
+// A nil pointer preserves the default review-first behavior at normalization
+// time.
+type IngestConfig struct {
+	AutoApply *bool `mapstructure:"auto_apply"`
+}
+
 // MaintenanceConfig controls ingest review behavior. Pointers preserve the
 // distinction between an omitted setting and an explicit false value while the
 // document is being normalized.
 type MaintenanceConfig struct {
 	AutoApply *bool `mapstructure:"auto_apply"`
 	Review    *bool `mapstructure:"review"`
+}
+
+type rawAppConfig struct {
+	Provider    string              `mapstructure:"provider"`
+	Workspace   WorkspaceConfig     `mapstructure:"workspace"`
+	Storage     StorageConfig       `mapstructure:"storage"`
+	Scope       knowltypes.ScopeRef `mapstructure:"scope"`
+	Server      ServerConfig        `mapstructure:"server"`
+	Operator    OperatorConfig      `mapstructure:"operator"`
+	Ingest      IngestConfig        `mapstructure:"ingest"`
+	Maintenance MaintenanceConfig   `mapstructure:"maintenance"`
+}
+
+// Normalize resolves legacy config aliases into the canonical public shape.
+func (config rawAppConfig) Normalize() (AppConfig, error) {
+	ingest, err := normalizeIngestConfig(config.Ingest, config.Maintenance)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	return AppConfig{
+		Provider:  config.Provider,
+		Workspace: config.Workspace,
+		Storage:   config.Storage,
+		Scope:     config.Scope,
+		Server:    config.Server,
+		Operator:  config.Operator,
+		Ingest:    ingest,
+	}, nil
+}
+
+func normalizeIngestConfig(canonical IngestConfig, legacy MaintenanceConfig) (IngestConfig, error) {
+	if canonical.configured() {
+		if legacy.configured() {
+			return IngestConfig{}, fmt.Errorf("knowl.ingest.auto_apply cannot be combined with legacy knowl.maintenance settings")
+		}
+		return canonical, nil
+	}
+	if !legacy.configured() {
+		return IngestConfig{}, nil
+	}
+	if legacy.AutoApply != nil && legacy.Review != nil && *legacy.AutoApply != !*legacy.Review {
+		return IngestConfig{}, fmt.Errorf("knowl.maintenance.auto_apply conflicts with knowl.maintenance.review")
+	}
+	if legacy.AutoApply != nil {
+		return IngestConfig{AutoApply: legacy.AutoApply}, nil
+	}
+	return IngestConfig{AutoApply: boolPtr(!*legacy.Review)}, nil
+}
+
+func (config IngestConfig) configured() bool {
+	return config.AutoApply != nil
+}
+
+func (config MaintenanceConfig) configured() bool {
+	return config.AutoApply != nil || config.Review != nil
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }

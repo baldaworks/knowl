@@ -50,9 +50,8 @@ knowl:
     listen_addr: 127.0.0.1:8080
   operator:
     token: replace-with-a-local-secret
-  maintenance:
-    review: true
-    # auto_apply: false
+  ingest:
+    auto_apply: false
 ```
 
 For PostgreSQL, replace only the typed storage selection with:
@@ -76,8 +75,7 @@ The loader applies `KNOWL_*` overrides to leaf keys present in the loaded
 document; common application keys include `KNOWL_WORKSPACE_PATH`,
 `KNOWL_PROVIDER`, `KNOWL_STORAGE_TYPE`, `KNOWL_STORAGE_SQLITE_PATH`,
 `KNOWL_STORAGE_POSTGRES_DSN`, `KNOWL_SERVER_LISTEN_ADDR`,
-`KNOWL_OPERATOR_TOKEN`, `KNOWL_MAINTENANCE_REVIEW`, and
-`KNOWL_MAINTENANCE_AUTO_APPLY`. Provider credentials should be supplied through
+`KNOWL_OPERATOR_TOKEN`, and `KNOWL_INGEST_AUTO_APPLY`. Provider credentials should be supplied through
 the shared runtime configuration's normal environment expansion, not printed
 in diagnostics.
 
@@ -85,11 +83,12 @@ The listener must be loopback (`localhost`, `127.0.0.1`, or another loopback
 IP); remote/shared deployment is outside this local contract. A relative
 SQLite path is resolved below the workspace.
 
-`maintenance.review: true` is the conservative default. Setting
-`maintenance.auto_apply: true` (or `review: false`) permits normal ingest to
-apply after validation. Preview always forces `awaiting_review`, even when
-auto-apply is configured. Writes also require a configured operator token and a
-matching `Authorization: Bearer ...` header.
+If `knowl.ingest.auto_apply` is omitted, Knowl defaults to review-first for
+normal ingest. Setting `knowl.ingest.auto_apply: true` permits normal ingest to
+apply after validation; `knowl init` writes the explicit `false` form. Preview
+always forces `awaiting_review`, even when auto-apply is configured. Writes
+also require a configured operator token and a matching
+`Authorization: Bearer ...` header.
 
 Startup validates the selected runtime provider before opening the workspace,
 SQL store, worker, or listener. Provider execution remains lazy: `validate` and
@@ -211,7 +210,7 @@ curl -sS \
 ```
 
 The apply response returns the same operation in `committed` state. Preview is
-always review-first, even when `maintenance.auto_apply` is enabled.
+always review-first, even when `knowl.ingest.auto_apply` is enabled.
 
 The host supplies its trusted scope when the envelope omits one and rejects a
 different scope. It rejects query-string scope overrides. The operation key is

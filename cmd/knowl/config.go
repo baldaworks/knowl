@@ -19,6 +19,11 @@ type knowlConfigDocument struct {
 	Knowl   AppConfig               `mapstructure:"knowl"`
 }
 
+type rawKnowlConfigDocument struct {
+	Runtime appconfig.RuntimeConfig `mapstructure:"runtime"`
+	Knowl   rawAppConfig            `mapstructure:"knowl"`
+}
+
 type loadedConfig struct {
 	Document   knowlConfigDocument
 	WorkingDir string
@@ -34,7 +39,7 @@ func loadConfig(cmdContext context.Context, configDir, profile string) (context.
 		return cmdContext, fmt.Errorf("get working directory: %w", err)
 	}
 
-	var document knowlConfigDocument
+	var rawDocument rawKnowlConfigDocument
 	selectedProfile, err := appconfig.LoadConfigDocument(
 		appconfig.RuntimeLoadOptions{
 			WorkingDir: workingDir,
@@ -46,16 +51,24 @@ func loadConfig(cmdContext context.Context, configDir, profile string) (context.
 			DefaultsYAML:       defaultKnowlConfig,
 			UseDotConfigAppDir: true,
 		},
-		&document,
+		&rawDocument,
 	)
 	if err != nil {
 		return cmdContext, err
 	}
-	if document.Knowl.Storage.Type == "" && document.Knowl.Storage.SQLite == nil && document.Knowl.Storage.Postgres == nil {
-		document.Knowl.Storage = StorageConfig{
+	if rawDocument.Knowl.Storage.Type == "" && rawDocument.Knowl.Storage.SQLite == nil && rawDocument.Knowl.Storage.Postgres == nil {
+		rawDocument.Knowl.Storage = StorageConfig{
 			Type:   defaultStore,
 			SQLite: &SQLiteConfig{},
 		}
+	}
+	knowlConfig, err := rawDocument.Knowl.Normalize()
+	if err != nil {
+		return cmdContext, fmt.Errorf("normalize knowl config: %w", err)
+	}
+	document := knowlConfigDocument{
+		Runtime: rawDocument.Runtime,
+		Knowl:   knowlConfig,
 	}
 
 	return context.WithValue(cmdContext, loadedConfigContextKey{}, loadedConfig{

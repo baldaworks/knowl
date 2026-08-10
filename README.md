@@ -81,12 +81,14 @@ knowl:
     type: sqlite
     sqlite:
       path: .knowl/knowl.sqlite
-  maintenance:
-    review: true
+  ingest:
+    auto_apply: false
 ```
 
 `knowl.provider` selects an entry from `runtime.providers`. Knowl's own config
-is under the `knowl:` block.
+is under the `knowl:` block. `knowl.ingest.auto_apply` controls normal ingest:
+`false` keeps writes in review, `true` applies automatically after validation.
+Preview remains review-first regardless of this setting.
 
 Run local reads directly:
 

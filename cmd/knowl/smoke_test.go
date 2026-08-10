@@ -29,6 +29,7 @@ const (
 	smokeSourceText    = "source text"
 	smokeQueryText     = "One"
 	smokePageID        = "entities/one"
+	smokePagePath      = "wiki/entities/one.md"
 	smokePageContent   = "---\nid: " + smokePageID + "\ntitle: " + smokeQueryText + "\ntype: entity\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# " + smokeQueryText + "\n"
 )
 
@@ -82,7 +83,7 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	maintainer := provider.Fixture{Result: domain.ModelEditPlan{
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{smokeSourceRef},
-		Edits:        []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte(smokePageContent)}},
+		Edits:        []domain.FileEdit{{Path: smokePagePath, Content: []byte(smokePageContent)}},
 	}}
 
 	host, err := knowl.NewHost(ctx, config, maintainer)

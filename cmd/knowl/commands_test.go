@@ -509,7 +509,7 @@ func TestIngestCommandAutoAppliesTrustedLocalWorkflowWithoutOperatorToken(t *tes
 	if result.Operation.Status != knowlapi.Committed {
 		t.Fatalf("ingest operation status = %q, want %q", result.Operation.Status, knowlapi.Committed)
 	}
-	if _, err := os.Stat(fixture.pagePath("wiki/entities/one.md")); err != nil {
+	if _, err := os.Stat(fixture.pagePath(smokePagePath)); err != nil {
 		t.Fatalf("committed page missing: %v", err)
 	}
 }
@@ -545,7 +545,7 @@ func TestIngestPreviewAndApplyCommandsShareDurableStateAcrossOneShotHosts(t *tes
 	if preview.Operation.Status != knowlapi.AwaitingReview {
 		t.Fatalf("preview operation status = %q, want %q", preview.Operation.Status, knowlapi.AwaitingReview)
 	}
-	if _, err := os.Stat(fixture.pagePath("wiki/entities/one.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(fixture.pagePath(smokePagePath)); !os.IsNotExist(err) {
 		t.Fatalf("preview page stat = %v, want absent", err)
 	}
 
@@ -563,7 +563,7 @@ func TestIngestPreviewAndApplyCommandsShareDurableStateAcrossOneShotHosts(t *tes
 	if applied.Operation.Status != knowlapi.Committed {
 		t.Fatalf("apply operation status = %q, want %q", applied.Operation.Status, knowlapi.Committed)
 	}
-	if _, err := os.Stat(fixture.pagePath("wiki/entities/one.md")); err != nil {
+	if _, err := os.Stat(fixture.pagePath(smokePagePath)); err != nil {
 		t.Fatalf("committed page missing after apply: %v", err)
 	}
 }
@@ -926,9 +926,15 @@ func TestRootCommandLoadsConfigIntoRunContext(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute init: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, ".config", appName, "config.yaml")); err != nil {
+	configPath := filepath.Join(workspace, ".config", appName, "config.yaml")
+	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("generated config: %v", err)
 	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	assertNoRetiredConfigKeys(t, content)
 }
 
 func TestLoadConfigDefaultsToSQLiteWithoutBackendSection(t *testing.T) {
@@ -1012,6 +1018,48 @@ func TestEmbeddedDefaultConfigArtifactLoadsThroughProductionTypes(t *testing.T) 
 	}
 	if token := strings.TrimSpace(loaded.Document.Knowl.Operator.Token); token != "" && !strings.HasPrefix(token, "replace-") {
 		t.Fatalf("embedded operator token = %q, want empty or placeholder", token)
+	}
+}
+
+func TestOperatorDocsUseCanonicalIngestConfigShape(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := testRepoRoot(t)
+	tests := []struct {
+		name string
+		path string
+		want []string
+	}{
+		{
+			name: "readme",
+			path: filepath.Join(repoRoot, "README.md"),
+			want: []string{"knowl.ingest.auto_apply", "auto_apply: false"},
+		},
+		{
+			name: "operations",
+			path: filepath.Join(repoRoot, "docs", "operations.md"),
+			want: []string{"KNOWL_INGEST_AUTO_APPLY", "knowl.ingest.auto_apply"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			content, err := os.ReadFile(test.path)
+			if err != nil {
+				t.Fatalf("read %s: %v", test.path, err)
+			}
+			text := string(content)
+			for _, unwanted := range []string{"maintenance:", "maintenance.review", "maintenance.auto_apply", "KNOWL_MAINTENANCE_"} {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("%s contains retired ingest-policy reference %q", test.path, unwanted)
+				}
+			}
+			for _, want := range test.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("%s missing canonical ingest-policy reference %q", test.path, want)
+				}
+			}
+		})
 	}
 }
 
@@ -1208,6 +1256,7 @@ func clearKnowlEnv(t *testing.T) {
 		"KNOWL_STORAGE_TYPE",
 		"KNOWL_STORAGE_SQLITE_PATH",
 		"KNOWL_STORAGE_POSTGRES_DSN",
+		"KNOWL_INGEST_AUTO_APPLY",
 		"KNOWL_SCOPE",
 		"KNOWL_SERVER_LISTEN_ADDR",
 		"KNOWL_OPERATOR_TOKEN",
@@ -1232,6 +1281,11 @@ func assertNoRetiredConfigKeys(t *testing.T, content []byte) {
 	knowlSection, ok := document["knowl"].(map[string]any)
 	if !ok {
 		t.Fatal("config artifact is missing knowl section")
+	}
+	for _, key := range []string{"maintenance"} {
+		if _, exists := knowlSection[key]; exists {
+			t.Fatalf("config artifact contains retired knowl key %q", key)
+		}
 	}
 	storageSection, ok := knowlSection["storage"].(map[string]any)
 	if !ok {
@@ -1289,7 +1343,7 @@ func newCommandWorkflowFixture(t *testing.T, autoApply bool) commandWorkflowFixt
 		maintainer: provider.Fixture{Result: domain.ModelEditPlan{
 			SchemaDigest: schema.Digest,
 			SourceRefs:   []string{smokeSourceRef},
-			Edits:        []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte(smokePageContent)}},
+			Edits:        []domain.FileEdit{{Path: smokePagePath, Content: []byte(smokePageContent)}},
 		}},
 	}
 }
