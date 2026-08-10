@@ -7,12 +7,17 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl"
 )
 
+const (
+	pageOneID = "entities/one"
+	pageTwoID = "entities/two"
+)
+
 func TestParseFrontmatterTrimsFields(t *testing.T) {
-	metadata, err := ParseFrontmatter("---\nid:  entities/one \ntitle:  One \ntype:  entity \nsource_refs:\n  - alpha:one@v1\n  -  beta:two@v2 \n---\n# One\n")
+	metadata, err := ParseFrontmatter("---\nid:  " + pageOneID + " \ntitle:  One \ntype:  entity \nsource_refs:\n  - alpha:one@v1\n  -  beta:two@v2 \n---\n# One\n")
 	if err != nil {
 		t.Fatalf("ParseFrontmatter() error = %v", err)
 	}
-	if metadata.ID != "entities/one" || metadata.Title != "One" || metadata.Type != "entity" {
+	if metadata.ID != pageOneID || metadata.Title != "One" || metadata.Type != "entity" {
 		t.Fatalf("ParseFrontmatter() metadata = %#v", metadata)
 	}
 	if want := []string{"alpha:one@v1", "beta:two@v2"}; !reflect.DeepEqual(metadata.SourceRefs, want) {
@@ -27,7 +32,7 @@ func TestParseFrontmatterRejectsMalformedBlocks(t *testing.T) {
 		}
 	})
 	t.Run("missing closing", func(t *testing.T) {
-		if _, err := ParseFrontmatter("---\nid: entities/one\n"); err == nil {
+		if _, err := ParseFrontmatter("---\nid: " + pageOneID + "\n"); err == nil {
 			t.Fatal("ParseFrontmatter() error = nil, want error")
 		}
 	})
@@ -39,30 +44,30 @@ func TestParseFrontmatterRejectsMalformedBlocks(t *testing.T) {
 }
 
 func TestMarkdownTargetsAndLinksNormalizeAndDedupe(t *testing.T) {
-	content := "[[wiki/entities/one.md|One]] [[entities/two#anchor]] [[entities/one]] [[../bad]] [[ ]] [[broken"
+	content := "[[wiki/" + pageOneID + ".md|One]] [[" + pageTwoID + "#anchor]] [[" + pageOneID + "]] [[../bad]] [[ ]] [[broken"
 	targets, malformed := MarkdownTargets(content)
 	if !malformed {
 		t.Fatal("MarkdownTargets() malformed = false, want true")
 	}
-	if want := []string{"entities/one", "entities/two", "entities/one"}; !reflect.DeepEqual(targets, want) {
+	if want := []string{pageOneID, pageTwoID, pageOneID}; !reflect.DeepEqual(targets, want) {
 		t.Fatalf("MarkdownTargets() = %#v, want %#v", targets, want)
 	}
 	links := Links("entities/source", content)
 	if want := []knowl.LinkReference{
-		{From: "entities/source", To: "entities/one", Relation: "wiki"},
-		{From: "entities/source", To: "entities/two", Relation: "wiki"},
+		{From: "entities/source", To: pageOneID, Relation: relationWiki},
+		{From: "entities/source", To: pageTwoID, Relation: relationWiki},
 	}; !reflect.DeepEqual(links, want) {
 		t.Fatalf("Links() = %#v, want %#v", links, want)
 	}
 }
 
 func TestIndexTargetsIncludeBareListItems(t *testing.T) {
-	content := "# Index\n\n- entities/one\n- wiki/entities/two.md\n[[entities/three]]\n"
+	content := "# Index\n\n- " + pageOneID + "\n- wiki/" + pageTwoID + ".md\n[[entities/three]]\n"
 	targets, malformed := IndexTargets(content)
 	if malformed {
 		t.Fatal("IndexTargets() malformed = true, want false")
 	}
-	if want := []string{"entities/three", "entities/one", "entities/two"}; !reflect.DeepEqual(targets, want) {
+	if want := []string{"entities/three", pageOneID, pageTwoID}; !reflect.DeepEqual(targets, want) {
 		t.Fatalf("IndexTargets() = %#v, want %#v", targets, want)
 	}
 }
@@ -73,7 +78,7 @@ func TestPageIDFromPath(t *testing.T) {
 		want knowl.PageID
 		ok   bool
 	}{
-		{path: "wiki/entities/one.md", want: "entities/one", ok: true},
+		{path: "wiki/" + pageOneID + ".md", want: pageOneID, ok: true},
 		{path: "wiki/index.md", ok: false},
 		{path: "wiki/log.md", ok: false},
 		{path: "schema.md", ok: false},

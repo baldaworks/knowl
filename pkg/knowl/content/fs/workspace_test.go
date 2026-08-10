@@ -14,7 +14,12 @@ import (
 )
 
 const testScope = "local"
-const testWorkspaceSourceRef = "fixture:source-1@1"
+const (
+	testFixtureAdapter     = "fixture"
+	testWorkspaceSourceRef = "fixture:source-1@1"
+	testPageOnePath        = "wiki/entities/one.md"
+	testIndexPath          = "wiki/index.md"
+)
 
 func TestWorkspaceInitAcceptsImmutableSourceAndReplaysIt(t *testing.T) {
 	workspace, err := New(t.TempDir())
@@ -28,7 +33,7 @@ func TestWorkspaceInitAcceptsImmutableSourceAndReplaysIt(t *testing.T) {
 	digest := sha256.Sum256(content)
 	envelope := knowl.SourceEnvelope{
 		Scope:     testScope,
-		Source:    knowl.SourceRef{Adapter: "fixture", ID: "source-1"},
+		Source:    knowl.SourceRef{Adapter: testFixtureAdapter, ID: "source-1"},
 		Version:   knowl.SourceVersion{Version: "1", Digest: hex.EncodeToString(digest[:])},
 		MediaType: "text/plain",
 		Content:   content,
@@ -120,7 +125,7 @@ func TestWorkspaceSnapshotIncludesMarkdownDigests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if snapshot.PageDigests["wiki/entities/one.md"] == "" {
+	if snapshot.PageDigests[testPageOnePath] == "" {
 		t.Fatalf("snapshot missing page digest: %#v", snapshot.PageDigests)
 	}
 	if len(snapshot.Pages) != 1 || snapshot.Pages[0].ID != "entities/one" {
@@ -219,17 +224,17 @@ func TestWorkspaceStagePlanRejectsInvalidProspectiveContentWithoutCanonicalMutat
 		name  string
 		edits []knowl.FileEdit
 	}{
-		{name: "missing frontmatter", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("# One\n")}}},
-		{name: "malformed frontmatter", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("---\nid: [\n---\n# One\n")}}},
-		{name: "missing id", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("---\ntitle: One\ntype: entity\nsource_refs:\n  - " + testWorkspaceSourceRef + "\n---\n# One\n")}}},
-		{name: "missing title", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("---\nid: entities/one\ntype: entity\nsource_refs:\n  - " + testWorkspaceSourceRef + "\n---\n# One\n")}}},
-		{name: "missing type", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("---\nid: entities/one\ntitle: One\nsource_refs:\n  - " + testWorkspaceSourceRef + "\n---\n# One\n")}}},
-		{name: "missing source refs", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("---\nid: entities/one\ntitle: One\ntype: entity\n---\n# One\n")}}},
-		{name: "id mismatch", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: validWorkspacePage("entities/two", "One", testWorkspaceSourceRef, "")}}},
-		{name: "unknown source ref", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: validWorkspacePage("entities/one", "One", "fixture:missing@1", "")}}},
-		{name: "malformed link", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[broken")}}},
-		{name: "missing link target", edits: []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/missing]]")}}},
-		{name: "broken index target", edits: []knowl.FileEdit{{Path: "wiki/index.md", Content: []byte("# Knowl index\n\n- entities/missing\n")}}},
+		{name: "missing frontmatter", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("# One\n")}}},
+		{name: "malformed frontmatter", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\nid: [\n---\n# One\n")}}},
+		{name: "missing id", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\ntitle: One\ntype: entity\nsource_refs:\n  - " + testWorkspaceSourceRef + "\n---\n# One\n")}}},
+		{name: "missing title", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\nid: entities/one\ntype: entity\nsource_refs:\n  - " + testWorkspaceSourceRef + "\n---\n# One\n")}}},
+		{name: "missing type", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\nid: entities/one\ntitle: One\nsource_refs:\n  - " + testWorkspaceSourceRef + "\n---\n# One\n")}}},
+		{name: "missing source refs", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\nid: entities/one\ntitle: One\ntype: entity\n---\n# One\n")}}},
+		{name: "id mismatch", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/two", "One", testWorkspaceSourceRef, "")}}},
+		{name: "unknown source ref", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", "fixture:missing@1", "")}}},
+		{name: "malformed link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[broken")}}},
+		{name: "missing link target", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/missing]]")}}},
+		{name: "broken index target", edits: []knowl.FileEdit{{Path: testIndexPath, Content: []byte("# Knowl index\n\n- entities/missing\n")}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,14 +246,14 @@ func TestWorkspaceStagePlanRejectsInvalidProspectiveContentWithoutCanonicalMutat
 				t.Fatalf("init workspace: %v", err)
 			}
 			acceptWorkspaceSource(t, workspace)
-			before := captureCanonicalState(t, workspace, "wiki/entities/one.md")
+			before := captureCanonicalState(t, workspace, testPageOnePath)
 			schema, err := workspace.Schema(context.Background(), testScope)
 			if err != nil {
 				t.Fatalf("read schema: %v", err)
 			}
 			edits := append([]knowl.FileEdit(nil), tt.edits...)
 			for index := range edits {
-				if edits[index].Path != "wiki/index.md" || edits[index].ExpectedDigest != "" {
+				if edits[index].Path != testIndexPath || edits[index].ExpectedDigest != "" {
 					continue
 				}
 				indexContent, readErr := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "index.md"))
@@ -293,7 +298,7 @@ func TestWorkspaceStagePlanAllowsExistingAndSamePlanTargets(t *testing.T) {
 		Scope:        testScope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
-		Edits:        []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")}},
+		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")}},
 	}); err != nil {
 		t.Fatalf("stage existing target: %v", err)
 	}
@@ -303,7 +308,7 @@ func TestWorkspaceStagePlanAllowsExistingAndSamePlanTargets(t *testing.T) {
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
 		Edits: []knowl.FileEdit{
-			{Path: "wiki/entities/one.md", Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")},
+			{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")},
 			{Path: "wiki/entities/two.md", ExpectedDigest: digestBytes(validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, "")), Content: validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, "")},
 		},
 	}); err != nil {
@@ -338,7 +343,7 @@ func TestWorkspaceStagePlanAllowsIndexTargetsWithoutFrontmatter(t *testing.T) {
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
 		Edits: []knowl.FileEdit{{
-			Path:           "wiki/index.md",
+			Path:           testIndexPath,
 			ExpectedDigest: digestBytes(indexContent),
 			Content:        []byte("# Knowl index\n\n- entities/two\n"),
 		}},
@@ -352,7 +357,7 @@ func TestWorkspaceStagePlanAllowsIndexTargetsWithoutFrontmatter(t *testing.T) {
 		SourceRefs:   []string{testWorkspaceSourceRef},
 		Edits: []knowl.FileEdit{
 			{
-				Path:           "wiki/index.md",
+				Path:           testIndexPath,
 				ExpectedDigest: digestBytes(indexContent),
 				Content:        []byte("# Knowl index\n\n- entities/three\n"),
 			},
@@ -384,7 +389,7 @@ func TestWorkspaceStagePlanRejectsInvalidExistingStageReplay(t *testing.T) {
 		Scope:        testScope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
-		Edits:        []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("# One\n")}},
+		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("# One\n")}},
 	}
 	stageDir := filepath.Join(workspace.Root(), knowlDir, "staging", token(plan.OperationID))
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(stageDir, filepath.FromSlash(plan.Edits[0].Path))), 0o700); err != nil {
@@ -452,7 +457,7 @@ func TestWorkspaceCommitRejectsBrokenProspectiveStateBeforeJournal(t *testing.T)
 		Scope:        testScope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
-		Edits:        []knowl.FileEdit{{Path: "wiki/entities/one.md", Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")}},
+		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")}},
 	})
 	if err != nil {
 		t.Fatalf("stage plan: %v", err)
@@ -489,7 +494,7 @@ func acceptWorkspaceSource(t *testing.T, workspace *Workspace) {
 	digest := sha256.Sum256(content)
 	if _, err := workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
 		Scope:     testScope,
-		Source:    knowl.SourceRef{Adapter: "fixture", ID: "source-1"},
+		Source:    knowl.SourceRef{Adapter: testFixtureAdapter, ID: "source-1"},
 		Version:   knowl.SourceVersion{Version: "1", Digest: hex.EncodeToString(digest[:])},
 		MediaType: "text/plain",
 		Content:   content,
@@ -517,7 +522,7 @@ func captureCanonicalState(t *testing.T, workspace *Workspace, extraPaths ...str
 		content: make(map[string][]byte),
 		missing: make(map[string]struct{}),
 	}
-	for _, relative := range append([]string{"wiki/index.md", "wiki/log.md"}, extraPaths...) {
+	for _, relative := range append([]string{testIndexPath, "wiki/log.md"}, extraPaths...) {
 		path := filepath.Join(workspace.Root(), filepath.FromSlash(relative))
 		content, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {

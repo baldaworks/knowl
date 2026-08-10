@@ -111,7 +111,7 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	maintainer.mu.Lock()
 	maintainer.plan.Edits = []knowl.FileEdit{
 		{Path: testPagePath, Content: planPageContent},
-		{Path: "wiki/entities/two.md", Content: planSupportingContent},
+		{Path: testPageTwoPath, Content: planSupportingContent},
 		{Path: "wiki/index.md", ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n- entities/one\n")...)},
 	}
 	maintainer.mu.Unlock()

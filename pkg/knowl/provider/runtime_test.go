@@ -16,6 +16,8 @@ import (
 	"google.golang.org/genai"
 )
 
+const wantMaintainerError = "maintainer"
+
 func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	plan := knowl.ModelEditPlan{
 		SchemaDigest: "schema-digest",
@@ -98,9 +100,9 @@ func TestRuntimeMaintainerRejectsUnsafeOutputAndLimits(t *testing.T) {
 		maxOutput int
 		wantError string
 	}{
-		{name: "malformed", output: secret + " not json", wantError: "maintainer"},
-		{name: "empty", output: "", wantError: "maintainer"},
-		{name: "oversized", output: strings.Repeat("x", 128), maxOutput: 32, wantError: "maintainer"},
+		{name: "malformed", output: secret + " not json", wantError: wantMaintainerError},
+		{name: "empty", output: "", wantError: wantMaintainerError},
+		{name: "oversized", output: strings.Repeat("x", 128), maxOutput: 32, wantError: wantMaintainerError},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

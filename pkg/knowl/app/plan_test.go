@@ -9,6 +9,7 @@ import (
 )
 
 const fixtureAdapter = "fixture"
+const fixtureSourceID = "source"
 
 func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 	input := knowl.MaintenanceInput{
@@ -36,7 +37,7 @@ func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 }
 
 func TestValidatePlanRejectsSchemaAndRawTargets(t *testing.T) {
-	input := knowl.MaintenanceInput{Schema: knowl.SchemaDocument{Digest: "schema"}, Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: "source"}, Version: knowl.SourceVersion{Version: "1"}}}
+	input := knowl.MaintenanceInput{Schema: knowl.SchemaDocument{Digest: "schema"}, Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: fixtureSourceID}, Version: knowl.SourceVersion{Version: "1"}}}
 	for _, path := range []string{"schema.md", "raw/source", "wiki/../schema.md", "wiki/log.md"} {
 		_, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{SchemaDigest: "schema", SourceRefs: []string{"fixture:source@1"}, Edits: []knowl.FileEdit{{Path: path}}}, DefaultPlanLimits())
 		if !errors.Is(err, ErrForbiddenEdit) {
@@ -46,7 +47,7 @@ func TestValidatePlanRejectsSchemaAndRawTargets(t *testing.T) {
 }
 
 func TestValidatePlanRejectsChangedSchema(t *testing.T) {
-	input := knowl.MaintenanceInput{Schema: knowl.SchemaDocument{Digest: "current"}, Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: "source"}, Version: knowl.SourceVersion{Version: "1"}}}
+	input := knowl.MaintenanceInput{Schema: knowl.SchemaDocument{Digest: "current"}, Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: fixtureSourceID}, Version: knowl.SourceVersion{Version: "1"}}}
 	_, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{SchemaDigest: "old", SourceRefs: []string{"fixture:source@1"}, Edits: []knowl.FileEdit{{Path: "wiki/topic.md"}}}, DefaultPlanLimits())
 	if !errors.Is(err, ErrSchemaMismatch) {
 		t.Fatalf("schema mismatch error = %v", err)

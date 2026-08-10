@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	testPageID   = "entities/one"
-	testPagePath = "wiki/entities/one.md"
-	cleanPageOne = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[[entities/two]]\n"
-	cleanPageTwo = "---\nid: entities/two\ntitle: Two\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n\n[[entities/one]]\n"
+	testPageID      = "entities/one"
+	testPagePath    = "wiki/entities/one.md"
+	testPageTwoPath = "wiki/entities/two.md"
+	cleanPageOne    = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[[entities/two]]\n"
+	cleanPageTwo    = "---\nid: entities/two\ntitle: Two\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n\n[[entities/one]]\n"
 )
 
 func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
@@ -164,9 +165,9 @@ func prepareCanonicalQueryWorkspace(t *testing.T, workspace interface {
 		t.Fatalf("accept query fixture source: %v", err)
 	}
 	for relative, content := range map[string]string{
-		testPagePath:           cleanPageOne,
-		"wiki/entities/two.md": cleanPageTwo,
-		"wiki/index.md":        "# Knowl index\n\n- entities/one\n- entities/two\n",
+		testPagePath:    cleanPageOne,
+		testPageTwoPath: cleanPageTwo,
+		"wiki/index.md": "# Knowl index\n\n- entities/one\n- entities/two\n",
 	} {
 		if err := os.WriteFile(filepath.Join(workspace.Root(), filepath.FromSlash(relative)), []byte(content), 0o600); err != nil {
 			t.Fatalf("write query fixture %q: %v", relative, err)

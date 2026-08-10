@@ -1,0 +1,21 @@
+# Binaries and assets
+bin/
+dist/
+*.exe
+*.png
+*.jpg
+*.pdf
+
+# Local runtime state
+.knowl/
+*.db
+*.db-wal
+*.db-shm
+.dolt/
+
+# Large generated files
+*.generated.go
+vendor/
+
+# Logs
+*.log

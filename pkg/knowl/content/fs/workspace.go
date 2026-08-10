@@ -1370,19 +1370,6 @@ func uniqueLinks(links []knowl.LinkReference) []knowl.LinkReference {
 	return unique
 }
 
-func uniqueStrings(values []string) []string {
-	if len(values) < 2 {
-		return values
-	}
-	unique := values[:0]
-	for _, value := range values {
-		if len(unique) == 0 || unique[len(unique)-1] != value {
-			unique = append(unique, value)
-		}
-	}
-	return unique
-}
-
 func schemaVersion(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)

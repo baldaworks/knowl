@@ -14,6 +14,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const knownProviderID = "known"
+
 func TestInitWorkspaceIsIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -336,7 +338,7 @@ func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.WithValue(context.Background(), loadedConfigContextKey{}, loadedConfig{
 				Document: knowlConfigDocument{
-					Runtime: appconfig.RuntimeConfig{Providers: map[string]agentconfig.Config{"known": providerConfig}},
+					Runtime: appconfig.RuntimeConfig{Providers: map[string]agentconfig.Config{knownProviderID: providerConfig}},
 					Knowl:   apphost.AppConfig{Provider: test.providerID},
 				},
 			})
@@ -348,16 +350,16 @@ func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testi
 
 	ctx := context.WithValue(context.Background(), loadedConfigContextKey{}, loadedConfig{
 		Document: knowlConfigDocument{
-			Runtime: appconfig.RuntimeConfig{Providers: map[string]agentconfig.Config{"known": providerConfig}},
-			Knowl:   apphost.AppConfig{Provider: "known"},
+			Runtime: appconfig.RuntimeConfig{Providers: map[string]agentconfig.Config{knownProviderID: providerConfig}},
+			Knowl:   apphost.AppConfig{Provider: knownProviderID},
 		},
 	})
 	factory, providerID, err := selectedRuntimeProvider(ctx)
 	if err != nil {
 		t.Fatalf("selectedRuntimeProvider() error: %v", err)
 	}
-	if factory == nil || providerID != "known" {
-		t.Fatalf("selectedRuntimeProvider() = (%#v, %q), want factory and known", factory, providerID)
+	if factory == nil || providerID != knownProviderID {
+		t.Fatalf("selectedRuntimeProvider() = (%#v, %q), want factory and %s", factory, providerID, knownProviderID)
 	}
 }
 

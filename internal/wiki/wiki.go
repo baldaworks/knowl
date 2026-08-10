@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	rootDir     = "wiki/"
-	indexPath   = "wiki/index.md"
-	logPath     = "wiki/log.md"
-	markdownExt = ".md"
+	rootDir      = "wiki/"
+	indexPath    = "wiki/index.md"
+	logPath      = "wiki/log.md"
+	markdownExt  = ".md"
+	relationWiki = "wiki"
 )
 
 // Frontmatter is the bounded YAML metadata recognized on ordinary pages.
@@ -140,12 +141,12 @@ func Links(from knowl.PageID, content string) []knowl.LinkReference {
 	links := make([]knowl.LinkReference, 0, len(targets))
 	seen := make(map[string]struct{}, len(targets))
 	for _, target := range targets {
-		key := target + "\x00wiki"
+		key := target + "\x00" + relationWiki
 		if _, exists := seen[key]; exists {
 			continue
 		}
 		seen[key] = struct{}{}
-		links = append(links, knowl.LinkReference{From: from, To: knowl.PageID(target), Relation: "wiki"})
+		links = append(links, knowl.LinkReference{From: from, To: knowl.PageID(target), Relation: relationWiki})
 	}
 	return links
 }

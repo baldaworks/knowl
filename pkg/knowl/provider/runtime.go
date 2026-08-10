@@ -59,13 +59,13 @@ Only propose edits that are necessary to maintain the canonical knowledge worksp
 // consumer-side interface here makes deterministic tests independent of ACP or
 // hosted provider processes.
 type RuntimeFactory interface {
-	Build(context.Context, agentfactory.BuildRequest) (adkagent.Agent, error)
+	Build(ctx context.Context, request agentfactory.BuildRequest) (adkagent.Agent, error)
 }
 
 // RuntimeFactoryValidator is implemented by the shared runtime factory when
 // it can validate a provider schema without starting the provider.
 type RuntimeFactoryValidator interface {
-	ValidateAgent(string) error
+	ValidateAgent(providerID string) error
 }
 
 type runnerFactory func(adkagent.Agent, session.Service) (*runner.Runner, error)

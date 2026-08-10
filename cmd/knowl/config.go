@@ -69,11 +69,11 @@ func loadConfig(cmdContext context.Context, configDir, profile string) (context.
 
 func configFromContext(ctx context.Context) (loadedConfig, error) {
 	if ctx == nil {
-		return loadedConfig{}, fmt.Errorf("Knowl config context is required")
+		return loadedConfig{}, fmt.Errorf("knowl config context is required")
 	}
 	config, ok := ctx.Value(loadedConfigContextKey{}).(loadedConfig)
 	if !ok {
-		return loadedConfig{}, fmt.Errorf("Knowl config is not loaded")
+		return loadedConfig{}, fmt.Errorf("knowl config is not loaded")
 	}
 	return config, nil
 }

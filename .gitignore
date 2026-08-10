@@ -2,6 +2,48 @@
 .config/knowl/*.local.yaml
 .knowl/
 /knowl
+
+# Go build artifacts
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+
+# Go test and coverage outputs
+*.test
+coverage.out
+cover.out
+*.coverprofile
+
+# Go/tool caches
+.cache/
+.gocache/
+.gomodcache/
+
+# IDE/editor files
+.idea/
+*.iml
+.vscode/
+.fleet/
+.zed/
+*.swp
+*.swo
+*~
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+tmp/
+temp/
+
 *.db
 *.db-wal
 *.db-shm
