@@ -3,20 +3,33 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
+	"github.com/baldaworks/knowl/internal/httpapi/trustedrequest"
 	"github.com/baldaworks/knowl/pkg/knowl"
+	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	"github.com/baldaworks/knowl/pkg/knowl/provider"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/normahq/runtime/v2/agentconfig"
 	"github.com/normahq/runtime/v2/appconfig"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
-const knownProviderID = "known"
+const (
+	knownProviderID = "known"
+	commandHelpFlag = "--help"
+)
 
 func TestInitWorkspaceIsIdempotent(t *testing.T) {
 	t.Parallel()
@@ -83,11 +96,15 @@ func TestStoreDriverSelection(t *testing.T) {
 func TestRootExposesCurrentLifecycleCommands(t *testing.T) {
 	root := newRootCommand()
 	want := map[string]bool{
-		initCommandName:     true,
-		validateCommandName: true,
-		startCommandName:    true,
-		ingestCommandName:   true,
-		lintCommandName:     true,
+		initCommandName:      true,
+		validateCommandName:  true,
+		startCommandName:     true,
+		ingestCommandName:    true,
+		queryCommandName:     true,
+		searchCommandName:    true,
+		lintCommandName:      true,
+		operationCommandName: true,
+		pageCommandName:      true,
 	}
 	for _, command := range root.Commands() {
 		delete(want, command.Name())
@@ -105,9 +122,13 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 		"Supported local workflow:",
 		"knowl init",
 		"knowl validate",
+		"knowl ingest --input FILE|-",
+		"knowl query <text>",
+		"knowl page links <page-id>",
 		startCommandUsage,
 		loopbackHTTPAPIText,
-		"not the supported local workflow today",
+		"Direct CLI workflows execute in-process",
+		"retained loopback HTTP/OpenAPI service mode",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("root help missing %q in output:\n%s", want, output)
@@ -115,34 +136,92 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 	}
 }
 
-func TestPlaceholderCommandHelpMarksCommandsUnsupported(t *testing.T) {
+func TestImplementedWorkflowHelpDescribesCLIInputs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		cmd       *cobra.Command
+		args      []string
+		wantParts []string
+	}{
+		{
+			name: "ingest",
+			cmd:  newIngestCommand(),
+			wantParts: []string{
+				"--input",
+				"JSON request body",
+				workflowJSONStdoutHelp,
+			},
+		},
+		{
+			name: "query",
+			cmd:  newQueryCommand(),
+			wantParts: []string{
+				"positional arguments",
+				workflowJSONStdoutHelp,
+			},
+		},
+		{
+			name: "page links",
+			cmd:  newPageCommand(),
+			args: []string{pageLinksCommandName, commandHelpFlag},
+			wantParts: []string{
+				"bounded link neighborhood",
+				"page ID",
+				workflowJSONStdoutHelp,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			test.cmd.SetOut(&output)
+			test.cmd.SetErr(&output)
+			if len(test.args) == 0 {
+				test.cmd.SetArgs([]string{commandHelpFlag})
+			} else {
+				test.cmd.SetArgs(test.args)
+			}
+			if err := test.cmd.Execute(); err != nil {
+				t.Fatalf("%s help Execute() error: %v", test.name, err)
+			}
+			for _, want := range test.wantParts {
+				if !strings.Contains(output.String(), want) {
+					t.Fatalf("%s help missing %q in output:\n%s", test.name, want, output.String())
+				}
+			}
+		})
+	}
+}
+
+func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name      string
 		cmd       *cobra.Command
 		wantShort string
-		wantHelp  []string
+		wantSubs  []string
 	}{
 		{
 			name:      ingestCommandName,
 			cmd:       newIngestCommand(),
-			wantShort: placeholderCommandShort,
-			wantHelp: []string{
-				unsupportedWorkflowToday,
-				startCommandUsage,
-				loopbackHTTPAPIText,
-			},
+			wantShort: "Accept and process one immutable source revision",
+			wantSubs:  []string{"preview", "apply"},
 		},
 		{
-			name:      lintCommandName,
-			cmd:       newLintCommand(),
-			wantShort: placeholderCommandShort,
-			wantHelp: []string{
-				unsupportedWorkflowToday,
-				startCommandUsage,
-				loopbackHTTPAPIText,
-			},
+			name:      queryCommandName,
+			cmd:       newQueryCommand(),
+			wantShort: "Assemble bounded wiki references and citations",
+			wantSubs:  []string{queryFileCommandName},
+		},
+		{
+			name:      pageCommandName,
+			cmd:       newPageCommand(),
+			wantShort: "Read one bounded canonical page",
+			wantSubs:  []string{pageLinksCommandName},
 		},
 	}
 
@@ -153,64 +232,531 @@ func TestPlaceholderCommandHelpMarksCommandsUnsupported(t *testing.T) {
 			if got := test.cmd.Short; got != test.wantShort {
 				t.Fatalf("%s short = %q, want %q", test.name, got, test.wantShort)
 			}
-
-			output := commandHelpOutput(t, test.cmd)
-			for _, want := range test.wantHelp {
-				if !strings.Contains(output, want) {
-					t.Fatalf("%s help missing %q in output:\n%s", test.name, want, output)
+			for _, want := range test.wantSubs {
+				found := false
+				for _, command := range test.cmd.Commands() {
+					if command.Name() == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("%s is missing subcommand %q", test.name, want)
 				}
 			}
 		})
 	}
 }
 
-func TestPlaceholderCommandsReturnSupportedWorkflowGuidance(t *testing.T) {
-	t.Parallel()
+func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
+	original := newLocalWorkflowSession
+	t.Cleanup(func() { newLocalWorkflowSession = original })
+
+	var (
+		gotMethod  string
+		gotPath    string
+		gotBody    string
+		gotAuth    string
+		gotTrusted bool
+	)
+	host := &stubLocalWorkflowHost{
+		handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			gotMethod = request.Method
+			gotPath = request.URL.Path
+			content, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			gotBody = string(content)
+			gotAuth = request.Header.Get("Authorization")
+			gotTrusted = trustedrequest.IsMarked(request.Context())
+			response.Header().Set("Content-Type", "application/json")
+			response.WriteHeader(http.StatusCreated)
+			_, _ = response.Write([]byte(`{"ok":true}`))
+		}),
+	}
+	newLocalWorkflowSession = func(context.Context) (localWorkflowSession, error) {
+		return localWorkflowSession{
+			Host:            host,
+			ShutdownTimeout: time.Second,
+		}, nil
+	}
+
+	response, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/ingest",
+		Body:   []byte(`{"hello":"world"}`),
+		Headers: http.Header{
+			"Authorization": []string{"Bearer test-token"},
+			"Content-Type":  []string{"application/json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+	if host.startCalls != 1 {
+		t.Fatalf("Start() calls = %d, want 1", host.startCalls)
+	}
+	if host.stopCalls != 1 {
+		t.Fatalf("Stop() calls = %d, want 1", host.stopCalls)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v1/ingest" {
+		t.Fatalf("request = (%s %s), want (%s %s)", gotMethod, gotPath, http.MethodPost, "/v1/ingest")
+	}
+	if gotBody != `{"hello":"world"}` {
+		t.Fatalf("body = %q, want %q", gotBody, `{"hello":"world"}`)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer test-token")
+	}
+	if !gotTrusted {
+		t.Fatal("request context was not marked trusted")
+	}
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusCreated)
+	}
+	if got := strings.TrimSpace(string(response.Body)); got != `{"ok":true}` {
+		t.Fatalf("response body = %q, want %q", got, `{"ok":true}`)
+	}
+}
+
+func TestIngestCommandAutoAppliesTrustedLocalWorkflowWithoutOperatorToken(t *testing.T) {
+	fixture := newCommandWorkflowFixture(t, true)
+	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
+
+	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
+		Scope: pointerTo("local"),
+		Source: knowlapi.SourceRef{
+			Adapter: smokeSourceAdapter,
+			Id:      smokeSourceID,
+		},
+		Version: knowlapi.SourceVersion{
+			Version: "1",
+			Digest:  smokeDigest([]byte(smokeSourceText)),
+		},
+		Content: []byte(smokeSourceText),
+	})
+
+	stdout, stderr, err := executeCLICommand(newIngestCommand(), []string{workflowInputFlagUsage, inputPath}, nil)
+	if err != nil {
+		t.Fatalf("ingest Execute() error: %v", err)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var result knowlapi.IngestResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("decode ingest output: %v", err)
+	}
+	if result.Operation.Status != knowlapi.Committed {
+		t.Fatalf("ingest operation status = %q, want %q", result.Operation.Status, knowlapi.Committed)
+	}
+	if _, err := os.Stat(fixture.pagePath("wiki/entities/one.md")); err != nil {
+		t.Fatalf("committed page missing: %v", err)
+	}
+}
+
+func TestIngestPreviewAndApplyCommandsShareDurableStateAcrossOneShotHosts(t *testing.T) {
+	fixture := newCommandWorkflowFixture(t, true)
+	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
+
+	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
+		Scope: pointerTo("local"),
+		Source: knowlapi.SourceRef{
+			Adapter: smokeSourceAdapter,
+			Id:      smokeSourceID,
+		},
+		Version: knowlapi.SourceVersion{
+			Version: "1",
+			Digest:  smokeDigest([]byte(smokeSourceText)),
+		},
+		Content: []byte(smokeSourceText),
+	})
+
+	previewOutput, previewErrOutput, err := executeCLICommand(newIngestCommand(), []string{"preview", workflowInputFlagUsage, inputPath}, nil)
+	if err != nil {
+		t.Fatalf("preview Execute() error: %v", err)
+	}
+	if strings.TrimSpace(previewErrOutput) != "" {
+		t.Fatalf("preview stderr = %q, want empty", previewErrOutput)
+	}
+	var preview knowlapi.IngestResult
+	if err := json.Unmarshal([]byte(previewOutput), &preview); err != nil {
+		t.Fatalf("decode preview output: %v", err)
+	}
+	if preview.Operation.Status != knowlapi.AwaitingReview {
+		t.Fatalf("preview operation status = %q, want %q", preview.Operation.Status, knowlapi.AwaitingReview)
+	}
+	if _, err := os.Stat(fixture.pagePath("wiki/entities/one.md")); !os.IsNotExist(err) {
+		t.Fatalf("preview page stat = %v, want absent", err)
+	}
+
+	applyOutput, applyErrOutput, err := executeCLICommand(newIngestCommand(), []string{"apply", preview.Operation.Id}, nil)
+	if err != nil {
+		t.Fatalf("apply Execute() error: %v", err)
+	}
+	if strings.TrimSpace(applyErrOutput) != "" {
+		t.Fatalf("apply stderr = %q, want empty", applyErrOutput)
+	}
+	var applied knowlapi.ApplyResult
+	if err := json.Unmarshal([]byte(applyOutput), &applied); err != nil {
+		t.Fatalf("decode apply output: %v", err)
+	}
+	if applied.Operation.Status != knowlapi.Committed {
+		t.Fatalf("apply operation status = %q, want %q", applied.Operation.Status, knowlapi.Committed)
+	}
+	if _, err := os.Stat(fixture.pagePath("wiki/entities/one.md")); err != nil {
+		t.Fatalf("committed page missing after apply: %v", err)
+	}
+}
+
+func TestQueryFileCommandReadsStdinAndStagesExplicitPlan(t *testing.T) {
+	fixture := newCommandWorkflowFixture(t, false)
+	fixture.acceptSource(t, domain.SourceEnvelope{
+		Scope: "local",
+		Source: domain.SourceRef{
+			Adapter: smokeSourceAdapter,
+			ID:      smokeSourceID,
+		},
+		Version: domain.SourceVersion{
+			Version: "1",
+			Digest:  smokeDigest([]byte(smokeSourceText)),
+		},
+		Content: []byte(smokeSourceText),
+	})
+	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
+
+	queryInput, err := json.Marshal(knowlapi.FilingRequest{
+		Query: "file this result",
+		Result: knowlapi.QueryResult{
+			Scope: "local",
+			Query: "file this result",
+			Pages: []knowlapi.PageReference{{
+				Id:        "entities/source",
+				Path:      "wiki/entities/source.md",
+				Title:     "Source",
+				Untrusted: true,
+			}},
+			Citations: []knowlapi.Citation{{
+				Kind:      knowlapi.Raw,
+				Reference: smokeSourceRef,
+				SourceRef: pointerTo(smokeSourceRef),
+				Untrusted: true,
+			}},
+		},
+		Plan: knowlapi.ModelEditPlan{
+			SchemaDigest: fixture.schema.Digest,
+			SourceRefs:   []string{smokeSourceRef},
+			Edits: []knowlapi.FileEdit{{
+				Path:    "wiki/entities/filed.md",
+				Content: []byte("---\nid: entities/filed\ntitle: Filed\ntype: entity\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# Filed\n"),
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal query file input: %v", err)
+	}
+
+	stdout, stderr, err := executeCLICommand(newQueryCommand(), []string{queryFileCommandName, workflowInputFlagUsage, "-"}, queryInput)
+	if err != nil {
+		t.Fatalf("query file Execute() error: %v", err)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		t.Fatalf("query file stderr = %q, want empty", stderr)
+	}
+	var result knowlapi.IngestResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("decode query file output: %v", err)
+	}
+	if result.Operation.Status != knowlapi.AwaitingReview {
+		t.Fatalf("query file status = %q, want %q", result.Operation.Status, knowlapi.AwaitingReview)
+	}
+	if _, err := os.Stat(fixture.pagePath("wiki/entities/filed.md")); !os.IsNotExist(err) {
+		t.Fatalf("filed page stat before apply = %v, want absent", err)
+	}
+}
+
+func TestQueryFileCommandRejectsMalformedJSONBeforeHostExecution(t *testing.T) {
+	original := newLocalWorkflowSession
+	t.Cleanup(func() { newLocalWorkflowSession = original })
+	newLocalWorkflowSession = func(context.Context) (localWorkflowSession, error) {
+		t.Fatal("local workflow session factory should not be called for malformed JSON input")
+		return localWorkflowSession{}, nil
+	}
+
+	stdout, stderr, err := executeCLICommand(newQueryCommand(), []string{queryFileCommandName, workflowInputFlagUsage, "-"}, []byte(`{"query":`))
+	if err == nil {
+		t.Fatal("query file Execute() error = nil, want decode error")
+	}
+	if !strings.Contains(err.Error(), "decode query file input") {
+		t.Fatalf("query file Execute() error = %q, want decode context", err)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		t.Fatalf("stderr = %q, want empty for local decode failure", stderr)
+	}
+}
+
+func TestReadCommandsReturnStructuredJSON(t *testing.T) {
+	fixture, ingest := prepareCommittedCommandWorkflow(t)
+	_ = fixture
 
 	tests := []struct {
-		name        string
-		cmd         *cobra.Command
-		wantMessage string
+		name   string
+		cmd    *cobra.Command
+		args   []string
+		assert func(*testing.T, string)
 	}{
 		{
-			name:        ingestCommandName,
-			cmd:         newIngestCommand(),
-			wantMessage: unsupportedWorkflowError(ingestCommandName).Error(),
+			name: "query",
+			cmd:  newQueryCommand(),
+			args: []string{smokeQueryText},
+			assert: func(t *testing.T, output string) {
+				t.Helper()
+				var result knowlapi.QueryResult
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatalf("decode query output: %v", err)
+				}
+				if result.Query != smokeQueryText || len(result.Pages) == 0 || result.Pages[0].Id != smokePageID {
+					t.Fatalf("query result = %#v", result)
+				}
+			},
 		},
 		{
-			name:        lintCommandName,
-			cmd:         newLintCommand(),
-			wantMessage: unsupportedWorkflowError(lintCommandName).Error(),
+			name: "search",
+			cmd:  newSearchCommand(),
+			args: []string{smokeQueryText},
+			assert: func(t *testing.T, output string) {
+				t.Helper()
+				var result []knowlapi.PageReference
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatalf("decode search output: %v", err)
+				}
+				if len(result) == 0 || result[0].Id != smokePageID {
+					t.Fatalf("search result = %#v", result)
+				}
+			},
+		},
+		{
+			name: "lint",
+			cmd:  newLintCommand(),
+			assert: func(t *testing.T, output string) {
+				t.Helper()
+				var result knowlapi.LintReport
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatalf("decode lint output: %v", err)
+				}
+				if !hasLintFindingCode(result.Findings, "index.missing_page") || !hasLintFindingCode(result.Findings, "page.orphan") {
+					t.Fatalf("lint findings = %#v, want current deterministic warnings", result.Findings)
+				}
+			},
+		},
+		{
+			name: "operation",
+			cmd:  newOperationCommand(),
+			args: []string{ingest.Operation.Id},
+			assert: func(t *testing.T, output string) {
+				t.Helper()
+				var result knowlapi.Operation
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatalf("decode operation output: %v", err)
+				}
+				if result.Id != ingest.Operation.Id || result.Status != knowlapi.Committed {
+					t.Fatalf("operation result = %#v", result)
+				}
+			},
+		},
+		{
+			name: "page",
+			cmd:  newPageCommand(),
+			args: []string{"entities/one"},
+			assert: func(t *testing.T, output string) {
+				t.Helper()
+				var result knowlapi.PageSnapshot
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatalf("decode page output: %v", err)
+				}
+				if result.Id != smokePageID || !result.Untrusted {
+					t.Fatalf("page result = %#v", result)
+				}
+			},
+		},
+		{
+			name: "page links",
+			cmd:  newPageCommand(),
+			args: []string{pageLinksCommandName, smokePageID},
+			assert: func(t *testing.T, output string) {
+				t.Helper()
+				var result []knowlapi.LinkReference
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
+					t.Fatalf("decode page links output: %v", err)
+				}
+				if len(result) != 0 {
+					t.Fatalf("page links = %#v, want empty", result)
+				}
+			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			if !test.cmd.SilenceErrors {
-				t.Fatalf("%s SilenceErrors = false, want true", test.name)
+			stdout, stderr, err := executeCLICommand(test.cmd, test.args, nil)
+			if err != nil {
+				t.Fatalf("%s Execute() error: %v", test.name, err)
 			}
-			if !test.cmd.SilenceUsage {
-				t.Fatalf("%s SilenceUsage = false, want true", test.name)
+			if strings.TrimSpace(stderr) != "" {
+				t.Fatalf("%s stderr = %q, want empty", test.name, stderr)
 			}
-
-			var output bytes.Buffer
-			test.cmd.SetOut(&output)
-			test.cmd.SetErr(&output)
-
-			err := test.cmd.Execute()
-			if err == nil {
-				t.Fatalf("%s Execute() error = nil, want guidance error", test.name)
-			}
-			if got := err.Error(); got != test.wantMessage {
-				t.Fatalf("%s Execute() error = %q, want %q", test.name, got, test.wantMessage)
-			}
-			if got := strings.TrimSpace(output.String()); got != "" {
-				t.Fatalf("%s Execute() wrote %q, want no Cobra usage/error output", test.name, got)
-			}
+			test.assert(t, stdout)
 		})
 	}
+}
+
+func TestPageCommandPrintsStructuredNotFoundError(t *testing.T) {
+	fixture := newCommandWorkflowFixture(t, true)
+	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
+
+	stdout, stderr, err := executeCLICommand(newPageCommand(), []string{"entities/missing"}, nil)
+	if err == nil {
+		t.Fatal("page Execute() error = nil, want workflow failure")
+	}
+	var workflowErr *workflowCommandError
+	if !errors.As(err, &workflowErr) {
+		t.Fatalf("page Execute() error = %T, want workflowCommandError", err)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, `"error":"not_found"`) {
+		t.Fatalf("stderr = %q, want structured not_found error", stderr)
+	}
+}
+
+func TestIngestCommandPrintsStructuredWorkflowError(t *testing.T) {
+	fixture := newCommandWorkflowFixture(t, true)
+	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
+
+	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
+		Scope: pointerTo("other"),
+		Source: knowlapi.SourceRef{
+			Adapter: smokeSourceAdapter,
+			Id:      smokeSourceID,
+		},
+		Version: knowlapi.SourceVersion{
+			Version: "1",
+			Digest:  smokeDigest([]byte(smokeSourceText)),
+		},
+		Content: []byte(smokeSourceText),
+	})
+
+	stdout, stderr, err := executeCLICommand(newIngestCommand(), []string{workflowInputFlagUsage, inputPath}, nil)
+	if err == nil {
+		t.Fatal("ingest Execute() error = nil, want workflow failure")
+	}
+	var workflowErr *workflowCommandError
+	if !errors.As(err, &workflowErr) {
+		t.Fatalf("ingest Execute() error = %T, want workflowCommandError", err)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, `"error":"invalid_request"`) {
+		t.Fatalf("stderr = %q, want structured invalid_request error", stderr)
+	}
+}
+
+func TestLocalWorkflowRunnerPropagatesStartError(t *testing.T) {
+	original := newLocalWorkflowSession
+	t.Cleanup(func() { newLocalWorkflowSession = original })
+
+	host := &stubLocalWorkflowHost{
+		handler:  http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		startErr: errors.New("boom"),
+	}
+	newLocalWorkflowSession = func(context.Context) (localWorkflowSession, error) {
+		return localWorkflowSession{
+			Host:            host,
+			ShutdownTimeout: time.Second,
+		}, nil
+	}
+
+	_, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
+		Method: http.MethodGet,
+		Path:   lintWorkflowPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "start local workflow host") {
+		t.Fatalf("Execute() error = %v, want start error", err)
+	}
+	if host.stopCalls != 0 {
+		t.Fatalf("Stop() calls = %d, want 0 when Start fails", host.stopCalls)
+	}
+}
+
+func TestLocalWorkflowRunnerClosesHostAfterStartError(t *testing.T) {
+	original := newLocalWorkflowSession
+	t.Cleanup(func() { newLocalWorkflowSession = original })
+
+	host := &stubClosableLocalWorkflowHost{
+		stubLocalWorkflowHost: stubLocalWorkflowHost{
+			handler:  http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+			startErr: errors.New("boom"),
+		},
+	}
+	newLocalWorkflowSession = func(context.Context) (localWorkflowSession, error) {
+		return localWorkflowSession{
+			Host:            host,
+			ShutdownTimeout: time.Second,
+		}, nil
+	}
+
+	_, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
+		Method: http.MethodGet,
+		Path:   "/v1/lint",
+	})
+	if err == nil || !strings.Contains(err.Error(), "start local workflow host") {
+		t.Fatalf("Execute() error = %v, want start error", err)
+	}
+	if host.closeCalls != 1 {
+		t.Fatalf("Close() calls = %d, want 1 after Start fails", host.closeCalls)
+	}
+	if host.stopCalls != 0 {
+		t.Fatalf("Stop() calls = %d, want 0 when cleanup uses Close()", host.stopCalls)
+	}
+}
+
+type stubLocalWorkflowHost struct {
+	handler    http.Handler
+	startErr   error
+	stopErr    error
+	startCalls int
+	stopCalls  int
+}
+
+func (host *stubLocalWorkflowHost) Start(context.Context) error {
+	host.startCalls++
+	return host.startErr
+}
+
+func (host *stubLocalWorkflowHost) Stop(context.Context) error {
+	host.stopCalls++
+	return host.stopErr
+}
+
+func (host *stubLocalWorkflowHost) Handler() http.Handler {
+	return host.handler
+}
+
+type stubClosableLocalWorkflowHost struct {
+	stubLocalWorkflowHost
+	closeErr   error
+	closeCalls int
+}
+
+func (host *stubClosableLocalWorkflowHost) Close() error {
+	host.closeCalls++
+	return host.closeErr
 }
 
 func TestRootCommandLoadsConfigIntoRunContext(t *testing.T) {
@@ -546,9 +1092,162 @@ func commandHelpOutput(t *testing.T, cmd *cobra.Command) string {
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	cmd.SetErr(&output)
-	cmd.SetArgs([]string{"--help"})
+	cmd.SetArgs([]string{commandHelpFlag})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute help for %s: %v", cmd.Name(), err)
 	}
 	return output.String()
+}
+
+type commandWorkflowFixture struct {
+	config     knowl.Config
+	schema     domain.SchemaDocument
+	maintainer provider.Fixture
+}
+
+func newCommandWorkflowFixture(t *testing.T, autoApply bool) commandWorkflowFixture {
+	t.Helper()
+
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	schema, err := workspace.Schema(context.Background(), "local")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = loopbackListenAddr
+	config.OperatorToken = ""
+	config.IngestOptions.AutoApply = autoApply
+	return commandWorkflowFixture{
+		config: config,
+		schema: schema,
+		maintainer: provider.Fixture{Result: domain.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{smokeSourceRef},
+			Edits:        []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte(smokePageContent)}},
+		}},
+	}
+}
+
+func (fixture commandWorkflowFixture) newSessionFactory(t *testing.T) localWorkflowSessionFactory {
+	t.Helper()
+
+	return func(ctx context.Context) (localWorkflowSession, error) {
+		host, err := knowl.NewHost(ctx, fixture.config, fixture.maintainer)
+		if err != nil {
+			return localWorkflowSession{}, err
+		}
+		return localWorkflowSession{
+			Host:            host,
+			ShutdownTimeout: fixture.config.ShutdownTimeout,
+		}, nil
+	}
+}
+
+func (fixture commandWorkflowFixture) pagePath(relative string) string {
+	return filepath.Join(fixture.config.Workspace, filepath.FromSlash(relative))
+}
+
+func (fixture commandWorkflowFixture) acceptSource(t *testing.T, envelope domain.SourceEnvelope) {
+	t.Helper()
+
+	workspace, err := contentfs.New(fixture.config.Workspace)
+	if err != nil {
+		t.Fatalf("reopen workspace: %v", err)
+	}
+	if _, err := workspace.AcceptSource(context.Background(), envelope); err != nil {
+		t.Fatalf("accept fixture source: %v", err)
+	}
+}
+
+func withLocalWorkflowSessionFactory(t *testing.T, factory localWorkflowSessionFactory) {
+	t.Helper()
+
+	original := newLocalWorkflowSession
+	newLocalWorkflowSession = factory
+	t.Cleanup(func() { newLocalWorkflowSession = original })
+}
+
+func executeCLICommand(cmd *cobra.Command, args []string, stdin []byte) (string, string, error) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetArgs(args)
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	if stdin == nil {
+		cmd.SetIn(bytes.NewReader(nil))
+	} else {
+		cmd.SetIn(bytes.NewReader(stdin))
+	}
+	cmd.SetContext(context.Background())
+	err := cmd.Execute()
+	return stdout.String(), stderr.String(), err
+}
+
+func writeJSONFixture(t *testing.T, value any) string {
+	t.Helper()
+
+	content, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal JSON fixture: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "input.json")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write JSON fixture: %v", err)
+	}
+	return path
+}
+
+func pointerTo(value string) *string {
+	return &value
+}
+
+func hasLintFindingCode(findings []knowlapi.LintFinding, code string) bool {
+	for _, finding := range findings {
+		if finding.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func prepareCommittedCommandWorkflow(t *testing.T) (commandWorkflowFixture, knowlapi.IngestResult) {
+	t.Helper()
+
+	fixture := newCommandWorkflowFixture(t, true)
+	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
+	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
+		Scope: pointerTo("local"),
+		Source: knowlapi.SourceRef{
+			Adapter: smokeSourceAdapter,
+			Id:      smokeSourceID,
+		},
+		Version: knowlapi.SourceVersion{
+			Version: "1",
+			Digest:  smokeDigest([]byte(smokeSourceText)),
+		},
+		Content: []byte(smokeSourceText),
+	})
+	stdout, stderr, err := executeCLICommand(newIngestCommand(), []string{workflowInputFlagUsage, inputPath}, nil)
+	if err != nil {
+		t.Fatalf("prepare committed ingest Execute() error: %v", err)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		t.Fatalf("prepare committed ingest stderr = %q, want empty", stderr)
+	}
+	var result knowlapi.IngestResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("decode committed ingest output: %v", err)
+	}
+	if result.Operation.Status != knowlapi.Committed {
+		t.Fatalf("prepare committed ingest status = %q, want %q", result.Operation.Status, knowlapi.Committed)
+	}
+	return fixture, result
 }

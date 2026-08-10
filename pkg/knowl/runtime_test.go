@@ -62,6 +62,22 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if preStart.Code != http.StatusServiceUnavailable {
 		t.Fatalf("pre-start readiness status = %d, want %d", preStart.Code, http.StatusServiceUnavailable)
 	}
+	body, status, err := doHostRequest(t, host, http.MethodGet, "/v1/query?q=before-start&scope=other", nil, "")
+	if err != nil {
+		t.Fatalf("pre-start scope override request: %v", err)
+	}
+	if status != http.StatusForbidden {
+		t.Fatalf("pre-start scope override status = %d, body %s", status, body)
+	}
+	assertErrorClass(t, body, "scope_override_forbidden")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/query?q=before-start", nil, "")
+	if err != nil {
+		t.Fatalf("pre-start query request: %v", err)
+	}
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("pre-start query status = %d, body %s", status, body)
+	}
+	assertErrorClass(t, body, "not_ready")
 	if err := host.Start(ctx); err != nil {
 		t.Fatalf("start host: %v", err)
 	}
@@ -73,6 +89,30 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if _, status, _ := doHostRequest(t, host, http.MethodGet, "/readyz", nil, ""); status != http.StatusOK {
 		t.Fatalf("readiness status = %d, want %d", status, http.StatusOK)
 	}
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/query", nil, "")
+	if err != nil {
+		t.Fatalf("query without q request: %v", err)
+	}
+	if status != http.StatusBadRequest {
+		t.Fatalf("query without q status = %d, body %s", status, body)
+	}
+	assertErrorClass(t, body, "query_required")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/pages/", nil, "")
+	if err != nil {
+		t.Fatalf("page without id request: %v", err)
+	}
+	if status != http.StatusBadRequest {
+		t.Fatalf("page without id status = %d, body %s", status, body)
+	}
+	assertErrorClass(t, body, "page_id_required")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/unknown", nil, "")
+	if err != nil {
+		t.Fatalf("unknown route request: %v", err)
+	}
+	if status != http.StatusNotFound {
+		t.Fatalf("unknown route status = %d, body %s", status, body)
+	}
+	assertErrorClass(t, body, "not_found")
 
 	envelope := domain.SourceEnvelope{
 		Scope:   "local",
@@ -87,7 +127,7 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if _, status, _ := doHostRequest(t, host, http.MethodPost, "/v1/ingest/preview", encoded, ""); status != http.StatusUnauthorized {
 		t.Fatalf("unauthorized preview status = %d, want %d", status, http.StatusUnauthorized)
 	}
-	body, status, err := doHostRequest(t, host, http.MethodPost, "/v1/ingest/preview", encoded, config.OperatorToken)
+	body, status, err = doHostRequest(t, host, http.MethodPost, "/v1/ingest/preview", encoded, config.OperatorToken)
 	if err != nil {
 		t.Fatalf("preview request: %v", err)
 	}
@@ -136,7 +176,18 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if operation.Status != domain.StatusCommitted {
 		t.Fatalf("operation status after commit = %q", operation.Status)
 	}
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/pages/entities/one", nil, "")
+	body, status, headers, err := doHostRequestDetailed(t, host, http.MethodGet, operationPath+"/apply", nil, "")
+	if err != nil {
+		t.Fatalf("get apply request: %v", err)
+	}
+	if status != http.StatusMethodNotAllowed {
+		t.Fatalf("get apply status = %d, body %s", status, body)
+	}
+	if allow := headers.Get("Allow"); !strings.Contains(allow, http.MethodPost) {
+		t.Fatalf("get apply Allow header = %q, want %q", allow, http.MethodPost)
+	}
+	assertErrorClass(t, body, "method_not_allowed")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/pages/entities/one/", nil, "")
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("page request = %d, %v, body %s", status, err, body)
 	}
@@ -146,6 +197,14 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	}
 	if !page.Untrusted || page.ID != "entities/one" {
 		t.Fatalf("page = %#v", page)
+	}
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/pages/entities/one/links", nil, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("page links request = %d, %v, body %s", status, err, body)
+	}
+	var links []domain.LinkReference
+	if err := json.Unmarshal(body, &links); err != nil {
+		t.Fatalf("decode links: %v", err)
 	}
 
 	shutdownHost(t, host)
@@ -241,13 +300,30 @@ const hostPageContent = "---\nid: entities/one\ntitle: One\ntype: entity\nsource
 
 func doHostRequest(t *testing.T, host *knowl.Host, method, path string, body []byte, token string) ([]byte, int, error) {
 	t.Helper()
+	content, status, _, err := doHostRequestDetailed(t, host, method, path, body, token)
+	return content, status, err
+}
+
+func doHostRequestDetailed(t *testing.T, host *knowl.Host, method, path string, body []byte, token string) ([]byte, int, http.Header, error) {
+	t.Helper()
 	request := httptest.NewRequest(method, "http://knowl"+path, bytes.NewReader(body))
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
 	response := httptest.NewRecorder()
 	host.Handler().ServeHTTP(response, request)
-	return response.Body.Bytes(), response.Code, nil
+	return response.Body.Bytes(), response.Code, response.Header(), nil
+}
+
+func assertErrorClass(t *testing.T, body []byte, want string) {
+	t.Helper()
+	var response map[string]string
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if got := response["error"]; got != want {
+		t.Fatalf("error class = %q, want %q", got, want)
+	}
 }
 
 func shutdownHost(t *testing.T, host *knowl.Host) {

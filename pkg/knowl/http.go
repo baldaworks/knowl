@@ -1,6 +1,7 @@
 package knowl
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
+	"github.com/baldaworks/knowl/internal/httpapi/trustedrequest"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -19,10 +22,6 @@ import (
 const maxHTTPBodyBytes = 8 << 20
 
 const serviceName = "knowl"
-
-const serviceKey = "service"
-
-const statusKey = "status"
 
 type httpDependencies struct {
 	Scope         domain.ScopeRef
@@ -38,113 +37,256 @@ func newHTTPHandler(dependencies httpDependencies) http.Handler {
 	if dependencies.Ready == nil {
 		dependencies.Ready = func() bool { return true }
 	}
-	return &httpHandler{dependencies: dependencies}
+	server := &httpHandler{dependencies: dependencies}
+	mux := &statusMux{inner: http.NewServeMux()}
+	generated := knowlapi.HandlerWithOptions(server, knowlapi.StdHTTPServerOptions{
+		BaseRouter:       mux,
+		ErrorHandlerFunc: generatedBindingError,
+	})
+	return &compatHTTPHandler{dependencies: dependencies, next: generated}
 }
 
 type httpHandler struct {
 	dependencies httpDependencies
 }
 
-func (handler *httpHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	if request.URL.Path == "/healthz" || request.URL.Path == "/health" {
-		handler.health(response)
-		return
+type compatHTTPHandler struct {
+	dependencies httpDependencies
+	next         http.Handler
+}
+
+func (handler *compatHTTPHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if strings.HasPrefix(request.URL.Path, "/v1/") {
+		if scope := request.URL.Query().Get("scope"); scope != "" {
+			writeHTTPError(response, http.StatusForbidden, "scope_override_forbidden")
+			return
+		}
+		if !handler.dependencies.Ready() {
+			writeHTTPError(response, http.StatusServiceUnavailable, "not_ready")
+			return
+		}
+		if request.URL.Path == "/v1/pages/" {
+			writeHTTPError(response, http.StatusBadRequest, "page_id_required")
+			return
+		}
+		request = normalizeGeneratedRequest(request)
 	}
-	if request.URL.Path == "/readyz" || request.URL.Path == "/health/ready" {
-		handler.ready(response)
-		return
-	}
-	if !strings.HasPrefix(request.URL.Path, "/v1/") {
+	handler.next.ServeHTTP(response, request)
+}
+
+type statusMux struct {
+	inner *http.ServeMux
+}
+
+func (mux *statusMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	mux.inner.HandleFunc(pattern, handler)
+}
+
+func (mux *statusMux) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	recorder := newBufferedResponseWriter()
+	mux.inner.ServeHTTP(recorder, request)
+	switch recorder.statusCode {
+	case http.StatusNotFound:
 		writeHTTPError(response, http.StatusNotFound, "not_found")
-		return
-	}
-	if scope := request.URL.Query().Get("scope"); scope != "" {
-		writeHTTPError(response, http.StatusForbidden, "scope_override_forbidden")
-		return
-	}
-	if !handler.dependencies.Ready() {
-		writeHTTPError(response, http.StatusServiceUnavailable, "not_ready")
-		return
-	}
-	path := strings.TrimSuffix(request.URL.Path, "/")
-	switch {
-	case path == "/v1/search" && request.Method == http.MethodGet:
-		handler.search(response, request)
-	case path == "/v1/query" && request.Method == http.MethodGet:
-		handler.query(response, request)
-	case path == "/v1/lint" && request.Method == http.MethodGet:
-		handler.lint(response, request)
-	case path == "/v1/lint/results" && request.Method == http.MethodGet:
-		handler.lint(response, request)
-	case path == "/v1/lint-results" && request.Method == http.MethodGet:
-		handler.lint(response, request)
-	case path == "/v1/ingest" && request.Method == http.MethodPost:
-		handler.ingest(response, request, false)
-	case path == "/v1/ingest/preview" && request.Method == http.MethodPost:
-		handler.ingest(response, request, true)
-	case path == "/v1/query/file" && request.Method == http.MethodPost:
-		handler.fileQuery(response, request)
-	case strings.HasPrefix(path, "/v1/operations/"):
-		handler.operation(response, request, strings.TrimPrefix(path, "/v1/operations/"))
-	case strings.HasPrefix(path, "/v1/status/"):
-		handler.operation(response, request, strings.TrimPrefix(path, "/v1/status/"))
-	case strings.HasPrefix(path, "/v1/pages/"):
-		handler.page(response, request, strings.TrimPrefix(path, "/v1/pages/"))
+	case http.StatusMethodNotAllowed:
+		copyHeaders(response.Header(), recorder.header)
+		writeHTTPError(response, http.StatusMethodNotAllowed, "method_not_allowed")
 	default:
-		writeHTTPError(response, http.StatusNotFound, "not_found")
+		recorder.writeTo(response)
 	}
 }
 
-func (handler *httpHandler) health(response http.ResponseWriter) {
-	writeJSON(response, http.StatusOK, map[string]any{serviceKey: serviceName, statusKey: "ok"})
+type bufferedResponseWriter struct {
+	header     http.Header
+	statusCode int
+	body       bytes.Buffer
 }
 
-func (handler *httpHandler) ready(response http.ResponseWriter) {
+func newBufferedResponseWriter() *bufferedResponseWriter {
+	return &bufferedResponseWriter{header: make(http.Header)}
+}
+
+func (writer *bufferedResponseWriter) Header() http.Header {
+	return writer.header
+}
+
+func (writer *bufferedResponseWriter) Write(bytesValue []byte) (int, error) {
+	if writer.statusCode == 0 {
+		writer.statusCode = http.StatusOK
+	}
+	return writer.body.Write(bytesValue)
+}
+
+func (writer *bufferedResponseWriter) WriteHeader(statusCode int) {
+	if writer.statusCode != 0 {
+		return
+	}
+	writer.statusCode = statusCode
+}
+
+func (writer *bufferedResponseWriter) writeTo(response http.ResponseWriter) {
+	copyHeaders(response.Header(), writer.header)
+	statusCode := writer.statusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	response.WriteHeader(statusCode)
+	if _, err := response.Write(writer.body.Bytes()); err != nil {
+		return
+	}
+}
+
+func copyHeaders(destination, source http.Header) {
+	for key, values := range source {
+		for _, value := range values {
+			destination.Add(key, value)
+		}
+	}
+}
+
+func normalizeGeneratedRequest(request *http.Request) *http.Request {
+	path := strings.TrimSuffix(request.URL.Path, "/")
+	rawPath := request.URL.RawPath
+	if rawPath == "" {
+		rawPath = path
+	}
+	const pagePrefix = "/v1/pages/"
+	const linksSuffix = "/links"
+	if strings.HasPrefix(path, pagePrefix) {
+		remainder := strings.TrimPrefix(path, pagePrefix)
+		switch {
+		case strings.HasSuffix(remainder, linksSuffix):
+			pageID := strings.TrimSuffix(remainder, linksSuffix)
+			rawPath = pagePrefix + url.PathEscape(pageID) + linksSuffix
+		case remainder != "":
+			rawPath = pagePrefix + url.PathEscape(remainder)
+		}
+	}
+	if path == request.URL.Path && rawPath == request.URL.RawPath {
+		return request
+	}
+	cloned := request.Clone(request.Context())
+	cloned.URL = cloneURL(request.URL)
+	cloned.URL.Path = path
+	cloned.URL.RawPath = rawPath
+	return cloned
+}
+
+func cloneURL(source *url.URL) *url.URL {
+	cloned := *source
+	return &cloned
+}
+
+func generatedBindingError(response http.ResponseWriter, request *http.Request, err error) {
+	var required *knowlapi.RequiredParamError
+	if errors.As(err, &required) && required.ParamName == "q" {
+		writeHTTPError(response, http.StatusBadRequest, "query_required")
+		return
+	}
+	var invalid *knowlapi.InvalidParamFormatError
+	if errors.As(err, &invalid) {
+		switch invalid.ParamName {
+		case "operation_id":
+			writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
+		case "page_id":
+			writeHTTPError(response, http.StatusBadRequest, "page_id_invalid")
+		default:
+			writeHTTPError(response, http.StatusBadRequest, "invalid_request")
+		}
+		return
+	}
+	writeHTTPError(response, http.StatusBadRequest, "invalid_request")
+}
+
+func (handler *httpHandler) GetHealthAlias(response http.ResponseWriter, _ *http.Request) {
+	health := knowlapi.GetHealthAlias200JSONResponse{
+		Service: serviceName,
+		Status:  knowlapi.Ok,
+	}
+	_ = health.VisitGetHealthAliasResponse(response)
+}
+
+func (handler *httpHandler) GetReadyAlias(response http.ResponseWriter, _ *http.Request) {
 	if !handler.dependencies.Ready() {
-		writeJSON(response, http.StatusServiceUnavailable, map[string]any{serviceKey: serviceName, statusKey: "not_ready"})
+		ready := knowlapi.GetReadyAlias503JSONResponse{Service: serviceName, Status: knowlapi.NotReady}
+		_ = ready.VisitGetReadyAliasResponse(response)
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"scope": handler.dependencies.Scope, serviceKey: serviceName, statusKey: "ready"})
+	scope := string(handler.dependencies.Scope)
+	ready := knowlapi.GetReadyAlias200JSONResponse{Service: serviceName, Status: knowlapi.Ready, Scope: &scope}
+	_ = ready.VisitGetReadyAliasResponse(response)
 }
 
-func (handler *httpHandler) search(response http.ResponseWriter, request *http.Request) {
-	query := strings.TrimSpace(request.URL.Query().Get("q"))
-	if query == "" {
-		writeHTTPError(response, http.StatusBadRequest, "query_required")
+func (handler *httpHandler) GetHealth(response http.ResponseWriter, _ *http.Request) {
+	health := knowlapi.GetHealth200JSONResponse{
+		Service: serviceName,
+		Status:  knowlapi.Ok,
+	}
+	_ = health.VisitGetHealthResponse(response)
+}
+
+func (handler *httpHandler) GetReady(response http.ResponseWriter, _ *http.Request) {
+	if !handler.dependencies.Ready() {
+		ready := knowlapi.GetReady503JSONResponse{Service: serviceName, Status: knowlapi.NotReady}
+		_ = ready.VisitGetReadyResponse(response)
 		return
 	}
-	result, err := handler.dependencies.Query.Search(request.Context(), handler.dependencies.Scope, query, domain.ReadLimits{})
+	scope := string(handler.dependencies.Scope)
+	ready := knowlapi.GetReady200JSONResponse{Service: serviceName, Status: knowlapi.Ready, Scope: &scope}
+	_ = ready.VisitGetReadyResponse(response)
+}
+
+func (handler *httpHandler) SearchPages(response http.ResponseWriter, request *http.Request, params knowlapi.SearchPagesParams) {
+	result, err := handler.dependencies.Query.Search(request.Context(), handler.dependencies.Scope, strings.TrimSpace(params.Q), domain.ReadLimits{})
 	if err != nil {
 		writeServiceError(response, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	transport := mustConvertJSON[[]knowlapi.PageReference](result)
+	_ = knowlapi.SearchPages200JSONResponse(transport).VisitSearchPagesResponse(response)
 }
 
-func (handler *httpHandler) query(response http.ResponseWriter, request *http.Request) {
-	query := strings.TrimSpace(request.URL.Query().Get("q"))
-	if query == "" {
-		writeHTTPError(response, http.StatusBadRequest, "query_required")
-		return
-	}
-	result, err := handler.dependencies.Query.Query(request.Context(), handler.dependencies.Scope, query, domain.ReadLimits{})
+func (handler *httpHandler) QueryKnowledge(response http.ResponseWriter, request *http.Request, params knowlapi.QueryKnowledgeParams) {
+	result, err := handler.dependencies.Query.Query(request.Context(), handler.dependencies.Scope, strings.TrimSpace(params.Q), domain.ReadLimits{})
 	if err != nil {
 		writeServiceError(response, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	transport := mustConvertJSON[knowlapi.QueryResult](result)
+	_ = knowlapi.QueryKnowledge200JSONResponse(transport).VisitQueryKnowledgeResponse(response)
 }
 
-func (handler *httpHandler) lint(response http.ResponseWriter, request *http.Request) {
+func (handler *httpHandler) LintWorkspace(response http.ResponseWriter, request *http.Request) {
 	result, err := handler.dependencies.Lint.Lint(request.Context(), handler.dependencies.Scope)
 	if err != nil {
 		writeServiceError(response, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	transport := mustConvertJSON[knowlapi.LintReport](result)
+	_ = knowlapi.LintWorkspace200JSONResponse(transport).VisitLintWorkspaceResponse(response)
 }
 
-func (handler *httpHandler) ingest(response http.ResponseWriter, request *http.Request, preview bool) {
+func (handler *httpHandler) LintWorkspaceDashAlias(response http.ResponseWriter, request *http.Request) {
+	result, err := handler.dependencies.Lint.Lint(request.Context(), handler.dependencies.Scope)
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	transport := mustConvertJSON[knowlapi.LintReport](result)
+	_ = knowlapi.LintWorkspaceDashAlias200JSONResponse(transport).VisitLintWorkspaceDashAliasResponse(response)
+}
+
+func (handler *httpHandler) LintWorkspaceResultsAlias(response http.ResponseWriter, request *http.Request) {
+	result, err := handler.dependencies.Lint.Lint(request.Context(), handler.dependencies.Scope)
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	transport := mustConvertJSON[knowlapi.LintReport](result)
+	_ = knowlapi.LintWorkspaceResultsAlias200JSONResponse(transport).VisitLintWorkspaceResultsAliasResponse(response)
+}
+
+func (handler *httpHandler) IngestSource(response http.ResponseWriter, request *http.Request) {
 	if !handler.requireOperator(response, request) {
 		return
 	}
@@ -160,21 +302,44 @@ func (handler *httpHandler) ingest(response http.ResponseWriter, request *http.R
 	var result app.IngestResult
 	work := func(ctx context.Context) error {
 		var workErr error
-		if preview {
-			result, workErr = handler.dependencies.Ingest.Preview(ctx, envelope)
-		} else {
-			result, workErr = handler.dependencies.Ingest.Ingest(ctx, envelope)
-		}
+		result, workErr = handler.dependencies.Ingest.Ingest(ctx, envelope)
 		return workErr
 	}
 	if err := handler.do(request.Context(), work); err != nil {
 		writeServiceError(response, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	transport := mustConvertJSON[knowlapi.IngestResult](result)
+	_ = knowlapi.IngestSource200JSONResponse(transport).VisitIngestSourceResponse(response)
 }
 
-func (handler *httpHandler) fileQuery(response http.ResponseWriter, request *http.Request) {
+func (handler *httpHandler) PreviewSource(response http.ResponseWriter, request *http.Request) {
+	if !handler.requireOperator(response, request) {
+		return
+	}
+	var envelope domain.SourceEnvelope
+	if err := decodeJSON(response, request, &envelope); err != nil {
+		return
+	}
+	envelope, err := trustedEnvelope(handler.dependencies.Scope, envelope)
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	var result app.IngestResult
+	if err := handler.do(request.Context(), func(ctx context.Context) error {
+		var previewErr error
+		result, previewErr = handler.dependencies.Ingest.Preview(ctx, envelope)
+		return previewErr
+	}); err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	transport := mustConvertJSON[knowlapi.IngestResult](result)
+	_ = knowlapi.PreviewSource200JSONResponse(transport).VisitPreviewSourceResponse(response)
+}
+
+func (handler *httpHandler) FileQueryResult(response http.ResponseWriter, request *http.Request) {
 	if !handler.requireOperator(response, request) {
 		return
 	}
@@ -194,41 +359,14 @@ func (handler *httpHandler) fileQuery(response http.ResponseWriter, request *htt
 		writeServiceError(response, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	transport := mustConvertJSON[knowlapi.IngestResult](result)
+	_ = knowlapi.FileQueryResult200JSONResponse(transport).VisitFileQueryResultResponse(response)
 }
 
-func (handler *httpHandler) operation(response http.ResponseWriter, request *http.Request, rawPath string) {
-	parts := strings.Split(strings.Trim(rawPath, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" || len(parts) > 2 || (len(parts) == 2 && parts[1] != "apply" && parts[1] != "status") {
-		writeHTTPError(response, http.StatusNotFound, "not_found")
-		return
-	}
-	id, err := url.PathUnescape(parts[0])
-	if err != nil || strings.TrimSpace(id) == "" {
+func (handler *httpHandler) GetOperation(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
+	id := strings.TrimSpace(operationID)
+	if id == "" {
 		writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
-		return
-	}
-	if len(parts) == 2 && parts[1] == "apply" {
-		if request.Method != http.MethodPost || !handler.requireOperator(response, request) {
-			if request.Method != http.MethodPost {
-				writeHTTPError(response, http.StatusMethodNotAllowed, "method_not_allowed")
-			}
-			return
-		}
-		var result app.ApplyResult
-		if err := handler.do(request.Context(), func(ctx context.Context) error {
-			var err error
-			result, err = handler.dependencies.Ingest.Apply(ctx, handler.dependencies.Scope, domain.OperationID(id))
-			return err
-		}); err != nil {
-			writeServiceError(response, err)
-			return
-		}
-		writeJSON(response, http.StatusOK, result)
-		return
-	}
-	if request.Method != http.MethodGet {
-		writeHTTPError(response, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
 	result, err := handler.dependencies.Query.Operation(request.Context(), handler.dependencies.Scope, domain.OperationID(id))
@@ -236,46 +374,104 @@ func (handler *httpHandler) operation(response http.ResponseWriter, request *htt
 		writeServiceError(response, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	transport := mustConvertJSON[knowlapi.Operation](result)
+	_ = knowlapi.GetOperation200JSONResponse(transport).VisitGetOperationResponse(response)
 }
 
-func (handler *httpHandler) page(response http.ResponseWriter, request *http.Request, rawPath string) {
-	parts := strings.Split(strings.Trim(rawPath, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
+func (handler *httpHandler) ApplyOperation(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
+	if !handler.requireOperator(response, request) {
+		return
+	}
+	id := strings.TrimSpace(operationID)
+	if id == "" {
+		writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
+		return
+	}
+	var result app.ApplyResult
+	if err := handler.do(request.Context(), func(ctx context.Context) error {
+		var applyErr error
+		result, applyErr = handler.dependencies.Ingest.Apply(ctx, handler.dependencies.Scope, domain.OperationID(id))
+		return applyErr
+	}); err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	transport := mustConvertJSON[knowlapi.ApplyResult](result)
+	_ = knowlapi.ApplyOperation200JSONResponse(transport).VisitApplyOperationResponse(response)
+}
+
+func (handler *httpHandler) GetOperationStatusAlias(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
+	id := strings.TrimSpace(operationID)
+	if id == "" {
+		writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
+		return
+	}
+	result, err := handler.dependencies.Query.Operation(request.Context(), handler.dependencies.Scope, domain.OperationID(id))
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	transport := mustConvertJSON[knowlapi.Operation](result)
+	_ = knowlapi.GetOperationStatusAlias200JSONResponse(transport).VisitGetOperationStatusAliasResponse(response)
+}
+
+func (handler *httpHandler) GetOperationLegacyStatusAlias(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
+	id := strings.TrimSpace(operationID)
+	if id == "" {
+		writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
+		return
+	}
+	result, err := handler.dependencies.Query.Operation(request.Context(), handler.dependencies.Scope, domain.OperationID(id))
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	transport := mustConvertJSON[knowlapi.Operation](result)
+	_ = knowlapi.GetOperationLegacyStatusAlias200JSONResponse(transport).VisitGetOperationLegacyStatusAliasResponse(response)
+}
+
+func (handler *httpHandler) GetPage(response http.ResponseWriter, request *http.Request, pageID knowlapi.PageID) {
+	id := pageID
+	if strings.TrimSpace(id) == "" {
 		writeHTTPError(response, http.StatusBadRequest, "page_id_required")
 		return
 	}
-	isLinks := len(parts) > 1 && parts[len(parts)-1] == "links"
-	if isLinks {
-		parts = parts[:len(parts)-1]
-	}
-	pageID, err := url.PathUnescape(strings.Join(parts, "/"))
-	if err != nil || !validPathID(pageID) {
+	if !validPathID(id) {
 		writeHTTPError(response, http.StatusBadRequest, "page_id_invalid")
 		return
 	}
-	if request.Method != http.MethodGet {
-		writeHTTPError(response, http.StatusMethodNotAllowed, "method_not_allowed")
-		return
-	}
-	if isLinks {
-		result, linkErr := handler.dependencies.Query.Links(request.Context(), handler.dependencies.Scope, domain.PageID(pageID), domain.ReadLimits{})
-		if linkErr != nil {
-			writeServiceError(response, linkErr)
-			return
-		}
-		writeJSON(response, http.StatusOK, result)
-		return
-	}
-	result, readErr := handler.dependencies.Query.Page(request.Context(), handler.dependencies.Scope, domain.PageID(pageID), domain.ReadLimits{})
+	result, readErr := handler.dependencies.Query.Page(request.Context(), handler.dependencies.Scope, domain.PageID(id), domain.ReadLimits{})
 	if readErr != nil {
 		writeServiceError(response, readErr)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	transport := mustConvertJSON[knowlapi.PageSnapshot](result)
+	_ = knowlapi.GetPage200JSONResponse(transport).VisitGetPageResponse(response)
+}
+
+func (handler *httpHandler) GetPageLinks(response http.ResponseWriter, request *http.Request, pageID knowlapi.PageID) {
+	id := pageID
+	if strings.TrimSpace(id) == "" {
+		writeHTTPError(response, http.StatusBadRequest, "page_id_required")
+		return
+	}
+	if !validPathID(id) {
+		writeHTTPError(response, http.StatusBadRequest, "page_id_invalid")
+		return
+	}
+	result, err := handler.dependencies.Query.Links(request.Context(), handler.dependencies.Scope, domain.PageID(id), domain.ReadLimits{})
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	transport := mustConvertJSON[[]knowlapi.LinkReference](result)
+	_ = knowlapi.GetPageLinks200JSONResponse(transport).VisitGetPageLinksResponse(response)
 }
 
 func (handler *httpHandler) requireOperator(response http.ResponseWriter, request *http.Request) bool {
+	if trustedrequest.IsMarked(request.Context()) {
+		return true
+	}
 	token := strings.TrimSpace(handler.dependencies.OperatorToken)
 	if token == "" {
 		writeHTTPError(response, http.StatusUnauthorized, "operator_authorization_required")
@@ -291,6 +487,18 @@ func (handler *httpHandler) requireOperator(response http.ResponseWriter, reques
 		return false
 	}
 	return true
+}
+
+func mustConvertJSON[T any](value any) T {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(fmt.Errorf("encode generated transport value: %w", err))
+	}
+	var target T
+	if err := json.Unmarshal(encoded, &target); err != nil {
+		panic(fmt.Errorf("decode generated transport value: %w", err))
+	}
+	return target
 }
 
 func (handler *httpHandler) do(ctx context.Context, fn func(context.Context) error) error {

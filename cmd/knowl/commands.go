@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/spf13/cobra"
 )
 
@@ -13,10 +14,8 @@ const (
 	indexFile  = "wiki/index.md"
 	logFile    = "wiki/log.md"
 
-	loopbackHTTPAPIText      = "loopback HTTP API"
-	startCommandUsage        = "knowl start"
-	placeholderCommandShort  = "Placeholder command; use the loopback HTTP API after knowl start"
-	unsupportedWorkflowToday = "not part of the supported local workflow today"
+	loopbackHTTPAPIText = "loopback HTTP API"
+	startCommandUsage   = "knowl start"
 
 	defaultSchema = `# Knowl schema
 
@@ -83,51 +82,40 @@ func newStartCommand() *cobra.Command {
 }
 
 func newIngestCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:           ingestCommandName,
-		Short:         placeholderCommandShort,
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		Long:          unsupportedWorkflowLong(ingestCommandName),
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return unsupportedWorkflowError(ingestCommandName)
-		},
-	}
+	command := newJSONBodyWorkflowCommand[knowlapi.SourceEnvelope](
+		ingestCommandName,
+		"Accept and process one immutable source revision",
+		"/v1/ingest",
+	)
+	command.AddCommand(
+		newJSONBodyWorkflowCommand[knowlapi.SourceEnvelope]("preview", "Accept and stage one immutable source revision", "/v1/ingest/preview"),
+		newApplyWorkflowCommand(),
+	)
+	return command
+}
+
+func newQueryCommand() *cobra.Command {
+	command := newQueryReadCommand()
+	command.AddCommand(
+		newQueryFileCommand(),
+	)
+	return command
+}
+
+func newSearchCommand() *cobra.Command {
+	return newSearchReadCommand()
 }
 
 func newLintCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:           lintCommandName,
-		Short:         placeholderCommandShort,
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		Long:          unsupportedWorkflowLong(lintCommandName),
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return unsupportedWorkflowError(lintCommandName)
-		},
-	}
+	return newLintReadCommand()
 }
 
-func unsupportedWorkflowLong(operation string) string {
-	return fmt.Sprintf(
-		"knowl %s is %s.\n\nStart the local service with %q, then use the %s for\n%s operations.",
-		operation,
-		unsupportedWorkflowToday,
-		startCommandUsage,
-		loopbackHTTPAPIText,
-		operation,
-	)
+func newOperationCommand() *cobra.Command {
+	return newOperationReadCommand()
 }
 
-func unsupportedWorkflowError(operation string) error {
-	return fmt.Errorf(
-		`knowl %s is %s; run %q and use the %s for %s operations`,
-		operation,
-		unsupportedWorkflowToday,
-		startCommandUsage,
-		loopbackHTTPAPIText,
-		operation,
-	)
+func newPageCommand() *cobra.Command {
+	return newPageReadCommand()
 }
 
 func initWorkspace(workspace string) error {

@@ -23,9 +23,13 @@ import (
 
 const (
 	smokeOperatorToken = "test-token"
-	smokeSourceRef     = "fixture:source-1@1"
+	smokeSourceAdapter = "fixture"
+	smokeSourceID      = "source-1"
+	smokeSourceRef     = smokeSourceAdapter + ":" + smokeSourceID + "@1"
 	smokeSourceText    = "source text"
-	smokePageContent   = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# One\n"
+	smokeQueryText     = "One"
+	smokePageID        = "entities/one"
+	smokePageContent   = "---\nid: " + smokePageID + "\ntitle: " + smokeQueryText + "\ntype: entity\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# " + smokeQueryText + "\n"
 )
 
 func TestSupportedLocalWorkflowSmoke(t *testing.T) {
@@ -36,7 +40,7 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	if err := executeRootCommand(initCommandName); err != nil {
 		t.Fatalf("run knowl init: %v", err)
 	}
-	t.Setenv("KNOWL_SERVER_LISTEN_ADDR", "127.0.0.1:0")
+	t.Setenv("KNOWL_SERVER_LISTEN_ADDR", loopbackListenAddr)
 	t.Setenv("KNOWL_OPERATOR_TOKEN", smokeOperatorToken)
 	if err := executeRootCommand("validate"); err != nil {
 		t.Fatalf("run knowl validate: %v", err)
@@ -53,8 +57,8 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	if config.Workspace != workspace {
 		t.Fatalf("host config workspace = %q, want %q", config.Workspace, workspace)
 	}
-	if config.ListenAddr != "127.0.0.1:0" {
-		t.Fatalf("host config listen addr = %q, want 127.0.0.1:0", config.ListenAddr)
+	if config.ListenAddr != loopbackListenAddr {
+		t.Fatalf("host config listen addr = %q, want %s", config.ListenAddr, loopbackListenAddr)
 	}
 	if config.OperatorToken != smokeOperatorToken {
 		t.Fatalf("host config operator token = %q, want %q", config.OperatorToken, smokeOperatorToken)
@@ -97,7 +101,7 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 
 	envelope := domain.SourceEnvelope{
 		Scope:   config.Scope,
-		Source:  domain.SourceRef{Adapter: "fixture", ID: "source-1"},
+		Source:  domain.SourceRef{Adapter: smokeSourceAdapter, ID: smokeSourceID},
 		Version: domain.SourceVersion{Version: "1", Digest: smokeDigest([]byte(smokeSourceText))},
 		Content: []byte(smokeSourceText),
 	}
@@ -160,7 +164,7 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	if err := json.Unmarshal(body, &page); err != nil {
 		t.Fatalf("decode page response: %v", err)
 	}
-	if page.ID != "entities/one" || !page.Untrusted {
+	if page.ID != smokePageID || !page.Untrusted {
 		t.Fatalf("page snapshot = %#v, want entities/one untrusted page", page)
 	}
 }

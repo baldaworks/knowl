@@ -1,0 +1,986 @@
+openapi: 3.0.3
+info:
+  title: Knowl Local HTTP API
+  version: v1
+  description: |
+    Canonical contract for Knowl's public loopback HTTP API.
+
+    This API is local-first and loopback-only. The trusted scope is owned by the
+    host. Any non-empty `scope` query override on `/v1/*` is rejected with
+    `scope_override_forbidden`.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Default local listener
+tags:
+  - name: health
+  - name: query
+  - name: maintenance
+  - name: operations
+  - name: pages
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Liveness probe
+      responses:
+        '200':
+          description: The host process is serving HTTP.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /health:
+    get:
+      tags: [health]
+      operationId: getHealthAlias
+      summary: Liveness probe alias
+      responses:
+        '200':
+          description: The host process is serving HTTP.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReady
+      summary: Readiness probe
+      responses:
+        '200':
+          description: Workspace recovery, SQL setup, and projection preparation completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+        '503':
+          description: Startup or recovery is not complete yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+  /health/ready:
+    get:
+      tags: [health]
+      operationId: getReadyAlias
+      summary: Readiness probe alias
+      responses:
+        '200':
+          description: Workspace recovery, SQL setup, and projection preparation completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+        '503':
+          description: Startup or recovery is not complete yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+  /v1/search:
+    get:
+      tags: [query]
+      operationId: searchPages
+      summary: Search bounded page references
+      description: |
+        Returns bounded untrusted page references for a query string.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      parameters:
+        - $ref: '#/components/parameters/QueryString'
+      responses:
+        '200':
+          description: Matching bounded page references.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PageReference'
+        '400':
+          $ref: '#/components/responses/QueryStringBadRequest'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/query:
+    get:
+      tags: [query]
+      operationId: queryKnowledge
+      summary: Assemble bounded wiki references and citations
+      description: |
+        Returns bounded pages, links, and citations for a query string.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      parameters:
+        - $ref: '#/components/parameters/QueryString'
+      responses:
+        '200':
+          description: Bounded query result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResult'
+        '400':
+          $ref: '#/components/responses/QueryStringBadRequest'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/lint:
+    get:
+      tags: [query]
+      operationId: lintWorkspace
+      summary: Run deterministic workspace lint
+      description: |
+        Returns bounded deterministic lint findings for the trusted scope.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      responses:
+        '200':
+          description: Lint findings for the trusted scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LintReport'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/lint/results:
+    get:
+      tags: [query]
+      operationId: lintWorkspaceResultsAlias
+      summary: Deterministic workspace lint alias
+      responses:
+        '200':
+          description: Lint findings for the trusted scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LintReport'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/lint-results:
+    get:
+      tags: [query]
+      operationId: lintWorkspaceDashAlias
+      summary: Deterministic workspace lint alias
+      responses:
+        '200':
+          description: Lint findings for the trusted scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LintReport'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/ingest:
+    post:
+      tags: [maintenance]
+      operationId: ingestSource
+      summary: Accept and process one immutable source revision
+      description: |
+        Normal ingest path. Depending on host policy it may return an operation
+        awaiting review or an operation that has already been committed.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceEnvelope'
+      responses:
+        '200':
+          description: Durable ingest result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+        '400':
+          $ref: '#/components/responses/JSONBodyBadRequest'
+        '401':
+          $ref: '#/components/responses/OperatorAuthorizationRequired'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/ingest/preview:
+    post:
+      tags: [maintenance]
+      operationId: previewSource
+      summary: Accept and stage one immutable source revision
+      description: |
+        Preview always stages the operation for review and does not auto-apply.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceEnvelope'
+      responses:
+        '200':
+          description: Durable ingest result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+        '400':
+          $ref: '#/components/responses/JSONBodyBadRequest'
+        '401':
+          $ref: '#/components/responses/OperatorAuthorizationRequired'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/query/file:
+    post:
+      tags: [maintenance]
+      operationId: fileQueryResult
+      summary: File a typed query result through the normal ingest gate
+      description: |
+        Files a bounded query result and an explicit typed plan through the same
+        source acceptance, staging, and commit path as ingest.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FilingRequest'
+      responses:
+        '200':
+          description: Durable ingest result for the filing request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+        '400':
+          $ref: '#/components/responses/JSONBodyBadRequest'
+        '401':
+          $ref: '#/components/responses/OperatorAuthorizationRequired'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/operations/{operation_id}:
+    parameters:
+      - $ref: '#/components/parameters/OperationID'
+    get:
+      tags: [operations]
+      operationId: getOperation
+      summary: Read one durable operation status
+      description: |
+        Returns the redacted durable state for one operation ID.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      responses:
+        '200':
+          description: Operation read model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '400':
+          $ref: '#/components/responses/OperationIDBadRequest'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/operations/{operation_id}/status:
+    parameters:
+      - $ref: '#/components/parameters/OperationID'
+    get:
+      tags: [operations]
+      operationId: getOperationStatusAlias
+      summary: Read one durable operation status alias
+      responses:
+        '200':
+          description: Operation read model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '400':
+          $ref: '#/components/responses/OperationIDBadRequest'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/operations/{operation_id}/apply:
+    parameters:
+      - $ref: '#/components/parameters/OperationID'
+    post:
+      tags: [operations]
+      operationId: applyOperation
+      summary: Apply one staged operation
+      description: |
+        Applies a previously staged reviewed operation.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Durable apply result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplyResult'
+        '400':
+          $ref: '#/components/responses/OperationIDBadRequest'
+        '401':
+          $ref: '#/components/responses/OperatorAuthorizationRequired'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/OperationNotApplyable'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/status/{operation_id}:
+    parameters:
+      - $ref: '#/components/parameters/OperationID'
+    get:
+      tags: [operations]
+      operationId: getOperationLegacyStatusAlias
+      summary: Read one durable operation status alias
+      responses:
+        '200':
+          description: Operation read model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '400':
+          $ref: '#/components/responses/OperationIDBadRequest'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/pages/{page_id}:
+    parameters:
+      - $ref: '#/components/parameters/PageID'
+    get:
+      tags: [pages]
+      operationId: getPage
+      summary: Read one bounded canonical page
+      description: |
+        The live HTTP API treats the page ID as the remainder after `/v1/pages/`.
+        Current callers may use slash-containing IDs such as `entities/one`.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      responses:
+        '200':
+          description: Bounded page snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageSnapshot'
+        '400':
+          $ref: '#/components/responses/PageIDBadRequest'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+  /v1/pages/{page_id}/links:
+    parameters:
+      - $ref: '#/components/parameters/PageID'
+    get:
+      tags: [pages]
+      operationId: getPageLinks
+      summary: Read one bounded link neighborhood
+      description: |
+        The live HTTP API treats the page ID as the remainder before `/links`.
+        Current callers may use slash-containing IDs such as `entities/one`.
+
+        Supplying a non-empty `scope` query parameter is forbidden and yields
+        `scope_override_forbidden`.
+      responses:
+        '200':
+          description: Bounded link neighborhood for one page.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LinkReference'
+        '400':
+          $ref: '#/components/responses/PageIDBadRequest'
+        '403':
+          $ref: '#/components/responses/ScopeOverrideForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+  parameters:
+    QueryString:
+      name: q
+      in: query
+      required: true
+      description: Non-empty query string.
+      schema:
+        type: string
+        minLength: 1
+    OperationID:
+      name: operation_id
+      in: path
+      required: true
+      description: |
+        Durable operation identifier. The live API accepts percent-encoded path
+        values and rejects empty or invalid IDs with `operation_id_invalid`.
+      schema:
+        type: string
+        minLength: 1
+    PageID:
+      name: page_id
+      in: path
+      required: true
+      allowReserved: true
+      description: |
+        Canonical page identifier. The live API accepts slash-containing values,
+        for example `entities/one`.
+      schema:
+        type: string
+        minLength: 1
+        example: entities/one
+  responses:
+    QueryStringBadRequest:
+      description: Missing or invalid query string.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            query_required:
+              value:
+                error: query_required
+            invalid_request:
+              value:
+                error: invalid_request
+    JSONBodyBadRequest:
+      description: Invalid JSON body or invalid request semantics.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            invalid_json:
+              value:
+                error: invalid_json
+            multiple_json_values:
+              value:
+                error: multiple_json_values
+            invalid_request:
+              value:
+                error: invalid_request
+    OperationIDBadRequest:
+      description: Invalid operation ID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: operation_id_invalid
+    PageIDBadRequest:
+      description: Missing or invalid page ID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            required:
+              value:
+                error: page_id_required
+            invalid:
+              value:
+                error: page_id_invalid
+    OperatorAuthorizationRequired:
+      description: Missing or mismatched operator bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: operator_authorization_required
+    ScopeOverrideForbidden:
+      description: Caller attempted to override the trusted host scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: scope_override_forbidden
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: not_found
+    UnavailableError:
+      description: The host is not ready yet or the service is temporarily unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            not_ready:
+              value:
+                error: not_ready
+            service_unavailable:
+              value:
+                error: service_unavailable
+    OperationNotApplyable:
+      description: The operation is not in a state that can be applied.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: operation_not_applyable
+    OperationFailed:
+      description: The operation failed or an unclassified application error occurred.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: operation_failed
+  schemas:
+    HealthResponse:
+      type: object
+      required: [service, status]
+      properties:
+        service:
+          type: string
+          example: knowl
+        status:
+          type: string
+          enum: [ok]
+    ReadyResponse:
+      type: object
+      required: [service, status]
+      properties:
+        service:
+          type: string
+          example: knowl
+        status:
+          type: string
+          enum: [ready, not_ready]
+        scope:
+          type: string
+          description: Trusted scope reported only when the host is ready.
+          example: local
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    SourceRef:
+      type: object
+      required: [adapter, id]
+      properties:
+        adapter:
+          type: string
+        id:
+          type: string
+    SourceVersion:
+      type: object
+      required: [version, digest]
+      properties:
+        version:
+          type: string
+        digest:
+          type: string
+    SourceEnvelope:
+      type: object
+      required: [source, version, content]
+      properties:
+        scope:
+          type: string
+          description: Optional trusted scope. When omitted, the host fills its configured scope.
+        source:
+          $ref: '#/components/schemas/SourceRef'
+        version:
+          $ref: '#/components/schemas/SourceVersion'
+        media_type:
+          type: string
+        content:
+          type: string
+          format: byte
+          description: Base64-encoded bounded source payload.
+        provenance:
+          type: object
+          additionalProperties: true
+        received_at:
+          type: string
+          format: date-time
+    PageReference:
+      type: object
+      required: [id, path, title, snippet, source_refs, untrusted]
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+        title:
+          type: string
+        snippet:
+          type: string
+        source_refs:
+          type: array
+          items:
+            type: string
+        untrusted:
+          type: boolean
+    LinkReference:
+      type: object
+      required: [from, to, relation, untrusted]
+      properties:
+        from:
+          type: string
+        to:
+          type: string
+        relation:
+          type: string
+        untrusted:
+          type: boolean
+    Citation:
+      type: object
+      required: [kind, reference, untrusted]
+      properties:
+        kind:
+          type: string
+          enum: [wiki, raw]
+        reference:
+          type: string
+        page_id:
+          type: string
+        path:
+          type: string
+        source_ref:
+          type: string
+        untrusted:
+          type: boolean
+    QueryResult:
+      type: object
+      required: [scope, query, pages, links, citations]
+      properties:
+        scope:
+          type: string
+        query:
+          type: string
+        pages:
+          type: array
+          items:
+            $ref: '#/components/schemas/PageReference'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinkReference'
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+    FileEdit:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+        expected_digest:
+          type: string
+        content:
+          type: string
+          format: byte
+    ModelEditPlan:
+      type: object
+      required: [schema_digest, source_refs, edits]
+      properties:
+        schema_digest:
+          type: string
+        source_refs:
+          type: array
+          items:
+            type: string
+        edits:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/FileEdit'
+        rationale:
+          type: string
+    FilingRequest:
+      type: object
+      required: [query, result, plan]
+      properties:
+        query:
+          type: string
+          minLength: 1
+        result:
+          $ref: '#/components/schemas/QueryResult'
+        plan:
+          $ref: '#/components/schemas/ModelEditPlan'
+    OperationKey:
+      type: object
+      required: [scope, source, version]
+      properties:
+        scope:
+          type: string
+        source:
+          $ref: '#/components/schemas/SourceRef'
+        version:
+          $ref: '#/components/schemas/SourceVersion'
+    Failure:
+      type: object
+      required: [class, operation_id]
+      properties:
+        class:
+          type: string
+        operation_id:
+          type: string
+    Operation:
+      type: object
+      required: [id, key, status, attempt, updated_at]
+      properties:
+        id:
+          type: string
+        key:
+          $ref: '#/components/schemas/OperationKey'
+        status:
+          type: string
+          enum:
+            - received
+            - planned
+            - awaiting_review
+            - applying
+            - committed
+            - failed
+        attempt:
+          type: integer
+        failure:
+          $ref: '#/components/schemas/Failure'
+        updated_at:
+          type: string
+          format: date-time
+    ValidatedEditPlan:
+      type: object
+      required: [operation_id, scope, schema_digest, source_refs, edits]
+      properties:
+        operation_id:
+          type: string
+        scope:
+          type: string
+        schema_digest:
+          type: string
+        source_refs:
+          type: array
+          items:
+            type: string
+        edits:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileEdit'
+    StagedChange:
+      type: object
+      required: [operation_id, digest, files, created_at]
+      properties:
+        operation_id:
+          type: string
+        digest:
+          type: string
+        files:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+    PageSnapshot:
+      type: object
+      required: [id, path, digest, title, content, untrusted, updated_at]
+      properties:
+        id:
+          type: string
+        path:
+          type: string
+        digest:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+        source_refs:
+          type: array
+          items:
+            type: string
+        untrusted:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+    WorkspaceSnapshot:
+      type: object
+      required: [scope, schema_digest, page_digests, pages, links, captured_at]
+      properties:
+        scope:
+          type: string
+        schema_digest:
+          type: string
+        page_digests:
+          type: object
+          additionalProperties:
+            type: string
+        pages:
+          type: array
+          items:
+            $ref: '#/components/schemas/PageSnapshot'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinkReference'
+        captured_at:
+          type: string
+          format: date-time
+    ContentCommit:
+      type: object
+      required: [operation_id, generation, files, snapshot, committed_at]
+      properties:
+        operation_id:
+          type: string
+        generation:
+          type: string
+        files:
+          type: array
+          items:
+            type: string
+        snapshot:
+          $ref: '#/components/schemas/WorkspaceSnapshot'
+        committed_at:
+          type: string
+          format: date-time
+    IngestResult:
+      type: object
+      required: [operation, plan, staged]
+      properties:
+        operation:
+          $ref: '#/components/schemas/Operation'
+        plan:
+          $ref: '#/components/schemas/ValidatedEditPlan'
+        staged:
+          $ref: '#/components/schemas/StagedChange'
+        commit:
+          nullable: true
+          $ref: '#/components/schemas/ContentCommit'
+    ApplyResult:
+      type: object
+      required: [operation]
+      properties:
+        operation:
+          $ref: '#/components/schemas/Operation'
+        commit:
+          nullable: true
+          $ref: '#/components/schemas/ContentCommit'
+    LintFinding:
+      type: object
+      required: [code, severity, message]
+      properties:
+        code:
+          type: string
+        severity:
+          type: string
+        path:
+          type: string
+        page_id:
+          type: string
+        message:
+          type: string
+        suggestion:
+          type: boolean
+        source_refs:
+          type: array
+          items:
+            type: string
+    LintReport:
+      type: object
+      required: [scope, findings, checked_at]
+      properties:
+        scope:
+          type: string
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/LintFinding'
+        checked_at:
+          type: string
+          format: date-time

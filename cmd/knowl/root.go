@@ -7,29 +7,44 @@ import (
 )
 
 const (
-	appName             = "knowl"
-	initCommandName     = "init"
-	validateCommandName = "validate"
-	startCommandName    = "start"
-	ingestCommandName   = "ingest"
-	lintCommandName     = "lint"
-	postgresStore       = "postgres"
-	defaultStore        = "sqlite"
-	defaultWorkspace    = "."
+	appName              = "knowl"
+	initCommandName      = "init"
+	validateCommandName  = "validate"
+	startCommandName     = "start"
+	ingestCommandName    = "ingest"
+	queryCommandName     = "query"
+	searchCommandName    = "search"
+	lintCommandName      = "lint"
+	operationCommandName = "operation"
+	pageCommandName      = "page"
+	postgresStore        = "postgres"
+	defaultStore         = "sqlite"
+	defaultWorkspace     = "."
 )
 
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   appName,
-		Short: "Run Knowl locally: init, validate, start, then use the loopback HTTP API",
+		Short: "Run Knowl locally: init, validate, then use CLI workflows or start the loopback HTTP API",
 		Long: `Supported local workflow:
 1. knowl init
 2. knowl validate
-3. knowl start
-4. Use the loopback HTTP API for ingest, query, lint, and apply operations.
+3. Run one-shot CLI workflows directly:
+   - knowl ingest --input FILE|-
+   - knowl ingest preview --input FILE|-
+   - knowl ingest apply <operation-id>
+   - knowl query <text>
+   - knowl query file --input FILE|-
+   - knowl search <text>
+   - knowl lint
+   - knowl operation <operation-id>
+   - knowl page <page-id>
+   - knowl page links <page-id>
+4. Run knowl start to keep the retained loopback HTTP/OpenAPI service mode available.
 
-The ingest and lint subcommands remain visible for compatibility, but they are
-not the supported local workflow today.`,
+Direct CLI workflows execute in-process and print structured JSON results.
+The retained loopback HTTP API remains supported for health checks, OpenAPI
+tooling, and local external clients.`,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			configDir, err := cmd.Flags().GetString("config-dir")
 			if err != nil {
@@ -55,7 +70,11 @@ not the supported local workflow today.`,
 		newValidateCommand(),
 		newStartCommand(),
 		newIngestCommand(),
+		newQueryCommand(),
+		newSearchCommand(),
 		newLintCommand(),
+		newOperationCommand(),
+		newPageCommand(),
 	} {
 		root.AddCommand(command)
 	}
