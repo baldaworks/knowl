@@ -44,7 +44,9 @@ func newInitCommand() *cobra.Command {
 			if err := writeConfig(configOutputPath(config), workspace); err != nil {
 				return err
 			}
-			fmt.Printf("initialized Knowl workspace at %s\n", workspace)
+			commandLogger(cmd).Info().
+				Str("workspace", workspace).
+				Msg("initialized Knowl workspace")
 			return nil
 		},
 	}
@@ -69,7 +71,10 @@ func newValidateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("valid Knowl workspace %s (store: %s)\n", workspace, driver)
+			commandLogger(cmd).Info().
+				Str("workspace", workspace).
+				Str("store", driver).
+				Msg("validated Knowl workspace")
 			return nil
 		},
 	}
@@ -121,9 +126,9 @@ func newPageCommand() *cobra.Command {
 func initWorkspace(workspace string) error {
 	for _, path := range []string{
 		filepath.Join(workspace, "raw"),
-		filepath.Join(workspace, "wiki", "entities"),
-		filepath.Join(workspace, "wiki", "concepts"),
-		filepath.Join(workspace, "wiki", "syntheses"),
+		filepath.Join(workspace, workspaceWikiDir, "entities"),
+		filepath.Join(workspace, workspaceWikiDir, "concepts"),
+		filepath.Join(workspace, workspaceWikiDir, "syntheses"),
 		filepath.Join(workspace, ".knowl", "staging"),
 		filepath.Join(workspace, ".knowl", "recovery"),
 	} {
@@ -161,7 +166,7 @@ func validateWorkspace(workspace string) error {
 			return fmt.Errorf("required workspace path %q is a directory", relative)
 		}
 	}
-	for _, relative := range []string{"raw", "wiki", ".knowl"} {
+	for _, relative := range []string{"raw", workspaceWikiDir, ".knowl"} {
 		path := filepath.Join(workspace, relative)
 		info, err := os.Stat(path)
 		if err != nil {

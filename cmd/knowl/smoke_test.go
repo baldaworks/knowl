@@ -129,7 +129,7 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 		t.Fatalf("preview operation status = %q, want %q", preview.Operation.Status, domain.StatusAwaitingReview)
 	}
 
-	pagePath := filepath.Join(config.Workspace, "wiki", "entities", "one.md")
+	pagePath := filepath.Join(config.Workspace, workspaceWikiDir, "entities", "one.md")
 	if _, err := os.Stat(pagePath); !os.IsNotExist(err) {
 		t.Fatalf("preview page stat = %v, want absent", err)
 	}

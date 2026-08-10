@@ -2,17 +2,19 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"os"
+
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
+	initCommandLogging(os.Stderr)
 	if err := newRootCommand().Execute(); err != nil {
 		var workflowErr *workflowCommandError
 		if errors.As(err, &workflowErr) {
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stderr, err)
+		log.Error().Err(err).Msg("knowl command failed")
 		os.Exit(1)
 	}
 }
