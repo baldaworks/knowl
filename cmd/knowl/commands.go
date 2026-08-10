@@ -100,11 +100,7 @@ func newIngestCommand() *cobra.Command {
 }
 
 func newQueryCommand() *cobra.Command {
-	command := newQueryReadCommand()
-	command.AddCommand(
-		newQueryFileCommand(),
-	)
-	return command
+	return newQueryReadCommand()
 }
 
 func newSearchCommand() *cobra.Command {

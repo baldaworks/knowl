@@ -100,11 +100,9 @@ func TestRootExposesCurrentLifecycleCommands(t *testing.T) {
 		validateCommandName:  true,
 		bootstrapCommandName: true,
 		startCommandName:     true,
-		ingestCommandName:    true,
 		queryCommandName:     true,
 		searchCommandName:    true,
 		lintCommandName:      true,
-		operationCommandName: true,
 		pageCommandName:      true,
 	}
 	for _, command := range root.Commands() {
@@ -125,15 +123,27 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 		"knowl bootstrap obsidian <path>",
 		"knowl query <text>",
 		"knowl page links <page-id>",
-		"advanced low-level ingest workflows",
-		"knowl ingest --input FILE|-",
 		startCommandUsage,
 		loopbackHTTPAPIText,
 		"Bootstrap creates a Knowl-owned workspace",
 		"retained loopback HTTP/OpenAPI service mode",
+		"retained loopback HTTP API",
+		"ingest, review/apply",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("root help missing %q in output:\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{
+		"knowl ingest --input FILE|-",
+		"knowl ingest preview --input FILE|-",
+		"knowl ingest apply <operation-id>",
+		"knowl query file --input FILE|-",
+		"knowl operation <operation-id>",
+		"advanced low-level ingest workflows",
+	} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("root help unexpectedly contains %q in output:\n%s", unwanted, output)
 		}
 	}
 }
@@ -155,15 +165,6 @@ func TestImplementedWorkflowHelpDescribesCLIInputs(t *testing.T) {
 				"<path>",
 				"fresh Knowl workspace",
 				"wiki/notes/**",
-			},
-		},
-		{
-			name: "ingest",
-			cmd:  newIngestCommand(),
-			wantParts: []string{
-				"--input",
-				"JSON request body",
-				workflowJSONStdoutHelp,
 			},
 		},
 		{
@@ -224,16 +225,10 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 			wantSubs:  []string{bootstrapWikiName, bootstrapObsidianName},
 		},
 		{
-			name:      ingestCommandName,
-			cmd:       newIngestCommand(),
-			wantShort: "Accept and process one immutable source revision",
-			wantSubs:  []string{"preview", "apply"},
-		},
-		{
 			name:      queryCommandName,
 			cmd:       newQueryCommand(),
 			wantShort: "Assemble bounded wiki references and citations",
-			wantSubs:  []string{queryFileCommandName},
+			wantSubs:  nil,
 		},
 		{
 			name:      pageCommandName,
@@ -620,7 +615,7 @@ func TestQueryFileCommandReadsStdinAndStagesExplicitPlan(t *testing.T) {
 		t.Fatalf("marshal query file input: %v", err)
 	}
 
-	stdout, stderr, err := executeCLICommand(newQueryCommand(), []string{queryFileCommandName, workflowInputFlagUsage, "-"}, queryInput)
+	stdout, stderr, err := executeCLICommand(newQueryFileCommand(), []string{workflowInputFlagUsage, "-"}, queryInput)
 	if err != nil {
 		t.Fatalf("query file Execute() error: %v", err)
 	}
@@ -647,11 +642,11 @@ func TestQueryFileCommandRejectsMalformedJSONBeforeHostExecution(t *testing.T) {
 		return localWorkflowSession{}, nil
 	}
 
-	stdout, stderr, err := executeCLICommand(newQueryCommand(), []string{queryFileCommandName, workflowInputFlagUsage, "-"}, []byte(`{"query":`))
+	stdout, stderr, err := executeCLICommand(newQueryFileCommand(), []string{workflowInputFlagUsage, "-"}, []byte(`{"query":`))
 	if err == nil {
 		t.Fatal("query file Execute() error = nil, want decode error")
 	}
-	if !strings.Contains(err.Error(), "decode query file input") {
+	if !strings.Contains(err.Error(), "decode file input") {
 		t.Fatalf("query file Execute() error = %q, want decode context", err)
 	}
 	if strings.TrimSpace(stdout) != "" {

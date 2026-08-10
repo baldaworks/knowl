@@ -30,7 +30,7 @@ const (
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           appName,
-		Short:         "Bootstrap or run a local Knowl workspace, then query/search/lint or use advanced ingest flows",
+		Short:         "Bootstrap or run a local Knowl workspace, then use direct read commands or the loopback HTTP API",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: `Supported local workflow:
@@ -40,24 +40,18 @@ func newRootCommand() *cobra.Command {
 2. Or initialize an empty workspace explicitly:
    - knowl init
    - knowl validate
-3. Run one-shot CLI workflows directly:
+3. Run direct local read commands:
    - knowl query <text>
    - knowl search <text>
    - knowl lint
    - knowl page <page-id>
    - knowl page links <page-id>
-4. Use advanced low-level ingest workflows when you need explicit source-envelope or operation control:
-   - knowl ingest --input FILE|-
-   - knowl ingest preview --input FILE|-
-   - knowl ingest apply <operation-id>
-   - knowl query file --input FILE|-
-   - knowl operation <operation-id>
-5. Run knowl start to keep the retained loopback HTTP/OpenAPI service mode available.
+4. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
 
-Bootstrap creates a Knowl-owned workspace. Direct CLI workflows execute
+Bootstrap creates a Knowl-owned workspace. Direct CLI read workflows execute
 in-process and print structured JSON results. The retained loopback HTTP API
-		remains supported for health checks, OpenAPI tooling, and local external
-		clients.`,
+remains supported for ingest, review/apply, health checks, OpenAPI tooling,
+and local external clients.`,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			initCommandLogging(cmd.ErrOrStderr())
 			configDir, err := cmd.Flags().GetString("config-dir")
@@ -84,11 +78,9 @@ in-process and print structured JSON results. The retained loopback HTTP API
 		newValidateCommand(),
 		newBootstrapCommand(),
 		newStartCommand(),
-		newIngestCommand(),
 		newQueryCommand(),
 		newSearchCommand(),
 		newLintCommand(),
-		newOperationCommand(),
 		newPageCommand(),
 	} {
 		root.AddCommand(command)

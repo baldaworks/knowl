@@ -17,10 +17,9 @@ go build -o knowl ./cmd/knowl
 curl -sS http://127.0.0.1:8080/readyz
 ```
 
-After `knowl start`, the supported ingest, query, lint, and apply workflows go
-through the loopback HTTP API. The `knowl ingest` and `knowl lint` Cobra
-commands remain visible for compatibility, but they are not the supported
-operator path today.
+The direct CLI covers workspace bootstrap plus read commands such as `query`,
+`search`, `page`, and `lint`. After `knowl start`, low-level ingest, review,
+apply, and integration workflows go through the loopback HTTP/OpenAPI API.
 
 ## Configuration
 
@@ -41,7 +40,7 @@ runtime:
 knowl:
   provider: opencode
   workspace:
-    path: ./knowledge
+    path: .
   storage:
     type: sqlite
     sqlite:

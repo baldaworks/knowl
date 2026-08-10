@@ -4,41 +4,37 @@ Knowl is an independent, local-first Markdown knowledge wiki. It turns bounded,
 curated source revisions into a human-readable, cited wiki while keeping the
 filesystem workspace as the source of truth.
 
-In practice, Knowl has two jobs:
+In practice, Knowl has two user-facing modes:
 
-- accept immutable source revisions (`ingest`) and turn them into staged or
-  committed wiki updates;
+- bootstrap an existing Markdown tree or Obsidian vault into a Knowl-owned
+  local workspace;
 - answer reads (`query`, `search`, `page`, `page links`, `lint`) from the
   canonical workspace and its rebuildable SQL projections.
 
-The canonical content lives in `knowledge/wiki/**`. SQL storage only keeps
+The canonical content lives in `workspace/wiki/**`. SQL storage only keeps
 durable operation state and rebuildable read projections. Knowl is local-first:
 it binds only to loopback, expects a local workspace, and does not assume a
-shared remote service.
+shared remote service. Low-level write/review workflows remain available
+through the loopback HTTP/OpenAPI API rather than the direct CLI.
 
 ## How it works
 
 The normal flow is:
 
-1. `knowl init` creates a workspace and a default local config.
+1. Bootstrap an existing wiki or vault with `knowl bootstrap ...`, or create an
+   empty workspace with `knowl init`.
 2. `knowl validate` checks config, workspace shape, and selected runtime
    provider wiring.
-3. `knowl ingest` or `knowl ingest preview` accepts one immutable source
-   revision as JSON.
-4. Knowl stores the raw source, asks the configured maintainer/runtime to plan
-   wiki edits, and either:
-   - stages the operation for review; or
-   - applies it immediately, depending on `knowl.maintenance`.
-5. Read commands work against the canonical wiki and its projections:
+3. Read commands work directly against the canonical wiki and its projections:
    - `knowl query`
    - `knowl search`
    - `knowl page`
    - `knowl page links`
    - `knowl lint`
+4. `knowl start` exposes the retained loopback HTTP/OpenAPI host when you need
+   low-level ingest/review/apply workflows or external local clients.
 
-The direct CLI commands run this workflow in-process and print structured JSON
-to stdout. `knowl start` exposes the same host as a retained loopback HTTP API
-for external local clients and OpenAPI-based tooling.
+Direct CLI read commands run in-process and print structured JSON to stdout.
 
 ## Quick start
 
@@ -48,7 +44,13 @@ Build the CLI:
 go build -o knowl ./cmd/knowl
 ```
 
-Initialize a local workspace and config:
+Bootstrap an existing Markdown tree into a local Knowl workspace:
+
+```bash
+./knowl bootstrap wiki /path/to/existing/wiki
+```
+
+Or initialize an empty workspace and config:
 
 ```bash
 ./knowl init
@@ -57,9 +59,9 @@ Initialize a local workspace and config:
 
 `init` creates:
 
-- a workspace at `./knowledge` by default;
+- a workspace rooted at the current directory by default;
 - a config file at `.config/knowl/config.yaml`;
-- a default SQLite operational store under `knowledge/.knowl/knowl.sqlite`.
+- a default SQLite operational store under `.knowl/knowl.sqlite`.
 
 A minimal config shape is:
 
@@ -74,7 +76,7 @@ runtime:
 knowl:
   provider: opencode
   workspace:
-    path: ./knowledge
+    path: .
   storage:
     type: sqlite
     sqlite:
@@ -86,60 +88,43 @@ knowl:
 `knowl.provider` selects an entry from `runtime.providers`. Knowl's own config
 is under the `knowl:` block.
 
-Create one source revision JSON. The request shape is `SourceEnvelope`. Because
-the `content` field is `[]byte`, JSON uses base64:
-
-```json
-{
-  "scope": "local",
-  "source": {"adapter": "fixture", "id": "source-1"},
-  "version": {
-    "version": "1",
-    "digest": "6f1d2c6282e03687c92530aab89b6c13a06b5b8989267dfb048eec821e1af53f"
-  },
-  "content": "IyBPbmUKClRoaXMgaXMgYSBmaXh0dXJlIHNvdXJjZS4K"
-}
-```
-
-With the default review-first policy, run the local workflow like this:
+Run local reads directly:
 
 ```bash
-./knowl ingest preview --input source.json
-./knowl operation <operation-id>
-./knowl ingest apply <operation-id>
 ./knowl query "One"
 ./knowl search "One"
 ./knowl lint
 ```
 
-If you disable review with `maintenance.review: false` or set
-`maintenance.auto_apply: true`, normal ingest can apply directly:
+Run the retained local host when you need HTTP/OpenAPI access:
 
 ```bash
-./knowl ingest --input source.json
+./knowl start
+curl -sS http://127.0.0.1:8080/readyz
 ```
 
-After apply, inspect generated content under `knowledge/wiki/**` and raw source
-history under `knowledge/raw/**`.
+Low-level ingest/review/apply flows are still supported, but only through the
+loopback HTTP/OpenAPI API documented in [docs/operations.md](docs/operations.md).
 
 ## CLI usage model
 
 The supported direct commands are:
 
-- `knowl ingest --input FILE|-`
-- `knowl ingest preview --input FILE|-`
-- `knowl ingest apply <operation-id>`
+- `knowl bootstrap wiki <path>`
+- `knowl bootstrap obsidian <path>`
+- `knowl init`
+- `knowl validate`
+- `knowl start`
 - `knowl query <text>`
-- `knowl query file --input FILE|-`
 - `knowl search <text>`
 - `knowl lint`
-- `knowl operation <operation-id>`
 - `knowl page <page-id>`
 - `knowl page links <page-id>`
 
-Complex write inputs use `--input FILE|-`. Read commands take positional
-arguments and print structured JSON results to stdout. Non-2xx workflow errors
-also return structured JSON, but the command exits non-zero.
+Read commands take positional arguments and print structured JSON results to
+stdout. Workspace lifecycle commands emit human-oriented logs to stderr. Write,
+review, and apply workflows are exposed through the loopback HTTP/OpenAPI API,
+not the direct CLI.
 
 Configuration loads from `.config/knowl/config.yaml`, then the selected profile
 and `KNOWL_*` overrides. Use `--config-dir` or `--profile` to select another
@@ -165,15 +150,15 @@ is the retained transport for:
 workspace validation, SQL setup, recovery, and projection preparation succeed.
 
 Loopback HTTP writes still require the configured operator token. Direct CLI
-workflows do not take per-request bearer headers because they execute as
+read workflows do not take per-request bearer headers because they execute as
 trusted local in-process workflows.
 
 ## Repository layout
 
-The canonical workspace layout is:
+Inside the configured workspace root, the canonical layout is:
 
 ```text
-knowledge/
+workspace/
 ├── schema.md
 ├── raw/
 ├── wiki/
