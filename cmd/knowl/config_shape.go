@@ -6,17 +6,18 @@ import (
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl"
+	knowltypes "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // AppConfig is the Knowl section of the Balda-compatible config document.
 type AppConfig struct {
-	Provider    string            `mapstructure:"provider"`
-	Workspace   WorkspaceConfig   `mapstructure:"workspace"`
-	Storage     StorageConfig     `mapstructure:"storage"`
-	Scope       knowl.ScopeRef    `mapstructure:"scope"`
-	Server      ServerConfig      `mapstructure:"server"`
-	Operator    OperatorConfig    `mapstructure:"operator"`
-	Maintenance MaintenanceConfig `mapstructure:"maintenance"`
+	Provider    string              `mapstructure:"provider"`
+	Workspace   WorkspaceConfig     `mapstructure:"workspace"`
+	Storage     StorageConfig       `mapstructure:"storage"`
+	Scope       knowltypes.ScopeRef `mapstructure:"scope"`
+	Server      ServerConfig        `mapstructure:"server"`
+	Operator    OperatorConfig      `mapstructure:"operator"`
+	Maintenance MaintenanceConfig   `mapstructure:"maintenance"`
 }
 
 // WorkspaceConfig controls the workspace root used by Knowl.
