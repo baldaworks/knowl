@@ -1,10 +1,26 @@
 # Local operations
 
-This document describes the current local process, configuration, lifecycle,
-storage, and transport contracts. The canonical policy is shared with the
-embeddable `pkg/knowl/app` services; public embedders use `pkg/knowl/types`
-for contracts, root `pkg/knowl` for plain host composition, and `pkg/knowlfx`
-for Fx-managed composition.
+This document is the detailed local reference for the current supported Knowl
+workflow. `README.md` is the task-first entrypoint; this document expands the
+verified config shape, lifecycle, HTTP surface, auth rules, storage behavior,
+and public embedding choices.
+
+## Supported local workflow
+
+Run the local operator path in this order:
+
+```bash
+go build -o knowl ./cmd/knowl
+./knowl init
+./knowl validate
+./knowl start
+curl -sS http://127.0.0.1:8080/readyz
+```
+
+After `knowl start`, the supported ingest, query, lint, and apply workflows go
+through the loopback HTTP API. The `knowl ingest` and `knowl lint` Cobra
+commands remain visible for compatibility, but they are not the supported
+operator path today.
 
 ## Configuration
 
@@ -87,7 +103,7 @@ read-only `unavailableMaintainer` fallback.
 ```bash
 ./knowl init
 ./knowl validate
-./knowl --profile default start
+./knowl start
 ```
 
 Host construction performs, in order, workspace validation, selected SQL
@@ -107,6 +123,32 @@ Callers that do not want Fx can construct and manage a host directly through
 root `pkg/knowl`. Core policy does not depend on Fx; callers using
 `pkg/knowl/app` can also compose their own lifecycle around the lower-level
 services.
+
+## Health, readiness, and auth
+
+Read-only health endpoints do not require the operator token:
+
+```bash
+curl -sS http://127.0.0.1:8080/healthz
+curl -sS http://127.0.0.1:8080/readyz
+```
+
+- `/healthz` returns HTTP 200 with JSON containing `service: "knowl"` and
+  `status: "ok"`.
+- `/readyz` returns HTTP 200 with JSON containing `service: "knowl"`,
+  `status: "ready"`, and the trusted `scope` after recovery, migration, and
+  projection preparation complete.
+
+Authenticated write endpoints require the operator token configured under
+`knowl.operator.token`:
+
+- `POST /v1/ingest`
+- `POST /v1/ingest/preview`
+- `POST /v1/operations/{id}/apply`
+- `POST /v1/query/file`
+
+Provide it as `Authorization: Bearer ...`. Missing or mismatched credentials
+return `operator_authorization_required`.
 
 ## Ingest, review, and filing
 
@@ -129,12 +171,48 @@ base64 encoded:
 {
   "scope": "local",
   "source": {"adapter": "fixture", "id": "source-1"},
-  "version": {"version": "1", "digest": "<sha256-of-content>"},
-  "media_type": "text/plain",
-  "content": "<base64-content>",
-  "provenance": {"origin": "operator"}
+  "version": {
+    "version": "1",
+    "digest": "a28130a037ced440a70f1e1e896d9f6cf7147adc31e233e588f58dde12902a2d"
+  },
+  "content": "c291cmNlIHRleHQ="
 }
 ```
+
+### Authenticated preview and apply example
+
+The runtime tests verify this preview flow:
+
+```bash
+export KNOWL_TOKEN=replace-with-a-local-secret
+
+curl -sS \
+  -H "Authorization: Bearer ${KNOWL_TOKEN}" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/v1/ingest/preview \
+  -d '{
+    "scope": "local",
+    "source": {"adapter": "fixture", "id": "source-1"},
+    "version": {
+      "version": "1",
+      "digest": "a28130a037ced440a70f1e1e896d9f6cf7147adc31e233e588f58dde12902a2d"
+    },
+    "content": "c291cmNlIHRleHQ="
+  }'
+```
+
+The response includes an `operation` whose status is `awaiting_review`. Copy
+that operation ID into the apply step:
+
+```bash
+curl -sS \
+  -X POST \
+  -H "Authorization: Bearer ${KNOWL_TOKEN}" \
+  http://127.0.0.1:8080/v1/operations/<operation-id>/apply
+```
+
+The apply response returns the same operation in `committed` state. Preview is
+always review-first, even when `maintenance.auto_apply` is enabled.
 
 The host supplies its trusted scope when the envelope omits one and rejects a
 different scope. It rejects query-string scope overrides. The operation key is
@@ -173,6 +251,15 @@ policy. Read-only query never files implicitly.
 | `GET` | `/v1/pages/{page-id}/links` | One bounded link neighborhood |
 | `GET` | `/v1/lint`, `/v1/lint/results`, or `/v1/lint-results` | Deterministic health report |
 
+After the preview/apply example commits the page, these read-only requests do
+not require the operator token:
+
+```bash
+curl -sS http://127.0.0.1:8080/v1/operations/<operation-id>
+curl -sS http://127.0.0.1:8080/v1/pages/entities/one
+curl -sS http://127.0.0.1:8080/v1/lint
+```
+
 Read results carry provenance and are marked untrusted where appropriate.
 Default read limits are 20 pages, 4 MiB, 32 KiB of characters, depth 8, and a
 30-second deadline; callers cannot expand them through the HTTP query surface.
@@ -180,6 +267,22 @@ Lint checks malformed frontmatter, missing/unknown citations, duplicate IDs,
 malformed/broken links, missing/orphan/stale index entries, log consistency,
 raw-source integrity, and SQL projection drift. Optional maintainer lint is
 suggestion-only and cannot mutate or fetch external sources.
+
+## Public embedding surface
+
+Choose the public package by responsibility:
+
+- `pkg/knowl/types` for transport-neutral domain contracts shared across
+  transports or callers that do not need to construct a host.
+- root `pkg/knowl` for the plain-Go host composition API. See
+  `pkg/knowl/example_test.go` for the verified `NewHost` example.
+- `pkg/knowlfx` for an Fx-managed `fx.App` wrapper over the same host. See
+  `pkg/knowlfx/example_test.go` for the verified `NewApp` example.
+
+Root `pkg/knowl` still exports transition aliases for the domain contracts, but
+new code should prefer `pkg/knowl/types` directly when it only needs the shared
+types. The canonical lower-level application policy remains in `pkg/knowl/app`;
+most embedders should start with root `pkg/knowl` or `pkg/knowlfx`.
 
 ## MCP tools
 

@@ -4,42 +4,49 @@ Knowl is an independent, local-first Markdown knowledge wiki. It turns bounded,
 curated source revisions into a human-readable, cited wiki while keeping the
 filesystem workspace as the source of truth.
 
-The public package split is explicit:
+## Supported local workflow
 
-- `pkg/knowl/types` contains transport-neutral domain contracts
-- `pkg/knowl/wiki` contains shared frontmatter and wiki-link semantics
-- root `pkg/knowl` contains the plain-Go host composition API
-- `pkg/knowlfx` contains the Fx lifecycle wrapper over root `pkg/knowl`
-- `pkg/knowl/app` contains canonical application policy
-
-The local `knowl` process composes the filesystem adapter, SQLite or
-PostgreSQL operational state, a serialized writer, the loopback HTTP operator
-API, and bounded read-only MCP tools through the public `pkg/knowl` +
-`pkg/knowlfx` boundary.
-
-## Quick start
+The supported local operator path is:
 
 ```bash
 go build -o knowl ./cmd/knowl
 ./knowl init
 ./knowl validate
 ./knowl start
+curl -sS http://127.0.0.1:8080/readyz
 ```
 
-`start` listens on `127.0.0.1:8080` by default. Configuration is loaded from
-`.config/knowl/config.yaml`, then the shared profile and `KNOWL_*` overrides.
-Use `--config-dir` or `--profile` to select another config source. The config
-must select a valid `knowl.provider` from `runtime.providers`; provider startup
-is lazy and begins when ingest planning needs it. See [local
-operations](docs/operations.md) for the complete Balda-compatible provider and
-typed SQLite/PostgreSQL examples.
+`start` listens on `127.0.0.1:8080` by default. `readyz` returns a JSON
+response with `status: "ready"` and `scope: "local"` after workspace
+validation, SQL setup, recovery, and projection preparation succeed.
 
-The `ingest` and `lint` Cobra command names are present for the command
-contract; the current operator workflows are the HTTP API and the public Go
-packages. Plain embedders can construct a host through root `pkg/knowl`; Fx
-embedders can use `pkg/knowlfx.NewApp`. The standalone host uses the selected
-shared runtime provider for maintenance planning; deterministic embedding tests
-can inject an explicit maintainer.
+Configuration is loaded from `.config/knowl/config.yaml`, then the selected
+profile and `KNOWL_*` overrides. Use `--config-dir` or `--profile` to select
+another config source.
+
+The supported ingest, query, lint, and apply workflows go through the loopback
+HTTP API after `knowl start`. The `ingest` and `lint` Cobra command names
+remain visible for compatibility, but they are not the supported local
+workflow today. See [local operations](docs/operations.md) for the verified
+config shape, operator-token auth, and concrete HTTP examples.
+
+## Public packages
+
+Use the public package split like this:
+
+- `pkg/knowl/types` for transport-neutral domain contracts
+- root `pkg/knowl` for the plain-Go host composition API
+- `pkg/knowlfx` for the Fx-managed lifecycle wrapper over root `pkg/knowl`
+
+Root `pkg/knowl` still exports transition aliases for the domain contracts,
+but new embedding code should prefer `pkg/knowl/types` directly. Plain
+embedders can construct and manage a host through root `pkg/knowl`; Fx
+embedders can use `pkg/knowlfx.NewApp`.
+
+For detailed config, endpoint, lifecycle, storage, and embedding examples, see
+[local operations](docs/operations.md). For deeper repository internals, see
+[workspace semantics](docs/workspace.md), [architecture](docs/architecture.md),
+and [integration boundaries](docs/integrations.md).
 
 ## Workspace
 
@@ -68,17 +75,26 @@ artifact.
 
 ## Development
 
+Use these commands as the maintainer verification story for the supported
+workflow:
+
 ```bash
+# Proves the supported local workflow claim on current HEAD:
+# - cmd/knowl smoke coverage runs the real init -> validate -> host startup path
+# - pkg/knowl covers the plain-Go embedding entrypoint
+# - pkg/knowlfx covers the Fx embedding entrypoint
 GOCACHE=/tmp/knowl-test-cache go test ./...
+
+# Optional broader checks for maintainers:
 GOCACHE=/tmp/knowl-race-cache go test -race ./...
 go vet ./...
 go build ./...
-# Requires Docker/Podman; starts an isolated PostgreSQL container.
+
+# Optional PostgreSQL/Testcontainers coverage. Requires Docker/Podman and stays
+# outside the default suite.
 go test -tags=integration ./pkg/knowl/store/postgres -run TestStoreContractWithTestcontainers -count=1
 ```
 
 The repository uses `go.uber.org/fx` in `pkg/knowlfx` and `modernc.org/sqlite`
 for the SQLite adapter. Balda integration is deliberately adapter-only; Knowl
-does not import Balda storage, sessions, transports, or memory policy. See
-[architecture](docs/architecture.md) and
-[integration boundaries](docs/integrations.md).
+does not import Balda storage, sessions, transports, or memory policy.

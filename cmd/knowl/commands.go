@@ -13,6 +13,11 @@ const (
 	indexFile  = "wiki/index.md"
 	logFile    = "wiki/log.md"
 
+	loopbackHTTPAPIText      = "loopback HTTP API"
+	startCommandUsage        = "knowl start"
+	placeholderCommandShort  = "Placeholder command; use the loopback HTTP API after knowl start"
+	unsupportedWorkflowToday = "not part of the supported local workflow today"
+
 	defaultSchema = `# Knowl schema
 
 This document defines the page, link, citation, ingest, query, and lint conventions for this workspace.
@@ -24,7 +29,7 @@ Maintainer plans may read this document but may not modify it.
 func newInitCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   initCommandName,
-		Short: "Initialize a Knowl workspace and config",
+		Short: "Initialize the supported local Knowl workspace and config",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			config, err := configFromContext(cmd.Context())
 			if err != nil {
@@ -48,8 +53,8 @@ func newInitCommand() *cobra.Command {
 
 func newValidateCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "validate",
-		Short: "Validate Knowl configuration and workspace",
+		Use:   validateCommandName,
+		Short: "Validate the supported local Knowl configuration and workspace",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if _, _, err := selectedRuntimeProvider(cmd.Context()); err != nil {
 				return err
@@ -72,21 +77,57 @@ func newValidateCommand() *cobra.Command {
 }
 
 func newStartCommand() *cobra.Command {
-	return &cobra.Command{Use: "start", Short: "Start the Knowl service", RunE: func(cmd *cobra.Command, _ []string) error {
+	return &cobra.Command{Use: startCommandName, Short: "Start the supported local Knowl service", RunE: func(cmd *cobra.Command, _ []string) error {
 		return runStart(cmd)
 	}}
 }
 
 func newIngestCommand() *cobra.Command {
-	return &cobra.Command{Use: "ingest", Short: "Ingest a source into the Knowl workspace", RunE: func(_ *cobra.Command, _ []string) error {
-		return fmt.Errorf("knowl ingest workflow is not implemented yet")
-	}}
+	return &cobra.Command{
+		Use:           ingestCommandName,
+		Short:         placeholderCommandShort,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Long:          unsupportedWorkflowLong(ingestCommandName),
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return unsupportedWorkflowError(ingestCommandName)
+		},
+	}
 }
 
 func newLintCommand() *cobra.Command {
-	return &cobra.Command{Use: "lint", Short: "Check Knowl workspace health", RunE: func(_ *cobra.Command, _ []string) error {
-		return fmt.Errorf("knowl lint is not implemented yet")
-	}}
+	return &cobra.Command{
+		Use:           lintCommandName,
+		Short:         placeholderCommandShort,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Long:          unsupportedWorkflowLong(lintCommandName),
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return unsupportedWorkflowError(lintCommandName)
+		},
+	}
+}
+
+func unsupportedWorkflowLong(operation string) string {
+	return fmt.Sprintf(
+		"knowl %s is %s.\n\nStart the local service with %q, then use the %s for\n%s operations.",
+		operation,
+		unsupportedWorkflowToday,
+		startCommandUsage,
+		loopbackHTTPAPIText,
+		operation,
+	)
+}
+
+func unsupportedWorkflowError(operation string) error {
+	return fmt.Errorf(
+		`knowl %s is %s; run %q and use the %s for %s operations`,
+		operation,
+		unsupportedWorkflowToday,
+		startCommandUsage,
+		loopbackHTTPAPIText,
+		operation,
+	)
 }
 
 func initWorkspace(workspace string) error {

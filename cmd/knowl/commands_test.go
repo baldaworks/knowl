@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/normahq/runtime/v2/agentconfig"
 	"github.com/normahq/runtime/v2/appconfig"
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -80,12 +82,134 @@ func TestStoreDriverSelection(t *testing.T) {
 
 func TestRootExposesCurrentLifecycleCommands(t *testing.T) {
 	root := newRootCommand()
-	want := map[string]bool{initCommandName: true, "validate": true, "start": true, "ingest": true, "lint": true}
+	want := map[string]bool{
+		initCommandName:     true,
+		validateCommandName: true,
+		startCommandName:    true,
+		ingestCommandName:   true,
+		lintCommandName:     true,
+	}
 	for _, command := range root.Commands() {
 		delete(want, command.Name())
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing lifecycle commands: %v", want)
+	}
+}
+
+func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
+	t.Parallel()
+
+	output := commandHelpOutput(t, newRootCommand())
+	for _, want := range []string{
+		"Supported local workflow:",
+		"knowl init",
+		"knowl validate",
+		startCommandUsage,
+		loopbackHTTPAPIText,
+		"not the supported local workflow today",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("root help missing %q in output:\n%s", want, output)
+		}
+	}
+}
+
+func TestPlaceholderCommandHelpMarksCommandsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		cmd       *cobra.Command
+		wantShort string
+		wantHelp  []string
+	}{
+		{
+			name:      ingestCommandName,
+			cmd:       newIngestCommand(),
+			wantShort: placeholderCommandShort,
+			wantHelp: []string{
+				unsupportedWorkflowToday,
+				startCommandUsage,
+				loopbackHTTPAPIText,
+			},
+		},
+		{
+			name:      lintCommandName,
+			cmd:       newLintCommand(),
+			wantShort: placeholderCommandShort,
+			wantHelp: []string{
+				unsupportedWorkflowToday,
+				startCommandUsage,
+				loopbackHTTPAPIText,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := test.cmd.Short; got != test.wantShort {
+				t.Fatalf("%s short = %q, want %q", test.name, got, test.wantShort)
+			}
+
+			output := commandHelpOutput(t, test.cmd)
+			for _, want := range test.wantHelp {
+				if !strings.Contains(output, want) {
+					t.Fatalf("%s help missing %q in output:\n%s", test.name, want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestPlaceholderCommandsReturnSupportedWorkflowGuidance(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		cmd         *cobra.Command
+		wantMessage string
+	}{
+		{
+			name:        ingestCommandName,
+			cmd:         newIngestCommand(),
+			wantMessage: unsupportedWorkflowError(ingestCommandName).Error(),
+		},
+		{
+			name:        lintCommandName,
+			cmd:         newLintCommand(),
+			wantMessage: unsupportedWorkflowError(lintCommandName).Error(),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if !test.cmd.SilenceErrors {
+				t.Fatalf("%s SilenceErrors = false, want true", test.name)
+			}
+			if !test.cmd.SilenceUsage {
+				t.Fatalf("%s SilenceUsage = false, want true", test.name)
+			}
+
+			var output bytes.Buffer
+			test.cmd.SetOut(&output)
+			test.cmd.SetErr(&output)
+
+			err := test.cmd.Execute()
+			if err == nil {
+				t.Fatalf("%s Execute() error = nil, want guidance error", test.name)
+			}
+			if got := err.Error(); got != test.wantMessage {
+				t.Fatalf("%s Execute() error = %q, want %q", test.name, got, test.wantMessage)
+			}
+			if got := strings.TrimSpace(output.String()); got != "" {
+				t.Fatalf("%s Execute() wrote %q, want no Cobra usage/error output", test.name, got)
+			}
+		})
 	}
 }
 
@@ -414,4 +538,17 @@ func assertNoRetiredConfigKeys(t *testing.T, content []byte) {
 			t.Fatalf("config artifact contains retired knowl.storage key %q", key)
 		}
 	}
+}
+
+func commandHelpOutput(t *testing.T, cmd *cobra.Command) string {
+	t.Helper()
+
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute help for %s: %v", cmd.Name(), err)
+	}
+	return output.String()
 }
