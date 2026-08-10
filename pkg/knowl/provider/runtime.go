@@ -9,8 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	knowl "github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/normahq/runtime/v2/agentfactory"
 	"github.com/normahq/runtime/v2/structuredagent"
 	adkagent "google.golang.org/adk/v2/agent"

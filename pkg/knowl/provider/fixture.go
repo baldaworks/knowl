@@ -3,8 +3,8 @@ package provider
 import (
 	"context"
 
-	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // Fixture is a deterministic local Maintainer used by supported contract tests.

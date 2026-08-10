@@ -1,8 +1,10 @@
-package knowl
+package main
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/baldaworks/knowl/pkg/knowl"
 )
 
 func TestStorageConfigNormalize(t *testing.T) {
@@ -18,45 +20,45 @@ func TestStorageConfigNormalize(t *testing.T) {
 	}{
 		{
 			name:       "sqlite path",
-			config:     StorageConfig{Type: StoreSQLite, SQLite: &SQLiteConfig{Path: ".knowl/custom.db"}},
-			wantDriver: StoreSQLite,
+			config:     StorageConfig{Type: knowl.StoreSQLite, SQLite: &SQLiteConfig{Path: ".knowl/custom.db"}},
+			wantDriver: knowl.StoreSQLite,
 			wantPath:   workspace + "/.knowl/custom.db",
 		},
 		{
 			name:       "sqlite default path",
-			config:     StorageConfig{Type: StoreSQLite, SQLite: &SQLiteConfig{}},
-			wantDriver: StoreSQLite,
+			config:     StorageConfig{Type: knowl.StoreSQLite, SQLite: &SQLiteConfig{}},
+			wantDriver: knowl.StoreSQLite,
 			wantPath:   workspace + "/.knowl/knowl.sqlite",
 		},
 		{
 			name:       "postgres",
-			config:     StorageConfig{Type: StorePostgres, Postgres: &PostgresConfig{DSN: secretDSN}},
-			wantDriver: StorePostgres,
+			config:     StorageConfig{Type: knowl.StorePostgres, Postgres: &PostgresConfig{DSN: secretDSN}},
+			wantDriver: knowl.StorePostgres,
 			wantDSN:    secretDSN,
 		},
 		{
 			name:    "sqlite block missing",
-			config:  StorageConfig{Type: StoreSQLite},
+			config:  StorageConfig{Type: knowl.StoreSQLite},
 			wantErr: "knowl.storage.sqlite",
 		},
 		{
 			name:    "postgres block missing",
-			config:  StorageConfig{Type: StorePostgres},
+			config:  StorageConfig{Type: knowl.StorePostgres},
 			wantErr: "knowl.storage.postgres",
 		},
 		{
 			name:    "postgres dsn missing",
-			config:  StorageConfig{Type: StorePostgres, Postgres: &PostgresConfig{}},
+			config:  StorageConfig{Type: knowl.StorePostgres, Postgres: &PostgresConfig{}},
 			wantErr: "knowl.storage.postgres.dsn",
 		},
 		{
 			name:    "extra postgres block",
-			config:  StorageConfig{Type: StoreSQLite, SQLite: &SQLiteConfig{}, Postgres: &PostgresConfig{DSN: secretDSN}},
+			config:  StorageConfig{Type: knowl.StoreSQLite, SQLite: &SQLiteConfig{}, Postgres: &PostgresConfig{DSN: secretDSN}},
 			wantErr: "knowl.storage.postgres",
 		},
 		{
 			name:    "extra sqlite block",
-			config:  StorageConfig{Type: StorePostgres, SQLite: &SQLiteConfig{}, Postgres: &PostgresConfig{DSN: secretDSN}},
+			config:  StorageConfig{Type: knowl.StorePostgres, SQLite: &SQLiteConfig{}, Postgres: &PostgresConfig{DSN: secretDSN}},
 			wantErr: "knowl.storage.sqlite",
 		},
 		{

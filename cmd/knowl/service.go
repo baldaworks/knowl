@@ -9,7 +9,8 @@ import (
 	"strings"
 	"syscall"
 
-	apphost "github.com/baldaworks/knowl/internal/apps/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowlfx"
 	"github.com/normahq/runtime/v2/agentfactory"
 	"github.com/normahq/runtime/v2/mcpregistry"
 	"github.com/spf13/cobra"
@@ -27,8 +28,8 @@ func runStart(cmd *cobra.Command) error {
 	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	var host *apphost.Host
-	application := apphost.NewApp(ctx, apphost.Options{
+	var host *knowl.Host
+	application := knowlfx.NewApp(ctx, knowlfx.Options{
 		Config:         config,
 		RuntimeFactory: runtimeFactory,
 		ProviderID:     providerID,
@@ -57,20 +58,20 @@ func runStart(cmd *cobra.Command) error {
 	return errors.Join(runErr, stopErr)
 }
 
-func hostConfig(ctx context.Context) (apphost.Config, error) {
+func hostConfig(ctx context.Context) (knowl.Config, error) {
 	loaded, err := configFromContext(ctx)
 	if err != nil {
-		return apphost.Config{}, err
+		return knowl.Config{}, err
 	}
 	workspace, err := workspacePath(ctx)
 	if err != nil {
-		return apphost.Config{}, err
+		return knowl.Config{}, err
 	}
 	storage, err := storageSettings(ctx)
 	if err != nil {
-		return apphost.Config{}, err
+		return knowl.Config{}, err
 	}
-	config := apphost.DefaultConfig()
+	config := knowl.DefaultConfig()
 	config.Workspace = workspace
 	config.StoreDriver = storage.Driver
 	if value := loaded.Document.Knowl.Scope; value != "" {

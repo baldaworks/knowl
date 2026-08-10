@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	ErrWorkerStopped = errors.New("knowl worker is stopped")
-	ErrWorkerFull    = errors.New("knowl worker queue is full")
+	errWorkerStopped = errors.New("knowl worker is stopped")
+	errWorkerFull    = errors.New("knowl worker queue is full")
 )
 
 type workItem struct {
@@ -18,38 +18,35 @@ type workItem struct {
 	result chan error
 }
 
-// Worker serializes bounded local write work and never grows an unbounded queue.
-type Worker struct {
+type worker struct {
 	queue    chan workItem
 	done     chan struct{}
 	mu       sync.Mutex
 	submitMu sync.RWMutex
 	cancel   context.CancelFunc
-	start    bool
-	stop     bool
+	started  bool
+	stopped  bool
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
-// NewWorker constructs a single-consumer bounded worker.
-func NewWorker(queueSize int) *Worker {
+func newWorker(queueSize int) *worker {
 	if queueSize <= 0 {
 		queueSize = 1
 	}
-	return &Worker{queue: make(chan workItem, queueSize), done: make(chan struct{})}
+	return &worker{queue: make(chan workItem, queueSize), done: make(chan struct{})}
 }
 
-// Start launches the worker. Calling Start more than once is harmless.
-func (worker *Worker) Start(ctx context.Context) error {
+func (worker *worker) start(ctx context.Context) error {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	if worker.start || worker.stop {
+	if worker.started || worker.stopped {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	worker.start = true
+	worker.started = true
 	worker.wg.Add(1)
 	workerCtx, cancel := context.WithCancel(ctx)
 	worker.cancel = cancel
@@ -57,21 +54,20 @@ func (worker *Worker) Start(ctx context.Context) error {
 	return nil
 }
 
-// Do queues one write operation and waits for its result.
-func (worker *Worker) Do(ctx context.Context, fn func(context.Context) error) error {
+func (worker *worker) do(ctx context.Context, fn func(context.Context) error) error {
 	if fn == nil {
-		return fmt.Errorf("worker function is required: %w", ErrWorkerFull)
+		return fmt.Errorf("worker function is required: %w", errWorkerFull)
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	worker.submitMu.RLock()
 	worker.mu.Lock()
-	started, stopped := worker.start, worker.stop
+	started, stopped := worker.started, worker.stopped
 	worker.mu.Unlock()
 	if !started || stopped {
 		worker.submitMu.RUnlock()
-		return ErrWorkerStopped
+		return errWorkerStopped
 	}
 	item := workItem{ctx: ctx, fn: fn, result: make(chan error, 1)}
 	select {
@@ -86,9 +82,9 @@ func (worker *Worker) Do(ctx context.Context, fn func(context.Context) error) er
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-worker.done:
-			return ErrWorkerStopped
+			return errWorkerStopped
 		default:
-			return ErrWorkerFull
+			return errWorkerFull
 		}
 	}
 	select {
@@ -97,19 +93,18 @@ func (worker *Worker) Do(ctx context.Context, fn func(context.Context) error) er
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-worker.done:
-		return ErrWorkerStopped
+		return errWorkerStopped
 	}
 }
 
-// Stop cancels the worker and waits for queued work to finish or the context to expire.
-func (worker *Worker) Stop(ctx context.Context) error {
+func (worker *worker) stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	worker.submitMu.Lock()
 	worker.mu.Lock()
-	if !worker.stop {
-		worker.stop = true
+	if !worker.stopped {
+		worker.stopped = true
 		if worker.cancel != nil {
 			worker.cancel()
 		}
@@ -130,7 +125,7 @@ func (worker *Worker) Stop(ctx context.Context) error {
 	}
 }
 
-func (worker *Worker) run(ctx context.Context) {
+func (worker *worker) run(ctx context.Context) {
 	defer worker.wg.Done()
 	defer worker.signalStopped()
 	for {
@@ -140,7 +135,7 @@ func (worker *Worker) run(ctx context.Context) {
 			return
 		case item := <-worker.queue:
 			if item.fn == nil {
-				item.result <- ErrWorkerFull
+				item.result <- errWorkerFull
 				continue
 			}
 			itemContext, cancel := context.WithCancel(ctx)
@@ -153,15 +148,15 @@ func (worker *Worker) run(ctx context.Context) {
 	}
 }
 
-func (worker *Worker) signalStopped() {
+func (worker *worker) signalStopped() {
 	worker.stopOnce.Do(func() { close(worker.done) })
 }
 
-func (worker *Worker) drain() {
+func (worker *worker) drain() {
 	for {
 		select {
 		case item := <-worker.queue:
-			item.result <- ErrWorkerStopped
+			item.result <- errWorkerStopped
 		default:
 			return
 		}

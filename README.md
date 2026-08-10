@@ -4,11 +4,18 @@ Knowl is an independent, local-first Markdown knowledge wiki. It turns bounded,
 curated source revisions into a human-readable, cited wiki while keeping the
 filesystem workspace as the source of truth.
 
-The core is embeddable under `pkg/knowl`. The local `knowl` process composes the
-filesystem adapter, SQLite or PostgreSQL operational state, a serialized writer,
-the loopback HTTP operator API, and bounded read-only MCP tools. The host uses
-Uber Fx for lifecycle ownership; canonical application policy remains in
-`pkg/knowl/app`.
+The public package split is explicit:
+
+- `pkg/knowl/types` contains transport-neutral domain contracts
+- `pkg/knowl/wiki` contains shared frontmatter and wiki-link semantics
+- root `pkg/knowl` contains the plain-Go host composition API
+- `pkg/knowlfx` contains the Fx lifecycle wrapper over root `pkg/knowl`
+- `pkg/knowl/app` contains canonical application policy
+
+The local `knowl` process composes the filesystem adapter, SQLite or
+PostgreSQL operational state, a serialized writer, the loopback HTTP operator
+API, and bounded read-only MCP tools through the public `pkg/knowl` +
+`pkg/knowlfx` boundary.
 
 ## Quick start
 
@@ -27,10 +34,12 @@ is lazy and begins when ingest planning needs it. See [local
 operations](docs/operations.md) for the complete Balda-compatible provider and
 typed SQLite/PostgreSQL examples.
 
-The `ingest` and `lint` Cobra command names are present for the command contract;
-the current operator workflows are the HTTP API and the public Go packages.
-The standalone host uses the selected shared runtime provider for maintenance
-planning; deterministic embedding tests can inject an explicit maintainer.
+The `ingest` and `lint` Cobra command names are present for the command
+contract; the current operator workflows are the HTTP API and the public Go
+packages. Plain embedders can construct a host through root `pkg/knowl`; Fx
+embedders can use `pkg/knowlfx.NewApp`. The standalone host uses the selected
+shared runtime provider for maintenance planning; deterministic embedding tests
+can inject an explicit maintainer.
 
 ## Workspace
 
@@ -68,8 +77,8 @@ go build ./...
 go test -tags=integration ./pkg/knowl/store/postgres -run TestStoreContractWithTestcontainers -count=1
 ```
 
-The repository uses `go.uber.org/fx` for the host composition root and
-`modernc.org/sqlite` for the SQLite adapter. Balda integration is deliberately
-adapter-only; Knowl does not import Balda storage, sessions, transports, or
-memory policy. See [architecture](docs/architecture.md) and
+The repository uses `go.uber.org/fx` in `pkg/knowlfx` and `modernc.org/sqlite`
+for the SQLite adapter. Balda integration is deliberately adapter-only; Knowl
+does not import Balda storage, sessions, transports, or memory policy. See
+[architecture](docs/architecture.md) and
 [integration boundaries](docs/integrations.md).

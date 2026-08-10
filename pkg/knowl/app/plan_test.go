@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 const fixtureAdapter = "fixture"

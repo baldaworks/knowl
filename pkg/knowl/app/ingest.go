@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 var (

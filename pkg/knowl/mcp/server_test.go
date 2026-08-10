@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 func TestServerExposesOnlyBoundedReadToolsAndPinsScope(t *testing.T) {

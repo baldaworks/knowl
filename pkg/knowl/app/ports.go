@@ -4,7 +4,7 @@ package app
 import (
 	"context"
 
-	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // ContentStore owns canonical workspace content and recovery.

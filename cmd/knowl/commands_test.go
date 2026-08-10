@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	apphost "github.com/baldaworks/knowl/internal/apps/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/normahq/runtime/v2/agentconfig"
 	"github.com/normahq/runtime/v2/appconfig"
 	"gopkg.in/yaml.v3"
@@ -50,15 +50,15 @@ func TestStoreDriverSelection(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.WithValue(context.Background(), loadedConfigContextKey{}, loadedConfig{
 				WorkingDir: t.TempDir(),
-				Document: knowlConfigDocument{Knowl: apphost.AppConfig{Storage: apphost.StorageConfig{
+				Document: knowlConfigDocument{Knowl: AppConfig{Storage: StorageConfig{
 					Type:   test.value,
-					SQLite: &apphost.SQLiteConfig{},
+					SQLite: &SQLiteConfig{},
 				}}},
 			})
 			if test.value == postgresStore {
 				loaded := ctx.Value(loadedConfigContextKey{}).(loadedConfig)
 				loaded.Document.Knowl.Storage.SQLite = nil
-				loaded.Document.Knowl.Storage.Postgres = &apphost.PostgresConfig{DSN: "postgres://localhost/knowl"}
+				loaded.Document.Knowl.Storage.Postgres = &PostgresConfig{DSN: "postgres://localhost/knowl"}
 				ctx = context.WithValue(context.Background(), loadedConfigContextKey{}, loaded)
 			}
 			got, err := storeDriver(ctx)
@@ -116,7 +116,7 @@ func TestLoadConfigDefaultsToSQLiteWithoutBackendSection(t *testing.T) {
 		t.Fatalf("normalize default storage: %v", err)
 	}
 	wantPath := filepath.Join(workingDir, ".knowl", "knowl.sqlite")
-	if storage.Driver != apphost.StoreSQLite || storage.Path != wantPath {
+	if storage.Driver != knowl.StoreSQLite || storage.Path != wantPath {
 		t.Fatalf("default storage = %#v, want sqlite path %q", storage, wantPath)
 	}
 }
@@ -149,7 +149,7 @@ func TestCheckedInConfigArtifactUsesTypedBaldaCompatibleShape(t *testing.T) {
 		t.Fatalf("normalize checked-in storage: %v", err)
 	}
 	wantPath := filepath.Join(repoRoot, "knowledge", ".knowl", "knowl.sqlite")
-	if storage.Driver != apphost.StoreSQLite || storage.Path != wantPath {
+	if storage.Driver != knowl.StoreSQLite || storage.Path != wantPath {
 		t.Fatalf("checked-in storage = %#v, want sqlite path %q", storage, wantPath)
 	}
 	if token := strings.TrimSpace(loaded.Document.Knowl.Operator.Token); token != "" && !strings.HasPrefix(token, "replace-") {
@@ -179,7 +179,7 @@ func TestEmbeddedDefaultConfigArtifactLoadsThroughProductionTypes(t *testing.T) 
 		t.Fatalf("normalize embedded storage: %v", err)
 	}
 	wantPath := filepath.Join(workingDir, ".knowl", "knowl.sqlite")
-	if storage.Driver != apphost.StoreSQLite || storage.Path != wantPath {
+	if storage.Driver != knowl.StoreSQLite || storage.Path != wantPath {
 		t.Fatalf("embedded storage = %#v, want sqlite path %q", storage, wantPath)
 	}
 	if token := strings.TrimSpace(loaded.Document.Knowl.Operator.Token); token != "" && !strings.HasPrefix(token, "replace-") {
@@ -339,7 +339,7 @@ func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testi
 			ctx := context.WithValue(context.Background(), loadedConfigContextKey{}, loadedConfig{
 				Document: knowlConfigDocument{
 					Runtime: appconfig.RuntimeConfig{Providers: map[string]agentconfig.Config{knownProviderID: providerConfig}},
-					Knowl:   apphost.AppConfig{Provider: test.providerID},
+					Knowl:   AppConfig{Provider: test.providerID},
 				},
 			})
 			if _, _, err := selectedRuntimeProvider(ctx); err == nil || !strings.Contains(err.Error(), test.wantError) {
@@ -351,7 +351,7 @@ func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testi
 	ctx := context.WithValue(context.Background(), loadedConfigContextKey{}, loadedConfig{
 		Document: knowlConfigDocument{
 			Runtime: appconfig.RuntimeConfig{Providers: map[string]agentconfig.Config{knownProviderID: providerConfig}},
-			Knowl:   apphost.AppConfig{Provider: knownProviderID},
+			Knowl:   AppConfig{Provider: knownProviderID},
 		},
 	})
 	factory, providerID, err := selectedRuntimeProvider(ctx)

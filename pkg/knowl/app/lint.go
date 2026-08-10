@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	internalwiki "github.com/baldaworks/knowl/internal/wiki"
-	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
+	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 const (
@@ -116,7 +116,7 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 			findings = append(findings, knowl.LintFinding{Code: "page.duplicate_id", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "multiple canonical pages use the same page ID"})
 		}
 		pageIDs[page.ID] = struct{}{}
-		metadata, err := internalwiki.ParseFrontmatter(page.Content)
+		metadata, err := knowlwiki.ParseFrontmatter(page.Content)
 		if err != nil {
 			findings = append(findings, knowl.LintFinding{Code: "frontmatter.malformed", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "page frontmatter is missing or malformed"})
 		} else {
@@ -140,7 +140,7 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 				}
 			}
 		}
-		targets, malformed := internalwiki.MarkdownTargets(page.Content)
+		targets, malformed := knowlwiki.MarkdownTargets(page.Content)
 		if malformed {
 			findings = append(findings, knowl.LintFinding{Code: "link.malformed", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "page contains an unterminated wiki link"})
 		}
@@ -150,7 +150,7 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 			}
 		}
 	}
-	indexTargets, malformed := internalwiki.IndexTargets(index.Content)
+	indexTargets, malformed := knowlwiki.IndexTargets(index.Content)
 	if malformed {
 		findings = append(findings, knowl.LintFinding{Code: "index.malformed", Severity: lintError, Path: index.Path, Message: "index contains an unterminated wiki link"})
 	}

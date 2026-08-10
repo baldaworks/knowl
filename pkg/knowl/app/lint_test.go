@@ -3,8 +3,8 @@ package app
 import (
 	"testing"
 
-	internalwiki "github.com/baldaworks/knowl/internal/wiki"
-	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
+	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 const (
@@ -49,11 +49,11 @@ func TestLintPagesPreservesMetadataAndLinkFindings(t *testing.T) {
 
 func TestLintUsesSharedWikiSemantics(t *testing.T) {
 	content := "---\nid: " + lintPageOneID + "\ntitle: One\ntype: entity\nsource_refs:\n  - raw:source@v1\n---\n[[wiki/" + lintPageTwoID + ".md|Two]]\n"
-	metadata, err := internalwiki.ParseFrontmatter(content)
+	metadata, err := knowlwiki.ParseFrontmatter(content)
 	if err != nil {
 		t.Fatalf("ParseFrontmatter() error = %v", err)
 	}
-	targets, malformed := internalwiki.MarkdownTargets(content)
+	targets, malformed := knowlwiki.MarkdownTargets(content)
 	if malformed {
 		t.Fatal("MarkdownTargets() malformed = true, want false")
 	}

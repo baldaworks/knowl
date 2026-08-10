@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	apphost "github.com/baldaworks/knowl/internal/apps/knowl"
 	"github.com/normahq/runtime/v2/appconfig"
 )
 
@@ -17,7 +16,7 @@ var defaultKnowlConfig []byte
 
 type knowlConfigDocument struct {
 	Runtime appconfig.RuntimeConfig `mapstructure:"runtime"`
-	Knowl   apphost.AppConfig       `mapstructure:"knowl"`
+	Knowl   AppConfig               `mapstructure:"knowl"`
 }
 
 type loadedConfig struct {
@@ -53,9 +52,9 @@ func loadConfig(cmdContext context.Context, configDir, profile string) (context.
 		return cmdContext, err
 	}
 	if document.Knowl.Storage.Type == "" && document.Knowl.Storage.SQLite == nil && document.Knowl.Storage.Postgres == nil {
-		document.Knowl.Storage = apphost.StorageConfig{
-			Type:   apphost.StoreSQLite,
-			SQLite: &apphost.SQLiteConfig{},
+		document.Knowl.Storage = StorageConfig{
+			Type:   defaultStore,
+			SQLite: &SQLiteConfig{},
 		}
 	}
 
@@ -105,14 +104,14 @@ func storeDriver(ctx context.Context) (string, error) {
 	return storage.Driver, nil
 }
 
-func storageSettings(ctx context.Context) (apphost.StorageSettings, error) {
+func storageSettings(ctx context.Context) (StorageSettings, error) {
 	config, err := configFromContext(ctx)
 	if err != nil {
-		return apphost.StorageSettings{}, err
+		return StorageSettings{}, err
 	}
 	workspace, err := workspacePath(ctx)
 	if err != nil {
-		return apphost.StorageSettings{}, err
+		return StorageSettings{}, err
 	}
 	return config.Document.Knowl.Storage.Normalize(workspace)
 }

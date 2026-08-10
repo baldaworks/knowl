@@ -12,8 +12,8 @@ import (
 	"os"
 	"strings"
 
-	domain "github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 const maxHTTPBodyBytes = 8 << 20
@@ -24,19 +24,17 @@ const serviceKey = "service"
 
 const statusKey = "status"
 
-// HTTPDependencies are the trusted services exposed by the loopback operator API.
-type HTTPDependencies struct {
+type httpDependencies struct {
 	Scope         domain.ScopeRef
 	OperatorToken string
 	Ingest        *app.IngestService
 	Query         *app.QueryService
 	Lint          *app.LintService
-	Worker        *Worker
+	Worker        *worker
 	Ready         func() bool
 }
 
-// NewHTTPHandler constructs the loopback operator and bounded read handler.
-func NewHTTPHandler(dependencies HTTPDependencies) http.Handler {
+func newHTTPHandler(dependencies httpDependencies) http.Handler {
 	if dependencies.Ready == nil {
 		dependencies.Ready = func() bool { return true }
 	}
@@ -44,7 +42,7 @@ func NewHTTPHandler(dependencies HTTPDependencies) http.Handler {
 }
 
 type httpHandler struct {
-	dependencies HTTPDependencies
+	dependencies httpDependencies
 }
 
 func (handler *httpHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -299,7 +297,7 @@ func (handler *httpHandler) do(ctx context.Context, fn func(context.Context) err
 	if handler.dependencies.Worker == nil {
 		return fn(ctx)
 	}
-	return handler.dependencies.Worker.Do(ctx, fn)
+	return handler.dependencies.Worker.do(ctx, fn)
 }
 
 func trustedEnvelope(scope domain.ScopeRef, envelope domain.SourceEnvelope) (domain.SourceEnvelope, error) {

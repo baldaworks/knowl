@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )

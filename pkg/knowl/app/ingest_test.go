@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 func TestIngestReviewApplyReplayAndProject(t *testing.T) {

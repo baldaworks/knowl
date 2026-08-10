@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )

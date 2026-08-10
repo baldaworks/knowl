@@ -1,4 +1,4 @@
-package knowl
+package knowlfx
 
 import (
 	"context"

@@ -11,17 +11,17 @@ import (
 	"sync"
 	"sync/atomic"
 
-	domain "github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
 	runtimeprovider "github.com/baldaworks/knowl/pkg/knowl/provider"
 	"github.com/baldaworks/knowl/pkg/knowl/store/postgres"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
-	"go.uber.org/fx"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-// Options supplies the host configuration and an independent maintainer boundary.
+// Options supplies the host configuration plus either an explicit maintainer
+// or the runtime-provider inputs needed to build one lazily.
 type Options struct {
 	Config         Config
 	Maintainer     app.Maintainer
@@ -38,7 +38,7 @@ type Host struct {
 
 	operations app.OperationStore
 	index      app.SearchIndex
-	worker     *Worker
+	worker     *worker
 	service    *app.IngestService
 	query      *app.QueryService
 	lint       *app.LintService
@@ -60,10 +60,14 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if options.Maintainer == nil {
-		return nil, fmt.Errorf("knowl maintainer is required")
+	config, err := options.Config.normalized()
+	if err != nil {
+		return nil, err
 	}
-	maintainerCloser, _ := options.Maintainer.(io.Closer)
+	maintainer, maintainerCloser, err := options.maintainer(config)
+	if err != nil {
+		return nil, err
+	}
 	var operationalCloser io.Closer
 	keep := false
 	defer func() {
@@ -77,10 +81,6 @@ func New(ctx context.Context, options Options) (*Host, error) {
 			_ = operationalCloser.Close()
 		}
 	}()
-	config, err := options.Config.normalized()
-	if err != nil {
-		return nil, err
-	}
 	workspace, err := contentfs.New(config.Workspace)
 	if err != nil {
 		return nil, err
@@ -93,7 +93,6 @@ func New(ctx context.Context, options Options) (*Host, error) {
 		return nil, err
 	}
 	operationalCloser = closer
-	maintainer := options.Maintainer
 	ingestOptions := config.IngestOptions
 	if ingestOptions.ReadLimits == (domain.ReadLimits{}) {
 		ingestOptions.ReadLimits = config.ReadLimits
@@ -131,14 +130,14 @@ func New(ctx context.Context, options Options) (*Host, error) {
 		maintainerCloser: maintainerCloser,
 		operations:       operations,
 		index:            index,
-		worker:           NewWorker(config.WorkerQueueSize),
+		worker:           newWorker(config.WorkerQueueSize),
 		service:          service,
 		query:            query,
 		lint:             lint,
 		mcp:              mcpServer,
 		serverErr:        make(chan error, 1),
 	}
-	host.handler = NewHTTPHandler(HTTPDependencies{
+	host.handler = newHTTPHandler(httpDependencies{
 		Scope:         config.Scope,
 		OperatorToken: config.OperatorToken,
 		Ingest:        service,
@@ -154,72 +153,6 @@ func New(ctx context.Context, options Options) (*Host, error) {
 // NewHost is an explicit constructor alias for callers composing one local host.
 func NewHost(ctx context.Context, config Config, maintainer app.Maintainer) (*Host, error) {
 	return New(ctx, Options{Config: config, Maintainer: maintainer})
-}
-
-// NewApp builds the Fx composition root for one local Knowl host.
-//
-// The plain New constructor remains available for embedding and unit tests; this
-// function is the service entry point and owns host start/stop through Fx.
-func NewApp(ctx context.Context, options Options, additional ...fx.Option) *fx.App {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return fx.New(
-		fx.Module("knowl.host",
-			fx.Provide(
-				func() (Config, error) { return options.Config.normalized() },
-				func(config Config) (app.Maintainer, error) {
-					if options.Maintainer != nil {
-						return options.Maintainer, nil
-					}
-					providerID := strings.TrimSpace(options.ProviderID)
-					if providerID == "" {
-						return nil, fmt.Errorf("knowl.provider is required")
-					}
-					if options.RuntimeFactory == nil {
-						return nil, fmt.Errorf("runtime provider factory is required")
-					}
-					if validator, ok := options.RuntimeFactory.(runtimeprovider.RuntimeFactoryValidator); ok {
-						if err := validator.ValidateAgent(providerID); err != nil {
-							return nil, fmt.Errorf("validate knowl.provider: %w", err)
-						}
-					}
-					return runtimeprovider.NewRuntimeMaintainer(options.RuntimeFactory, providerID, config.Workspace)
-				},
-				func(config Config, maintainer app.Maintainer) (*Host, error) {
-					return New(ctx, Options{Config: config, Maintainer: maintainer})
-				},
-				func(host *Host) hostLifecycle { return host },
-			),
-			fx.Invoke(registerHostLifecycle),
-		),
-		fx.Options(additional...),
-	)
-}
-
-type hostLifecycle interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
-}
-
-type hostLifecycleParams struct {
-	fx.In
-
-	Lifecycle fx.Lifecycle
-	Host      hostLifecycle
-}
-
-func registerHostLifecycle(params hostLifecycleParams) {
-	// Preflight opens the operational store before Fx starts the host. The
-	// no-op start hook makes that ownership visible to Fx, so a failed host
-	// start still rolls back the preflight resources.
-	params.Lifecycle.Append(fx.Hook{
-		OnStart: func(context.Context) error { return nil },
-		OnStop:  params.Host.Stop,
-	})
-	params.Lifecycle.Append(fx.Hook{
-		OnStart: params.Host.Start,
-	})
 }
 
 // Start binds the loopback HTTP listener and marks the host ready after preflight.
@@ -241,7 +174,7 @@ func (host *Host) Start(_ context.Context) error {
 	host.listener = listener
 	host.server = &http.Server{Handler: host.handler, ReadHeaderTimeout: host.config.ReadLimits.Deadline}
 	host.cancel = cancel
-	if err := host.worker.Start(serverCtx); err != nil {
+	if err := host.worker.start(serverCtx); err != nil {
 		cancel()
 		_ = listener.Close()
 		host.listener = nil
@@ -312,7 +245,7 @@ func (host *Host) Stop(ctx context.Context) error {
 		cancel()
 	}
 	var shutdownErrs []error
-	if err := host.worker.Stop(ctx); err != nil {
+	if err := host.worker.stop(ctx); err != nil {
 		shutdownErrs = append(shutdownErrs, fmt.Errorf("stop Knowl worker: %w", err))
 	}
 	if server != nil {
@@ -377,6 +310,33 @@ func (host *Host) Operations() app.OperationStore { return host.operations }
 
 // Index returns the rebuildable search projection port.
 func (host *Host) Index() app.SearchIndex { return host.index }
+
+func (options Options) maintainer(config Config) (app.Maintainer, io.Closer, error) {
+	if options.Maintainer != nil {
+		closer, _ := options.Maintainer.(io.Closer)
+		return options.Maintainer, closer, nil
+	}
+	providerID := strings.TrimSpace(options.ProviderID)
+	if options.RuntimeFactory == nil && providerID == "" {
+		return nil, nil, fmt.Errorf("knowl maintainer is required")
+	}
+	if providerID == "" {
+		return nil, nil, fmt.Errorf("knowl.provider is required")
+	}
+	if options.RuntimeFactory == nil {
+		return nil, nil, fmt.Errorf("runtime provider factory is required")
+	}
+	if validator, ok := options.RuntimeFactory.(runtimeprovider.RuntimeFactoryValidator); ok {
+		if err := validator.ValidateAgent(providerID); err != nil {
+			return nil, nil, fmt.Errorf("validate knowl.provider: %w", err)
+		}
+	}
+	maintainer, err := runtimeprovider.NewRuntimeMaintainer(options.RuntimeFactory, providerID, config.Workspace)
+	if err != nil {
+		return nil, nil, err
+	}
+	return maintainer, maintainer, nil
+}
 
 func openOperationalStore(ctx context.Context, config Config) (app.OperationStore, app.SearchIndex, io.Closer, projectionChecker, error) {
 	switch config.StoreDriver {

@@ -1,4 +1,4 @@
-package knowl
+package knowl_test
 
 import (
 	"bytes"
@@ -16,18 +16,18 @@ import (
 	"testing"
 	"time"
 
-	domain "github.com/baldaworks/knowl/pkg/knowl"
+	knowl "github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/normahq/runtime/v2/agentfactory"
-	"go.uber.org/fx"
 	adkagent "google.golang.org/adk/v2/agent"
 )
 
 const hostSourceRef = "fixture:source-1@1"
 
-func TestHostPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
+func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
@@ -40,7 +40,7 @@ func TestHostPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read schema: %v", err)
 	}
-	config := DefaultConfig()
+	config := knowl.DefaultConfig()
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = "127.0.0.1:0"
@@ -51,7 +51,8 @@ func TestHostPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 		SourceRefs:   []string{hostSourceRef},
 		Edits:        []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte(hostPageContent)}},
 	}}
-	host, err := NewHost(ctx, config, maintainer)
+
+	host, err := knowl.NewHost(ctx, config, maintainer)
 	if err != nil {
 		t.Fatalf("compose host: %v", err)
 	}
@@ -61,21 +62,11 @@ func TestHostPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if preStart.Code != http.StatusServiceUnavailable {
 		t.Fatalf("pre-start readiness status = %d, want %d", preStart.Code, http.StatusServiceUnavailable)
 	}
-	if err := host.worker.Start(ctx); err != nil {
-		t.Fatalf("start worker: %v", err)
-	}
-	host.ready.Store(true)
-	shutdownHost(t, host)
-
-	host, err = NewHost(ctx, config, maintainer)
-	if err != nil {
-		t.Fatalf("recompose host: %v", err)
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("start host: %v", err)
 	}
 	defer shutdownHost(t, host)
-	if err := host.worker.Start(ctx); err != nil {
-		t.Fatalf("start worker: %v", err)
-	}
-	host.ready.Store(true)
+
 	if _, status, _ := doHostRequest(t, host, http.MethodGet, "/healthz", nil, ""); status != http.StatusOK {
 		t.Fatalf("health status = %d, want %d", status, http.StatusOK)
 	}
@@ -158,15 +149,15 @@ func TestHostPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	}
 
 	shutdownHost(t, host)
-	host, err = NewHost(ctx, config, maintainer)
+
+	host, err = knowl.NewHost(ctx, config, maintainer)
 	if err != nil {
 		t.Fatalf("reopen committed host: %v", err)
 	}
 	defer shutdownHost(t, host)
-	if err := host.worker.Start(ctx); err != nil {
-		t.Fatalf("start worker: %v", err)
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("restart host: %v", err)
 	}
-	host.ready.Store(true)
 	body, status, err = doHostRequest(t, host, http.MethodGet, operationPath, nil, "")
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("reopened operation request = %d, %v, body %s", status, err, body)
@@ -181,11 +172,11 @@ func TestHostPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 
 func TestNewRejectsNilMaintainerBeforeOpeningStore(t *testing.T) {
 	workspace := t.TempDir()
-	config := DefaultConfig()
+	config := knowl.DefaultConfig()
 	config.Workspace = workspace
 	config.StorePath = filepath.Join(workspace, ".knowl", "state.db")
 
-	_, err := New(context.Background(), Options{Config: config})
+	_, err := knowl.New(context.Background(), knowl.Options{Config: config})
 	if err == nil || !strings.Contains(err.Error(), "maintainer") {
 		t.Fatalf("New() error = %v, want required maintainer", err)
 	}
@@ -194,7 +185,7 @@ func TestNewRejectsNilMaintainerBeforeOpeningStore(t *testing.T) {
 	}
 }
 
-func TestNewAppBuildsRuntimeMaintainerThroughFx(t *testing.T) {
+func TestNewBuildsRuntimeMaintainerLazily(t *testing.T) {
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("new workspace: %v", err)
@@ -202,32 +193,22 @@ func TestNewAppBuildsRuntimeMaintainerThroughFx(t *testing.T) {
 	if err := workspace.Init(); err != nil {
 		t.Fatalf("init workspace: %v", err)
 	}
-	config := DefaultConfig()
+	config := knowl.DefaultConfig()
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
-	config.ListenAddr = "127.0.0.1:0"
 	factory := &validatingRuntimeFactory{providerID: "provider"}
-	var host *Host
-	application := NewApp(context.Background(), Options{
+
+	host, err := knowl.New(context.Background(), knowl.Options{
 		Config:         config,
 		RuntimeFactory: factory,
 		ProviderID:     "provider",
-	}, fx.Populate(&host))
-	if err := application.Err(); err != nil {
-		t.Fatalf("Fx composition error: %v", err)
+	})
+	if err != nil {
+		t.Fatalf("compose host: %v", err)
 	}
-	startCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := application.Start(startCtx); err != nil {
-		t.Fatalf("Fx start error: %v", err)
-	}
-	if host == nil || !host.Ready() {
-		t.Fatalf("host = %#v, want ready host", host)
-	}
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer stopCancel()
-	if err := application.Stop(stopCtx); err != nil {
-		t.Fatalf("Fx stop error: %v", err)
+	defer shutdownHost(t, host)
+	if host.Ready() {
+		t.Fatal("host should not be ready before Start")
 	}
 	if factory.validations != 1 {
 		t.Fatalf("provider validations = %d, want one", factory.validations)
@@ -258,7 +239,7 @@ func (factory *validatingRuntimeFactory) Build(context.Context, agentfactory.Bui
 
 const hostPageContent = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + hostSourceRef + "\n---\n# One\n"
 
-func doHostRequest(t *testing.T, host *Host, method, path string, body []byte, token string) ([]byte, int, error) {
+func doHostRequest(t *testing.T, host *knowl.Host, method, path string, body []byte, token string) ([]byte, int, error) {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://knowl"+path, bytes.NewReader(body))
 	if token != "" {
@@ -269,7 +250,7 @@ func doHostRequest(t *testing.T, host *Host, method, path string, body []byte, t
 	return response.Body.Bytes(), response.Code, nil
 }
 
-func shutdownHost(t *testing.T, host *Host) {
+func shutdownHost(t *testing.T, host *knowl.Host) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

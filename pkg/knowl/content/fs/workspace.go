@@ -17,8 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	internalwiki "github.com/baldaworks/knowl/internal/wiki"
-	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/types"
+	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 	"gopkg.in/yaml.v3"
 )
 
@@ -718,7 +718,7 @@ func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) 
 		if relative == filepath.ToSlash(filepath.Join(workspaceWikiDir, "index.md")) || relative == filepath.ToSlash(filepath.Join(workspaceWikiDir, "log.md")) {
 			return nil
 		}
-		pageID, _ := internalwiki.PageIDFromPath(relative)
+		pageID, _ := knowlwiki.PageIDFromPath(relative)
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			return infoErr
@@ -1098,7 +1098,7 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 		return err
 	}
 	for _, edit := range edits {
-		pageID, ok := internalwiki.PageIDFromPath(edit.Target)
+		pageID, ok := knowlwiki.PageIDFromPath(edit.Target)
 		if ok {
 			pageTargets[pageID] = struct{}{}
 		}
@@ -1110,7 +1110,7 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 	indexPath := filepath.ToSlash(filepath.Join(workspaceWikiDir, "index.md"))
 	for _, edit := range edits {
 		if edit.Target == indexPath {
-			targets, malformed := internalwiki.IndexTargets(edit.Content)
+			targets, malformed := knowlwiki.IndexTargets(edit.Content)
 			if malformed {
 				return contentInvalidError(edit.Target, "index.malformed")
 			}
@@ -1121,7 +1121,7 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 			}
 			continue
 		}
-		pageID, ok := internalwiki.PageIDFromPath(edit.Target)
+		pageID, ok := knowlwiki.PageIDFromPath(edit.Target)
 		if !ok {
 			continue
 		}
@@ -1133,7 +1133,7 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 }
 
 func validateOrdinaryPageEdit(target string, pageID knowl.PageID, content string, rawRefs map[string]struct{}, pageTargets map[knowl.PageID]struct{}) error {
-	metadata, err := internalwiki.ParseFrontmatter(content)
+	metadata, err := knowlwiki.ParseFrontmatter(content)
 	if err != nil {
 		return contentInvalidError(target, "frontmatter.malformed")
 	}
@@ -1162,7 +1162,7 @@ func validateOrdinaryPageEdit(target string, pageID knowl.PageID, content string
 	if nonEmptySourceRefs == 0 {
 		return contentInvalidError(target, "citation.missing")
 	}
-	targets, malformed := internalwiki.MarkdownTargets(content)
+	targets, malformed := knowlwiki.MarkdownTargets(content)
 	if malformed {
 		return contentInvalidError(target, "link.malformed")
 	}
@@ -1208,7 +1208,7 @@ func (workspace *Workspace) currentPageTargetsLocked() (map[knowl.PageID]struct{
 		if relErr != nil {
 			return relErr
 		}
-		pageID, ok := internalwiki.PageIDFromPath(filepath.ToSlash(relative))
+		pageID, ok := knowlwiki.PageIDFromPath(filepath.ToSlash(relative))
 		if ok {
 			targets[pageID] = struct{}{}
 		}
@@ -1350,11 +1350,11 @@ func markdownTitle(content []byte) string {
 }
 
 func markdownSourceRefs(content []byte) []string {
-	return internalwiki.SourceRefs(string(content))
+	return knowlwiki.SourceRefs(string(content))
 }
 
 func markdownLinks(from knowl.PageID, content []byte) []knowl.LinkReference {
-	return internalwiki.Links(from, string(content))
+	return knowlwiki.Links(from, string(content))
 }
 
 func uniqueLinks(links []knowl.LinkReference) []knowl.LinkReference {

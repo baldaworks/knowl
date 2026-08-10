@@ -2,7 +2,9 @@
 
 This document describes the current local process, configuration, lifecycle,
 storage, and transport contracts. The canonical policy is shared with the
-embeddable `pkg/knowl/app` services.
+embeddable `pkg/knowl/app` services; public embedders use `pkg/knowl/types`
+for contracts, root `pkg/knowl` for plain host composition, and `pkg/knowlfx`
+for Fx-managed composition.
 
 ## Configuration
 
@@ -100,9 +102,11 @@ host lifecycle is:
    queued writes within the shutdown deadline, shuts down HTTP, recovers the
    workspace, closes the provider-backed maintainer, and closes the SQL store.
 
-The same lifecycle is available to embedding callers through
-`internal/apps/knowl.NewApp` inside the repository. Core policy does not depend
-on Fx; callers using `pkg/knowl/app` can compose their own lifecycle.
+The same lifecycle is available publicly through `pkg/knowlfx.NewApp`.
+Callers that do not want Fx can construct and manage a host directly through
+root `pkg/knowl`. Core policy does not depend on Fx; callers using
+`pkg/knowl/app` can also compose their own lifecycle around the lower-level
+services.
 
 ## Ingest, review, and filing
 
