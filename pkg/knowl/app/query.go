@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	ErrQueryInvalid  = errors.New("invalid Knowl query")
-	ErrPageNotFound  = errors.New("knowl page not found")
-	ErrFilingInvalid = errors.New("invalid explicit wiki filing")
+	ErrQueryInvalid      = errors.New("invalid Knowl query")
+	ErrPageNotFound      = errors.New("knowl page not found")
+	ErrOperationNotFound = errors.New("knowl operation not found")
+	ErrFilingInvalid     = errors.New("invalid explicit wiki filing")
 )
 
 // QueryOptions configures bounded wiki-first reads.
