@@ -1,0 +1,251 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/baldaworks/knowl/pkg/knowl/types"
+)
+
+// Reserve creates or returns the operation for one source revision.
+func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta knowl.OperationMeta) (knowl.Operation, error) {
+	if strings.TrimSpace(string(key.Scope)) == "" || strings.TrimSpace(key.Source.Adapter) == "" || strings.TrimSpace(key.Source.ID) == "" || strings.TrimSpace(key.Version.Version) == "" || strings.TrimSpace(key.Version.Digest) == "" {
+		return knowl.Operation{}, fmt.Errorf("operation key is incomplete: %w", ErrConflict)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var existingID, existingDigest string
+	err := store.db.QueryRowContext(ctx, `
+		SELECT operation_id, source_digest
+		FROM knowl_operations
+		WHERE scope = ? AND source_adapter = ? AND source_id = ? AND source_version = ?`,
+		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version).Scan(&existingID, &existingDigest)
+	if err == nil {
+		if existingDigest != key.Version.Digest {
+			return knowl.Operation{}, ErrConflict
+		}
+		return store.Operation(ctx, key.Scope, knowl.OperationID(existingID))
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return knowl.Operation{}, fmt.Errorf("inspect existing operation: %w", err)
+	}
+	now := meta.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	operationID := operationID(key)
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO knowl_operations (
+			operation_id, scope, source_adapter, source_id, source_version, source_digest,
+			schema_digest, status, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.Version.Digest,
+		meta.SchemaDigest, knowl.StatusReceived, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	if err != nil {
+		return knowl.Operation{}, fmt.Errorf("reserve operation: %w", err)
+	}
+	return store.Operation(ctx, key.Scope, knowl.OperationID(operationID))
+}
+
+// SavePlan persists a redacted plan digest and advances the operation.
+func (store *Store) SavePlan(ctx context.Context, id knowl.OperationID, summary knowl.PlanSummary) error {
+	if strings.TrimSpace(summary.Digest) == "" {
+		return fmt.Errorf("plan digest is required: %w", ErrConflict)
+	}
+	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
+		if current.status == knowl.StatusPlanned {
+			if current.planDigest == summary.Digest {
+				return nil
+			}
+			return fmt.Errorf("plan digest differs: %w", ErrConflict)
+		}
+		if current.status != knowl.StatusReceived {
+			return invalidTransition(current.status, knowl.StatusPlanned)
+		}
+		return updateOperationTx(ctx, tx, id, `status = ?, plan_digest = ?, updated_at = ?`, knowl.StatusPlanned, summary.Digest, nowString())
+	})
+}
+
+// MarkAwaitingReview marks an operation that needs explicit apply.
+func (store *Store) MarkAwaitingReview(ctx context.Context, id knowl.OperationID) error {
+	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
+		if current.status == knowl.StatusAwaitingReview {
+			return nil
+		}
+		if current.status != knowl.StatusPlanned {
+			return invalidTransition(current.status, knowl.StatusAwaitingReview)
+		}
+		return updateOperationTx(ctx, tx, id, `status = ?, updated_at = ?`, knowl.StatusAwaitingReview, nowString())
+	})
+}
+
+// MarkApplying claims an operation with a lease.
+func (store *Store) MarkApplying(ctx context.Context, id knowl.OperationID, lease knowl.Lease) error {
+	if strings.TrimSpace(lease.Token) == "" || lease.ExpiresAt.IsZero() {
+		return fmt.Errorf("lease token and expiry are required: %w", ErrConflict)
+	}
+	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
+		now := time.Now().UTC()
+		if current.status == knowl.StatusApplying {
+			expiresAt, err := parseOptionalTime(current.leaseExpiresAt)
+			if err != nil {
+				return err
+			}
+			if expiresAt.After(now) {
+				return ErrLeaseConflict
+			}
+		} else if current.status != knowl.StatusPlanned && current.status != knowl.StatusAwaitingReview {
+			return invalidTransition(current.status, knowl.StatusApplying)
+		}
+		return updateOperationTx(ctx, tx, id, `status = ?, attempt = attempt + 1, lease_token = ?, lease_expires_at = ?, updated_at = ?`, knowl.StatusApplying, lease.Token, lease.ExpiresAt.UTC().Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	})
+}
+
+// CommitOutcome marks a canonical content commit as complete.
+func (store *Store) CommitOutcome(ctx context.Context, id knowl.OperationID, commit knowl.ContentCommit) error {
+	if strings.TrimSpace(commit.Generation) == "" {
+		return fmt.Errorf("commit generation is required: %w", ErrConflict)
+	}
+	if commit.OperationID != "" && knowl.OperationID(commit.OperationID) != id {
+		return fmt.Errorf("commit belongs to %q, want %q: %w", commit.OperationID, id, ErrConflict)
+	}
+	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
+		if current.status == knowl.StatusCommitted {
+			if current.commitGeneration == commit.Generation {
+				return nil
+			}
+			return fmt.Errorf("commit generation differs: %w", ErrConflict)
+		}
+		if current.status != knowl.StatusApplying {
+			return invalidTransition(current.status, knowl.StatusCommitted)
+		}
+		return updateOperationTx(ctx, tx, id, `status = ?, commit_generation = ?, lease_token = '', lease_expires_at = '', updated_at = ?`, knowl.StatusCommitted, commit.Generation, nowString())
+	})
+}
+
+// Fail records a stable redacted failure class.
+func (store *Store) Fail(ctx context.Context, id knowl.OperationID, failure knowl.Failure) error {
+	if strings.TrimSpace(failure.Class) == "" {
+		return fmt.Errorf("failure class is required: %w", ErrConflict)
+	}
+	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
+		if current.status == knowl.StatusFailed {
+			if current.failureClass == failure.Class {
+				return nil
+			}
+			return fmt.Errorf("failure class differs: %w", ErrConflict)
+		}
+		if current.status == knowl.StatusCommitted {
+			return invalidTransition(current.status, knowl.StatusFailed)
+		}
+		return updateOperationTx(ctx, tx, id, `status = ?, failure_class = ?, lease_token = '', lease_expires_at = '', updated_at = ?`, knowl.StatusFailed, failure.Class, nowString())
+	})
+}
+
+// Operation reads one operation within its scope.
+func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error) {
+	var operation knowl.Operation
+	var sourceAdapter, sourceID, sourceVersion, sourceDigest, schemaDigest string
+	var status, failureClass, updatedAt string
+	var attempt int
+	err := store.db.QueryRowContext(ctx, `
+		SELECT operation_id, source_adapter, source_id, source_version, source_digest,
+		       schema_digest, status, attempt, failure_class, updated_at
+		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id).
+		Scan(&operation.ID, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest, &schemaDigest, &status, &attempt, &failureClass, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return knowl.Operation{}, ErrNotFound
+	}
+	if err != nil {
+		return knowl.Operation{}, fmt.Errorf("read operation: %w", err)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return knowl.Operation{}, fmt.Errorf("parse operation time: %w", err)
+	}
+	operation.Key = knowl.OperationKey{Scope: scope, Source: knowl.SourceRef{Adapter: sourceAdapter, ID: sourceID}, Version: knowl.SourceVersion{Version: sourceVersion, Digest: sourceDigest}}
+	operation.Status = knowl.OperationStatus(status)
+	operation.Attempt = attempt
+	operation.UpdatedAt = parsed
+	if failureClass != "" {
+		operation.Failure = &knowl.Failure{Class: failureClass, OperationID: string(operation.ID)}
+	}
+	_ = schemaDigest
+	return operation, nil
+}
+
+type operationRow struct {
+	status           knowl.OperationStatus
+	planDigest       string
+	commitGeneration string
+	failureClass     string
+	leaseExpiresAt   string
+}
+
+func (store *Store) transition(ctx context.Context, id knowl.OperationID, update func(*sql.Tx, operationRow) error) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin operation transition: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var current operationRow
+	var status string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, plan_digest, commit_generation, failure_class, lease_expires_at
+		FROM knowl_operations WHERE operation_id = ?`, id).
+		Scan(&status, &current.planDigest, &current.commitGeneration, &current.failureClass, &current.leaseExpiresAt); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("read operation transition: %w", err)
+	}
+	current.status = knowl.OperationStatus(status)
+	if err := update(tx, current); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit operation transition: %w", err)
+	}
+	return nil
+}
+
+func updateOperationTx(ctx context.Context, tx *sql.Tx, id knowl.OperationID, assignments string, args ...any) error {
+	result, err := tx.ExecContext(ctx, `UPDATE knowl_operations SET `+assignments+` WHERE operation_id = ?`, append(args, id)...)
+	if err != nil {
+		return fmt.Errorf("update operation: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect operation update: %w", err)
+	}
+	if changed != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func invalidTransition(from, to knowl.OperationStatus) error {
+	return fmt.Errorf("cannot transition operation from %q to %q: %w", from, to, ErrInvalidState)
+}
+
+func parseOptionalTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse lease expiry: %w", err)
+	}
+	return parsed, nil
+}
+
+func nowString() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+func operationID(key knowl.OperationKey) string {
+	return fmt.Sprintf("%s:%s:%s@%s#%s", key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.Version.Digest[:minInt(len(key.Version.Digest), 16)])
+}

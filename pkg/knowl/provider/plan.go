@@ -1,0 +1,97 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync/atomic"
+
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
+	adkagent "google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
+)
+
+// Plan asks the selected runtime provider for one bounded structured edit
+// plan. Provider output is validated again by pkg/knowl/app after this method.
+func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
+	if ctx == nil {
+		return knowl.ModelEditPlan{}, fmt.Errorf("maintainer context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return knowl.ModelEditPlan{}, err
+	}
+
+	maintainer.mu.Lock()
+	defer maintainer.mu.Unlock()
+	if maintainer.closed {
+		return knowl.ModelEditPlan{}, fmt.Errorf("maintainer is closed")
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return knowl.ModelEditPlan{}, fmt.Errorf("encode maintenance input: %w", err)
+	}
+	if len(payload) > maintainer.maxInput {
+		return knowl.ModelEditPlan{}, fmt.Errorf("maintenance input exceeds configured limit")
+	}
+	envelope, err := json.Marshal(map[string]string{"input": string(payload)})
+	if err != nil {
+		return knowl.ModelEditPlan{}, fmt.Errorf("encode maintenance request")
+	}
+	runtime, err := maintainer.ensureRuntime(ctx)
+	if err != nil {
+		return knowl.ModelEditPlan{}, err
+	}
+
+	sessionID := fmt.Sprintf("plan-%d", atomic.AddUint64(&maintainer.sequence, 1))
+	_ = runtime.sessions.Delete(ctx, &session.DeleteRequest{
+		AppName: maintainerAppName, UserID: maintainerUserID, SessionID: sessionID,
+	})
+	if _, err := runtime.sessions.Create(ctx, &session.CreateRequest{
+		AppName: maintainerAppName, UserID: maintainerUserID, SessionID: sessionID,
+	}); err != nil {
+		return knowl.ModelEditPlan{}, fmt.Errorf("create maintainer session")
+	}
+	defer func() {
+		_ = runtime.sessions.Delete(context.Background(), &session.DeleteRequest{
+			AppName: maintainerAppName, UserID: maintainerUserID, SessionID: sessionID,
+		})
+	}()
+
+	var output strings.Builder
+	for event, runErr := range runtime.runner.Run(
+		ctx,
+		maintainerUserID,
+		sessionID,
+		genai.NewContentFromText(string(envelope), genai.RoleUser),
+		adkagent.RunConfig{},
+	) {
+		if runErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return knowl.ModelEditPlan{}, ctxErr
+			}
+			return knowl.ModelEditPlan{}, fmt.Errorf("run maintainer provider")
+		}
+		if event == nil || event.Content == nil {
+			continue
+		}
+		for _, part := range event.Content.Parts {
+			if part != nil && !part.Thought {
+				output.WriteString(part.Text)
+			}
+		}
+		if output.Len() > maintainer.maxOutput {
+			return knowl.ModelEditPlan{}, fmt.Errorf("maintainer provider output exceeds configured limit")
+		}
+	}
+	if strings.TrimSpace(output.String()) == "" {
+		return knowl.ModelEditPlan{}, fmt.Errorf("maintainer provider returned empty output")
+	}
+
+	var plan knowl.ModelEditPlan
+	if err := json.Unmarshal([]byte(output.String()), &plan); err != nil {
+		return knowl.ModelEditPlan{}, fmt.Errorf("decode maintainer plan")
+	}
+	return plan, nil
+}
