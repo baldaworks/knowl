@@ -22,3 +22,6 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
+
+      - name: go-arch-lint
+        run: go run github.com/fe3dback/go-arch-lint@v1.15.0 check --project-path .

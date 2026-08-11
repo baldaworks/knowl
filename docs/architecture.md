@@ -5,39 +5,125 @@ accepted source versions; `wiki/` contains the human-readable Markdown
 knowledge artifact; `schema.md` is operator-owned policy; `wiki/index.md` and
 `wiki/log.md` are maintained workspace files. SQL is never canonical content.
 
-The public package map is:
+This document derives architecture from [product requirements](requirements.md).
+It is not a license to preserve accidental package structure.
+
+The architecture is organized around two questions:
+
+1. what external usage surfaces Knowl supports
+2. what internal layers are allowed to know about each other
+
+The goal is not to maximize package count. The goal is to keep each usage
+surface narrow and to keep inward dependencies obvious.
+
+## Architectural consequences of the requirements
+
+The requirements imply these constraints:
+
+- one public business contract with three operations: retrieve, ingest, and
+  operation status;
+- one canonical content owner: the filesystem workspace;
+- SQL/search state remains operational and rebuildable;
+- MCP and HTTP are transport surfaces over the same app services;
+- sidecar/service is the baseline runtime shape, with Fx as an in-process
+  alternative over the same host runtime;
+- package and file splits exist to preserve readability and ownership, not to
+  manufacture more layers than the product requires.
+
+## Usage surfaces
+
+These are the supported ways to use Knowl:
+
+- `pkg/knowl`: plain-Go host API and composition root
+- `pkg/knowlfx`: Fx wrapper over `pkg/knowl`
+- HTTP/OpenAPI: `internal/httpapi/*`
+- `pkg/knowl/mcp`: bounded three-tool MCP adapter
+- `cmd/knowl`: operator CLI
+
+Everything else is implementation detail for one of those surfaces, not another
+public product surface.
+
+## Layers
+
+The intended dependency flow is:
 
 ```text
-pkg/knowl/types/                   domain IDs and data-only types
-pkg/knowl/wiki/                    shared wiki/frontmatter semantics
-pkg/knowl/app/                     application policy and consuming ports
-pkg/knowl/                         plain-Go host composition API
-pkg/knowlfx/                       Fx lifecycle wrapper over pkg/knowl
-pkg/knowl/content/fs/              canonical filesystem adapter
-pkg/knowl/store/sqlite/            SQLite operations/projections
-pkg/knowl/store/postgres/          PostgreSQL operations/projections
-pkg/knowl/provider/                maintainer provider boundary
-pkg/knowl/mcp/                     bounded three-tool MCP adapter
+entrypoints/surfaces -> composition -> adapters -> app policy -> shared types
 ```
 
-`pkg/knowl/app` owns the interfaces. Concrete adapters depend inward on those interfaces. The public core has no Balda, Cobra, Viper, Goose, SQL-driver, provider-SDK, HTTP, or MCP-broker dependency. Balda integration remains an adapter that maps Balda-owned material into a Knowl source envelope and consumes bounded Knowl results.
+With the current package map:
 
-The SQL adapters implement `OperationStore` and `SearchIndex`; they retain operations, leases, redacted status, provenance indexes, and rebuildable text/link projections. Canonical Markdown and immutable raw sources remain in the filesystem adapter.
+```text
+pkg/knowl/types            shared IDs and data-only shapes
+pkg/knowl/wiki             shared wiki/frontmatter semantics
+pkg/knowl/app              application policy and consuming ports
+pkg/knowl/content/fs       canonical workspace adapter
+pkg/knowl/store/*          operational state and projection adapters
+pkg/knowl/provider         maintainer provider adapter
+pkg/knowl/mcp              MCP adapter surface
+internal/httpapi/*         HTTP adapter surface
+internal/bootstrap         workspace bootstrap/import support
+pkg/knowl                  composition root and host API
+pkg/knowlfx                Fx entrypoint
+cmd/knowl                  CLI entrypoint
+```
 
-Root `pkg/knowl` is the source of truth for non-Fx host assembly. Its
-constructors perform workspace validation, selected-store migration,
-interrupted-filesystem recovery, and projection readiness before the host
-becomes ready. `pkg/knowlfx.NewApp` and `pkg/knowlfx.Module` give Fx the same
-host lifecycle without re-implementing assembly: startup binds the configured
-HTTP listener and starts the bounded single-consumer writer; shutdown marks the
-host unready, drains or interrupts queued work, recovers the workspace, and
-closes the operational store. The worker preserves one-writer ordering for
-canonical files.
+## Layer rules
 
-The transport boundary is intentionally narrow. Both MCP and HTTP expose the
-same three business operations: retrieve, ingest, and operation status. Health
-and readiness stay operational-only. Sidecar/service deployment is the baseline runtime shape;
-Fx remains the in-process alternative over the same app core.
+- `pkg/knowl/types` is the bottom layer. It should not depend on other Knowl
+  packages.
+- `pkg/knowl/wiki` may depend on `pkg/knowl/types`, because it only adds wiki
+  formatting semantics.
+- `pkg/knowl/app` owns business policy and consumer-side ports. Adapters depend
+  on it; it does not depend on adapters. It may depend on `pkg/knowl/wiki`
+  where business policy needs to reason about canonical markdown semantics.
+- Adapters (`content/fs`, `store/*`, `provider`, MCP, HTTP, bootstrap) may
+  depend on `app`, `types`, and `wiki` as needed, but not on each other unless
+  they are part of the same surface-support package.
+- `pkg/knowl` is the only package allowed to compose multiple adapters together.
+- `pkg/knowlfx` and `cmd/knowl` are entrypoints. They may depend on
+  `pkg/knowl`, but they should not become a second composition root with their
+  own business rules.
+
+## Granularity rule
+
+When code becomes too large, prefer splitting files inside the same package
+before creating a new package.
+
+Create a new package only when at least one of these is true:
+
+- it is a distinct external usage surface;
+- it is a distinct adapter to an external technology boundary;
+- it is a shared semantic contract needed by multiple layers.
+
+Do not create a new package merely to:
+
+- shorten one file;
+- prepare for hypothetical reuse;
+- turn support code for one surface into a fake standalone subsystem.
+
+## Ownership
+
+- Canonical content ownership lives in `pkg/knowl/content/fs`.
+- Operational durability, leases, and projections live in `pkg/knowl/store/*`.
+- Model planning lives behind `pkg/knowl/provider`.
+- Business workflow and validation live in `pkg/knowl/app`.
+- Transport-specific request and response mapping lives in the transport
+  surface, not in `app`.
+
+This keeps policy changes local to `pkg/knowl/app`, adapter swaps local to the
+corresponding adapter package, and runtime wiring local to `pkg/knowl`.
+
+Both MCP and HTTP expose the same three business operations: retrieve, ingest,
+and operation status. Sidecar/service deployment is the baseline runtime shape;
+`pkg/knowlfx` remains the in-process alternative over the same app core.
+
+## Enforcement
+
+`.go-arch-lint.yml` encodes only the top-level boundaries above. It is
+deliberately conservative: it protects the main surfaces and inward dependency
+flow without turning every subdirectory into a separate architectural concept.
 
 See [workspace semantics](workspace.md), [service operations](operations.md),
-and [integration boundaries](integrations.md).
+the [product requirements](requirements.md), and
+[integration boundaries](integrations.md).

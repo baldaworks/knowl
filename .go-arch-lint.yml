@@ -1,0 +1,88 @@
+version: 1
+
+allow:
+  depOnAnyVendor: true
+
+excludeFiles:
+  - "^.*_test\\.go$"
+
+components:
+  cli:
+    in: cmd/knowl
+  host:
+    in: pkg/knowl
+  fx:
+    in: pkg/knowlfx
+  app:
+    in: pkg/knowl/app
+  types:
+    in: pkg/knowl/types
+  wiki:
+    in: pkg/knowl/wiki
+  content:
+    in: pkg/knowl/content/**
+  store:
+    in: pkg/knowl/store/**
+  provider:
+    in: pkg/knowl/provider
+  mcp:
+    in: pkg/knowl/mcp
+  httpapi:
+    in: internal/httpapi/**
+  bootstrap:
+    in: internal/bootstrap
+
+deps:
+  wiki:
+    mayDependOn:
+      - types
+  app:
+    mayDependOn:
+      - types
+      - wiki
+  content:
+    mayDependOn:
+      - types
+      - wiki
+  store:
+    mayDependOn:
+      - app
+      - types
+  provider:
+    mayDependOn:
+      - app
+      - types
+  mcp:
+    mayDependOn:
+      - app
+      - types
+  httpapi:
+    mayDependOn:
+      - httpapi
+      - app
+      - types
+  bootstrap:
+    mayDependOn:
+      - content
+      - types
+  host:
+    mayDependOn:
+      - app
+      - types
+      - content
+      - store
+      - provider
+      - mcp
+      - httpapi
+  fx:
+    mayDependOn:
+      - host
+  cli:
+    mayDependOn:
+      - host
+      - fx
+      - bootstrap
+      - content
+      - provider
+      - types
+      - httpapi

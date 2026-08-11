@@ -218,6 +218,7 @@ remain rebuildable operational state.
 
 - sidecar/service runbook: [docs/sidecar.md](docs/sidecar.md)
 - service config and HTTP contract: [docs/operations.md](docs/operations.md)
+- product requirements: [docs/requirements.md](docs/requirements.md)
 - product and adapter boundaries: [docs/integrations.md](docs/integrations.md)
 - runtime/package ownership: [docs/architecture.md](docs/architecture.md)
 - workspace semantics: [docs/workspace.md](docs/workspace.md)
