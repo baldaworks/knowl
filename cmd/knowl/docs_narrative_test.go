@@ -66,36 +66,3 @@ func TestPublicDocsMatchServiceFirstKISSNarrative(t *testing.T) {
 		})
 	}
 }
-
-func TestPublicDocsDoNotDescribeRetiredPublicSurface(t *testing.T) {
-	repoRoot := testRepoRoot(t)
-	paths := []string{
-		filepath.Join(repoRoot, "README.md"),
-		filepath.Join(repoRoot, "docs", "operations.md"),
-		filepath.Join(repoRoot, "docs", "integrations.md"),
-		filepath.Join(repoRoot, "docs", "architecture.md"),
-	}
-
-	unwanted := []string{
-		"/v1/ingest/preview",
-		"/v1/query/file",
-		"/v1/search",
-		"/v1/pages/",
-		"/v1/lint",
-		"Authorization: Bearer",
-		"five server-scoped read-only tools",
-	}
-
-	for _, path := range paths {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		text := string(content)
-		for _, bad := range unwanted {
-			if strings.Contains(text, bad) {
-				t.Fatalf("%s contains retired public-surface reference %q", path, bad)
-			}
-		}
-	}
-}

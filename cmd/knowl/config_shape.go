@@ -16,7 +16,6 @@ type AppConfig struct {
 	Storage   StorageConfig       `mapstructure:"storage"`
 	Scope     knowltypes.ScopeRef `mapstructure:"scope"`
 	Server    ServerConfig        `mapstructure:"server"`
-	Operator  OperatorConfig      `mapstructure:"operator"`
 	Ingest    IngestConfig        `mapstructure:"ingest"`
 }
 
@@ -103,11 +102,6 @@ type ServerConfig struct {
 	ListenAddr string `mapstructure:"listen_addr"`
 }
 
-// OperatorConfig controls operator authentication.
-type OperatorConfig struct {
-	Token string `mapstructure:"token"`
-}
-
 // IngestConfig controls whether normal ingest stops for review or auto-applies.
 // A nil pointer preserves the default review-first behavior at normalization
 // time.
@@ -129,7 +123,6 @@ type rawAppConfig struct {
 	Storage     StorageConfig       `mapstructure:"storage"`
 	Scope       knowltypes.ScopeRef `mapstructure:"scope"`
 	Server      ServerConfig        `mapstructure:"server"`
-	Operator    OperatorConfig      `mapstructure:"operator"`
 	Ingest      IngestConfig        `mapstructure:"ingest"`
 	Maintenance MaintenanceConfig   `mapstructure:"maintenance"`
 }
@@ -146,7 +139,6 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 		Storage:   config.Storage,
 		Scope:     config.Scope,
 		Server:    config.Server,
-		Operator:  config.Operator,
 		Ingest:    ingest,
 	}, nil
 }

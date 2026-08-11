@@ -179,7 +179,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		Doer:   workerDoer{worker: runtime.worker},
 		Ready:  host.Ready,
 	})
-	mcpHandler, err := mcphttp.NewHandler(runtime.mcp, host.Ready, runtime.config.OperatorToken)
+	mcpHandler, err := mcphttp.NewHandler(runtime.mcp, host.Ready)
 	if err != nil {
 		return nil, fmt.Errorf("compose Knowl MCP HTTP handler: %w", err)
 	}

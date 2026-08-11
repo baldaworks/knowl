@@ -43,7 +43,6 @@ Run it directly:
 ```bash
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
-  -e KNOWL_OPERATOR_TOKEN="${KNOWL_TOKEN}" \
   -v knowl-data:/var/lib/knowl \
   knowl:local
 ```
@@ -77,6 +76,4 @@ KISS HTTP contract:
 - `POST /v1/ingest`
 - `GET /v1/operations/{operation_id}`
 
-When `KNOWL_OPERATOR_TOKEN` is configured, the MCP client sends the same value
-as `Authorization: Bearer <token>`. Keep the published port loopback-only for
-local sidecar use.
+Keep the published port loopback-only for local sidecar use.

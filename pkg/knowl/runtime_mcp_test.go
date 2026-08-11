@@ -2,7 +2,6 @@ package knowl_test
 
 import (
 	"context"
-	"net/http"
 	"path/filepath"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestHostServesAuthenticatedMCPContract(t *testing.T) {
+func TestHostServesMCPContract(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
@@ -29,13 +28,12 @@ func TestHostServesAuthenticatedMCPContract(t *testing.T) {
 	config := knowl.DefaultConfig()
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
-	config.ListenAddr = "127.0.0.1:0"
-	config.OperatorToken = "test-token"
+	config.ListenAddr = hostListenAddr
 	config.IngestOptions.AutoApply = true
 	maintainer := provider.Fixture{Result: domain.ModelEditPlan{
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{hostSourceRef},
-		Edits:        []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte(hostPageContent)}},
+		Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
 	}}
 	host, err := knowl.NewHost(ctx, config, maintainer)
 	if err != nil {
@@ -46,26 +44,12 @@ func TestHostServesAuthenticatedMCPContract(t *testing.T) {
 	}
 	defer shutdownHost(t, host)
 
-	unauthorized, err := http.Get("http://" + host.Addr() + "/mcp")
-	if err != nil {
-		t.Fatalf("unauthorized MCP request: %v", err)
-	}
-	_ = unauthorized.Body.Close()
-	if unauthorized.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("unauthorized MCP status = %d, want %d", unauthorized.StatusCode, http.StatusUnauthorized)
-	}
-
 	client := sdkmcp.NewClient(
 		&sdkmcp.Implementation{Name: "knowl-test-client", Version: "1.0.0"},
 		nil,
 	)
-	httpClient := &http.Client{Transport: bearerTransport{
-		token: "test-token",
-		base:  http.DefaultTransport,
-	}}
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{
 		Endpoint:             "http://" + host.Addr() + "/mcp",
-		HTTPClient:           httpClient,
 		DisableStandaloneSSE: true,
 	}, nil)
 	if err != nil {
@@ -82,9 +66,9 @@ func TestHostServesAuthenticatedMCPContract(t *testing.T) {
 		t.Fatalf("list MCP tools: %v", err)
 	}
 	wantNames := map[string]bool{
-		"knowl_retrieve":  false,
-		"knowl_ingest":    false,
-		"knowl_operation": false,
+		hostRetrieveToolName: false,
+		"knowl_ingest":       false,
+		"knowl_operation":    false,
 	}
 	if len(listed.Tools) != len(wantNames) {
 		t.Fatalf("tool count = %d, want %d", len(listed.Tools), len(wantNames))
@@ -132,15 +116,15 @@ func TestHostServesAuthenticatedMCPContract(t *testing.T) {
 		t.Fatalf("call knowl_operation = (%v, %#v)", err, operation)
 	}
 	retrieved, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-		Name:      "knowl_retrieve",
-		Arguments: map[string]any{"query": "One"},
+		Name:      hostRetrieveToolName,
+		Arguments: map[string]any{hostQueryKey: hostQuery},
 	})
 	if err != nil || retrieved.IsError {
 		t.Fatalf("call knowl_retrieve = (%v, %#v)", err, retrieved)
 	}
 	forbidden, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-		Name:      "knowl_retrieve",
-		Arguments: map[string]any{"query": "One", "scope": "other"},
+		Name:      hostRetrieveToolName,
+		Arguments: map[string]any{hostQueryKey: hostQuery, "scope": "other"},
 	})
 	if err != nil {
 		t.Fatalf("call scoped knowl_retrieve: %v", err)
@@ -148,15 +132,4 @@ func TestHostServesAuthenticatedMCPContract(t *testing.T) {
 	if !forbidden.IsError {
 		t.Fatal("scoped knowl_retrieve succeeded, want tool error")
 	}
-}
-
-type bearerTransport struct {
-	token string
-	base  http.RoundTripper
-}
-
-func (transport bearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	cloned := request.Clone(request.Context())
-	cloned.Header.Set("Authorization", "Bearer "+transport.token)
-	return transport.base.RoundTrip(cloned)
 }

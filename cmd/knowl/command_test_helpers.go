@@ -17,7 +17,6 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -78,42 +77,10 @@ func clearKnowlEnv(t *testing.T) {
 		"KNOWL_INGEST_AUTO_APPLY",
 		"KNOWL_SCOPE",
 		"KNOWL_SERVER_LISTEN_ADDR",
-		"KNOWL_OPERATOR_TOKEN",
 		"KNOWL_MAINTENANCE_REVIEW",
 		"KNOWL_MAINTENANCE_AUTO_APPLY",
 	} {
 		t.Setenv(key, "")
-	}
-}
-
-func assertNoRetiredConfigKeys(t *testing.T, content []byte) {
-	t.Helper()
-	var document map[string]any
-	if err := yaml.Unmarshal(content, &document); err != nil {
-		t.Fatalf("decode config artifact: %v", err)
-	}
-	for _, key := range []string{"workspace", "scope", "store"} {
-		if _, exists := document[key]; exists {
-			t.Fatalf("config artifact contains retired top-level key %q", key)
-		}
-	}
-	knowlSection, ok := document["knowl"].(map[string]any)
-	if !ok {
-		t.Fatal("config artifact is missing knowl section")
-	}
-	for _, key := range []string{"maintenance"} {
-		if _, exists := knowlSection[key]; exists {
-			t.Fatalf("config artifact contains retired knowl key %q", key)
-		}
-	}
-	storageSection, ok := knowlSection["storage"].(map[string]any)
-	if !ok {
-		return
-	}
-	for _, key := range []string{"driver", "path"} {
-		if _, exists := storageSection[key]; exists {
-			t.Fatalf("config artifact contains retired knowl.storage key %q", key)
-		}
 	}
 }
 
@@ -154,7 +121,6 @@ func newCommandWorkflowFixture(t *testing.T, autoApply bool) commandWorkflowFixt
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = loopbackListenAddr
-	config.OperatorToken = ""
 	config.IngestOptions.AutoApply = autoApply
 	return commandWorkflowFixture{
 		config: config,

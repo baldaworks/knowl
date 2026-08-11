@@ -112,8 +112,7 @@ curl -sS http://127.0.0.1:8080/readyz
 ```
 
 The same listener exposes MCP Streamable HTTP at
-`http://127.0.0.1:8080/mcp`. When `knowl.operator.token` is configured, MCP
-clients must send it as an `Authorization: Bearer ...` header.
+`http://127.0.0.1:8080/mcp`.
 
 Run one-shot local wrappers over the same KISS contract:
 

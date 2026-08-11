@@ -4,12 +4,10 @@ package mcphttp
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	knowlmcp "github.com/baldaworks/knowl/pkg/knowl/mcp"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,7 +19,7 @@ const (
 )
 
 // NewHandler adapts one trusted-scope Knowl MCP registry to Streamable HTTP.
-func NewHandler(registry *knowlmcp.Server, ready func() bool, operatorToken string) (http.Handler, error) {
+func NewHandler(registry *knowlmcp.Server, ready func() bool) (http.Handler, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("knowl MCP registry is required")
 	}
@@ -36,7 +34,6 @@ func NewHandler(registry *knowlmcp.Server, ready func() bool, operatorToken stri
 		},
 	)
 	for _, definition := range registry.Tools() {
-		definition := definition
 		server.AddTool(&sdkmcp.Tool{
 			Name:        definition.Name,
 			Description: definition.Description,
@@ -69,14 +66,12 @@ func NewHandler(registry *knowlmcp.Server, ready func() bool, operatorToken stri
 	return &handler{
 		next:  transport,
 		ready: ready,
-		token: strings.TrimSpace(operatorToken),
 	}, nil
 }
 
 type handler struct {
 	next  http.Handler
 	ready func() bool
-	token string
 }
 
 func (handler *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -84,21 +79,7 @@ func (handler *handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		http.Error(response, "knowl MCP service is not ready", http.StatusServiceUnavailable)
 		return
 	}
-	if handler.token != "" && !validBearerToken(request.Header.Get("Authorization"), handler.token) {
-		response.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(response, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	handler.next.ServeHTTP(response, request)
-}
-
-func validBearerToken(authorization string, expected string) bool {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(authorization, prefix) {
-		return false
-	}
-	provided := strings.TrimSpace(strings.TrimPrefix(authorization, prefix))
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
 }
 
 func decodeArguments(request *sdkmcp.CallToolRequest) (map[string]any, error) {

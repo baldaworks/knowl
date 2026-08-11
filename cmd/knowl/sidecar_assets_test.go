@@ -20,7 +20,6 @@ func TestSidecarConfigLoadsThroughProductionTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read sidecar config: %v", err)
 	}
-	assertNoRetiredConfigKeys(t, content)
 	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), content, 0o600); err != nil {
 		t.Fatalf("write sidecar config copy: %v", err)
 	}

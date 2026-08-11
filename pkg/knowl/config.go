@@ -26,7 +26,6 @@ type Config struct {
 	StorePath       string
 	PostgresDSN     string
 	ListenAddr      string
-	OperatorToken   string
 	ReadLimits      domain.ReadLimits
 	IngestOptions   app.IngestOptions
 	WorkerQueueSize int

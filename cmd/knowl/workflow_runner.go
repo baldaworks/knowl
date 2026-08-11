@@ -33,10 +33,9 @@ type localWorkflowSessionFactory func(context.Context) (localWorkflowSession, er
 var newLocalWorkflowSession = newProductionLocalWorkflowSession
 
 type localWorkflowRequest struct {
-	Method  string
-	Path    string
-	Body    []byte
-	Headers http.Header
+	Method string
+	Path   string
+	Body   []byte
 }
 
 type localWorkflowResponse struct {
@@ -117,11 +116,6 @@ func (runner *localWorkflowRunner) Execute(ctx context.Context, request localWor
 
 	httpRequest := httptest.NewRequest(request.Method, "http://knowl"+request.Path, bytes.NewReader(request.Body))
 	httpRequest = trustedrequest.Mark(httpRequest)
-	for key, values := range request.Headers {
-		for _, value := range values {
-			httpRequest.Header.Add(key, value)
-		}
-	}
 	response := httptest.NewRecorder()
 	session.Host.Handler().ServeHTTP(response, httpRequest)
 	return localWorkflowResponse{

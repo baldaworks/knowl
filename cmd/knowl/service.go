@@ -80,9 +80,6 @@ func hostConfig(ctx context.Context) (knowl.Config, error) {
 	if value := loaded.Document.Knowl.Server.ListenAddr; value != "" {
 		config.ListenAddr = value
 	}
-	if value := loaded.Document.Knowl.Operator.Token; value != "" {
-		config.OperatorToken = value
-	}
 	config.StorePath = storage.Path
 	config.PostgresDSN = storage.DSN
 	if value := loaded.Document.Knowl.Ingest.AutoApply; value != nil {

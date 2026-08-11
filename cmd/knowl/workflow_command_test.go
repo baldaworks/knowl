@@ -24,7 +24,6 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 		gotMethod  string
 		gotPath    string
 		gotBody    string
-		gotAuth    string
 		gotTrusted bool
 	)
 	host := &stubLocalWorkflowHost{
@@ -36,7 +35,6 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 				t.Fatalf("read request body: %v", err)
 			}
 			gotBody = string(content)
-			gotAuth = request.Header.Get("Authorization")
 			gotTrusted = trustedrequest.IsMarked(request.Context())
 			response.Header().Set("Content-Type", "application/json")
 			response.WriteHeader(http.StatusCreated)
@@ -54,10 +52,6 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 		Method: http.MethodPost,
 		Path:   publicIngestPath,
 		Body:   []byte(`{"hello":"world"}`),
-		Headers: http.Header{
-			"Authorization": []string{"Bearer test-token"},
-			"Content-Type":  []string{"application/json"},
-		},
 	})
 	if err != nil {
 		t.Fatalf("Execute() error: %v", err)
@@ -74,9 +68,6 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 	if gotBody != `{"hello":"world"}` {
 		t.Fatalf("body = %q, want %q", gotBody, `{"hello":"world"}`)
 	}
-	if gotAuth != "Bearer test-token" {
-		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer test-token")
-	}
 	if !gotTrusted {
 		t.Fatal("request context was not marked trusted")
 	}
@@ -88,7 +79,7 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 	}
 }
 
-func TestIngestCommandAutoAppliesTrustedLocalWorkflowWithoutOperatorToken(t *testing.T) {
+func TestIngestCommandAutoAppliesTrustedLocalWorkflow(t *testing.T) {
 	fixture := newCommandWorkflowFixture(t, true)
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
 

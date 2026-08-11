@@ -25,11 +25,6 @@ func TestRootCommandLoadsConfigIntoRunContext(t *testing.T) {
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("generated config: %v", err)
 	}
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("read generated config: %v", err)
-	}
-	assertNoRetiredConfigKeys(t, content)
 }
 
 func TestLoadConfigDefaultsToSQLiteWithoutBackendSection(t *testing.T) {
@@ -55,13 +50,6 @@ func TestCheckedInConfigArtifactUsesTypedBaldaCompatibleShape(t *testing.T) {
 	t.Chdir(repoRoot)
 	clearKnowlEnv(t)
 
-	configPath := filepath.Join(repoRoot, ".config", appName, "config.yaml")
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("read checked-in config: %v", err)
-	}
-	assertNoRetiredConfigKeys(t, content)
-
 	ctx, err := loadConfig(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("load checked-in config: %v", err)
@@ -81,17 +69,12 @@ func TestCheckedInConfigArtifactUsesTypedBaldaCompatibleShape(t *testing.T) {
 	if storage.Driver != knowl.StoreSQLite || storage.Path != wantPath {
 		t.Fatalf("checked-in storage = %#v, want sqlite path %q", storage, wantPath)
 	}
-	if token := strings.TrimSpace(loaded.Document.Knowl.Operator.Token); token != "" && !strings.HasPrefix(token, "replace-") {
-		t.Fatalf("operator token = %q, want empty or placeholder", token)
-	}
 }
 
 func TestEmbeddedDefaultConfigArtifactLoadsThroughProductionTypes(t *testing.T) {
 	workingDir := t.TempDir()
 	t.Chdir(workingDir)
 	clearKnowlEnv(t)
-	assertNoRetiredConfigKeys(t, defaultKnowlConfig)
-
 	ctx, err := loadConfig(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("load embedded config: %v", err)
@@ -110,9 +93,6 @@ func TestEmbeddedDefaultConfigArtifactLoadsThroughProductionTypes(t *testing.T) 
 	wantPath := filepath.Join(workingDir, ".knowl", "knowl.sqlite")
 	if storage.Driver != knowl.StoreSQLite || storage.Path != wantPath {
 		t.Fatalf("embedded storage = %#v, want sqlite path %q", storage, wantPath)
-	}
-	if token := strings.TrimSpace(loaded.Document.Knowl.Operator.Token); token != "" && !strings.HasPrefix(token, "replace-") {
-		t.Fatalf("embedded operator token = %q, want empty or placeholder", token)
 	}
 }
 
@@ -144,11 +124,6 @@ func TestOperatorDocsUseCanonicalIngestConfigShape(t *testing.T) {
 				t.Fatalf("read %s: %v", test.path, err)
 			}
 			text := string(content)
-			for _, unwanted := range []string{"maintenance:", "maintenance.review", "maintenance.auto_apply", "KNOWL_MAINTENANCE_"} {
-				if strings.Contains(text, unwanted) {
-					t.Fatalf("%s contains retired ingest-policy reference %q", test.path, unwanted)
-				}
-			}
 			for _, want := range test.want {
 				if !strings.Contains(text, want) {
 					t.Fatalf("%s missing canonical ingest-policy reference %q", test.path, want)

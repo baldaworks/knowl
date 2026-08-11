@@ -31,6 +31,12 @@ const hostSourceIdempotencyKey = "1"
 const hostSourceContentKey = "content"
 const hostSourceOriginKey = "origin"
 const hostSourceIdempotencyKeyName = "idempotency_key"
+const hostListenAddr = "127.0.0.1:0"
+const hostPagePath = "wiki/entities/one.md"
+const hostPageID = "entities/one"
+const hostQuery = "One"
+const hostQueryKey = "query"
+const hostRetrieveToolName = "knowl_retrieve"
 
 func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	ctx := context.Background()
@@ -48,13 +54,12 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	config := knowl.DefaultConfig()
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
-	config.ListenAddr = "127.0.0.1:0"
-	config.OperatorToken = "test-token"
+	config.ListenAddr = hostListenAddr
 	config.IngestOptions.AutoApply = true
 	maintainer := provider.Fixture{Result: domain.ModelEditPlan{
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{hostSourceRef},
-		Edits:        []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte(hostPageContent)}},
+		Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
 	}}
 
 	host, err := knowl.NewHost(ctx, config, maintainer)
@@ -67,7 +72,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	if preStart.Code != http.StatusServiceUnavailable {
 		t.Fatalf("pre-start readiness status = %d, want %d", preStart.Code, http.StatusServiceUnavailable)
 	}
-	body, status, err := doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=before-start&scope=other", nil, "")
+	body, status, err := doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=before-start&scope=other", nil)
 	if err != nil {
 		t.Fatalf("pre-start scope override request: %v", err)
 	}
@@ -75,7 +80,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 		t.Fatalf("pre-start scope override status = %d, body %s", status, body)
 	}
 	assertErrorClass(t, body, "scope_override_forbidden")
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=before-start", nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=before-start", nil)
 	if err != nil {
 		t.Fatalf("pre-start query request: %v", err)
 	}
@@ -88,13 +93,13 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	}
 	defer shutdownHost(t, host)
 
-	if _, status, _ := doHostRequest(t, host, http.MethodGet, "/healthz", nil, ""); status != http.StatusOK {
+	if _, status, _ := doHostRequest(t, host, http.MethodGet, "/healthz", nil); status != http.StatusOK {
 		t.Fatalf("health status = %d, want %d", status, http.StatusOK)
 	}
-	if _, status, _ := doHostRequest(t, host, http.MethodGet, "/readyz", nil, ""); status != http.StatusOK {
+	if _, status, _ := doHostRequest(t, host, http.MethodGet, "/readyz", nil); status != http.StatusOK {
 		t.Fatalf("readiness status = %d, want %d", status, http.StatusOK)
 	}
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve", nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve", nil)
 	if err != nil {
 		t.Fatalf("retrieve without query request: %v", err)
 	}
@@ -102,7 +107,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 		t.Fatalf("retrieve without query status = %d, body %s", status, body)
 	}
 	assertErrorClass(t, body, "query_required")
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/unknown", nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/unknown", nil)
 	if err != nil {
 		t.Fatalf("unknown route request: %v", err)
 	}
@@ -120,7 +125,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode ingest request: %v", err)
 	}
-	body, status, err = doHostRequest(t, host, http.MethodPost, "/v1/ingest", encoded, "")
+	body, status, err = doHostRequest(t, host, http.MethodPost, "/v1/ingest", encoded)
 	if err != nil {
 		t.Fatalf("ingest request: %v", err)
 	}
@@ -143,7 +148,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	}
 
 	operationPath := "/v1/operations/" + url.PathEscape(ingested.OperationID)
-	body, status, err = doHostRequest(t, host, http.MethodGet, operationPath, nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, operationPath, nil)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("operation status request = %d, %v, body %s", status, err, body)
 	}
@@ -158,7 +163,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	if operation.ID != ingested.OperationID || operation.Status != hostCompletedStatus {
 		t.Fatalf("operation status after commit = %q", operation.Status)
 	}
-	body, status, headers, err := doHostRequestDetailed(t, host, http.MethodGet, "/v1/ingest", nil, "")
+	body, status, headers, err := doHostRequestDetailed(t, host, http.MethodGet, "/v1/ingest", nil)
 	if err != nil {
 		t.Fatalf("get ingest request: %v", err)
 	}
@@ -169,7 +174,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 		t.Fatalf("get ingest Allow header = %q, want %q", allow, http.MethodPost)
 	}
 	assertErrorClass(t, body, "method_not_allowed")
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("retrieve request = %d, %v, body %s", status, err, body)
 	}
@@ -182,7 +187,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	if err := json.Unmarshal(body, &retrieve); err != nil {
 		t.Fatalf("decode retrieve result: %v", err)
 	}
-	if retrieve.Query != "One" || len(retrieve.Evidence) == 0 || retrieve.Evidence[0].PageID != "entities/one" {
+	if retrieve.Query != hostQuery || len(retrieve.Evidence) == 0 || retrieve.Evidence[0].PageID != hostPageID {
 		t.Fatalf("retrieve result = %#v", retrieve)
 	}
 
@@ -196,7 +201,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	if err := host.Start(ctx); err != nil {
 		t.Fatalf("restart host: %v", err)
 	}
-	body, status, err = doHostRequest(t, host, http.MethodGet, operationPath, nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, operationPath, nil)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("reopened operation request = %d, %v, body %s", status, err, body)
 	}
@@ -224,12 +229,12 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	config := knowl.DefaultConfig()
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
-	config.ListenAddr = "127.0.0.1:0"
+	config.ListenAddr = hostListenAddr
 	config.IngestOptions.AutoApply = false
 	maintainer := provider.Fixture{Result: domain.ModelEditPlan{
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{hostSourceRef},
-		Edits:        []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte(hostPageContent)}},
+		Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
 	}}
 
 	host, err := knowl.NewHost(ctx, config, maintainer)
@@ -265,7 +270,7 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode ingest request: %v", err)
 	}
-	body, status, err := doHostRequest(t, host, http.MethodPost, "/v1/ingest", encoded, "")
+	body, status, err := doHostRequest(t, host, http.MethodPost, "/v1/ingest", encoded)
 	if err != nil {
 		t.Fatalf("http ingest: %v", err)
 	}
@@ -286,7 +291,7 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 		t.Fatalf("operation IDs differ: http=%q mcp=%q", httpIngest.OperationID, mcpIngest.OperationID)
 	}
 
-	mcpRetrieveValue, err := host.MCP().Call(ctx, "knowl_retrieve", map[string]any{"query": "One"})
+	mcpRetrieveValue, err := host.MCP().Call(ctx, hostRetrieveToolName, map[string]any{hostQueryKey: hostQuery})
 	if err != nil {
 		t.Fatalf("mcp retrieve: %v", err)
 	}
@@ -294,7 +299,7 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	if !ok {
 		t.Fatalf("mcp retrieve type = %T, want mcp.RetrieveResult", mcpRetrieveValue)
 	}
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil)
 	if err != nil {
 		t.Fatalf("http retrieve: %v", err)
 	}
@@ -325,7 +330,7 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	if !ok {
 		t.Fatalf("mcp operation type = %T, want mcp.OperationResult", mcpOperationValue)
 	}
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/operations/"+url.PathEscape(httpIngest.OperationID), nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/operations/"+url.PathEscape(httpIngest.OperationID), nil)
 	if err != nil {
 		t.Fatalf("http operation: %v", err)
 	}
@@ -413,18 +418,15 @@ func (factory *validatingRuntimeFactory) Build(context.Context, agentfactory.Bui
 
 const hostPageContent = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + hostSourceRef + "\n---\n# One\n"
 
-func doHostRequest(t *testing.T, host *knowl.Host, method, path string, body []byte, token string) ([]byte, int, error) {
+func doHostRequest(t *testing.T, host *knowl.Host, method, path string, body []byte) ([]byte, int, error) {
 	t.Helper()
-	content, status, _, err := doHostRequestDetailed(t, host, method, path, body, token)
+	content, status, _, err := doHostRequestDetailed(t, host, method, path, body)
 	return content, status, err
 }
 
-func doHostRequestDetailed(t *testing.T, host *knowl.Host, method, path string, body []byte, token string) ([]byte, int, http.Header, error) {
+func doHostRequestDetailed(t *testing.T, host *knowl.Host, method, path string, body []byte) ([]byte, int, http.Header, error) {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://knowl"+path, bytes.NewReader(body))
-	if token != "" {
-		request.Header.Set("Authorization", "Bearer "+token)
-	}
 	response := httptest.NewRecorder()
 	host.Handler().ServeHTTP(response, request)
 	return response.Body.Bytes(), response.Code, response.Header(), nil

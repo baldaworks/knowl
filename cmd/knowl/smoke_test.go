@@ -101,7 +101,7 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 		t.Fatalf("encode ingest request: %v", err)
 	}
 
-	body, status, err := doLiveHostRequest(client, baseURL, http.MethodPost, publicIngestPath, encoded, "")
+	body, status, err := doLiveHostRequest(client, baseURL, http.MethodPost, publicIngestPath, encoded)
 	if err != nil {
 		t.Fatalf("ingest request: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 		t.Fatalf("committed page missing: %v", err)
 	}
 
-	body, status, err = doLiveHostRequest(client, baseURL, http.MethodGet, "/v1/retrieve?query="+smokeQueryText, nil, "")
+	body, status, err = doLiveHostRequest(client, baseURL, http.MethodGet, "/v1/retrieve?query="+smokeQueryText, nil)
 	if err != nil {
 		t.Fatalf("retrieve request: %v", err)
 	}
@@ -161,7 +161,7 @@ func waitForHTTPStatus(t *testing.T, client *http.Client, baseURL, path string, 
 	var lastStatus int
 	var lastErr error
 	for time.Now().Before(deadline) {
-		_, status, err := doLiveHostRequest(client, baseURL, http.MethodGet, path, nil, "")
+		_, status, err := doLiveHostRequest(client, baseURL, http.MethodGet, path, nil)
 		if err == nil && status == want {
 			return
 		}
@@ -172,13 +172,10 @@ func waitForHTTPStatus(t *testing.T, client *http.Client, baseURL, path string, 
 	t.Fatalf("%s status = (%d, %v), want (%d, nil)", path, lastStatus, lastErr, want)
 }
 
-func doLiveHostRequest(client *http.Client, baseURL, method, path string, body []byte, token string) ([]byte, int, error) {
+func doLiveHostRequest(client *http.Client, baseURL, method, path string, body []byte) ([]byte, int, error) {
 	request, err := http.NewRequestWithContext(context.Background(), method, baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
-	}
-	if token != "" {
-		request.Header.Set("Authorization", "Bearer "+token)
 	}
 	response, err := client.Do(request)
 	if err != nil {

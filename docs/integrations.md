@@ -81,8 +81,6 @@ runtime:
     knowl:
       type: http
       url: http://127.0.0.1:8080/mcp
-      headers:
-        Authorization: "Bearer ${KNOWL_TOKEN}"
 
 balda:
   mcp_servers:
