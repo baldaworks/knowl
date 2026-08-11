@@ -30,7 +30,7 @@ const (
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           appName,
-		Short:         "Bootstrap or run a local Knowl workspace, then use direct read commands or the loopback HTTP API",
+		Short:         "Bootstrap or run a local Knowl workspace, then use the KISS retrieve/ingest/operation workflow",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: `Supported local workflow:
@@ -40,18 +40,15 @@ func newRootCommand() *cobra.Command {
 2. Or initialize an empty workspace explicitly:
    - knowl init
    - knowl validate
-3. Run direct local read commands:
+3. Run the supported local workflow commands:
    - knowl query <text>
-   - knowl search <text>
-   - knowl lint
-   - knowl page <page-id>
-   - knowl page links <page-id>
+   - knowl ingest --input request.json
+   - knowl operation <operation-id>
 4. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
 
-Bootstrap creates a Knowl-owned workspace. Direct CLI read workflows execute
+Bootstrap creates a Knowl-owned workspace. Local workflow commands execute
 in-process and print structured JSON results. The retained loopback HTTP API
-remains supported for ingest, review/apply, health checks, OpenAPI tooling,
-and local external clients.`,
+exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			initCommandLogging(cmd.ErrOrStderr())
 			configDir, err := cmd.Flags().GetString("config-dir")
@@ -78,10 +75,9 @@ and local external clients.`,
 		newValidateCommand(),
 		newBootstrapCommand(),
 		newStartCommand(),
+		newIngestCommand(),
 		newQueryCommand(),
-		newSearchCommand(),
-		newLintCommand(),
-		newPageCommand(),
+		newOperationCommand(),
 	} {
 		root.AddCommand(command)
 	}

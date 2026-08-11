@@ -87,36 +87,19 @@ func newStartCommand() *cobra.Command {
 }
 
 func newIngestCommand() *cobra.Command {
-	command := newJSONBodyWorkflowCommand[knowlapi.SourceEnvelope](
+	return newJSONBodyWorkflowCommand[knowlapi.IngestRequest](
 		ingestCommandName,
-		"Accept and process one immutable source revision",
-		"/v1/ingest",
+		"Submit one source to the Knowl ingest pipeline",
+		publicIngestPath,
 	)
-	command.AddCommand(
-		newJSONBodyWorkflowCommand[knowlapi.SourceEnvelope]("preview", "Accept and stage one immutable source revision", "/v1/ingest/preview"),
-		newApplyWorkflowCommand(),
-	)
-	return command
 }
 
 func newQueryCommand() *cobra.Command {
 	return newQueryReadCommand()
 }
 
-func newSearchCommand() *cobra.Command {
-	return newSearchReadCommand()
-}
-
-func newLintCommand() *cobra.Command {
-	return newLintReadCommand()
-}
-
 func newOperationCommand() *cobra.Command {
 	return newOperationReadCommand()
-}
-
-func newPageCommand() *cobra.Command {
-	return newPageReadCommand()
 }
 
 func initWorkspace(workspace string) error {

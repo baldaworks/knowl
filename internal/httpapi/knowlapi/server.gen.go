@@ -16,10 +16,6 @@ import (
 	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
 )
 
-const (
-	BearerAuthScopes = "bearerAuth.Scopes"
-)
-
 // Defines values for CitationKind.
 const (
 	Raw  CitationKind = "raw"
@@ -31,14 +27,20 @@ const (
 	Ok HealthResponseStatus = "ok"
 )
 
-// Defines values for OperationStatus.
+// Defines values for IngestResultStatus.
 const (
-	Applying       OperationStatus = "applying"
-	AwaitingReview OperationStatus = "awaiting_review"
-	Committed      OperationStatus = "committed"
-	Failed         OperationStatus = "failed"
-	Planned        OperationStatus = "planned"
-	Received       OperationStatus = "received"
+	IngestResultStatusCompleted IngestResultStatus = "completed"
+	IngestResultStatusFailed    IngestResultStatus = "failed"
+	IngestResultStatusQueued    IngestResultStatus = "queued"
+	IngestResultStatusRunning   IngestResultStatus = "running"
+)
+
+// Defines values for OperationResultStatus.
+const (
+	OperationResultStatusCompleted OperationResultStatus = "completed"
+	OperationResultStatusFailed    OperationResultStatus = "failed"
+	OperationResultStatusQueued    OperationResultStatus = "queued"
+	OperationResultStatusRunning   OperationResultStatus = "running"
 )
 
 // Defines values for ReadyResponseStatus.
@@ -46,12 +48,6 @@ const (
 	NotReady ReadyResponseStatus = "not_ready"
 	Ready    ReadyResponseStatus = "ready"
 )
-
-// ApplyResult defines model for ApplyResult.
-type ApplyResult struct {
-	Commit    *ContentCommit `json:"commit,omitempty"`
-	Operation Operation      `json:"operation"`
-}
 
 // Citation defines model for Citation.
 type Citation struct {
@@ -66,38 +62,24 @@ type Citation struct {
 // CitationKind defines model for Citation.Kind.
 type CitationKind string
 
-// ContentCommit defines model for ContentCommit.
-type ContentCommit struct {
-	CommittedAt time.Time         `json:"committed_at"`
-	Files       []string          `json:"files"`
-	Generation  string            `json:"generation"`
-	OperationId string            `json:"operation_id"`
-	Snapshot    WorkspaceSnapshot `json:"snapshot"`
-}
-
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// EvidenceItem defines model for EvidenceItem.
+type EvidenceItem struct {
+	PageId     string    `json:"page_id"`
+	Snippet    string    `json:"snippet"`
+	SourceRefs *[]string `json:"source_refs,omitempty"`
+	Title      string    `json:"title"`
+	Untrusted  bool      `json:"untrusted"`
 }
 
 // Failure defines model for Failure.
 type Failure struct {
 	Class       string `json:"class"`
 	OperationId string `json:"operation_id"`
-}
-
-// FileEdit defines model for FileEdit.
-type FileEdit struct {
-	Content        []byte  `json:"content"`
-	ExpectedDigest *string `json:"expected_digest,omitempty"`
-	Path           string  `json:"path"`
-}
-
-// FilingRequest defines model for FilingRequest.
-type FilingRequest struct {
-	Plan   ModelEditPlan `json:"plan"`
-	Query  string        `json:"query"`
-	Result QueryResult   `json:"result"`
 }
 
 // HealthResponse defines model for HealthResponse.
@@ -109,98 +91,37 @@ type HealthResponse struct {
 // HealthResponseStatus defines model for HealthResponse.Status.
 type HealthResponseStatus string
 
+// IngestRequest defines model for IngestRequest.
+type IngestRequest struct {
+	// Content Raw source content.
+	Content        *string `json:"content,omitempty"`
+	IdempotencyKey *string `json:"idempotency_key,omitempty"`
+	MediaType      *string `json:"media_type,omitempty"`
+	Origin         *string `json:"origin,omitempty"`
+
+	// Uri External source URI.
+	Uri *string `json:"uri,omitempty"`
+}
+
 // IngestResult defines model for IngestResult.
 type IngestResult struct {
-	Commit    *ContentCommit    `json:"commit,omitempty"`
-	Operation Operation         `json:"operation"`
-	Plan      ValidatedEditPlan `json:"plan"`
-	Staged    StagedChange      `json:"staged"`
+	OperationId string             `json:"operation_id"`
+	Status      IngestResultStatus `json:"status"`
 }
 
-// LinkReference defines model for LinkReference.
-type LinkReference struct {
-	From      string `json:"from"`
-	Relation  string `json:"relation"`
-	To        string `json:"to"`
-	Untrusted bool   `json:"untrusted"`
+// IngestResultStatus defines model for IngestResult.Status.
+type IngestResultStatus string
+
+// OperationResult defines model for OperationResult.
+type OperationResult struct {
+	Failure   *Failure              `json:"failure,omitempty"`
+	Id        string                `json:"id"`
+	Status    OperationResultStatus `json:"status"`
+	UpdatedAt time.Time             `json:"updated_at"`
 }
 
-// LintFinding defines model for LintFinding.
-type LintFinding struct {
-	Code       string    `json:"code"`
-	Message    string    `json:"message"`
-	PageId     *string   `json:"page_id,omitempty"`
-	Path       *string   `json:"path,omitempty"`
-	Severity   string    `json:"severity"`
-	SourceRefs *[]string `json:"source_refs,omitempty"`
-	Suggestion *bool     `json:"suggestion,omitempty"`
-}
-
-// LintReport defines model for LintReport.
-type LintReport struct {
-	CheckedAt time.Time     `json:"checked_at"`
-	Findings  []LintFinding `json:"findings"`
-	Scope     string        `json:"scope"`
-}
-
-// ModelEditPlan defines model for ModelEditPlan.
-type ModelEditPlan struct {
-	Edits        []FileEdit `json:"edits"`
-	Rationale    *string    `json:"rationale,omitempty"`
-	SchemaDigest string     `json:"schema_digest"`
-	SourceRefs   []string   `json:"source_refs"`
-}
-
-// Operation defines model for Operation.
-type Operation struct {
-	Attempt   int             `json:"attempt"`
-	Failure   *Failure        `json:"failure,omitempty"`
-	Id        string          `json:"id"`
-	Key       OperationKey    `json:"key"`
-	Status    OperationStatus `json:"status"`
-	UpdatedAt time.Time       `json:"updated_at"`
-}
-
-// OperationStatus defines model for Operation.Status.
-type OperationStatus string
-
-// OperationKey defines model for OperationKey.
-type OperationKey struct {
-	Scope   string        `json:"scope"`
-	Source  SourceRef     `json:"source"`
-	Version SourceVersion `json:"version"`
-}
-
-// PageReference defines model for PageReference.
-type PageReference struct {
-	Id         string   `json:"id"`
-	Path       string   `json:"path"`
-	Snippet    string   `json:"snippet"`
-	SourceRefs []string `json:"source_refs"`
-	Title      string   `json:"title"`
-	Untrusted  bool     `json:"untrusted"`
-}
-
-// PageSnapshot defines model for PageSnapshot.
-type PageSnapshot struct {
-	Content    string    `json:"content"`
-	Digest     string    `json:"digest"`
-	Id         string    `json:"id"`
-	Path       string    `json:"path"`
-	SourceRefs *[]string `json:"source_refs,omitempty"`
-	Title      string    `json:"title"`
-	Untrusted  bool      `json:"untrusted"`
-	UpdatedAt  time.Time `json:"updated_at"`
-}
-
-// QueryResult defines model for QueryResult.
-type QueryResult struct {
-	Citations []Citation      `json:"citations"`
-	Links     []LinkReference `json:"links"`
-	Pages     []PageReference `json:"pages"`
-	Query     string          `json:"query"`
-	Scope     string          `json:"scope"`
-}
+// OperationResultStatus defines model for OperationResult.Status.
+type OperationResultStatus string
 
 // ReadyResponse defines model for ReadyResponse.
 type ReadyResponse struct {
@@ -213,67 +134,18 @@ type ReadyResponse struct {
 // ReadyResponseStatus defines model for ReadyResponse.Status.
 type ReadyResponseStatus string
 
-// SourceEnvelope defines model for SourceEnvelope.
-type SourceEnvelope struct {
-	// Content Base64-encoded bounded source payload.
-	Content    []byte                  `json:"content"`
-	MediaType  *string                 `json:"media_type,omitempty"`
-	Provenance *map[string]interface{} `json:"provenance,omitempty"`
-	ReceivedAt *time.Time              `json:"received_at,omitempty"`
-
-	// Scope Optional trusted scope. When omitted, the host fills its configured scope.
-	Scope   *string       `json:"scope,omitempty"`
-	Source  SourceRef     `json:"source"`
-	Version SourceVersion `json:"version"`
-}
-
-// SourceRef defines model for SourceRef.
-type SourceRef struct {
-	Adapter string `json:"adapter"`
-	Id      string `json:"id"`
-}
-
-// SourceVersion defines model for SourceVersion.
-type SourceVersion struct {
-	Digest  string `json:"digest"`
-	Version string `json:"version"`
-}
-
-// StagedChange defines model for StagedChange.
-type StagedChange struct {
-	CreatedAt   time.Time `json:"created_at"`
-	Digest      string    `json:"digest"`
-	Files       []string  `json:"files"`
-	OperationId string    `json:"operation_id"`
-}
-
-// ValidatedEditPlan defines model for ValidatedEditPlan.
-type ValidatedEditPlan struct {
-	Edits        []FileEdit `json:"edits"`
-	OperationId  string     `json:"operation_id"`
-	SchemaDigest string     `json:"schema_digest"`
-	Scope        string     `json:"scope"`
-	SourceRefs   []string   `json:"source_refs"`
-}
-
-// WorkspaceSnapshot defines model for WorkspaceSnapshot.
-type WorkspaceSnapshot struct {
-	CapturedAt   time.Time         `json:"captured_at"`
-	Links        []LinkReference   `json:"links"`
-	PageDigests  map[string]string `json:"page_digests"`
-	Pages        []PageSnapshot    `json:"pages"`
-	SchemaDigest string            `json:"schema_digest"`
-	Scope        string            `json:"scope"`
+// RetrieveResult defines model for RetrieveResult.
+type RetrieveResult struct {
+	Citations *[]Citation    `json:"citations,omitempty"`
+	Evidence  []EvidenceItem `json:"evidence"`
+	Query     string         `json:"query"`
 }
 
 // OperationID defines model for OperationID.
 type OperationID = string
 
-// PageID defines model for PageID.
-type PageID = string
-
-// QueryString defines model for QueryString.
-type QueryString = string
+// RetrieveQuery defines model for RetrieveQuery.
+type RetrieveQuery = string
 
 // JSONBodyBadRequest defines model for JSONBodyBadRequest.
 type JSONBodyBadRequest = ErrorResponse
@@ -287,15 +159,6 @@ type OperationFailed = ErrorResponse
 // OperationIDBadRequest defines model for OperationIDBadRequest.
 type OperationIDBadRequest = ErrorResponse
 
-// OperationNotApplyable defines model for OperationNotApplyable.
-type OperationNotApplyable = ErrorResponse
-
-// OperatorAuthorizationRequired defines model for OperatorAuthorizationRequired.
-type OperatorAuthorizationRequired = ErrorResponse
-
-// PageIDBadRequest defines model for PageIDBadRequest.
-type PageIDBadRequest = ErrorResponse
-
 // QueryStringBadRequest defines model for QueryStringBadRequest.
 type QueryStringBadRequest = ErrorResponse
 
@@ -305,83 +168,32 @@ type ScopeOverrideForbidden = ErrorResponse
 // UnavailableError defines model for UnavailableError.
 type UnavailableError = ErrorResponse
 
-// QueryKnowledgeParams defines parameters for QueryKnowledge.
-type QueryKnowledgeParams struct {
-	// Q Non-empty query string.
-	Q QueryString `form:"q" json:"q"`
+// RetrieveKnowledgeParams defines parameters for RetrieveKnowledge.
+type RetrieveKnowledgeParams struct {
+	// Query Free-text retrieval query.
+	Query RetrieveQuery `form:"query" json:"query"`
 }
 
-// SearchPagesParams defines parameters for SearchPages.
-type SearchPagesParams struct {
-	// Q Non-empty query string.
-	Q QueryString `form:"q" json:"q"`
-}
-
-// IngestSourceJSONRequestBody defines body for IngestSource for application/json ContentType.
-type IngestSourceJSONRequestBody = SourceEnvelope
-
-// PreviewSourceJSONRequestBody defines body for PreviewSource for application/json ContentType.
-type PreviewSourceJSONRequestBody = SourceEnvelope
-
-// FileQueryResultJSONRequestBody defines body for FileQueryResult for application/json ContentType.
-type FileQueryResultJSONRequestBody = FilingRequest
+// IngestKnowledgeJSONRequestBody defines body for IngestKnowledge for application/json ContentType.
+type IngestKnowledgeJSONRequestBody = IngestRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// Liveness probe alias
-	// (GET /health)
-	GetHealthAlias(w http.ResponseWriter, r *http.Request)
-	// Readiness probe alias
-	// (GET /health/ready)
-	GetReadyAlias(w http.ResponseWriter, r *http.Request)
 	// Liveness probe
 	// (GET /healthz)
 	GetHealth(w http.ResponseWriter, r *http.Request)
 	// Readiness probe
 	// (GET /readyz)
 	GetReady(w http.ResponseWriter, r *http.Request)
-	// Accept and process one immutable source revision
+	// Submit one bounded source to the trusted Knowl ingest pipeline
 	// (POST /v1/ingest)
-	IngestSource(w http.ResponseWriter, r *http.Request)
-	// Accept and stage one immutable source revision
-	// (POST /v1/ingest/preview)
-	PreviewSource(w http.ResponseWriter, r *http.Request)
-	// Run deterministic workspace lint
-	// (GET /v1/lint)
-	LintWorkspace(w http.ResponseWriter, r *http.Request)
-	// Deterministic workspace lint alias
-	// (GET /v1/lint-results)
-	LintWorkspaceDashAlias(w http.ResponseWriter, r *http.Request)
-	// Deterministic workspace lint alias
-	// (GET /v1/lint/results)
-	LintWorkspaceResultsAlias(w http.ResponseWriter, r *http.Request)
-	// Read one durable operation status
+	IngestKnowledge(w http.ResponseWriter, r *http.Request)
+	// Read one durable Knowl operation status
 	// (GET /v1/operations/{operation_id})
 	GetOperation(w http.ResponseWriter, r *http.Request, operationId OperationID)
-	// Apply one staged operation
-	// (POST /v1/operations/{operation_id}/apply)
-	ApplyOperation(w http.ResponseWriter, r *http.Request, operationId OperationID)
-	// Read one durable operation status alias
-	// (GET /v1/operations/{operation_id}/status)
-	GetOperationStatusAlias(w http.ResponseWriter, r *http.Request, operationId OperationID)
-	// Read one bounded canonical page
-	// (GET /v1/pages/{page_id})
-	GetPage(w http.ResponseWriter, r *http.Request, pageId PageID)
-	// Read one bounded link neighborhood
-	// (GET /v1/pages/{page_id}/links)
-	GetPageLinks(w http.ResponseWriter, r *http.Request, pageId PageID)
-	// Assemble bounded wiki references and citations
-	// (GET /v1/query)
-	QueryKnowledge(w http.ResponseWriter, r *http.Request, params QueryKnowledgeParams)
-	// File a typed query result through the normal ingest gate
-	// (POST /v1/query/file)
-	FileQueryResult(w http.ResponseWriter, r *http.Request)
-	// Search bounded page references
-	// (GET /v1/search)
-	SearchPages(w http.ResponseWriter, r *http.Request, params SearchPagesParams)
-	// Read one durable operation status alias
-	// (GET /v1/status/{operation_id})
-	GetOperationLegacyStatusAlias(w http.ResponseWriter, r *http.Request, operationId OperationID)
+	// Retrieve bounded evidence from the trusted Knowl scope
+	// (GET /v1/retrieve)
+	RetrieveKnowledge(w http.ResponseWriter, r *http.Request, params RetrieveKnowledgeParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -392,34 +204,6 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
-
-// GetHealthAlias operation middleware
-func (siw *ServerInterfaceWrapper) GetHealthAlias(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetHealthAlias(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetReadyAlias operation middleware
-func (siw *ServerInterfaceWrapper) GetReadyAlias(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetReadyAlias(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
 
 // GetHealth operation middleware
 func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Request) {
@@ -449,79 +233,11 @@ func (siw *ServerInterfaceWrapper) GetReady(w http.ResponseWriter, r *http.Reque
 	handler.ServeHTTP(w, r)
 }
 
-// IngestSource operation middleware
-func (siw *ServerInterfaceWrapper) IngestSource(w http.ResponseWriter, r *http.Request) {
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
+// IngestKnowledge operation middleware
+func (siw *ServerInterfaceWrapper) IngestKnowledge(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.IngestSource(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// PreviewSource operation middleware
-func (siw *ServerInterfaceWrapper) PreviewSource(w http.ResponseWriter, r *http.Request) {
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.PreviewSource(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// LintWorkspace operation middleware
-func (siw *ServerInterfaceWrapper) LintWorkspace(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.LintWorkspace(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// LintWorkspaceDashAlias operation middleware
-func (siw *ServerInterfaceWrapper) LintWorkspaceDashAlias(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.LintWorkspaceDashAlias(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// LintWorkspaceResultsAlias operation middleware
-func (siw *ServerInterfaceWrapper) LintWorkspaceResultsAlias(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.LintWorkspaceResultsAlias(w, r)
+		siw.Handler.IngestKnowledge(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -556,216 +272,31 @@ func (siw *ServerInterfaceWrapper) GetOperation(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
-// ApplyOperation operation middleware
-func (siw *ServerInterfaceWrapper) ApplyOperation(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// ------------- Path parameter "operation_id" -------------
-	var operationId OperationID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "operation_id", r.PathValue("operation_id"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "operation_id", Err: err})
-		return
-	}
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ApplyOperation(w, r, operationId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetOperationStatusAlias operation middleware
-func (siw *ServerInterfaceWrapper) GetOperationStatusAlias(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// ------------- Path parameter "operation_id" -------------
-	var operationId OperationID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "operation_id", r.PathValue("operation_id"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "operation_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetOperationStatusAlias(w, r, operationId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetPage operation middleware
-func (siw *ServerInterfaceWrapper) GetPage(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// ------------- Path parameter "page_id" -------------
-	var pageId PageID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "page_id", r.PathValue("page_id"), &pageId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetPage(w, r, pageId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetPageLinks operation middleware
-func (siw *ServerInterfaceWrapper) GetPageLinks(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// ------------- Path parameter "page_id" -------------
-	var pageId PageID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "page_id", r.PathValue("page_id"), &pageId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetPageLinks(w, r, pageId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// QueryKnowledge operation middleware
-func (siw *ServerInterfaceWrapper) QueryKnowledge(w http.ResponseWriter, r *http.Request) {
+// RetrieveKnowledge operation middleware
+func (siw *ServerInterfaceWrapper) RetrieveKnowledge(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 
 	// Parameter object where we will unmarshal all parameters from the context
-	var params QueryKnowledgeParams
+	var params RetrieveKnowledgeParams
 
-	// ------------- Required query parameter "q" -------------
+	// ------------- Required query parameter "query" -------------
 
-	if paramValue := r.URL.Query().Get("q"); paramValue != "" {
-
-	} else {
-		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
-		return
-	}
-
-	err = runtime.BindQueryParameter("form", true, true, "q", r.URL.Query(), &params.Q)
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.QueryKnowledge(w, r, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// FileQueryResult operation middleware
-func (siw *ServerInterfaceWrapper) FileQueryResult(w http.ResponseWriter, r *http.Request) {
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.FileQueryResult(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// SearchPages operation middleware
-func (siw *ServerInterfaceWrapper) SearchPages(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params SearchPagesParams
-
-	// ------------- Required query parameter "q" -------------
-
-	if paramValue := r.URL.Query().Get("q"); paramValue != "" {
+	if paramValue := r.URL.Query().Get("query"); paramValue != "" {
 
 	} else {
-		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "query"})
 		return
 	}
 
-	err = runtime.BindQueryParameter("form", true, true, "q", r.URL.Query(), &params.Q)
+	err = runtime.BindQueryParameter("form", true, true, "query", r.URL.Query(), &params.Query)
 	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "query", Err: err})
 		return
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.SearchPages(w, r, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetOperationLegacyStatusAlias operation middleware
-func (siw *ServerInterfaceWrapper) GetOperationLegacyStatusAlias(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// ------------- Path parameter "operation_id" -------------
-	var operationId OperationID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "operation_id", r.PathValue("operation_id"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "operation_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetOperationLegacyStatusAlias(w, r, operationId)
+		siw.Handler.RetrieveKnowledge(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -895,24 +426,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
-	m.HandleFunc("GET "+options.BaseURL+"/health", wrapper.GetHealthAlias)
-	m.HandleFunc("GET "+options.BaseURL+"/health/ready", wrapper.GetReadyAlias)
 	m.HandleFunc("GET "+options.BaseURL+"/healthz", wrapper.GetHealth)
 	m.HandleFunc("GET "+options.BaseURL+"/readyz", wrapper.GetReady)
-	m.HandleFunc("POST "+options.BaseURL+"/v1/ingest", wrapper.IngestSource)
-	m.HandleFunc("POST "+options.BaseURL+"/v1/ingest/preview", wrapper.PreviewSource)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/lint", wrapper.LintWorkspace)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/lint-results", wrapper.LintWorkspaceDashAlias)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/lint/results", wrapper.LintWorkspaceResultsAlias)
+	m.HandleFunc("POST "+options.BaseURL+"/v1/ingest", wrapper.IngestKnowledge)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/operations/{operation_id}", wrapper.GetOperation)
-	m.HandleFunc("POST "+options.BaseURL+"/v1/operations/{operation_id}/apply", wrapper.ApplyOperation)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/operations/{operation_id}/status", wrapper.GetOperationStatusAlias)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/pages/{page_id}", wrapper.GetPage)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/pages/{page_id}/links", wrapper.GetPageLinks)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/query", wrapper.QueryKnowledge)
-	m.HandleFunc("POST "+options.BaseURL+"/v1/query/file", wrapper.FileQueryResult)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/search", wrapper.SearchPages)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/status/{operation_id}", wrapper.GetOperationLegacyStatusAlias)
+	m.HandleFunc("GET "+options.BaseURL+"/v1/retrieve", wrapper.RetrieveKnowledge)
 
 	return m
 }
@@ -925,58 +443,11 @@ type OperationFailedJSONResponse ErrorResponse
 
 type OperationIDBadRequestJSONResponse ErrorResponse
 
-type OperationNotApplyableJSONResponse ErrorResponse
-
-type OperatorAuthorizationRequiredJSONResponse ErrorResponse
-
-type PageIDBadRequestJSONResponse ErrorResponse
-
 type QueryStringBadRequestJSONResponse ErrorResponse
 
 type ScopeOverrideForbiddenJSONResponse ErrorResponse
 
 type UnavailableErrorJSONResponse ErrorResponse
-
-type GetHealthAliasRequestObject struct {
-}
-
-type GetHealthAliasResponseObject interface {
-	VisitGetHealthAliasResponse(w http.ResponseWriter) error
-}
-
-type GetHealthAlias200JSONResponse HealthResponse
-
-func (response GetHealthAlias200JSONResponse) VisitGetHealthAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetReadyAliasRequestObject struct {
-}
-
-type GetReadyAliasResponseObject interface {
-	VisitGetReadyAliasResponse(w http.ResponseWriter) error
-}
-
-type GetReadyAlias200JSONResponse ReadyResponse
-
-func (response GetReadyAlias200JSONResponse) VisitGetReadyAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetReadyAlias503JSONResponse ReadyResponse
-
-func (response GetReadyAlias503JSONResponse) VisitGetReadyAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
 
 type GetHealthRequestObject struct {
 }
@@ -1019,267 +490,55 @@ func (response GetReady503JSONResponse) VisitGetReadyResponse(w http.ResponseWri
 	return json.NewEncoder(w).Encode(response)
 }
 
-type IngestSourceRequestObject struct {
-	Body *IngestSourceJSONRequestBody
+type IngestKnowledgeRequestObject struct {
+	Body *IngestKnowledgeJSONRequestBody
 }
 
-type IngestSourceResponseObject interface {
-	VisitIngestSourceResponse(w http.ResponseWriter) error
+type IngestKnowledgeResponseObject interface {
+	VisitIngestKnowledgeResponse(w http.ResponseWriter) error
 }
 
-type IngestSource200JSONResponse IngestResult
+type IngestKnowledge200JSONResponse IngestResult
 
-func (response IngestSource200JSONResponse) VisitIngestSourceResponse(w http.ResponseWriter) error {
+func (response IngestKnowledge200JSONResponse) VisitIngestKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type IngestSource400JSONResponse struct{ JSONBodyBadRequestJSONResponse }
+type IngestKnowledge400JSONResponse struct{ JSONBodyBadRequestJSONResponse }
 
-func (response IngestSource400JSONResponse) VisitIngestSourceResponse(w http.ResponseWriter) error {
+func (response IngestKnowledge400JSONResponse) VisitIngestKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type IngestSource401JSONResponse struct {
-	OperatorAuthorizationRequiredJSONResponse
-}
-
-func (response IngestSource401JSONResponse) VisitIngestSourceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type IngestSource403JSONResponse struct {
+type IngestKnowledge403JSONResponse struct {
 	ScopeOverrideForbiddenJSONResponse
 }
 
-func (response IngestSource403JSONResponse) VisitIngestSourceResponse(w http.ResponseWriter) error {
+func (response IngestKnowledge403JSONResponse) VisitIngestKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(403)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type IngestSource422JSONResponse struct{ OperationFailedJSONResponse }
+type IngestKnowledge422JSONResponse struct{ OperationFailedJSONResponse }
 
-func (response IngestSource422JSONResponse) VisitIngestSourceResponse(w http.ResponseWriter) error {
+func (response IngestKnowledge422JSONResponse) VisitIngestKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type IngestSource503JSONResponse struct{ UnavailableErrorJSONResponse }
+type IngestKnowledge503JSONResponse struct{ UnavailableErrorJSONResponse }
 
-func (response IngestSource503JSONResponse) VisitIngestSourceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type PreviewSourceRequestObject struct {
-	Body *PreviewSourceJSONRequestBody
-}
-
-type PreviewSourceResponseObject interface {
-	VisitPreviewSourceResponse(w http.ResponseWriter) error
-}
-
-type PreviewSource200JSONResponse IngestResult
-
-func (response PreviewSource200JSONResponse) VisitPreviewSourceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type PreviewSource400JSONResponse struct{ JSONBodyBadRequestJSONResponse }
-
-func (response PreviewSource400JSONResponse) VisitPreviewSourceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type PreviewSource401JSONResponse struct {
-	OperatorAuthorizationRequiredJSONResponse
-}
-
-func (response PreviewSource401JSONResponse) VisitPreviewSourceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type PreviewSource403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response PreviewSource403JSONResponse) VisitPreviewSourceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type PreviewSource422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response PreviewSource422JSONResponse) VisitPreviewSourceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type PreviewSource503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response PreviewSource503JSONResponse) VisitPreviewSourceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceRequestObject struct {
-}
-
-type LintWorkspaceResponseObject interface {
-	VisitLintWorkspaceResponse(w http.ResponseWriter) error
-}
-
-type LintWorkspace200JSONResponse LintReport
-
-func (response LintWorkspace200JSONResponse) VisitLintWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspace403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response LintWorkspace403JSONResponse) VisitLintWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspace422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response LintWorkspace422JSONResponse) VisitLintWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspace503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response LintWorkspace503JSONResponse) VisitLintWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceDashAliasRequestObject struct {
-}
-
-type LintWorkspaceDashAliasResponseObject interface {
-	VisitLintWorkspaceDashAliasResponse(w http.ResponseWriter) error
-}
-
-type LintWorkspaceDashAlias200JSONResponse LintReport
-
-func (response LintWorkspaceDashAlias200JSONResponse) VisitLintWorkspaceDashAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceDashAlias403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response LintWorkspaceDashAlias403JSONResponse) VisitLintWorkspaceDashAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceDashAlias422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response LintWorkspaceDashAlias422JSONResponse) VisitLintWorkspaceDashAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceDashAlias503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response LintWorkspaceDashAlias503JSONResponse) VisitLintWorkspaceDashAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceResultsAliasRequestObject struct {
-}
-
-type LintWorkspaceResultsAliasResponseObject interface {
-	VisitLintWorkspaceResultsAliasResponse(w http.ResponseWriter) error
-}
-
-type LintWorkspaceResultsAlias200JSONResponse LintReport
-
-func (response LintWorkspaceResultsAlias200JSONResponse) VisitLintWorkspaceResultsAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceResultsAlias403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response LintWorkspaceResultsAlias403JSONResponse) VisitLintWorkspaceResultsAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceResultsAlias422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response LintWorkspaceResultsAlias422JSONResponse) VisitLintWorkspaceResultsAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type LintWorkspaceResultsAlias503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response LintWorkspaceResultsAlias503JSONResponse) VisitLintWorkspaceResultsAliasResponse(w http.ResponseWriter) error {
+func (response IngestKnowledge503JSONResponse) VisitIngestKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
 
@@ -1294,7 +553,7 @@ type GetOperationResponseObject interface {
 	VisitGetOperationResponse(w http.ResponseWriter) error
 }
 
-type GetOperation200JSONResponse Operation
+type GetOperation200JSONResponse OperationResult
 
 func (response GetOperation200JSONResponse) VisitGetOperationResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
@@ -1352,528 +611,57 @@ func (response GetOperation503JSONResponse) VisitGetOperationResponse(w http.Res
 	return json.NewEncoder(w).Encode(response)
 }
 
-type ApplyOperationRequestObject struct {
-	OperationId OperationID `json:"operation_id"`
+type RetrieveKnowledgeRequestObject struct {
+	Params RetrieveKnowledgeParams
 }
 
-type ApplyOperationResponseObject interface {
-	VisitApplyOperationResponse(w http.ResponseWriter) error
+type RetrieveKnowledgeResponseObject interface {
+	VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error
 }
 
-type ApplyOperation200JSONResponse ApplyResult
+type RetrieveKnowledge200JSONResponse RetrieveResult
 
-func (response ApplyOperation200JSONResponse) VisitApplyOperationResponse(w http.ResponseWriter) error {
+func (response RetrieveKnowledge200JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type ApplyOperation400JSONResponse struct {
-	OperationIDBadRequestJSONResponse
-}
-
-func (response ApplyOperation400JSONResponse) VisitApplyOperationResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ApplyOperation401JSONResponse struct {
-	OperatorAuthorizationRequiredJSONResponse
-}
-
-func (response ApplyOperation401JSONResponse) VisitApplyOperationResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ApplyOperation403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response ApplyOperation403JSONResponse) VisitApplyOperationResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ApplyOperation404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response ApplyOperation404JSONResponse) VisitApplyOperationResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ApplyOperation409JSONResponse struct {
-	OperationNotApplyableJSONResponse
-}
-
-func (response ApplyOperation409JSONResponse) VisitApplyOperationResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ApplyOperation422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response ApplyOperation422JSONResponse) VisitApplyOperationResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ApplyOperation503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response ApplyOperation503JSONResponse) VisitApplyOperationResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationStatusAliasRequestObject struct {
-	OperationId OperationID `json:"operation_id"`
-}
-
-type GetOperationStatusAliasResponseObject interface {
-	VisitGetOperationStatusAliasResponse(w http.ResponseWriter) error
-}
-
-type GetOperationStatusAlias200JSONResponse Operation
-
-func (response GetOperationStatusAlias200JSONResponse) VisitGetOperationStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationStatusAlias400JSONResponse struct {
-	OperationIDBadRequestJSONResponse
-}
-
-func (response GetOperationStatusAlias400JSONResponse) VisitGetOperationStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationStatusAlias403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response GetOperationStatusAlias403JSONResponse) VisitGetOperationStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationStatusAlias404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response GetOperationStatusAlias404JSONResponse) VisitGetOperationStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationStatusAlias422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response GetOperationStatusAlias422JSONResponse) VisitGetOperationStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationStatusAlias503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response GetOperationStatusAlias503JSONResponse) VisitGetOperationStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPageRequestObject struct {
-	PageId PageID `json:"page_id"`
-}
-
-type GetPageResponseObject interface {
-	VisitGetPageResponse(w http.ResponseWriter) error
-}
-
-type GetPage200JSONResponse PageSnapshot
-
-func (response GetPage200JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPage400JSONResponse struct{ PageIDBadRequestJSONResponse }
-
-func (response GetPage400JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPage403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response GetPage403JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPage404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response GetPage404JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPage422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response GetPage422JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPage503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response GetPage503JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPageLinksRequestObject struct {
-	PageId PageID `json:"page_id"`
-}
-
-type GetPageLinksResponseObject interface {
-	VisitGetPageLinksResponse(w http.ResponseWriter) error
-}
-
-type GetPageLinks200JSONResponse []LinkReference
-
-func (response GetPageLinks200JSONResponse) VisitGetPageLinksResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPageLinks400JSONResponse struct{ PageIDBadRequestJSONResponse }
-
-func (response GetPageLinks400JSONResponse) VisitGetPageLinksResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPageLinks403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response GetPageLinks403JSONResponse) VisitGetPageLinksResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPageLinks404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response GetPageLinks404JSONResponse) VisitGetPageLinksResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPageLinks422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response GetPageLinks422JSONResponse) VisitGetPageLinksResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetPageLinks503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response GetPageLinks503JSONResponse) VisitGetPageLinksResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type QueryKnowledgeRequestObject struct {
-	Params QueryKnowledgeParams
-}
-
-type QueryKnowledgeResponseObject interface {
-	VisitQueryKnowledgeResponse(w http.ResponseWriter) error
-}
-
-type QueryKnowledge200JSONResponse QueryResult
-
-func (response QueryKnowledge200JSONResponse) VisitQueryKnowledgeResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type QueryKnowledge400JSONResponse struct {
+type RetrieveKnowledge400JSONResponse struct {
 	QueryStringBadRequestJSONResponse
 }
 
-func (response QueryKnowledge400JSONResponse) VisitQueryKnowledgeResponse(w http.ResponseWriter) error {
+func (response RetrieveKnowledge400JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type QueryKnowledge403JSONResponse struct {
+type RetrieveKnowledge403JSONResponse struct {
 	ScopeOverrideForbiddenJSONResponse
 }
 
-func (response QueryKnowledge403JSONResponse) VisitQueryKnowledgeResponse(w http.ResponseWriter) error {
+func (response RetrieveKnowledge403JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(403)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type QueryKnowledge422JSONResponse struct{ OperationFailedJSONResponse }
+type RetrieveKnowledge422JSONResponse struct{ OperationFailedJSONResponse }
 
-func (response QueryKnowledge422JSONResponse) VisitQueryKnowledgeResponse(w http.ResponseWriter) error {
+func (response RetrieveKnowledge422JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type QueryKnowledge503JSONResponse struct{ UnavailableErrorJSONResponse }
+type RetrieveKnowledge503JSONResponse struct{ UnavailableErrorJSONResponse }
 
-func (response QueryKnowledge503JSONResponse) VisitQueryKnowledgeResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type FileQueryResultRequestObject struct {
-	Body *FileQueryResultJSONRequestBody
-}
-
-type FileQueryResultResponseObject interface {
-	VisitFileQueryResultResponse(w http.ResponseWriter) error
-}
-
-type FileQueryResult200JSONResponse IngestResult
-
-func (response FileQueryResult200JSONResponse) VisitFileQueryResultResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type FileQueryResult400JSONResponse struct{ JSONBodyBadRequestJSONResponse }
-
-func (response FileQueryResult400JSONResponse) VisitFileQueryResultResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type FileQueryResult401JSONResponse struct {
-	OperatorAuthorizationRequiredJSONResponse
-}
-
-func (response FileQueryResult401JSONResponse) VisitFileQueryResultResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type FileQueryResult403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response FileQueryResult403JSONResponse) VisitFileQueryResultResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type FileQueryResult422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response FileQueryResult422JSONResponse) VisitFileQueryResultResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type FileQueryResult503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response FileQueryResult503JSONResponse) VisitFileQueryResultResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type SearchPagesRequestObject struct {
-	Params SearchPagesParams
-}
-
-type SearchPagesResponseObject interface {
-	VisitSearchPagesResponse(w http.ResponseWriter) error
-}
-
-type SearchPages200JSONResponse []PageReference
-
-func (response SearchPages200JSONResponse) VisitSearchPagesResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type SearchPages400JSONResponse struct {
-	QueryStringBadRequestJSONResponse
-}
-
-func (response SearchPages400JSONResponse) VisitSearchPagesResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type SearchPages403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response SearchPages403JSONResponse) VisitSearchPagesResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type SearchPages422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response SearchPages422JSONResponse) VisitSearchPagesResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type SearchPages503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response SearchPages503JSONResponse) VisitSearchPagesResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(503)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationLegacyStatusAliasRequestObject struct {
-	OperationId OperationID `json:"operation_id"`
-}
-
-type GetOperationLegacyStatusAliasResponseObject interface {
-	VisitGetOperationLegacyStatusAliasResponse(w http.ResponseWriter) error
-}
-
-type GetOperationLegacyStatusAlias200JSONResponse Operation
-
-func (response GetOperationLegacyStatusAlias200JSONResponse) VisitGetOperationLegacyStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationLegacyStatusAlias400JSONResponse struct {
-	OperationIDBadRequestJSONResponse
-}
-
-func (response GetOperationLegacyStatusAlias400JSONResponse) VisitGetOperationLegacyStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationLegacyStatusAlias403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
-
-func (response GetOperationLegacyStatusAlias403JSONResponse) VisitGetOperationLegacyStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationLegacyStatusAlias404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response GetOperationLegacyStatusAlias404JSONResponse) VisitGetOperationLegacyStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationLegacyStatusAlias422JSONResponse struct{ OperationFailedJSONResponse }
-
-func (response GetOperationLegacyStatusAlias422JSONResponse) VisitGetOperationLegacyStatusAliasResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(422)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetOperationLegacyStatusAlias503JSONResponse struct{ UnavailableErrorJSONResponse }
-
-func (response GetOperationLegacyStatusAlias503JSONResponse) VisitGetOperationLegacyStatusAliasResponse(w http.ResponseWriter) error {
+func (response RetrieveKnowledge503JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
 
@@ -1882,60 +670,21 @@ func (response GetOperationLegacyStatusAlias503JSONResponse) VisitGetOperationLe
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
-	// Liveness probe alias
-	// (GET /health)
-	GetHealthAlias(ctx context.Context, request GetHealthAliasRequestObject) (GetHealthAliasResponseObject, error)
-	// Readiness probe alias
-	// (GET /health/ready)
-	GetReadyAlias(ctx context.Context, request GetReadyAliasRequestObject) (GetReadyAliasResponseObject, error)
 	// Liveness probe
 	// (GET /healthz)
 	GetHealth(ctx context.Context, request GetHealthRequestObject) (GetHealthResponseObject, error)
 	// Readiness probe
 	// (GET /readyz)
 	GetReady(ctx context.Context, request GetReadyRequestObject) (GetReadyResponseObject, error)
-	// Accept and process one immutable source revision
+	// Submit one bounded source to the trusted Knowl ingest pipeline
 	// (POST /v1/ingest)
-	IngestSource(ctx context.Context, request IngestSourceRequestObject) (IngestSourceResponseObject, error)
-	// Accept and stage one immutable source revision
-	// (POST /v1/ingest/preview)
-	PreviewSource(ctx context.Context, request PreviewSourceRequestObject) (PreviewSourceResponseObject, error)
-	// Run deterministic workspace lint
-	// (GET /v1/lint)
-	LintWorkspace(ctx context.Context, request LintWorkspaceRequestObject) (LintWorkspaceResponseObject, error)
-	// Deterministic workspace lint alias
-	// (GET /v1/lint-results)
-	LintWorkspaceDashAlias(ctx context.Context, request LintWorkspaceDashAliasRequestObject) (LintWorkspaceDashAliasResponseObject, error)
-	// Deterministic workspace lint alias
-	// (GET /v1/lint/results)
-	LintWorkspaceResultsAlias(ctx context.Context, request LintWorkspaceResultsAliasRequestObject) (LintWorkspaceResultsAliasResponseObject, error)
-	// Read one durable operation status
+	IngestKnowledge(ctx context.Context, request IngestKnowledgeRequestObject) (IngestKnowledgeResponseObject, error)
+	// Read one durable Knowl operation status
 	// (GET /v1/operations/{operation_id})
 	GetOperation(ctx context.Context, request GetOperationRequestObject) (GetOperationResponseObject, error)
-	// Apply one staged operation
-	// (POST /v1/operations/{operation_id}/apply)
-	ApplyOperation(ctx context.Context, request ApplyOperationRequestObject) (ApplyOperationResponseObject, error)
-	// Read one durable operation status alias
-	// (GET /v1/operations/{operation_id}/status)
-	GetOperationStatusAlias(ctx context.Context, request GetOperationStatusAliasRequestObject) (GetOperationStatusAliasResponseObject, error)
-	// Read one bounded canonical page
-	// (GET /v1/pages/{page_id})
-	GetPage(ctx context.Context, request GetPageRequestObject) (GetPageResponseObject, error)
-	// Read one bounded link neighborhood
-	// (GET /v1/pages/{page_id}/links)
-	GetPageLinks(ctx context.Context, request GetPageLinksRequestObject) (GetPageLinksResponseObject, error)
-	// Assemble bounded wiki references and citations
-	// (GET /v1/query)
-	QueryKnowledge(ctx context.Context, request QueryKnowledgeRequestObject) (QueryKnowledgeResponseObject, error)
-	// File a typed query result through the normal ingest gate
-	// (POST /v1/query/file)
-	FileQueryResult(ctx context.Context, request FileQueryResultRequestObject) (FileQueryResultResponseObject, error)
-	// Search bounded page references
-	// (GET /v1/search)
-	SearchPages(ctx context.Context, request SearchPagesRequestObject) (SearchPagesResponseObject, error)
-	// Read one durable operation status alias
-	// (GET /v1/status/{operation_id})
-	GetOperationLegacyStatusAlias(ctx context.Context, request GetOperationLegacyStatusAliasRequestObject) (GetOperationLegacyStatusAliasResponseObject, error)
+	// Retrieve bounded evidence from the trusted Knowl scope
+	// (GET /v1/retrieve)
+	RetrieveKnowledge(ctx context.Context, request RetrieveKnowledgeRequestObject) (RetrieveKnowledgeResponseObject, error)
 }
 
 type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
@@ -1965,54 +714,6 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
-}
-
-// GetHealthAlias operation middleware
-func (sh *strictHandler) GetHealthAlias(w http.ResponseWriter, r *http.Request) {
-	var request GetHealthAliasRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetHealthAlias(ctx, request.(GetHealthAliasRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetHealthAlias")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetHealthAliasResponseObject); ok {
-		if err := validResponse.VisitGetHealthAliasResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetReadyAlias operation middleware
-func (sh *strictHandler) GetReadyAlias(w http.ResponseWriter, r *http.Request) {
-	var request GetReadyAliasRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetReadyAlias(ctx, request.(GetReadyAliasRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetReadyAlias")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetReadyAliasResponseObject); ok {
-		if err := validResponse.VisitGetReadyAliasResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
 }
 
 // GetHealth operation middleware
@@ -2063,11 +764,11 @@ func (sh *strictHandler) GetReady(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// IngestSource operation middleware
-func (sh *strictHandler) IngestSource(w http.ResponseWriter, r *http.Request) {
-	var request IngestSourceRequestObject
+// IngestKnowledge operation middleware
+func (sh *strictHandler) IngestKnowledge(w http.ResponseWriter, r *http.Request) {
+	var request IngestKnowledgeRequestObject
 
-	var body IngestSourceJSONRequestBody
+	var body IngestKnowledgeJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
 		return
@@ -2075,121 +776,18 @@ func (sh *strictHandler) IngestSource(w http.ResponseWriter, r *http.Request) {
 	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.IngestSource(ctx, request.(IngestSourceRequestObject))
+		return sh.ssi.IngestKnowledge(ctx, request.(IngestKnowledgeRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "IngestSource")
+		handler = middleware(handler, "IngestKnowledge")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(IngestSourceResponseObject); ok {
-		if err := validResponse.VisitIngestSourceResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// PreviewSource operation middleware
-func (sh *strictHandler) PreviewSource(w http.ResponseWriter, r *http.Request) {
-	var request PreviewSourceRequestObject
-
-	var body PreviewSourceJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.PreviewSource(ctx, request.(PreviewSourceRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "PreviewSource")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(PreviewSourceResponseObject); ok {
-		if err := validResponse.VisitPreviewSourceResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// LintWorkspace operation middleware
-func (sh *strictHandler) LintWorkspace(w http.ResponseWriter, r *http.Request) {
-	var request LintWorkspaceRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.LintWorkspace(ctx, request.(LintWorkspaceRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "LintWorkspace")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(LintWorkspaceResponseObject); ok {
-		if err := validResponse.VisitLintWorkspaceResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// LintWorkspaceDashAlias operation middleware
-func (sh *strictHandler) LintWorkspaceDashAlias(w http.ResponseWriter, r *http.Request) {
-	var request LintWorkspaceDashAliasRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.LintWorkspaceDashAlias(ctx, request.(LintWorkspaceDashAliasRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "LintWorkspaceDashAlias")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(LintWorkspaceDashAliasResponseObject); ok {
-		if err := validResponse.VisitLintWorkspaceDashAliasResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// LintWorkspaceResultsAlias operation middleware
-func (sh *strictHandler) LintWorkspaceResultsAlias(w http.ResponseWriter, r *http.Request) {
-	var request LintWorkspaceResultsAliasRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.LintWorkspaceResultsAlias(ctx, request.(LintWorkspaceResultsAliasRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "LintWorkspaceResultsAlias")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(LintWorkspaceResultsAliasResponseObject); ok {
-		if err := validResponse.VisitLintWorkspaceResultsAliasResponse(w); err != nil {
+	} else if validResponse, ok := response.(IngestKnowledgeResponseObject); ok {
+		if err := validResponse.VisitIngestKnowledgeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2223,212 +821,25 @@ func (sh *strictHandler) GetOperation(w http.ResponseWriter, r *http.Request, op
 	}
 }
 
-// ApplyOperation operation middleware
-func (sh *strictHandler) ApplyOperation(w http.ResponseWriter, r *http.Request, operationId OperationID) {
-	var request ApplyOperationRequestObject
-
-	request.OperationId = operationId
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.ApplyOperation(ctx, request.(ApplyOperationRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "ApplyOperation")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(ApplyOperationResponseObject); ok {
-		if err := validResponse.VisitApplyOperationResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetOperationStatusAlias operation middleware
-func (sh *strictHandler) GetOperationStatusAlias(w http.ResponseWriter, r *http.Request, operationId OperationID) {
-	var request GetOperationStatusAliasRequestObject
-
-	request.OperationId = operationId
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetOperationStatusAlias(ctx, request.(GetOperationStatusAliasRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetOperationStatusAlias")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetOperationStatusAliasResponseObject); ok {
-		if err := validResponse.VisitGetOperationStatusAliasResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetPage operation middleware
-func (sh *strictHandler) GetPage(w http.ResponseWriter, r *http.Request, pageId PageID) {
-	var request GetPageRequestObject
-
-	request.PageId = pageId
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetPage(ctx, request.(GetPageRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetPage")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetPageResponseObject); ok {
-		if err := validResponse.VisitGetPageResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetPageLinks operation middleware
-func (sh *strictHandler) GetPageLinks(w http.ResponseWriter, r *http.Request, pageId PageID) {
-	var request GetPageLinksRequestObject
-
-	request.PageId = pageId
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetPageLinks(ctx, request.(GetPageLinksRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetPageLinks")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetPageLinksResponseObject); ok {
-		if err := validResponse.VisitGetPageLinksResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// QueryKnowledge operation middleware
-func (sh *strictHandler) QueryKnowledge(w http.ResponseWriter, r *http.Request, params QueryKnowledgeParams) {
-	var request QueryKnowledgeRequestObject
+// RetrieveKnowledge operation middleware
+func (sh *strictHandler) RetrieveKnowledge(w http.ResponseWriter, r *http.Request, params RetrieveKnowledgeParams) {
+	var request RetrieveKnowledgeRequestObject
 
 	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.QueryKnowledge(ctx, request.(QueryKnowledgeRequestObject))
+		return sh.ssi.RetrieveKnowledge(ctx, request.(RetrieveKnowledgeRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "QueryKnowledge")
+		handler = middleware(handler, "RetrieveKnowledge")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(QueryKnowledgeResponseObject); ok {
-		if err := validResponse.VisitQueryKnowledgeResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// FileQueryResult operation middleware
-func (sh *strictHandler) FileQueryResult(w http.ResponseWriter, r *http.Request) {
-	var request FileQueryResultRequestObject
-
-	var body FileQueryResultJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.FileQueryResult(ctx, request.(FileQueryResultRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "FileQueryResult")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(FileQueryResultResponseObject); ok {
-		if err := validResponse.VisitFileQueryResultResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// SearchPages operation middleware
-func (sh *strictHandler) SearchPages(w http.ResponseWriter, r *http.Request, params SearchPagesParams) {
-	var request SearchPagesRequestObject
-
-	request.Params = params
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.SearchPages(ctx, request.(SearchPagesRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "SearchPages")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(SearchPagesResponseObject); ok {
-		if err := validResponse.VisitSearchPagesResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetOperationLegacyStatusAlias operation middleware
-func (sh *strictHandler) GetOperationLegacyStatusAlias(w http.ResponseWriter, r *http.Request, operationId OperationID) {
-	var request GetOperationLegacyStatusAliasRequestObject
-
-	request.OperationId = operationId
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetOperationLegacyStatusAlias(ctx, request.(GetOperationLegacyStatusAliasRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetOperationLegacyStatusAlias")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetOperationLegacyStatusAliasResponseObject); ok {
-		if err := validResponse.VisitGetOperationLegacyStatusAliasResponse(w); err != nil {
+	} else if validResponse, ok := response.(RetrieveKnowledgeResponseObject); ok {
+		if err := validResponse.VisitRetrieveKnowledgeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

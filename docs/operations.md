@@ -1,33 +1,33 @@
-# Local operations
+# Service operations
 
-This document is the detailed local reference for the current supported Knowl
-workflow. `README.md` is the task-first entrypoint; this document expands the
-verified config shape, lifecycle, HTTP surface, auth rules, storage behavior,
-and public embedding choices.
+This document is the operator-facing reference for running Knowl as a service.
 
-## Supported local workflow
+If you only need the product overview, start with [README.md](../README.md).
+If you need the baseline container path, see [sidecar deployment](sidecar.md).
 
-Run the local operator path in this order:
+## Runtime model
 
-```bash
-go build -o knowl ./cmd/knowl
-./knowl init
-./knowl validate
-./knowl start
-curl -sS http://127.0.0.1:8080/readyz
-```
+Knowl is a standalone knowledge service with:
 
-The direct CLI covers workspace bootstrap plus read commands such as `query`,
-`search`, `page`, and `lint`. After `knowl start`, low-level ingest, review,
-apply, and integration workflows go through the loopback HTTP/OpenAPI API.
+- a canonical workspace;
+- one ingest pipeline;
+- rebuildable operational state and projections;
+- MCP and HTTP transports over the same application services.
+
+Baseline deployment is service/sidecar mode. Fx embedding is the alternative
+for Go applications that want the same runtime in-process.
 
 ## Configuration
 
-The CLI reads `.config/knowl/config.yaml` by default. `--config-dir` selects an
-additional config root and `--profile` selects a top-level profile using the
-same loader semantics as Balda. The document has two sections: the shared
-Norma runtime registry and the Knowl application settings. A complete SQLite
-example is:
+The CLI loads `.config/knowl/config.yaml` by default. `--config-dir` selects an
+additional config root and `--profile` selects a top-level profile.
+
+The config has two sections:
+
+- `runtime:` — shared provider registry in Balda-compatible typed shape
+- `knowl:` — Knowl application settings
+
+SQLite example:
 
 ```yaml
 runtime:
@@ -48,55 +48,64 @@ knowl:
   scope: local
   server:
     listen_addr: 127.0.0.1:8080
-  operator:
-    token: replace-with-a-local-secret
   ingest:
     auto_apply: false
 ```
 
-For PostgreSQL, replace only the typed storage selection with:
+PostgreSQL example:
 
 ```yaml
+knowl:
   storage:
     type: postgres
     postgres:
       dsn: ${KNOWL_POSTGRES_DSN}
 ```
 
-`knowl.provider` is only a selector; it must name an entry in
-`runtime.providers`. Runtime entries retain Balda's discriminated shape:
-`type` plus the matching type-specific block. Knowl storage follows the same
-pattern: `knowl.storage.type` selects one backend, and only the matching
-optional block (`sqlite` or `postgres`) may be present. The CLI defaults to
-SQLite when the storage section is omitted, and `knowl init` writes the
-explicit SQLite block. A selected PostgreSQL block requires a non-empty DSN.
+Container baseline example:
 
-The loader applies `KNOWL_*` overrides to leaf keys present in the loaded
-document; common application keys include `KNOWL_WORKSPACE_PATH`,
-`KNOWL_PROVIDER`, `KNOWL_STORAGE_TYPE`, `KNOWL_STORAGE_SQLITE_PATH`,
-`KNOWL_STORAGE_POSTGRES_DSN`, `KNOWL_SERVER_LISTEN_ADDR`,
-`KNOWL_OPERATOR_TOKEN`, and `KNOWL_INGEST_AUTO_APPLY`. Provider credentials should be supplied through
-the shared runtime configuration's normal environment expansion, not printed
-in diagnostics.
+```yaml
+knowl:
+  workspace:
+    path: /var/lib/knowl/knowledge
+  storage:
+    type: sqlite
+    sqlite:
+      path: .knowl/knowl.sqlite
+  server:
+    listen_addr: 0.0.0.0:8080
+```
 
-The listener must be loopback (`localhost`, `127.0.0.1`, or another loopback
-IP); remote/shared deployment is outside this local contract. A relative
-SQLite path is resolved below the workspace.
+Notes:
 
-If `knowl.ingest.auto_apply` is omitted, Knowl defaults to review-first for
-normal ingest. Setting `knowl.ingest.auto_apply: true` permits normal ingest to
-apply after validation; `knowl init` writes the explicit `false` form. Preview
-always forces `awaiting_review`, even when auto-apply is configured. Writes
-also require a configured operator token and a matching
-`Authorization: Bearer ...` header.
+- `knowl.provider` selects one entry from `runtime.providers`.
+- `knowl.storage.type` selects one optional typed storage block.
+- when storage is omitted, Knowl defaults to SQLite.
+- `knowl.ingest.auto_apply` affects internal normal ingest policy; the public
+  KISS ingest contract still returns the simplified durable operation result.
+- default local listen address is `127.0.0.1:8080`; service/sidecar deployments
+  may override it with `0.0.0.0:8080` or another literal IP bind.
 
-Startup validates the selected runtime provider before opening the workspace,
-SQL store, worker, or listener. Provider execution remains lazy: `validate` and
-`start` do not contact the model, while ingest planning invokes the selected
-provider through Knowl's structured maintainer adapter. There is no silent
-read-only `unavailableMaintainer` fallback.
+Common `KNOWL_*` overrides include:
 
-## Start and lifecycle
+- `KNOWL_PROVIDER`
+- `KNOWL_WORKSPACE_PATH`
+- `KNOWL_STORAGE_TYPE`
+- `KNOWL_STORAGE_SQLITE_PATH`
+- `KNOWL_STORAGE_POSTGRES_DSN`
+- `KNOWL_SERVER_LISTEN_ADDR`
+- `KNOWL_INGEST_AUTO_APPLY`
+
+## Supported operator workflow
+
+Local workspace bootstrap:
+
+```bash
+go build -o knowl ./cmd/knowl
+./knowl bootstrap wiki /path/to/wiki
+```
+
+Empty workspace initialization:
 
 ```bash
 ./knowl init
@@ -104,234 +113,144 @@ read-only `unavailableMaintainer` fallback.
 ./knowl start
 ```
 
-Host construction performs, in order, workspace validation, selected SQL
-migration, filesystem recovery, a canonical snapshot, and projection readiness
-(rebuild if needed). Only then does the HTTP host become ready. The Fx-owned
-host lifecycle is:
-
-1. `Start` binds the loopback listener, starts the bounded single-consumer
-   writer, and marks readiness true. It does not block on the server loop.
-2. The service waits for cancellation or a fatal HTTP server error.
-3. `Stop` marks readiness false, stops accepting new work, drains or interrupts
-   queued writes within the shutdown deadline, shuts down HTTP, recovers the
-   workspace, closes the provider-backed maintainer, and closes the SQL store.
-
-The same lifecycle is available publicly through `pkg/knowlfx.NewApp`.
-Callers that do not want Fx can construct and manage a host directly through
-root `pkg/knowl`. Core policy does not depend on Fx; callers using
-`pkg/knowl/app` can also compose their own lifecycle around the lower-level
-services.
-
-## Health, readiness, and auth
-
-Read-only health endpoints do not require the operator token:
+Sidecar baseline:
 
 ```bash
-curl -sS http://127.0.0.1:8080/healthz
+docker compose -f deploy/sidecar/compose.yaml up --build
+```
+
+The CLI commands `query`, `ingest`, and `operation` are one-shot operator
+wrappers over the same service semantics. They are not the primary agent
+integration surface.
+
+## HTTP contract
+
+Authoritative contract: [api/openapi/knowl.yaml](../api/openapi/knowl.yaml)
+
+Business endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/retrieve?query=...` | Retrieve bounded evidence with provenance |
+| `POST` | `/v1/ingest` | Submit one text or URI source |
+| `GET` | `/v1/operations/{operation_id}` | Read one durable public operation status |
+
+Operational endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/healthz` | Process liveness |
+| `GET` | `/readyz` | Workspace/store/projection readiness |
+
+The public state model is:
+
+```text
+queued -> running -> completed | failed
+```
+
+The trusted scope is owned by the host or service configuration. Callers must
+not supply a different scope through public request arguments.
+
+## HTTP examples
+
+Readiness:
+
+```bash
 curl -sS http://127.0.0.1:8080/readyz
 ```
 
-- `/healthz` returns HTTP 200 with JSON containing `service: "knowl"` and
-  `status: "ok"`.
-- `/readyz` returns HTTP 200 with JSON containing `service: "knowl"`,
-  `status: "ready"`, and the trusted `scope` after recovery, migration, and
-  projection preparation complete.
-
-Authenticated write endpoints require the operator token configured under
-`knowl.operator.token`:
-
-- `POST /v1/ingest`
-- `POST /v1/ingest/preview`
-- `POST /v1/operations/{id}/apply`
-- `POST /v1/query/file`
-
-Provide it as `Authorization: Bearer ...`. Missing or mismatched credentials
-return `operator_authorization_required`.
-
-## Ingest, review, and filing
-
-The trusted loopback HTTP API exposes:
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/v1/ingest` | Accept, plan, and apply or review one source revision according to policy |
-| `POST` | `/v1/ingest/preview` | Accept and stage one source revision, always awaiting review |
-| `POST` | `/v1/operations/{id}/apply` | Apply a staged reviewed operation |
-| `GET` | `/v1/operations/{id}` | Read redacted operation status |
-| `GET` | `/v1/operations/{id}/status` | Status alias |
-| `GET` | `/v1/status/{id}` | Status alias |
-| `POST` | `/v1/query/file` | Explicitly file a query result and typed plan through the same gate |
-
-The source envelope is bounded textual input. In JSON, Go `[]byte` content is
-base64 encoded:
-
-```json
-{
-  "scope": "local",
-  "source": {"adapter": "fixture", "id": "source-1"},
-  "version": {
-    "version": "1",
-    "digest": "a28130a037ced440a70f1e1e896d9f6cf7147adc31e233e588f58dde12902a2d"
-  },
-  "content": "c291cmNlIHRleHQ="
-}
-```
-
-### Authenticated preview and apply example
-
-The runtime tests verify this preview flow:
+Retrieve:
 
 ```bash
-export KNOWL_TOKEN=replace-with-a-local-secret
-
 curl -sS \
-  -H "Authorization: Bearer ${KNOWL_TOKEN}" \
+  "http://127.0.0.1:8080/v1/retrieve?query=Why%20was%20Badger%20chosen%3F"
+```
+
+Ingest text:
+
+```bash
+curl -sS \
   -H "Content-Type: application/json" \
-  http://127.0.0.1:8080/v1/ingest/preview \
+  http://127.0.0.1:8080/v1/ingest \
   -d '{
-    "scope": "local",
-    "source": {"adapter": "fixture", "id": "source-1"},
-    "version": {
-      "version": "1",
-      "digest": "a28130a037ced440a70f1e1e896d9f6cf7147adc31e233e588f58dde12902a2d"
-    },
-    "content": "c291cmNlIHRleHQ="
+    "content": "Badger was chosen because ...",
+    "origin": "ticket-1234",
+    "idempotency_key": "ticket-1234"
   }'
 ```
 
-The response includes an `operation` whose status is `awaiting_review`. Copy
-that operation ID into the apply step:
+Ingest URI:
 
 ```bash
 curl -sS \
-  -X POST \
-  -H "Authorization: Bearer ${KNOWL_TOKEN}" \
-  http://127.0.0.1:8080/v1/operations/<operation-id>/apply
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/v1/ingest \
+  -d '{
+    "uri": "https://example.com/adr/session-memory-store"
+  }'
 ```
 
-The apply response returns the same operation in `committed` state. Preview is
-always review-first, even when `knowl.ingest.auto_apply` is enabled.
-
-The host supplies its trusted scope when the envelope omits one and rejects a
-different scope. It rejects query-string scope overrides. The operation key is
-`(scope, adapter, source ID, version)`; a digest conflict never overwrites an
-accepted raw source.
-
-The normal state progression is:
-
-```text
-received -> planned -> awaiting_review -> applying -> committed
-planned  -> applying -> committed
-planned  -> failed
-```
-
-With explicit auto-apply, `app.IngestService` advances from `planned` to
-`applying`; otherwise it stages the plan and returns `awaiting_review`. Preview
-uses the latter path unconditionally. Apply validates the retained staging
-manifest, schema digest, prior file digests, and recovery journal before making
-the Markdown generation visible. Replaying a committed source revision returns
-the retained operation rather than duplicating edits.
-
-The query filing request contains `query`, the bounded `result`, and a typed
-`plan`. Filing creates an immutable query-result source and sends it through the
-same source acceptance, schema, review, plan, staging, commit, and projection
-policy. Read-only query never files implicitly.
-
-## Reads, search, and lint
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/healthz` or `/health` | Liveness |
-| `GET` | `/readyz` or `/health/ready` | Recovery/migration/projection readiness |
-| `GET` | `/v1/search?q=...` | Bounded page references |
-| `GET` | `/v1/query?q=...` | Bounded pages, links, and wiki/raw citations |
-| `GET` | `/v1/pages/{page-id}` | One bounded page read |
-| `GET` | `/v1/pages/{page-id}/links` | One bounded link neighborhood |
-| `GET` | `/v1/lint`, `/v1/lint/results`, or `/v1/lint-results` | Deterministic health report |
-
-After the preview/apply example commits the page, these read-only requests do
-not require the operator token:
+Poll operation:
 
 ```bash
-curl -sS http://127.0.0.1:8080/v1/operations/<operation-id>
-curl -sS http://127.0.0.1:8080/v1/pages/entities/one
-curl -sS http://127.0.0.1:8080/v1/lint
+curl -sS http://127.0.0.1:8080/v1/operations/op_01K...
 ```
 
-Read results carry provenance and are marked untrusted where appropriate.
-Default read limits are 20 pages, 4 MiB, 32 KiB of characters, depth 8, and a
-30-second deadline; callers cannot expand them through the HTTP query surface.
-Lint checks malformed frontmatter, missing/unknown citations, duplicate IDs,
-malformed/broken links, missing/orphan/stale index entries, log consistency,
-raw-source integrity, and SQL projection drift. Optional maintainer lint is
-suggestion-only and cannot mutate or fetch external sources.
+## MCP contract
 
-## Public embedding surface
+MCP is the primary agent-facing interface.
 
-Choose the public package by responsibility:
+The baseline server exposes exactly:
 
-- `pkg/knowl/types` for transport-neutral domain contracts shared across
-  transports or callers that do not need to construct a host.
-- root `pkg/knowl` for the plain-Go host composition API. See
-  `pkg/knowl/example_test.go` for the verified `NewHost` example.
-- `pkg/knowlfx` for an Fx-managed `fx.App` wrapper over the same host. See
-  `pkg/knowlfx/example_test.go` for the verified `NewApp` example.
+- `knowl_retrieve`
+- `knowl_ingest`
+- `knowl_operation`
 
-Root `pkg/knowl` still exports transition aliases for the domain contracts, but
-new code should prefer `pkg/knowl/types` directly when it only needs the shared
-types. The canonical lower-level application policy remains in `pkg/knowl/app`;
-most embedders should start with root `pkg/knowl` or `pkg/knowlfx`.
+MCP and HTTP call the same underlying application services.
 
-## MCP tools
+## Lifecycle and readiness
 
-`pkg/knowl/mcp` exposes a transport-neutral registry with the following five
-read-only tools:
+Host construction performs:
 
-- `search(query)`
-- `read-page(id)`
-- `links(id)`
-- `operation-status(id)`
-- `lint-results()`
+1. workspace validation;
+2. selected-store setup/migration;
+3. recovery;
+4. projection preparation;
+5. listener startup.
 
-The server stores one trusted scope and bounded read limits. Tool arguments may
-not include `scope`; ingest, apply, query filing, schema modification, and
-delete/forget tools are absent. A transport adapter should expose `Tools` or
-`ListTools` and dispatch through `Call`/`CallTool`; the registry itself does not
-grant filesystem or SQL access beyond the application ports.
+`/healthz` only means the process is serving HTTP.
 
-## Stores, migrations, and rebuilds
+`/readyz` means:
 
-Both stores implement the same `app.OperationStore` and `app.SearchIndex` ports.
-Each embeds a dialect-specific Goose migration and runs it during `Open`:
+- workspace is usable;
+- store is open;
+- recovery completed;
+- projections are ready for retrieve/operation reads.
 
-- SQLite uses `modernc.org/sqlite`, one connection, WAL where available, and a
-  busy timeout. Its default file is `.knowl/knowl.sqlite`.
-- PostgreSQL uses `pgx`, a bounded connection pool, PostgreSQL full-text search,
-  and the configured DSN. The DSN is never returned in redacted diagnostics.
+## Sidecar notes
 
-The positive PostgreSQL adapter contract can run against an isolated
-Testcontainers instance without requiring a checked-in DSN:
+The checked-in sidecar assets assume:
 
-```bash
-go test -tags=integration ./pkg/knowl/store/postgres -run TestStoreContractWithTestcontainers -count=1
-```
+- Knowl owns `/var/lib/knowl`;
+- the canonical workspace is `/var/lib/knowl/knowledge`;
+- the agent talks to Knowl over MCP or the same KISS HTTP contract;
+- the agent does not mutate `raw/`, `wiki/`, or `.knowl/` directly.
 
-This integration command requires a Docker- or Podman-compatible container
-runtime. Ordinary `go test ./...` does not start containers.
+## Fx embedding
 
-The SQL schema contains operation state, leases, page/link projections, and
-projection metadata. A canonical `WorkspaceSnapshot` can rebuild the
-projection through `SearchIndex.Rebuild`; startup performs this when the stored
-schema/snapshot digest is not ready, and lint reports later drift. There is no
-remote migration or automatic publication command. Stop the host before a
-filesystem/SQLite backup; use the normal PostgreSQL backup tooling for a
-PostgreSQL deployment.
+For Go applications:
 
-## Diagnostics and safety
+- root `pkg/knowl` is the non-Fx runtime entrypoint;
+- `pkg/knowlfx.NewApp` wraps the same runtime with Fx lifecycle management.
 
-HTTP errors expose stable classes such as `not_found`, `invalid_request`,
-`service_unavailable`, `operation_not_applyable`, and `operation_failed` rather
-than source bodies, page bodies, provider output, credentials, or DSNs.
-Scope is host configuration, not user-controlled request data. Raw sources,
-Markdown, retrieved pages, and provider plans are untrusted content and cannot
-change paths, scope, validation, or available tools.
+This is an alternative deployment/composition mode, not a second product API.
+
+## What this service is not
+
+Knowl is not:
+
+- session or chat memory;
+- user-fact memory;
+- a generic memory platform;
+- orchestration or role-agent execution;
+- the final-answer service.

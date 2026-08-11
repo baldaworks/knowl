@@ -10,7 +10,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/spf13/cobra"
 )
 
@@ -18,10 +17,9 @@ const (
 	workflowInputFlagName  = "input"
 	workflowInputFlagUsage = "--" + workflowInputFlagName
 	loopbackListenAddr     = "127.0.0.1:0"
-	queryFileCommandName   = "file"
-	pageLinksCommandName   = "links"
-	lintWorkflowPath       = "/v1/lint"
 	workflowJSONStdoutHelp = "structured JSON result to stdout"
+	publicIngestPath       = "/v1/ingest"
+	publicRetrievePath     = "/v1/retrieve"
 )
 
 type workflowCommandError struct {
@@ -64,81 +62,18 @@ func newJSONBodyWorkflowCommand[T any](use, short, requestPath string) *cobra.Co
 	return command
 }
 
-func newApplyWorkflowCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:           "apply <operation-id>",
-		Short:         "Apply one staged operation",
-		Long:          "Apply one staged operation.\n\nPass the durable operation ID as a positional argument. The command prints the " + workflowJSONStdoutHelp + ".",
-		Args:          cobra.ExactArgs(1),
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			operationID := strings.TrimSpace(args[0])
-			if operationID == "" {
-				return fmt.Errorf("operation ID is required")
-			}
-			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
-				Method: http.MethodPost,
-				Path:   "/v1/operations/" + url.PathEscape(operationID) + "/apply",
-			})
-		},
-	}
-}
-
-func newQueryFileCommand() *cobra.Command {
-	return newJSONBodyWorkflowCommand[knowlapi.FilingRequest](
-		queryFileCommandName,
-		"File a typed query result through the normal ingest gate",
-		"/v1/query/file",
-	)
-}
-
 func newQueryReadCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:           queryCommandName + " <text>",
-		Short:         "Assemble bounded wiki references and citations",
-		Long:          "Assemble bounded wiki references and citations.\n\nPass the query text as positional arguments. The command prints the " + workflowJSONStdoutHelp + ".",
+		Short:         "Retrieve bounded evidence from Knowl",
+		Long:          "Retrieve bounded evidence from Knowl.\n\nPass the query text as positional arguments. The command prints the " + workflowJSONStdoutHelp + ".",
 		Args:          cobra.MinimumNArgs(1),
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
 				Method: http.MethodGet,
-				Path:   "/v1/query?q=" + url.QueryEscape(strings.TrimSpace(strings.Join(args, " "))),
-			})
-		},
-	}
-}
-
-func newSearchReadCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:           searchCommandName + " <text>",
-		Short:         "Search bounded page references",
-		Long:          "Search bounded page references.\n\nPass the search text as positional arguments. The command prints the " + workflowJSONStdoutHelp + ".",
-		Args:          cobra.MinimumNArgs(1),
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
-				Method: http.MethodGet,
-				Path:   "/v1/search?q=" + url.QueryEscape(strings.TrimSpace(strings.Join(args, " "))),
-			})
-		},
-	}
-}
-
-func newLintReadCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:           lintCommandName,
-		Short:         "Run deterministic workspace lint",
-		Long:          "Run deterministic workspace lint.\n\nThe command prints the structured JSON lint report to stdout.",
-		Args:          cobra.NoArgs,
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
-				Method: http.MethodGet,
-				Path:   lintWorkflowPath,
+				Path:   publicRetrievePath + "?query=" + url.QueryEscape(strings.TrimSpace(strings.Join(args, " "))),
 			})
 		},
 	}
@@ -160,50 +95,6 @@ func newOperationReadCommand() *cobra.Command {
 			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
 				Method: http.MethodGet,
 				Path:   "/v1/operations/" + url.PathEscape(operationID),
-			})
-		},
-	}
-}
-
-func newPageReadCommand() *cobra.Command {
-	command := &cobra.Command{
-		Use:           pageCommandName + " <page-id>",
-		Short:         "Read one bounded canonical page",
-		Long:          "Read one bounded canonical page.\n\nPass the canonical page ID as a positional argument. The command prints the " + workflowJSONStdoutHelp + ".",
-		Args:          cobra.ExactArgs(1),
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			pageID := strings.TrimSpace(args[0])
-			if pageID == "" {
-				return fmt.Errorf("page ID is required")
-			}
-			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
-				Method: http.MethodGet,
-				Path:   "/v1/pages/" + url.PathEscape(pageID),
-			})
-		},
-	}
-	command.AddCommand(newPageLinksReadCommand())
-	return command
-}
-
-func newPageLinksReadCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:           pageLinksCommandName + " <page-id>",
-		Short:         "Read one bounded link neighborhood",
-		Long:          "Read one bounded link neighborhood.\n\nPass the canonical page ID as a positional argument. The command prints the " + workflowJSONStdoutHelp + ".",
-		Args:          cobra.ExactArgs(1),
-		SilenceErrors: true,
-		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			pageID := strings.TrimSpace(args[0])
-			if pageID == "" {
-				return fmt.Errorf("page ID is required")
-			}
-			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
-				Method: http.MethodGet,
-				Path:   "/v1/pages/" + url.PathEscape(pageID) + "/links",
 			})
 		},
 	}

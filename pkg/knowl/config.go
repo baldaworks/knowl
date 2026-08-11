@@ -86,7 +86,7 @@ func (config Config) normalized() (Config, error) {
 	if strings.TrimSpace(config.ListenAddr) == "" {
 		config.ListenAddr = DefaultListen
 	}
-	if err := validateLoopbackAddr(config.ListenAddr); err != nil {
+	if err := validateListenAddr(config.ListenAddr); err != nil {
 		return Config{}, err
 	}
 	if config.ReadLimits == (domain.ReadLimits{}) {
@@ -104,17 +104,17 @@ func (config Config) normalized() (Config, error) {
 	return config, nil
 }
 
-func validateLoopbackAddr(address string) error {
+func validateListenAddr(address string) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return fmt.Errorf("listen address %q must include a port: %w", address, err)
 	}
-	if host == "localhost" {
+	if host == "" || host == "localhost" {
 		return nil
 	}
 	parsed := net.ParseIP(host)
-	if parsed == nil || !parsed.IsLoopback() {
-		return fmt.Errorf("listen address %q must be loopback", address)
+	if parsed == nil {
+		return fmt.Errorf("listen address %q must use localhost, an empty host, or a literal IP", address)
 	}
 	return nil
 }

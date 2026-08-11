@@ -3,29 +3,24 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
-	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 const (
-	smokeOperatorToken = "test-token"
-	smokeSourceAdapter = "fixture"
 	smokeSourceID      = "source-1"
-	smokeSourceRef     = smokeSourceAdapter + ":" + smokeSourceID + "@1"
+	smokeSourceVersion = "1"
+	smokeSourceRef     = "inline:" + smokeSourceID + "@" + smokeSourceVersion
 	smokeSourceText    = "source text"
 	smokeQueryText     = "One"
 	smokePageID        = "entities/one"
@@ -42,7 +37,6 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 		t.Fatalf("run knowl init: %v", err)
 	}
 	t.Setenv("KNOWL_SERVER_LISTEN_ADDR", loopbackListenAddr)
-	t.Setenv("KNOWL_OPERATOR_TOKEN", smokeOperatorToken)
 	if err := executeRootCommand("validate"); err != nil {
 		t.Fatalf("run knowl validate: %v", err)
 	}
@@ -60,9 +54,6 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	}
 	if config.ListenAddr != loopbackListenAddr {
 		t.Fatalf("host config listen addr = %q, want %s", config.ListenAddr, loopbackListenAddr)
-	}
-	if config.OperatorToken != smokeOperatorToken {
-		t.Fatalf("host config operator token = %q, want %q", config.OperatorToken, smokeOperatorToken)
 	}
 	if config.StoreDriver != knowl.StoreSQLite {
 		t.Fatalf("host config store driver = %q, want %q", config.StoreDriver, knowl.StoreSQLite)
@@ -100,73 +91,57 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	waitForHTTPStatus(t, client, baseURL, "/healthz", http.StatusOK)
 	waitForHTTPStatus(t, client, baseURL, "/readyz", http.StatusOK)
 
-	envelope := domain.SourceEnvelope{
-		Scope:   config.Scope,
-		Source:  domain.SourceRef{Adapter: smokeSourceAdapter, ID: smokeSourceID},
-		Version: domain.SourceVersion{Version: "1", Digest: smokeDigest([]byte(smokeSourceText))},
-		Content: []byte(smokeSourceText),
+	ingestRequest := map[string]string{
+		"content":         smokeSourceText,
+		"origin":          smokeSourceID,
+		"idempotency_key": smokeSourceVersion,
 	}
-	encoded, err := json.Marshal(envelope)
+	encoded, err := json.Marshal(ingestRequest)
 	if err != nil {
-		t.Fatalf("encode source envelope: %v", err)
+		t.Fatalf("encode ingest request: %v", err)
 	}
 
-	if _, status, err := doLiveHostRequest(client, baseURL, http.MethodPost, "/v1/ingest/preview", encoded, ""); err != nil || status != http.StatusUnauthorized {
-		t.Fatalf("unauthorized preview = (%d, %v), want (%d, nil)", status, err, http.StatusUnauthorized)
-	}
-
-	body, status, err := doLiveHostRequest(client, baseURL, http.MethodPost, "/v1/ingest/preview", encoded, config.OperatorToken)
+	body, status, err := doLiveHostRequest(client, baseURL, http.MethodPost, publicIngestPath, encoded, "")
 	if err != nil {
-		t.Fatalf("preview request: %v", err)
+		t.Fatalf("ingest request: %v", err)
 	}
 	if status != http.StatusOK {
-		t.Fatalf("preview status = %d, body %s", status, body)
+		t.Fatalf("ingest status = %d, body %s", status, body)
 	}
-	var preview app.IngestResult
-	if err := json.Unmarshal(body, &preview); err != nil {
-		t.Fatalf("decode preview response: %v", err)
+	var ingested struct {
+		OperationID string `json:"operation_id"`
+		Status      string `json:"status"`
 	}
-	if preview.Operation.Status != domain.StatusAwaitingReview {
-		t.Fatalf("preview operation status = %q, want %q", preview.Operation.Status, domain.StatusAwaitingReview)
+	if err := json.Unmarshal(body, &ingested); err != nil {
+		t.Fatalf("decode ingest response: %v", err)
+	}
+	if ingested.Status != "completed" {
+		t.Fatalf("ingest status = %q, want completed", ingested.Status)
 	}
 
 	pagePath := filepath.Join(config.Workspace, workspaceWikiDir, "entities", "one.md")
-	if _, err := os.Stat(pagePath); !os.IsNotExist(err) {
-		t.Fatalf("preview page stat = %v, want absent", err)
-	}
-
-	operationPath := "/v1/operations/" + url.PathEscape(string(preview.Operation.ID))
-	body, status, err = doLiveHostRequest(client, baseURL, http.MethodPost, operationPath+"/apply", nil, config.OperatorToken)
-	if err != nil {
-		t.Fatalf("apply request: %v", err)
-	}
-	if status != http.StatusOK {
-		t.Fatalf("apply status = %d, body %s", status, body)
-	}
-	var applied app.ApplyResult
-	if err := json.Unmarshal(body, &applied); err != nil {
-		t.Fatalf("decode apply response: %v", err)
-	}
-	if applied.Operation.Status != domain.StatusCommitted {
-		t.Fatalf("apply operation status = %q, want %q", applied.Operation.Status, domain.StatusCommitted)
-	}
 	if _, err := os.Stat(pagePath); err != nil {
 		t.Fatalf("committed page missing: %v", err)
 	}
 
-	body, status, err = doLiveHostRequest(client, baseURL, http.MethodGet, "/v1/pages/entities/one", nil, "")
+	body, status, err = doLiveHostRequest(client, baseURL, http.MethodGet, "/v1/retrieve?query="+smokeQueryText, nil, "")
 	if err != nil {
-		t.Fatalf("page request: %v", err)
+		t.Fatalf("retrieve request: %v", err)
 	}
 	if status != http.StatusOK {
-		t.Fatalf("page status = %d, body %s", status, body)
+		t.Fatalf("retrieve status = %d, body %s", status, body)
 	}
-	var page domain.PageSnapshot
-	if err := json.Unmarshal(body, &page); err != nil {
-		t.Fatalf("decode page response: %v", err)
+	var result struct {
+		Query    string `json:"query"`
+		Evidence []struct {
+			PageID string `json:"page_id"`
+		} `json:"evidence"`
 	}
-	if page.ID != smokePageID || !page.Untrusted {
-		t.Fatalf("page snapshot = %#v, want entities/one untrusted page", page)
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("decode retrieve response: %v", err)
+	}
+	if result.Query != smokeQueryText || len(result.Evidence) == 0 || result.Evidence[0].PageID != smokePageID {
+		t.Fatalf("retrieve result = %#v, want evidence for %s", result, smokePageID)
 	}
 }
 
@@ -221,9 +196,4 @@ func shutdownSmokeHost(t *testing.T, host *knowl.Host) {
 	if err := host.Shutdown(ctx); err != nil {
 		t.Fatalf("shutdown host: %v", err)
 	}
-}
-
-func smokeDigest(content []byte) string {
-	digest := sha256.Sum256(content)
-	return hex.EncodeToString(digest[:])
 }

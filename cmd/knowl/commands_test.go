@@ -100,10 +100,9 @@ func TestRootExposesCurrentLifecycleCommands(t *testing.T) {
 		validateCommandName:  true,
 		bootstrapCommandName: true,
 		startCommandName:     true,
+		ingestCommandName:    true,
 		queryCommandName:     true,
-		searchCommandName:    true,
-		lintCommandName:      true,
-		pageCommandName:      true,
+		operationCommandName: true,
 	}
 	for _, command := range root.Commands() {
 		delete(want, command.Name())
@@ -122,25 +121,23 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 		"knowl bootstrap wiki <path>",
 		"knowl bootstrap obsidian <path>",
 		"knowl query <text>",
-		"knowl page links <page-id>",
+		"knowl ingest --input request.json",
+		"knowl operation <operation-id>",
 		startCommandUsage,
-		loopbackHTTPAPIText,
 		"Bootstrap creates a Knowl-owned workspace",
 		"retained loopback HTTP/OpenAPI service mode",
-		"retained loopback HTTP API",
-		"ingest, review/apply",
+		"same KISS contract for retrieve, ingest, operation, and health",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("root help missing %q in output:\n%s", want, output)
 		}
 	}
 	for _, unwanted := range []string{
-		"knowl ingest --input FILE|-",
-		"knowl ingest preview --input FILE|-",
-		"knowl ingest apply <operation-id>",
-		"knowl query file --input FILE|-",
-		"knowl operation <operation-id>",
-		"advanced low-level ingest workflows",
+		"knowl search <text>",
+		"knowl lint",
+		"knowl page <page-id>",
+		"knowl page links <page-id>",
+		"review/apply",
 	} {
 		if strings.Contains(output, unwanted) {
 			t.Fatalf("root help unexpectedly contains %q in output:\n%s", unwanted, output)
@@ -176,12 +173,18 @@ func TestImplementedWorkflowHelpDescribesCLIInputs(t *testing.T) {
 			},
 		},
 		{
-			name: "page links",
-			cmd:  newPageCommand(),
-			args: []string{pageLinksCommandName, commandHelpFlag},
+			name: "ingest",
+			cmd:  newIngestCommand(),
 			wantParts: []string{
-				"bounded link neighborhood",
-				"page ID",
+				"canonical JSON request body",
+				workflowJSONStdoutHelp,
+			},
+		},
+		{
+			name: "operation",
+			cmd:  newOperationCommand(),
+			wantParts: []string{
+				"durable operation ID",
 				workflowJSONStdoutHelp,
 			},
 		},
@@ -227,14 +230,20 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 		{
 			name:      queryCommandName,
 			cmd:       newQueryCommand(),
-			wantShort: "Assemble bounded wiki references and citations",
+			wantShort: "Retrieve bounded evidence from Knowl",
 			wantSubs:  nil,
 		},
 		{
-			name:      pageCommandName,
-			cmd:       newPageCommand(),
-			wantShort: "Read one bounded canonical page",
-			wantSubs:  []string{pageLinksCommandName},
+			name:      ingestCommandName,
+			cmd:       newIngestCommand(),
+			wantShort: "Submit one source to the Knowl ingest pipeline",
+			wantSubs:  nil,
+		},
+		{
+			name:      operationCommandName,
+			cmd:       newOperationCommand(),
+			wantShort: "Read one durable operation status",
+			wantSubs:  nil,
 		},
 	}
 
@@ -442,7 +451,7 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 
 	response, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
 		Method: http.MethodPost,
-		Path:   "/v1/ingest",
+		Path:   publicIngestPath,
 		Body:   []byte(`{"hello":"world"}`),
 		Headers: http.Header{
 			"Authorization": []string{"Bearer test-token"},
@@ -458,8 +467,8 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 	if host.stopCalls != 1 {
 		t.Fatalf("Stop() calls = %d, want 1", host.stopCalls)
 	}
-	if gotMethod != http.MethodPost || gotPath != "/v1/ingest" {
-		t.Fatalf("request = (%s %s), want (%s %s)", gotMethod, gotPath, http.MethodPost, "/v1/ingest")
+	if gotMethod != http.MethodPost || gotPath != publicIngestPath {
+		t.Fatalf("request = (%s %s), want (%s %s)", gotMethod, gotPath, http.MethodPost, publicIngestPath)
 	}
 	if gotBody != `{"hello":"world"}` {
 		t.Fatalf("body = %q, want %q", gotBody, `{"hello":"world"}`)
@@ -482,17 +491,10 @@ func TestIngestCommandAutoAppliesTrustedLocalWorkflowWithoutOperatorToken(t *tes
 	fixture := newCommandWorkflowFixture(t, true)
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
 
-	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
-		Scope: pointerTo("local"),
-		Source: knowlapi.SourceRef{
-			Adapter: smokeSourceAdapter,
-			Id:      smokeSourceID,
-		},
-		Version: knowlapi.SourceVersion{
-			Version: "1",
-			Digest:  smokeDigest([]byte(smokeSourceText)),
-		},
-		Content: []byte(smokeSourceText),
+	inputPath := writeJSONFixture(t, knowlapi.IngestRequest{
+		Content:        pointerTo(smokeSourceText),
+		Origin:         pointerTo(smokeSourceID),
+		IdempotencyKey: pointerTo(smokeSourceVersion),
 	})
 
 	stdout, stderr, err := executeCLICommand(newIngestCommand(), []string{workflowInputFlagUsage, inputPath}, nil)
@@ -506,154 +508,11 @@ func TestIngestCommandAutoAppliesTrustedLocalWorkflowWithoutOperatorToken(t *tes
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatalf("decode ingest output: %v", err)
 	}
-	if result.Operation.Status != knowlapi.Committed {
-		t.Fatalf("ingest operation status = %q, want %q", result.Operation.Status, knowlapi.Committed)
+	if result.Status != knowlapi.IngestResultStatusCompleted {
+		t.Fatalf("ingest operation status = %q, want %q", result.Status, knowlapi.IngestResultStatusCompleted)
 	}
 	if _, err := os.Stat(fixture.pagePath(smokePagePath)); err != nil {
 		t.Fatalf("committed page missing: %v", err)
-	}
-}
-
-func TestIngestPreviewAndApplyCommandsShareDurableStateAcrossOneShotHosts(t *testing.T) {
-	fixture := newCommandWorkflowFixture(t, true)
-	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
-
-	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
-		Scope: pointerTo("local"),
-		Source: knowlapi.SourceRef{
-			Adapter: smokeSourceAdapter,
-			Id:      smokeSourceID,
-		},
-		Version: knowlapi.SourceVersion{
-			Version: "1",
-			Digest:  smokeDigest([]byte(smokeSourceText)),
-		},
-		Content: []byte(smokeSourceText),
-	})
-
-	previewOutput, previewErrOutput, err := executeCLICommand(newIngestCommand(), []string{"preview", workflowInputFlagUsage, inputPath}, nil)
-	if err != nil {
-		t.Fatalf("preview Execute() error: %v", err)
-	}
-	if strings.TrimSpace(previewErrOutput) != "" {
-		t.Fatalf("preview stderr = %q, want empty", previewErrOutput)
-	}
-	var preview knowlapi.IngestResult
-	if err := json.Unmarshal([]byte(previewOutput), &preview); err != nil {
-		t.Fatalf("decode preview output: %v", err)
-	}
-	if preview.Operation.Status != knowlapi.AwaitingReview {
-		t.Fatalf("preview operation status = %q, want %q", preview.Operation.Status, knowlapi.AwaitingReview)
-	}
-	if _, err := os.Stat(fixture.pagePath(smokePagePath)); !os.IsNotExist(err) {
-		t.Fatalf("preview page stat = %v, want absent", err)
-	}
-
-	applyOutput, applyErrOutput, err := executeCLICommand(newIngestCommand(), []string{"apply", preview.Operation.Id}, nil)
-	if err != nil {
-		t.Fatalf("apply Execute() error: %v", err)
-	}
-	if strings.TrimSpace(applyErrOutput) != "" {
-		t.Fatalf("apply stderr = %q, want empty", applyErrOutput)
-	}
-	var applied knowlapi.ApplyResult
-	if err := json.Unmarshal([]byte(applyOutput), &applied); err != nil {
-		t.Fatalf("decode apply output: %v", err)
-	}
-	if applied.Operation.Status != knowlapi.Committed {
-		t.Fatalf("apply operation status = %q, want %q", applied.Operation.Status, knowlapi.Committed)
-	}
-	if _, err := os.Stat(fixture.pagePath(smokePagePath)); err != nil {
-		t.Fatalf("committed page missing after apply: %v", err)
-	}
-}
-
-func TestQueryFileCommandReadsStdinAndStagesExplicitPlan(t *testing.T) {
-	fixture := newCommandWorkflowFixture(t, false)
-	fixture.acceptSource(t, domain.SourceEnvelope{
-		Scope: "local",
-		Source: domain.SourceRef{
-			Adapter: smokeSourceAdapter,
-			ID:      smokeSourceID,
-		},
-		Version: domain.SourceVersion{
-			Version: "1",
-			Digest:  smokeDigest([]byte(smokeSourceText)),
-		},
-		Content: []byte(smokeSourceText),
-	})
-	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
-
-	queryInput, err := json.Marshal(knowlapi.FilingRequest{
-		Query: "file this result",
-		Result: knowlapi.QueryResult{
-			Scope: "local",
-			Query: "file this result",
-			Pages: []knowlapi.PageReference{{
-				Id:        "entities/source",
-				Path:      "wiki/entities/source.md",
-				Title:     "Source",
-				Untrusted: true,
-			}},
-			Citations: []knowlapi.Citation{{
-				Kind:      knowlapi.Raw,
-				Reference: smokeSourceRef,
-				SourceRef: pointerTo(smokeSourceRef),
-				Untrusted: true,
-			}},
-		},
-		Plan: knowlapi.ModelEditPlan{
-			SchemaDigest: fixture.schema.Digest,
-			SourceRefs:   []string{smokeSourceRef},
-			Edits: []knowlapi.FileEdit{{
-				Path:    "wiki/entities/filed.md",
-				Content: []byte("---\nid: entities/filed\ntitle: Filed\ntype: entity\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# Filed\n"),
-			}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal query file input: %v", err)
-	}
-
-	stdout, stderr, err := executeCLICommand(newQueryFileCommand(), []string{workflowInputFlagUsage, "-"}, queryInput)
-	if err != nil {
-		t.Fatalf("query file Execute() error: %v", err)
-	}
-	if strings.TrimSpace(stderr) != "" {
-		t.Fatalf("query file stderr = %q, want empty", stderr)
-	}
-	var result knowlapi.IngestResult
-	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		t.Fatalf("decode query file output: %v", err)
-	}
-	if result.Operation.Status != knowlapi.AwaitingReview {
-		t.Fatalf("query file status = %q, want %q", result.Operation.Status, knowlapi.AwaitingReview)
-	}
-	if _, err := os.Stat(fixture.pagePath("wiki/entities/filed.md")); !os.IsNotExist(err) {
-		t.Fatalf("filed page stat before apply = %v, want absent", err)
-	}
-}
-
-func TestQueryFileCommandRejectsMalformedJSONBeforeHostExecution(t *testing.T) {
-	original := newLocalWorkflowSession
-	t.Cleanup(func() { newLocalWorkflowSession = original })
-	newLocalWorkflowSession = func(context.Context) (localWorkflowSession, error) {
-		t.Fatal("local workflow session factory should not be called for malformed JSON input")
-		return localWorkflowSession{}, nil
-	}
-
-	stdout, stderr, err := executeCLICommand(newQueryFileCommand(), []string{workflowInputFlagUsage, "-"}, []byte(`{"query":`))
-	if err == nil {
-		t.Fatal("query file Execute() error = nil, want decode error")
-	}
-	if !strings.Contains(err.Error(), "decode file input") {
-		t.Fatalf("query file Execute() error = %q, want decode context", err)
-	}
-	if strings.TrimSpace(stdout) != "" {
-		t.Fatalf("stdout = %q, want empty", stdout)
-	}
-	if strings.TrimSpace(stderr) != "" {
-		t.Fatalf("stderr = %q, want empty for local decode failure", stderr)
 	}
 }
 
@@ -673,86 +532,27 @@ func TestReadCommandsReturnStructuredJSON(t *testing.T) {
 			args: []string{smokeQueryText},
 			assert: func(t *testing.T, output string) {
 				t.Helper()
-				var result knowlapi.QueryResult
+				var result knowlapi.RetrieveResult
 				if err := json.Unmarshal([]byte(output), &result); err != nil {
 					t.Fatalf("decode query output: %v", err)
 				}
-				if result.Query != smokeQueryText || len(result.Pages) == 0 || result.Pages[0].Id != smokePageID {
+				if result.Query != smokeQueryText || len(result.Evidence) == 0 || result.Evidence[0].PageId != smokePageID {
 					t.Fatalf("query result = %#v", result)
-				}
-			},
-		},
-		{
-			name: "search",
-			cmd:  newSearchCommand(),
-			args: []string{smokeQueryText},
-			assert: func(t *testing.T, output string) {
-				t.Helper()
-				var result []knowlapi.PageReference
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("decode search output: %v", err)
-				}
-				if len(result) == 0 || result[0].Id != smokePageID {
-					t.Fatalf("search result = %#v", result)
-				}
-			},
-		},
-		{
-			name: "lint",
-			cmd:  newLintCommand(),
-			assert: func(t *testing.T, output string) {
-				t.Helper()
-				var result knowlapi.LintReport
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("decode lint output: %v", err)
-				}
-				if !hasLintFindingCode(result.Findings, "index.missing_page") || !hasLintFindingCode(result.Findings, "page.orphan") {
-					t.Fatalf("lint findings = %#v, want current deterministic warnings", result.Findings)
 				}
 			},
 		},
 		{
 			name: "operation",
 			cmd:  newOperationCommand(),
-			args: []string{ingest.Operation.Id},
+			args: []string{ingest.OperationId},
 			assert: func(t *testing.T, output string) {
 				t.Helper()
-				var result knowlapi.Operation
+				var result knowlapi.OperationResult
 				if err := json.Unmarshal([]byte(output), &result); err != nil {
 					t.Fatalf("decode operation output: %v", err)
 				}
-				if result.Id != ingest.Operation.Id || result.Status != knowlapi.Committed {
+				if result.Id != ingest.OperationId || result.Status != knowlapi.OperationResultStatusCompleted {
 					t.Fatalf("operation result = %#v", result)
-				}
-			},
-		},
-		{
-			name: "page",
-			cmd:  newPageCommand(),
-			args: []string{"entities/one"},
-			assert: func(t *testing.T, output string) {
-				t.Helper()
-				var result knowlapi.PageSnapshot
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("decode page output: %v", err)
-				}
-				if result.Id != smokePageID || !result.Untrusted {
-					t.Fatalf("page result = %#v", result)
-				}
-			},
-		},
-		{
-			name: "page links",
-			cmd:  newPageCommand(),
-			args: []string{pageLinksCommandName, smokePageID},
-			assert: func(t *testing.T, output string) {
-				t.Helper()
-				var result []knowlapi.LinkReference
-				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("decode page links output: %v", err)
-				}
-				if len(result) != 0 {
-					t.Fatalf("page links = %#v, want empty", result)
 				}
 			},
 		},
@@ -772,17 +572,17 @@ func TestReadCommandsReturnStructuredJSON(t *testing.T) {
 	}
 }
 
-func TestPageCommandPrintsStructuredNotFoundError(t *testing.T) {
+func TestOperationCommandPrintsStructuredNotFoundError(t *testing.T) {
 	fixture := newCommandWorkflowFixture(t, true)
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
 
-	stdout, stderr, err := executeCLICommand(newPageCommand(), []string{"entities/missing"}, nil)
+	stdout, stderr, err := executeCLICommand(newOperationCommand(), []string{"op_missing"}, nil)
 	if err == nil {
-		t.Fatal("page Execute() error = nil, want workflow failure")
+		t.Fatal("operation Execute() error = nil, want workflow failure")
 	}
 	var workflowErr *workflowCommandError
 	if !errors.As(err, &workflowErr) {
-		t.Fatalf("page Execute() error = %T, want workflowCommandError", err)
+		t.Fatalf("operation Execute() error = %T, want workflowCommandError", err)
 	}
 	if strings.TrimSpace(stdout) != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)
@@ -796,18 +596,7 @@ func TestIngestCommandPrintsStructuredWorkflowError(t *testing.T) {
 	fixture := newCommandWorkflowFixture(t, true)
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
 
-	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
-		Scope: pointerTo("other"),
-		Source: knowlapi.SourceRef{
-			Adapter: smokeSourceAdapter,
-			Id:      smokeSourceID,
-		},
-		Version: knowlapi.SourceVersion{
-			Version: "1",
-			Digest:  smokeDigest([]byte(smokeSourceText)),
-		},
-		Content: []byte(smokeSourceText),
-	})
+	inputPath := writeJSONFixture(t, knowlapi.IngestRequest{})
 
 	stdout, stderr, err := executeCLICommand(newIngestCommand(), []string{workflowInputFlagUsage, inputPath}, nil)
 	if err == nil {
@@ -842,7 +631,7 @@ func TestLocalWorkflowRunnerPropagatesStartError(t *testing.T) {
 
 	_, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
 		Method: http.MethodGet,
-		Path:   lintWorkflowPath,
+		Path:   "/v1/retrieve?query=test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "start local workflow host") {
 		t.Fatalf("Execute() error = %v, want start error", err)
@@ -871,7 +660,7 @@ func TestLocalWorkflowRunnerClosesHostAfterStartError(t *testing.T) {
 
 	_, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
 		Method: http.MethodGet,
-		Path:   "/v1/lint",
+		Path:   "/v1/retrieve?query=test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "start local workflow host") {
 		t.Fatalf("Execute() error = %v, want start error", err)
@@ -1367,18 +1156,6 @@ func (fixture commandWorkflowFixture) pagePath(relative string) string {
 	return filepath.Join(fixture.config.Workspace, filepath.FromSlash(relative))
 }
 
-func (fixture commandWorkflowFixture) acceptSource(t *testing.T, envelope domain.SourceEnvelope) {
-	t.Helper()
-
-	workspace, err := contentfs.New(fixture.config.Workspace)
-	if err != nil {
-		t.Fatalf("reopen workspace: %v", err)
-	}
-	if _, err := workspace.AcceptSource(context.Background(), envelope); err != nil {
-		t.Fatalf("accept fixture source: %v", err)
-	}
-}
-
 func withLocalWorkflowSessionFactory(t *testing.T, factory localWorkflowSessionFactory) {
 	t.Helper()
 
@@ -1421,31 +1198,15 @@ func pointerTo(value string) *string {
 	return &value
 }
 
-func hasLintFindingCode(findings []knowlapi.LintFinding, code string) bool {
-	for _, finding := range findings {
-		if finding.Code == code {
-			return true
-		}
-	}
-	return false
-}
-
 func prepareCommittedCommandWorkflow(t *testing.T) (commandWorkflowFixture, knowlapi.IngestResult) {
 	t.Helper()
 
 	fixture := newCommandWorkflowFixture(t, true)
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
-	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
-		Scope: pointerTo("local"),
-		Source: knowlapi.SourceRef{
-			Adapter: smokeSourceAdapter,
-			Id:      smokeSourceID,
-		},
-		Version: knowlapi.SourceVersion{
-			Version: "1",
-			Digest:  smokeDigest([]byte(smokeSourceText)),
-		},
-		Content: []byte(smokeSourceText),
+	inputPath := writeJSONFixture(t, knowlapi.IngestRequest{
+		Content:        pointerTo(smokeSourceText),
+		Origin:         pointerTo(smokeSourceID),
+		IdempotencyKey: pointerTo(smokeSourceVersion),
 	})
 	stdout, stderr, err := executeCLICommand(newIngestCommand(), []string{workflowInputFlagUsage, inputPath}, nil)
 	if err != nil {
@@ -1458,8 +1219,8 @@ func prepareCommittedCommandWorkflow(t *testing.T) (commandWorkflowFixture, know
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatalf("decode committed ingest output: %v", err)
 	}
-	if result.Operation.Status != knowlapi.Committed {
-		t.Fatalf("prepare committed ingest status = %q, want %q", result.Operation.Status, knowlapi.Committed)
+	if result.Status != knowlapi.IngestResultStatusCompleted {
+		t.Fatalf("prepare committed ingest status = %q, want %q", result.Status, knowlapi.IngestResultStatusCompleted)
 	}
 	return fixture, result
 }

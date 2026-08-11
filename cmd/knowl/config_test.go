@@ -113,7 +113,7 @@ func TestLoadConfigRejectsContradictoryLegacyMaintenancePolicy(t *testing.T) {
 	}
 }
 
-func TestCanonicalIngestConfigKeepsPreviewReviewFirst(t *testing.T) {
+func TestCanonicalIngestConfigStillExposesCompletedPublicIngest(t *testing.T) {
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("new workspace: %v", err)
@@ -147,35 +147,28 @@ func TestCanonicalIngestConfigKeepsPreviewReviewFirst(t *testing.T) {
 	}
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
 
-	inputPath := writeJSONFixture(t, knowlapi.SourceEnvelope{
-		Scope: pointerTo("local"),
-		Source: knowlapi.SourceRef{
-			Adapter: smokeSourceAdapter,
-			Id:      smokeSourceID,
-		},
-		Version: knowlapi.SourceVersion{
-			Version: "1",
-			Digest:  smokeDigest([]byte(smokeSourceText)),
-		},
-		Content: []byte(smokeSourceText),
+	inputPath := writeJSONFixture(t, knowlapi.IngestRequest{
+		Content:        pointerTo(smokeSourceText),
+		Origin:         pointerTo(smokeSourceID),
+		IdempotencyKey: pointerTo(smokeSourceVersion),
 	})
 
-	stdout, stderr, err := executeCLICommand(newIngestCommand(), []string{"preview", workflowInputFlagUsage, inputPath}, nil)
+	stdout, stderr, err := executeCLICommand(newIngestCommand(), []string{workflowInputFlagUsage, inputPath}, nil)
 	if err != nil {
-		t.Fatalf("preview Execute() error: %v", err)
+		t.Fatalf("ingest Execute() error: %v", err)
 	}
 	if strings.TrimSpace(stderr) != "" {
-		t.Fatalf("preview stderr = %q, want empty", stderr)
+		t.Fatalf("ingest stderr = %q, want empty", stderr)
 	}
 	var result knowlapi.IngestResult
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		t.Fatalf("decode preview output: %v", err)
+		t.Fatalf("decode ingest output: %v", err)
 	}
-	if result.Operation.Status != knowlapi.AwaitingReview {
-		t.Fatalf("preview operation status = %q, want %q", result.Operation.Status, knowlapi.AwaitingReview)
+	if result.Status != knowlapi.IngestResultStatusCompleted {
+		t.Fatalf("ingest status = %q, want %q", result.Status, knowlapi.IngestResultStatusCompleted)
 	}
-	if _, err := os.Stat(fixture.pagePath(smokePagePath)); !os.IsNotExist(err) {
-		t.Fatalf("preview page stat = %v, want absent", err)
+	if _, err := os.Stat(fixture.pagePath(smokePagePath)); err != nil {
+		t.Fatalf("committed page stat = %v, want present", err)
 	}
 }
 

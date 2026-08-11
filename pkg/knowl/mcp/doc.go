@@ -1,2 +1,2 @@
-// Package mcp provides bounded, server-scoped, read-only Knowl tools.
+// Package mcp provides bounded, server-scoped Knowl MCP tools.
 package mcp

@@ -3,7 +3,8 @@ package knowl
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,16 +13,19 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
-	"github.com/baldaworks/knowl/internal/httpapi/trustedrequest"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	pgstore "github.com/baldaworks/knowl/pkg/knowl/store/postgres"
+	sqlitestore "github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 const maxHTTPBodyBytes = 8 << 20
 
 const serviceName = "knowl"
+const inlineSourceAdapter = "inline"
 
 type httpDependencies struct {
 	Scope         domain.ScopeRef
@@ -63,10 +67,6 @@ func (handler *compatHTTPHandler) ServeHTTP(response http.ResponseWriter, reques
 		}
 		if !handler.dependencies.Ready() {
 			writeHTTPError(response, http.StatusServiceUnavailable, "not_ready")
-			return
-		}
-		if request.URL.Path == "/v1/pages/" {
-			writeHTTPError(response, http.StatusBadRequest, "page_id_required")
 			return
 		}
 		request = normalizeGeneratedRequest(request)
@@ -146,20 +146,16 @@ func copyHeaders(destination, source http.Header) {
 
 func normalizeGeneratedRequest(request *http.Request) *http.Request {
 	path := strings.TrimSuffix(request.URL.Path, "/")
+	if path == "" {
+		path = "/"
+	}
 	rawPath := request.URL.RawPath
 	if rawPath == "" {
 		rawPath = path
-	}
-	const pagePrefix = "/v1/pages/"
-	const linksSuffix = "/links"
-	if strings.HasPrefix(path, pagePrefix) {
-		remainder := strings.TrimPrefix(path, pagePrefix)
-		switch {
-		case strings.HasSuffix(remainder, linksSuffix):
-			pageID := strings.TrimSuffix(remainder, linksSuffix)
-			rawPath = pagePrefix + url.PathEscape(pageID) + linksSuffix
-		case remainder != "":
-			rawPath = pagePrefix + url.PathEscape(remainder)
+	} else {
+		rawPath = strings.TrimSuffix(rawPath, "/")
+		if rawPath == "" {
+			rawPath = "/"
 		}
 	}
 	if path == request.URL.Path && rawPath == request.URL.RawPath {
@@ -177,9 +173,9 @@ func cloneURL(source *url.URL) *url.URL {
 	return &cloned
 }
 
-func generatedBindingError(response http.ResponseWriter, request *http.Request, err error) {
+func generatedBindingError(response http.ResponseWriter, _ *http.Request, err error) {
 	var required *knowlapi.RequiredParamError
-	if errors.As(err, &required) && required.ParamName == "q" {
+	if errors.As(err, &required) && required.ParamName == "query" {
 		writeHTTPError(response, http.StatusBadRequest, "query_required")
 		return
 	}
@@ -188,33 +184,14 @@ func generatedBindingError(response http.ResponseWriter, request *http.Request, 
 		switch invalid.ParamName {
 		case "operation_id":
 			writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
-		case "page_id":
-			writeHTTPError(response, http.StatusBadRequest, "page_id_invalid")
+		case "query":
+			writeHTTPError(response, http.StatusBadRequest, "query_required")
 		default:
 			writeHTTPError(response, http.StatusBadRequest, "invalid_request")
 		}
 		return
 	}
 	writeHTTPError(response, http.StatusBadRequest, "invalid_request")
-}
-
-func (handler *httpHandler) GetHealthAlias(response http.ResponseWriter, _ *http.Request) {
-	health := knowlapi.GetHealthAlias200JSONResponse{
-		Service: serviceName,
-		Status:  knowlapi.Ok,
-	}
-	_ = health.VisitGetHealthAliasResponse(response)
-}
-
-func (handler *httpHandler) GetReadyAlias(response http.ResponseWriter, _ *http.Request) {
-	if !handler.dependencies.Ready() {
-		ready := knowlapi.GetReadyAlias503JSONResponse{Service: serviceName, Status: knowlapi.NotReady}
-		_ = ready.VisitGetReadyAliasResponse(response)
-		return
-	}
-	scope := string(handler.dependencies.Scope)
-	ready := knowlapi.GetReadyAlias200JSONResponse{Service: serviceName, Status: knowlapi.Ready, Scope: &scope}
-	_ = ready.VisitGetReadyAliasResponse(response)
 }
 
 func (handler *httpHandler) GetHealth(response http.ResponseWriter, _ *http.Request) {
@@ -236,65 +213,27 @@ func (handler *httpHandler) GetReady(response http.ResponseWriter, _ *http.Reque
 	_ = ready.VisitGetReadyResponse(response)
 }
 
-func (handler *httpHandler) SearchPages(response http.ResponseWriter, request *http.Request, params knowlapi.SearchPagesParams) {
-	result, err := handler.dependencies.Query.Search(request.Context(), handler.dependencies.Scope, strings.TrimSpace(params.Q), domain.ReadLimits{})
+func (handler *httpHandler) RetrieveKnowledge(response http.ResponseWriter, request *http.Request, params knowlapi.RetrieveKnowledgeParams) {
+	result, err := handler.dependencies.Query.Query(
+		request.Context(),
+		handler.dependencies.Scope,
+		strings.TrimSpace(params.Query),
+		domain.ReadLimits{},
+	)
 	if err != nil {
 		writeServiceError(response, err)
 		return
 	}
-	transport := mustConvertJSON[[]knowlapi.PageReference](result)
-	_ = knowlapi.SearchPages200JSONResponse(transport).VisitSearchPagesResponse(response)
+	transport := mustConvertJSON[knowlapi.RetrieveResult](httpRetrieveResult(result))
+	_ = knowlapi.RetrieveKnowledge200JSONResponse(transport).VisitRetrieveKnowledgeResponse(response)
 }
 
-func (handler *httpHandler) QueryKnowledge(response http.ResponseWriter, request *http.Request, params knowlapi.QueryKnowledgeParams) {
-	result, err := handler.dependencies.Query.Query(request.Context(), handler.dependencies.Scope, strings.TrimSpace(params.Q), domain.ReadLimits{})
-	if err != nil {
-		writeServiceError(response, err)
+func (handler *httpHandler) IngestKnowledge(response http.ResponseWriter, request *http.Request) {
+	var ingestRequest knowlapi.IngestRequest
+	if err := decodeJSON(response, request, &ingestRequest); err != nil {
 		return
 	}
-	transport := mustConvertJSON[knowlapi.QueryResult](result)
-	_ = knowlapi.QueryKnowledge200JSONResponse(transport).VisitQueryKnowledgeResponse(response)
-}
-
-func (handler *httpHandler) LintWorkspace(response http.ResponseWriter, request *http.Request) {
-	result, err := handler.dependencies.Lint.Lint(request.Context(), handler.dependencies.Scope)
-	if err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.LintReport](result)
-	_ = knowlapi.LintWorkspace200JSONResponse(transport).VisitLintWorkspaceResponse(response)
-}
-
-func (handler *httpHandler) LintWorkspaceDashAlias(response http.ResponseWriter, request *http.Request) {
-	result, err := handler.dependencies.Lint.Lint(request.Context(), handler.dependencies.Scope)
-	if err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.LintReport](result)
-	_ = knowlapi.LintWorkspaceDashAlias200JSONResponse(transport).VisitLintWorkspaceDashAliasResponse(response)
-}
-
-func (handler *httpHandler) LintWorkspaceResultsAlias(response http.ResponseWriter, request *http.Request) {
-	result, err := handler.dependencies.Lint.Lint(request.Context(), handler.dependencies.Scope)
-	if err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.LintReport](result)
-	_ = knowlapi.LintWorkspaceResultsAlias200JSONResponse(transport).VisitLintWorkspaceResultsAliasResponse(response)
-}
-
-func (handler *httpHandler) IngestSource(response http.ResponseWriter, request *http.Request) {
-	if !handler.requireOperator(response, request) {
-		return
-	}
-	var envelope domain.SourceEnvelope
-	if err := decodeJSON(response, request, &envelope); err != nil {
-		return
-	}
-	envelope, err := trustedEnvelope(handler.dependencies.Scope, envelope)
+	envelope, err := httpIngestEnvelope(handler.dependencies.Scope, ingestRequest)
 	if err != nil {
 		writeServiceError(response, err)
 		return
@@ -303,64 +242,25 @@ func (handler *httpHandler) IngestSource(response http.ResponseWriter, request *
 	work := func(ctx context.Context) error {
 		var workErr error
 		result, workErr = handler.dependencies.Ingest.Ingest(ctx, envelope)
-		return workErr
+		if workErr != nil {
+			return workErr
+		}
+		if result.Operation.Status != domain.StatusAwaitingReview {
+			return nil
+		}
+		applied, applyErr := handler.dependencies.Ingest.Apply(ctx, handler.dependencies.Scope, result.Operation.ID)
+		if applyErr != nil {
+			return applyErr
+		}
+		result.Operation = applied.Operation
+		return nil
 	}
 	if err := handler.do(request.Context(), work); err != nil {
 		writeServiceError(response, err)
 		return
 	}
-	transport := mustConvertJSON[knowlapi.IngestResult](result)
-	_ = knowlapi.IngestSource200JSONResponse(transport).VisitIngestSourceResponse(response)
-}
-
-func (handler *httpHandler) PreviewSource(response http.ResponseWriter, request *http.Request) {
-	if !handler.requireOperator(response, request) {
-		return
-	}
-	var envelope domain.SourceEnvelope
-	if err := decodeJSON(response, request, &envelope); err != nil {
-		return
-	}
-	envelope, err := trustedEnvelope(handler.dependencies.Scope, envelope)
-	if err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	var result app.IngestResult
-	if err := handler.do(request.Context(), func(ctx context.Context) error {
-		var previewErr error
-		result, previewErr = handler.dependencies.Ingest.Preview(ctx, envelope)
-		return previewErr
-	}); err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.IngestResult](result)
-	_ = knowlapi.PreviewSource200JSONResponse(transport).VisitPreviewSourceResponse(response)
-}
-
-func (handler *httpHandler) FileQueryResult(response http.ResponseWriter, request *http.Request) {
-	if !handler.requireOperator(response, request) {
-		return
-	}
-	var filing app.FilingRequest
-	if err := decodeJSON(response, request, &filing); err != nil {
-		return
-	}
-	if filing.Result.Scope == "" {
-		filing.Result.Scope = handler.dependencies.Scope
-	}
-	var result app.IngestResult
-	if err := handler.do(request.Context(), func(ctx context.Context) error {
-		var err error
-		result, err = handler.dependencies.Query.File(ctx, handler.dependencies.Scope, filing)
-		return err
-	}); err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.IngestResult](result)
-	_ = knowlapi.FileQueryResult200JSONResponse(transport).VisitFileQueryResultResponse(response)
+	transport := mustConvertJSON[knowlapi.IngestResult](httpIngestResult(result.Operation))
+	_ = knowlapi.IngestKnowledge200JSONResponse(transport).VisitIngestKnowledgeResponse(response)
 }
 
 func (handler *httpHandler) GetOperation(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
@@ -374,119 +274,149 @@ func (handler *httpHandler) GetOperation(response http.ResponseWriter, request *
 		writeServiceError(response, err)
 		return
 	}
-	transport := mustConvertJSON[knowlapi.Operation](result)
+	transport := mustConvertJSON[knowlapi.OperationResult](httpOperationResult(result))
 	_ = knowlapi.GetOperation200JSONResponse(transport).VisitGetOperationResponse(response)
 }
 
-func (handler *httpHandler) ApplyOperation(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
-	if !handler.requireOperator(response, request) {
-		return
-	}
-	id := strings.TrimSpace(operationID)
-	if id == "" {
-		writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
-		return
-	}
-	var result app.ApplyResult
-	if err := handler.do(request.Context(), func(ctx context.Context) error {
-		var applyErr error
-		result, applyErr = handler.dependencies.Ingest.Apply(ctx, handler.dependencies.Scope, domain.OperationID(id))
-		return applyErr
-	}); err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.ApplyResult](result)
-	_ = knowlapi.ApplyOperation200JSONResponse(transport).VisitApplyOperationResponse(response)
+type httpEvidenceItem struct {
+	PageID     domain.PageID `json:"page_id"`
+	Title      string        `json:"title"`
+	Snippet    string        `json:"snippet"`
+	SourceRefs []string      `json:"source_refs,omitempty"`
+	Untrusted  bool          `json:"untrusted"`
 }
 
-func (handler *httpHandler) GetOperationStatusAlias(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
-	id := strings.TrimSpace(operationID)
-	if id == "" {
-		writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
-		return
-	}
-	result, err := handler.dependencies.Query.Operation(request.Context(), handler.dependencies.Scope, domain.OperationID(id))
-	if err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.Operation](result)
-	_ = knowlapi.GetOperationStatusAlias200JSONResponse(transport).VisitGetOperationStatusAliasResponse(response)
+type httpRetrieveResponse struct {
+	Query     string             `json:"query"`
+	Evidence  []httpEvidenceItem `json:"evidence"`
+	Citations []app.Citation     `json:"citations,omitempty"`
 }
 
-func (handler *httpHandler) GetOperationLegacyStatusAlias(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
-	id := strings.TrimSpace(operationID)
-	if id == "" {
-		writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
-		return
-	}
-	result, err := handler.dependencies.Query.Operation(request.Context(), handler.dependencies.Scope, domain.OperationID(id))
-	if err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.Operation](result)
-	_ = knowlapi.GetOperationLegacyStatusAlias200JSONResponse(transport).VisitGetOperationLegacyStatusAliasResponse(response)
+type httpIngestResponse struct {
+	OperationID domain.OperationID `json:"operation_id"`
+	Status      string             `json:"status"`
 }
 
-func (handler *httpHandler) GetPage(response http.ResponseWriter, request *http.Request, pageID knowlapi.PageID) {
-	id := pageID
-	if strings.TrimSpace(id) == "" {
-		writeHTTPError(response, http.StatusBadRequest, "page_id_required")
-		return
-	}
-	if !validPathID(id) {
-		writeHTTPError(response, http.StatusBadRequest, "page_id_invalid")
-		return
-	}
-	result, readErr := handler.dependencies.Query.Page(request.Context(), handler.dependencies.Scope, domain.PageID(id), domain.ReadLimits{})
-	if readErr != nil {
-		writeServiceError(response, readErr)
-		return
-	}
-	transport := mustConvertJSON[knowlapi.PageSnapshot](result)
-	_ = knowlapi.GetPage200JSONResponse(transport).VisitGetPageResponse(response)
+type httpOperationResponse struct {
+	ID        domain.OperationID `json:"id"`
+	Status    string             `json:"status"`
+	UpdatedAt time.Time          `json:"updated_at"`
+	Failure   *domain.Failure    `json:"failure,omitempty"`
 }
 
-func (handler *httpHandler) GetPageLinks(response http.ResponseWriter, request *http.Request, pageID knowlapi.PageID) {
-	id := pageID
-	if strings.TrimSpace(id) == "" {
-		writeHTTPError(response, http.StatusBadRequest, "page_id_required")
-		return
+func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
+	evidence := make([]httpEvidenceItem, 0, len(result.Pages))
+	for _, page := range result.Pages {
+		evidence = append(evidence, httpEvidenceItem{
+			PageID:     page.ID,
+			Title:      page.Title,
+			Snippet:    page.Snippet,
+			SourceRefs: append([]string(nil), page.SourceRefs...),
+			Untrusted:  page.Untrusted,
+		})
 	}
-	if !validPathID(id) {
-		writeHTTPError(response, http.StatusBadRequest, "page_id_invalid")
-		return
+	citations := make([]app.Citation, len(result.Citations))
+	copy(citations, result.Citations)
+	return httpRetrieveResponse{
+		Query:     result.Query,
+		Evidence:  evidence,
+		Citations: citations,
 	}
-	result, err := handler.dependencies.Query.Links(request.Context(), handler.dependencies.Scope, domain.PageID(id), domain.ReadLimits{})
-	if err != nil {
-		writeServiceError(response, err)
-		return
-	}
-	transport := mustConvertJSON[[]knowlapi.LinkReference](result)
-	_ = knowlapi.GetPageLinks200JSONResponse(transport).VisitGetPageLinksResponse(response)
 }
 
-func (handler *httpHandler) requireOperator(response http.ResponseWriter, request *http.Request) bool {
-	if trustedrequest.IsMarked(request.Context()) {
-		return true
+func httpIngestResult(operation domain.Operation) httpIngestResponse {
+	return httpIngestResponse{
+		OperationID: operation.ID,
+		Status:      httpOperationStatus(operation.Status),
 	}
-	token := strings.TrimSpace(handler.dependencies.OperatorToken)
-	if token == "" {
-		writeHTTPError(response, http.StatusUnauthorized, "operator_authorization_required")
-		return false
+}
+
+func httpOperationResult(operation domain.Operation) httpOperationResponse {
+	return httpOperationResponse{
+		ID:        operation.ID,
+		Status:    httpOperationStatus(operation.Status),
+		UpdatedAt: operation.UpdatedAt,
+		Failure:   operation.Failure,
 	}
-	authorization := strings.TrimSpace(request.Header.Get("Authorization"))
-	if strings.HasPrefix(authorization, "Bearer ") {
-		authorization = strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
+}
+
+func httpOperationStatus(status domain.OperationStatus) string {
+	switch status {
+	case domain.StatusApplying:
+		return "running"
+	case domain.StatusCommitted:
+		return "completed"
+	case domain.StatusFailed:
+		return "failed"
+	default:
+		return "queued"
 	}
-	if subtle.ConstantTimeCompare([]byte(token), []byte(authorization)) != 1 {
-		response.Header().Set("WWW-Authenticate", "Bearer")
-		writeHTTPError(response, http.StatusUnauthorized, "operator_authorization_required")
-		return false
+}
+
+func httpIngestEnvelope(scope domain.ScopeRef, request knowlapi.IngestRequest) (domain.SourceEnvelope, error) {
+	content := strings.TrimSpace(valueOrEmpty(request.Content))
+	uri := strings.TrimSpace(valueOrEmpty(request.Uri))
+	mediaType := strings.TrimSpace(valueOrEmpty(request.MediaType))
+	origin := strings.TrimSpace(valueOrEmpty(request.Origin))
+	idempotencyKey := strings.TrimSpace(valueOrEmpty(request.IdempotencyKey))
+
+	switch {
+	case content == "" && uri == "":
+		return domain.SourceEnvelope{}, fmt.Errorf("one of %q or %q is required: %w", "content", "uri", app.ErrQueryInvalid)
+	case content != "" && uri != "":
+		return domain.SourceEnvelope{}, fmt.Errorf("only one of %q or %q is allowed: %w", "content", "uri", app.ErrQueryInvalid)
 	}
-	return true
+
+	payload := []byte(content)
+	adapter := inlineSourceAdapter
+	sourceHint := origin
+	if uri != "" {
+		payload = []byte(uri)
+		adapter = "uri"
+		sourceHint = uri
+		if mediaType == "" {
+			mediaType = "text/uri-list"
+		}
+	}
+	if mediaType == "" {
+		mediaType = "text/plain"
+	}
+	digest := sha256.Sum256(payload)
+	digestText := hex.EncodeToString(digest[:])
+	sourceID := httpStableSourceID(sourceHint, idempotencyKey, digestText)
+	version := httpStableSourceVersion(idempotencyKey, digestText)
+	return domain.SourceEnvelope{
+		Scope:     scope,
+		Source:    domain.SourceRef{Adapter: adapter, ID: sourceID},
+		Version:   domain.SourceVersion{Version: version, Digest: digestText},
+		MediaType: mediaType,
+		Content:   payload,
+	}, nil
+}
+
+func httpStableSourceID(origin, idempotencyKey, digest string) string {
+	switch {
+	case origin != "":
+		return origin
+	case idempotencyKey != "":
+		return idempotencyKey
+	default:
+		return "source-" + digest[:16]
+	}
+}
+
+func httpStableSourceVersion(idempotencyKey, digest string) string {
+	if idempotencyKey != "" {
+		return idempotencyKey
+	}
+	return "sha256-" + digest[:16]
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func mustConvertJSON[T any](value any) T {
@@ -506,20 +436,6 @@ func (handler *httpHandler) do(ctx context.Context, fn func(context.Context) err
 		return fn(ctx)
 	}
 	return handler.dependencies.Worker.do(ctx, fn)
-}
-
-func trustedEnvelope(scope domain.ScopeRef, envelope domain.SourceEnvelope) (domain.SourceEnvelope, error) {
-	if envelope.Scope == "" {
-		envelope.Scope = scope
-	}
-	if envelope.Scope != scope {
-		return domain.SourceEnvelope{}, fmt.Errorf("source scope is not authorized: %w", app.ErrQueryInvalid)
-	}
-	return envelope, nil
-}
-
-func validPathID(value string) bool {
-	return value != "" && value != "." && value != ".." && !strings.HasPrefix(value, "/") && !strings.Contains(value, "\x00") && !strings.Contains(value, "../") && !strings.Contains(value, `/..`)
 }
 
 func decodeJSON(response http.ResponseWriter, request *http.Request, destination any) error {
@@ -544,7 +460,7 @@ func writeServiceError(response http.ResponseWriter, err error) {
 
 func classifyServiceError(err error) (int, string) {
 	switch {
-	case errors.Is(err, os.ErrNotExist), errors.Is(err, app.ErrPageNotFound):
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, app.ErrPageNotFound), errors.Is(err, pgstore.ErrNotFound), errors.Is(err, sqlitestore.ErrNotFound):
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, app.ErrQueryInvalid), errors.Is(err, app.ErrFilingInvalid):
 		return http.StatusBadRequest, "invalid_request"

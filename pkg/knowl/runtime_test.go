@@ -3,8 +3,6 @@ package knowl_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,17 +15,24 @@ import (
 	"time"
 
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
-	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	"github.com/baldaworks/knowl/pkg/knowl/mcp"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/normahq/runtime/v2/agentfactory"
 	adkagent "google.golang.org/adk/v2/agent"
 )
 
-const hostSourceRef = "fixture:source-1@1"
+const hostSourceRef = "inline:source-1@1"
+const hostCompletedStatus = "completed"
+const hostSourceContent = "source text"
+const hostSourceOrigin = "source-1"
+const hostSourceIdempotencyKey = "1"
+const hostSourceContentKey = "content"
+const hostSourceOriginKey = "origin"
+const hostSourceIdempotencyKeyName = "idempotency_key"
 
-func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
+func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
@@ -62,7 +67,7 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if preStart.Code != http.StatusServiceUnavailable {
 		t.Fatalf("pre-start readiness status = %d, want %d", preStart.Code, http.StatusServiceUnavailable)
 	}
-	body, status, err := doHostRequest(t, host, http.MethodGet, "/v1/query?q=before-start&scope=other", nil, "")
+	body, status, err := doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=before-start&scope=other", nil, "")
 	if err != nil {
 		t.Fatalf("pre-start scope override request: %v", err)
 	}
@@ -70,7 +75,7 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 		t.Fatalf("pre-start scope override status = %d, body %s", status, body)
 	}
 	assertErrorClass(t, body, "scope_override_forbidden")
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/query?q=before-start", nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=before-start", nil, "")
 	if err != nil {
 		t.Fatalf("pre-start query request: %v", err)
 	}
@@ -89,22 +94,14 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if _, status, _ := doHostRequest(t, host, http.MethodGet, "/readyz", nil, ""); status != http.StatusOK {
 		t.Fatalf("readiness status = %d, want %d", status, http.StatusOK)
 	}
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/query", nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve", nil, "")
 	if err != nil {
-		t.Fatalf("query without q request: %v", err)
+		t.Fatalf("retrieve without query request: %v", err)
 	}
 	if status != http.StatusBadRequest {
-		t.Fatalf("query without q status = %d, body %s", status, body)
+		t.Fatalf("retrieve without query status = %d, body %s", status, body)
 	}
 	assertErrorClass(t, body, "query_required")
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/pages/", nil, "")
-	if err != nil {
-		t.Fatalf("page without id request: %v", err)
-	}
-	if status != http.StatusBadRequest {
-		t.Fatalf("page without id status = %d, body %s", status, body)
-	}
-	assertErrorClass(t, body, "page_id_required")
 	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/unknown", nil, "")
 	if err != nil {
 		t.Fatalf("unknown route request: %v", err)
@@ -114,97 +111,79 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	}
 	assertErrorClass(t, body, "not_found")
 
-	envelope := domain.SourceEnvelope{
-		Scope:   "local",
-		Source:  domain.SourceRef{Adapter: "fixture", ID: "source-1"},
-		Version: domain.SourceVersion{Version: "1", Digest: hostDigest([]byte("source text"))},
-		Content: []byte("source text"),
+	ingestRequest := map[string]string{
+		hostSourceContentKey:         hostSourceContent,
+		hostSourceOriginKey:          hostSourceOrigin,
+		hostSourceIdempotencyKeyName: hostSourceIdempotencyKey,
 	}
-	encoded, err := json.Marshal(envelope)
+	encoded, err := json.Marshal(ingestRequest)
 	if err != nil {
-		t.Fatalf("encode envelope: %v", err)
+		t.Fatalf("encode ingest request: %v", err)
 	}
-	if _, status, _ := doHostRequest(t, host, http.MethodPost, "/v1/ingest/preview", encoded, ""); status != http.StatusUnauthorized {
-		t.Fatalf("unauthorized preview status = %d, want %d", status, http.StatusUnauthorized)
-	}
-	body, status, err = doHostRequest(t, host, http.MethodPost, "/v1/ingest/preview", encoded, config.OperatorToken)
+	body, status, err = doHostRequest(t, host, http.MethodPost, "/v1/ingest", encoded, "")
 	if err != nil {
-		t.Fatalf("preview request: %v", err)
+		t.Fatalf("ingest request: %v", err)
 	}
 	if status != http.StatusOK {
-		t.Fatalf("preview status = %d, body %s", status, body)
+		t.Fatalf("ingest status = %d, body %s", status, body)
 	}
-	var planned app.IngestResult
-	if err := json.Unmarshal(body, &planned); err != nil {
-		t.Fatalf("decode preview: %v", err)
+	var ingested struct {
+		OperationID string `json:"operation_id"`
+		Status      string `json:"status"`
 	}
-	if planned.Operation.Status != domain.StatusAwaitingReview {
-		t.Fatalf("preview operation status = %q, want awaiting_review", planned.Operation.Status)
+	if err := json.Unmarshal(body, &ingested); err != nil {
+		t.Fatalf("decode ingest result: %v", err)
 	}
 	pagePath := filepath.Join(workspace.Root(), "wiki", "entities", "one.md")
-	if _, err := os.Stat(pagePath); !os.IsNotExist(err) {
-		t.Fatalf("preview page stat = %v, want absent", err)
-	}
-
-	operationPath := "/v1/operations/" + url.PathEscape(string(planned.Operation.ID))
-	body, status, err = doHostRequest(t, host, http.MethodPost, operationPath+"/apply", nil, config.OperatorToken)
-	if err != nil {
-		t.Fatalf("apply request: %v", err)
-	}
-	if status != http.StatusOK {
-		t.Fatalf("apply status = %d, body %s", status, body)
-	}
-	var applied app.ApplyResult
-	if err := json.Unmarshal(body, &applied); err != nil {
-		t.Fatalf("decode apply: %v", err)
-	}
-	if applied.Operation.Status != domain.StatusCommitted {
-		t.Fatalf("apply operation status = %q, want committed", applied.Operation.Status)
+	if ingested.Status != hostCompletedStatus {
+		t.Fatalf("ingest status = %q, want completed", ingested.Status)
 	}
 	if _, err := os.Stat(pagePath); err != nil {
 		t.Fatalf("committed page missing: %v", err)
 	}
 
+	operationPath := "/v1/operations/" + url.PathEscape(ingested.OperationID)
 	body, status, err = doHostRequest(t, host, http.MethodGet, operationPath, nil, "")
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("operation status request = %d, %v, body %s", status, err, body)
 	}
-	var operation domain.Operation
+	var operation struct {
+		ID        string    `json:"id"`
+		Status    string    `json:"status"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
 	if err := json.Unmarshal(body, &operation); err != nil {
 		t.Fatalf("decode operation: %v", err)
 	}
-	if operation.Status != domain.StatusCommitted {
+	if operation.ID != ingested.OperationID || operation.Status != hostCompletedStatus {
 		t.Fatalf("operation status after commit = %q", operation.Status)
 	}
-	body, status, headers, err := doHostRequestDetailed(t, host, http.MethodGet, operationPath+"/apply", nil, "")
+	body, status, headers, err := doHostRequestDetailed(t, host, http.MethodGet, "/v1/ingest", nil, "")
 	if err != nil {
-		t.Fatalf("get apply request: %v", err)
+		t.Fatalf("get ingest request: %v", err)
 	}
 	if status != http.StatusMethodNotAllowed {
-		t.Fatalf("get apply status = %d, body %s", status, body)
+		t.Fatalf("get ingest status = %d, body %s", status, body)
 	}
 	if allow := headers.Get("Allow"); !strings.Contains(allow, http.MethodPost) {
-		t.Fatalf("get apply Allow header = %q, want %q", allow, http.MethodPost)
+		t.Fatalf("get ingest Allow header = %q, want %q", allow, http.MethodPost)
 	}
 	assertErrorClass(t, body, "method_not_allowed")
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/pages/entities/one/", nil, "")
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil, "")
 	if err != nil || status != http.StatusOK {
-		t.Fatalf("page request = %d, %v, body %s", status, err, body)
+		t.Fatalf("retrieve request = %d, %v, body %s", status, err, body)
 	}
-	var page domain.PageSnapshot
-	if err := json.Unmarshal(body, &page); err != nil {
-		t.Fatalf("decode page: %v", err)
+	var retrieve struct {
+		Query    string `json:"query"`
+		Evidence []struct {
+			PageID string `json:"page_id"`
+		} `json:"evidence"`
 	}
-	if !page.Untrusted || page.ID != "entities/one" {
-		t.Fatalf("page = %#v", page)
+	if err := json.Unmarshal(body, &retrieve); err != nil {
+		t.Fatalf("decode retrieve result: %v", err)
 	}
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/pages/entities/one/links", nil, "")
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("page links request = %d, %v, body %s", status, err, body)
-	}
-	var links []domain.LinkReference
-	if err := json.Unmarshal(body, &links); err != nil {
-		t.Fatalf("decode links: %v", err)
+	if retrieve.Query != "One" || len(retrieve.Evidence) == 0 || retrieve.Evidence[0].PageID != "entities/one" {
+		t.Fatalf("retrieve result = %#v", retrieve)
 	}
 
 	shutdownHost(t, host)
@@ -224,8 +203,144 @@ func TestHostPublicAPIPreflightsHTTPPreviewApplyAndRestart(t *testing.T) {
 	if err := json.Unmarshal(body, &operation); err != nil {
 		t.Fatalf("decode reopened operation: %v", err)
 	}
-	if operation.Status != domain.StatusCommitted {
+	if operation.Status != hostCompletedStatus {
 		t.Fatalf("reopened operation status = %q, want committed", operation.Status)
+	}
+}
+
+func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	schema, err := workspace.Schema(ctx, "local")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = "127.0.0.1:0"
+	config.IngestOptions.AutoApply = false
+	maintainer := provider.Fixture{Result: domain.ModelEditPlan{
+		SchemaDigest: schema.Digest,
+		SourceRefs:   []string{hostSourceRef},
+		Edits:        []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte(hostPageContent)}},
+	}}
+
+	host, err := knowl.NewHost(ctx, config, maintainer)
+	if err != nil {
+		t.Fatalf("compose host: %v", err)
+	}
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("start host: %v", err)
+	}
+	defer shutdownHost(t, host)
+
+	mcpValue, err := host.MCP().Call(ctx, "knowl_ingest", map[string]any{
+		hostSourceContentKey:         hostSourceContent,
+		hostSourceOriginKey:          hostSourceOrigin,
+		hostSourceIdempotencyKeyName: hostSourceIdempotencyKey,
+	})
+	if err != nil {
+		t.Fatalf("mcp ingest: %v", err)
+	}
+	mcpIngest, ok := mcpValue.(mcp.IngestResult)
+	if !ok {
+		t.Fatalf("mcp ingest type = %T, want mcp.IngestResult", mcpValue)
+	}
+	if mcpIngest.Status != hostCompletedStatus {
+		t.Fatalf("mcp ingest status = %q, want %q", mcpIngest.Status, hostCompletedStatus)
+	}
+
+	encoded, err := json.Marshal(map[string]string{
+		hostSourceContentKey:         hostSourceContent,
+		hostSourceOriginKey:          hostSourceOrigin,
+		hostSourceIdempotencyKeyName: hostSourceIdempotencyKey,
+	})
+	if err != nil {
+		t.Fatalf("encode ingest request: %v", err)
+	}
+	body, status, err := doHostRequest(t, host, http.MethodPost, "/v1/ingest", encoded, "")
+	if err != nil {
+		t.Fatalf("http ingest: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("http ingest status = %d, body %s", status, body)
+	}
+	var httpIngest struct {
+		OperationID string `json:"operation_id"`
+		Status      string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &httpIngest); err != nil {
+		t.Fatalf("decode http ingest: %v", err)
+	}
+	if httpIngest.Status != hostCompletedStatus {
+		t.Fatalf("http ingest status = %q, want %q", httpIngest.Status, hostCompletedStatus)
+	}
+	if httpIngest.OperationID != string(mcpIngest.OperationID) {
+		t.Fatalf("operation IDs differ: http=%q mcp=%q", httpIngest.OperationID, mcpIngest.OperationID)
+	}
+
+	mcpRetrieveValue, err := host.MCP().Call(ctx, "knowl_retrieve", map[string]any{"query": "One"})
+	if err != nil {
+		t.Fatalf("mcp retrieve: %v", err)
+	}
+	mcpRetrieve, ok := mcpRetrieveValue.(mcp.RetrieveResult)
+	if !ok {
+		t.Fatalf("mcp retrieve type = %T, want mcp.RetrieveResult", mcpRetrieveValue)
+	}
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil, "")
+	if err != nil {
+		t.Fatalf("http retrieve: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("http retrieve status = %d, body %s", status, body)
+	}
+	var httpRetrieve struct {
+		Query    string `json:"query"`
+		Evidence []struct {
+			PageID string `json:"page_id"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(body, &httpRetrieve); err != nil {
+		t.Fatalf("decode http retrieve: %v", err)
+	}
+	if len(mcpRetrieve.Evidence) != 1 || len(httpRetrieve.Evidence) != 1 {
+		t.Fatalf("unexpected evidence counts: mcp=%d http=%d", len(mcpRetrieve.Evidence), len(httpRetrieve.Evidence))
+	}
+	if mcpRetrieve.Evidence[0].PageID != domain.PageID(httpRetrieve.Evidence[0].PageID) {
+		t.Fatalf("retrieve page mismatch: mcp=%q http=%q", mcpRetrieve.Evidence[0].PageID, httpRetrieve.Evidence[0].PageID)
+	}
+
+	mcpOperationValue, err := host.MCP().Call(ctx, "knowl_operation", map[string]any{"id": string(mcpIngest.OperationID)})
+	if err != nil {
+		t.Fatalf("mcp operation: %v", err)
+	}
+	mcpOperation, ok := mcpOperationValue.(mcp.OperationResult)
+	if !ok {
+		t.Fatalf("mcp operation type = %T, want mcp.OperationResult", mcpOperationValue)
+	}
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/operations/"+url.PathEscape(httpIngest.OperationID), nil, "")
+	if err != nil {
+		t.Fatalf("http operation: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("http operation status = %d, body %s", status, body)
+	}
+	var httpOperation struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &httpOperation); err != nil {
+		t.Fatalf("decode http operation: %v", err)
+	}
+	if mcpOperation.ID != domain.OperationID(httpOperation.ID) || mcpOperation.Status != httpOperation.Status {
+		t.Fatalf("operation mismatch: mcp=%#v http=%#v", mcpOperation, httpOperation)
 	}
 }
 
@@ -333,9 +448,4 @@ func shutdownHost(t *testing.T, host *knowl.Host) {
 	if err := host.Shutdown(ctx); err != nil {
 		t.Fatalf("shutdown host: %v", err)
 	}
-}
-
-func hostDigest(content []byte) string {
-	digest := sha256.Sum256(content)
-	return hex.EncodeToString(digest[:])
 }

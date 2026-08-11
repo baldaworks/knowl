@@ -119,7 +119,7 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compose lint service: %w", err)
 	}
-	mcpServer, err := mcp.NewServer(query, lint, config.Scope, config.ReadLimits)
+	mcpServer, err := mcp.NewServer(query, service, config.Scope, config.ReadLimits)
 	if err != nil {
 		return nil, fmt.Errorf("compose MCP service: %w", err)
 	}

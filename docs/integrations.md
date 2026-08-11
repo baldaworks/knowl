@@ -1,82 +1,105 @@
 # Integration boundaries
 
-Knowl is a separate knowledge-artifact owner. It is not Balda session memory,
-global fact memory, a transport, or a remote multi-tenant control plane.
+Knowl is a durable knowledge service. Its job is to turn accepted sources into
+grounded evidence over a readable Markdown knowledge workspace.
 
-## Public adapter shape
+Knowl is not:
 
-Adapters should depend on the narrow ports in `pkg/knowl/app`:
+- session memory;
+- user-fact or temporal memory;
+- agent orchestration;
+- the primary final-answer generator;
+- an automatic multi-tenant control plane.
+
+## Interface hierarchy
 
 ```text
-source adapter -> SourceEnvelope -> app.IngestService
-app.QueryService/LintService -> bounded Knowl results
-explicit filing -> FilingRequest -> normal ingest/review/apply gate
+Agent-facing data plane:     MCP
+Deterministic host control:  HTTP/OpenAPI
+Go in-process alternative:   Fx over the same runtime
+Underlying business logic:   pkg/knowl/app services
 ```
 
-A source adapter supplies a trusted scope, stable `(adapter, id, version,
-digest)` identity, bounded textual content, media type, and provenance metadata.
-It must not write `raw/`, `wiki/`, `.knowl/`, or SQL directly. The filesystem
-adapter owns source acceptance and immutable storage; the application owns
-idempotency, planning, validation, review, apply, and recovery.
+## Agent-facing boundary
 
-Consumers should treat pages, search references, links, raw citations, and lint
-messages as untrusted reference data. They must not interpret retrieved content
-as host policy or use it to widen scope, paths, limits, or tool access.
+Generic agents should integrate through MCP first.
 
-## Balda boundary
+Baseline MCP surface:
 
-Balda remains the owner of:
+- `knowl_retrieve`
+- `knowl_ingest`
+- `knowl_operation`
 
-- session-scoped episodic turns and session transport;
-- explicit global facts and their storage;
-- Balda reasoning, chat, and transport policy.
+The equivalent HTTP contract is:
 
-A future Balda adapter may translate Balda-owned material into Knowl source
-envelopes and consume Knowl's bounded query/lint/operation results. It may keep
-its own source identity and scope mapping, but Knowl must not import Balda
-packages or open Balda databases, Badger stores, NATS subjects, sessions, or
-transports. No implicit synchronization or ownership transfer is provided.
+- `GET /v1/retrieve`
+- `POST /v1/ingest`
+- `GET /v1/operations/{operation_id}`
 
-## Maintainer provider boundary
+Neither MCP nor HTTP exposes direct page CRUD, raw workspace writes, search
+sub-steps, or mandatory public review/apply choreography.
 
-`app.Maintainer` is the only application dependency needed to produce a model
-edit plan. The standalone CLI uses the same Norma runtime document and
-provider registry as Balda:
+## Source adapter boundary
 
-```yaml
-runtime:
-  providers:
-    codex:
-      type: codex_acp
-      codex_acp:
-        model: gpt-5-codex
-knowl:
-  provider: codex
-```
+A source adapter may translate external material into one public ingest request.
+It may supply:
 
-`knowl.provider` names one `runtime.providers` entry; Knowl does not define a
-second provider schema or translate a Knowl-only model configuration. Shared
-runtime validation runs before host side effects. The selected provider is
-adapted by `pkg/knowl/provider.NewRuntimeMaintainer`, which builds it lazily,
-uses an isolated in-memory session for each plan, grants no MCP servers or
-tools, and closes provider resources with the host lifecycle.
+- text content;
+- a URI;
+- stable origin and idempotency hints.
 
-The provider receives a bounded `MaintenanceInput` containing schema, accepted
-source metadata/text, selected pages, and read limits. It returns data-only
-`ModelEditPlan` output. The application validates schema digest, source
-citations, allowed paths, file count/size, and rationale limits before staging.
-Provider code never receives unrestricted filesystem authority and never edits
-schema, raw sources, or log files.
+It must not:
 
-Embedding callers may still pass an explicit `app.Maintainer` to the host
-constructor for deterministic tests or an application-owned adapter. The
-standalone CLI requires an explicit valid selector and never installs an
-unavailable maintainer in its place.
+- write `raw/`, `wiki/`, `.knowl/`, or SQL directly;
+- choose arbitrary trusted scope per request;
+- bypass the ingest pipeline with page IDs, Markdown paths, or ready-made
+  changesets.
+
+## Host/application boundary
+
+The host owns:
+
+- session context;
+- user context;
+- final answer generation;
+- tool orchestration and policy;
+- mapping between its own identity model and a trusted Knowl scope.
+
+Knowl returns bounded evidence and durable operation status. The host decides
+how to combine that evidence with everything else it knows.
+
+## Balda and adjacent systems
+
+Balda or another host runtime may:
+
+- translate project/domain material into Knowl ingest requests;
+- consume Knowl evidence through MCP or HTTP;
+- keep its own session memory, user memory, and orchestration separately.
+
+Knowl must not import or directly own those other persistence layers.
+
+## Provider boundary
+
+The selected runtime provider is an implementation detail behind the maintainer
+adapter.
+
+Knowl:
+
+- reads `knowl.provider`;
+- resolves it through the shared `runtime.providers` document;
+- invokes the provider lazily through the maintainer boundary;
+- validates returned plans before canonical mutation.
+
+Provider code does not receive unrestricted filesystem authority.
 
 ## Out of scope
 
-The current contract intentionally excludes automatic web research or URL
-fetching, remote/shared tenancy, vector databases, encryption, binary/image
-understanding, automatic Git push/sync, mutating MCP tools, implicit forgetting,
-and deletion of immutable raw sources. Those capabilities require explicit
-future contracts and ownership decisions.
+The accepted baseline does not promise:
+
+- automatic web research or crawling;
+- vector DB as canonical storage;
+- shared multi-tenant security guarantees;
+- implicit forgetting or deletion of immutable raw sources;
+- binary/image understanding;
+- automatic Git push/sync;
+- a broader CRUD/admin public API.
