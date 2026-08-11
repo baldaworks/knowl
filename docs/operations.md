@@ -94,6 +94,7 @@ Common `KNOWL_*` overrides include:
 - `KNOWL_STORAGE_SQLITE_PATH`
 - `KNOWL_STORAGE_POSTGRES_DSN`
 - `KNOWL_SERVER_LISTEN_ADDR`
+- `KNOWL_OPERATOR_TOKEN`
 - `KNOWL_INGEST_AUTO_APPLY`
 
 ## Supported operator workflow
@@ -199,6 +200,14 @@ curl -sS http://127.0.0.1:8080/v1/operations/op_01K...
 ## MCP contract
 
 MCP is the primary agent-facing interface.
+
+The running service exposes MCP Streamable HTTP on its existing listener at
+`http://127.0.0.1:8080/mcp`.
+
+If `knowl.operator.token` is non-empty, clients must send
+`Authorization: Bearer <token>`. An empty token keeps the loopback development
+endpoint open. Configure a token whenever the listener is reachable outside
+the local host.
 
 The baseline server exposes exactly:
 

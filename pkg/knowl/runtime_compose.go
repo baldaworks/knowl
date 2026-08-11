@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	httpserver "github.com/baldaworks/knowl/internal/httpapi/server"
+	"github.com/baldaworks/knowl/internal/mcphttp"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
@@ -47,7 +48,17 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newHost(runtime), nil
+	host, err := newHost(runtime)
+	if err != nil {
+		if runtime.maintainerCloser != nil {
+			_ = runtime.maintainerCloser.Close()
+		}
+		if runtime.closer != nil {
+			_ = runtime.closer.Close()
+		}
+		return nil, err
+	}
+	return host, nil
 }
 
 func composeRuntime(ctx context.Context, config Config, maintainer app.Maintainer, maintainerCloser io.Closer) (_ composedRuntime, err error) {
@@ -146,7 +157,7 @@ func composeServices(
 	return service, query, lint, nil
 }
 
-func newHost(runtime composedRuntime) *Host {
+func newHost(runtime composedRuntime) (*Host, error) {
 	host := &Host{
 		config:           runtime.config,
 		workspace:        runtime.workspace,
@@ -161,14 +172,22 @@ func newHost(runtime composedRuntime) *Host {
 		mcp:              runtime.mcp,
 		serverErr:        make(chan error, 1),
 	}
-	host.handler = httpserver.NewHandler(httpserver.Dependencies{
+	httpHandler := httpserver.NewHandler(httpserver.Dependencies{
 		Scope:  runtime.config.Scope,
 		Ingest: runtime.service,
 		Query:  runtime.query,
 		Doer:   workerDoer{worker: runtime.worker},
 		Ready:  host.Ready,
 	})
-	return host
+	mcpHandler, err := mcphttp.NewHandler(runtime.mcp, host.Ready, runtime.config.OperatorToken)
+	if err != nil {
+		return nil, fmt.Errorf("compose Knowl MCP HTTP handler: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/", httpHandler)
+	host.handler = mux
+	return host, nil
 }
 
 func (options Options) maintainer(config Config) (app.Maintainer, io.Closer, error) {

@@ -43,6 +43,7 @@ Run it directly:
 ```bash
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
+  -e KNOWL_OPERATOR_TOKEN="${KNOWL_TOKEN}" \
   -v knowl-data:/var/lib/knowl \
   knowl:local
 ```
@@ -71,6 +72,11 @@ curl -sS http://127.0.0.1:8080/readyz
 The agent or host app runs next to Knowl and talks to it over MCP or the same
 KISS HTTP contract:
 
+- MCP Streamable HTTP: `/mcp`
 - `GET /v1/retrieve`
 - `POST /v1/ingest`
 - `GET /v1/operations/{operation_id}`
+
+When `KNOWL_OPERATOR_TOKEN` is configured, the MCP client sends the same value
+as `Authorization: Bearer <token>`. Keep the published port loopback-only for
+local sidecar use.

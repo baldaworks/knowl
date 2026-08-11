@@ -30,6 +30,9 @@ Baseline MCP surface:
 - `knowl_ingest`
 - `knowl_operation`
 
+The standalone service exposes this surface as MCP Streamable HTTP at `/mcp`
+on its existing service listener.
+
 The equivalent HTTP contract is:
 
 - `GET /v1/retrieve`
@@ -70,11 +73,35 @@ how to combine that evidence with everything else it knows.
 
 ## Balda and adjacent systems
 
+Balda supports Knowl through its generic external MCP configuration:
+
+```yaml
+runtime:
+  mcp_servers:
+    knowl:
+      type: http
+      url: http://127.0.0.1:8080/mcp
+      headers:
+        Authorization: "Bearer ${KNOWL_TOKEN}"
+
+balda:
+  mcp_servers:
+    - knowl
+```
+
+Knowl is started and configured separately. Balda does not embed Knowl, manage
+its process, initialize its workspace, or own its provider and persistence.
+Remove `knowl` from `balda.mcp_servers` to stop injecting it into new Balda
+sessions.
+
 Balda or another host runtime may:
 
 - translate project/domain material into Knowl ingest requests;
 - consume Knowl evidence through MCP or HTTP;
 - keep its own session memory, user memory, and orchestration separately.
+
+There is no automatic Balda-turn ingestion. Content enters Knowl only through
+an explicit `knowl_ingest` call or another operator-controlled ingest path.
 
 Knowl must not import or directly own those other persistence layers.
 

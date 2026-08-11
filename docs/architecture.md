@@ -38,6 +38,7 @@ These are the supported ways to use Knowl:
 - `pkg/knowlfx`: Fx wrapper over `pkg/knowl`
 - HTTP/OpenAPI: `internal/httpapi/*`
 - `pkg/knowl/mcp`: bounded three-tool MCP adapter
+- `internal/mcphttp`: standard Streamable HTTP transport over that adapter
 - `cmd/knowl`: operator CLI
 
 Everything else is implementation detail for one of those surfaces, not another
@@ -61,6 +62,7 @@ pkg/knowl/content/fs       canonical workspace adapter
 pkg/knowl/store/*          operational state and projection adapters
 pkg/knowl/provider         maintainer provider adapter
 pkg/knowl/mcp              MCP adapter surface
+internal/mcphttp           MCP Streamable HTTP transport
 internal/httpapi/*         HTTP adapter surface
 internal/bootstrap         workspace bootstrap/import support
 pkg/knowl                  composition root and host API
