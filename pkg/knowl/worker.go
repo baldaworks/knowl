@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -134,6 +136,7 @@ func (worker *worker) run(ctx context.Context) {
 			}
 			itemContext, cancel := context.WithCancel(ctx)
 			if err := item.fn(itemContext); err != nil {
+				log.Error().Err(err).Msg("knowl background operation failed")
 				cancel()
 				continue
 			}
