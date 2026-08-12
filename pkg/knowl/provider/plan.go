@@ -98,12 +98,12 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 		if outputBytes > maintainer.maxOutput {
 			return knowl.ModelEditPlan{}, fmt.Errorf("maintainer provider output exceeds configured limit")
 		}
-		var decoded knowl.ModelEditPlan
+		var decoded maintainerPlanOutput
 		if err := json.Unmarshal([]byte(candidate), &decoded); err != nil {
 			decodeErr = err
 			continue
 		}
-		plan = decoded
+		plan = decoded.modelPlan()
 		planFound = true
 	}
 	if planFound {
@@ -116,6 +116,36 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 		return knowl.ModelEditPlan{}, fmt.Errorf("decode maintainer plan: %w", decodeErr)
 	}
 	return knowl.ModelEditPlan{}, fmt.Errorf("decode maintainer plan")
+}
+
+type maintainerPlanOutput struct {
+	SchemaDigest string                     `json:"schema_digest"`
+	SourceRefs   []string                   `json:"source_refs"`
+	Edits        []maintainerFileEditOutput `json:"edits"`
+	Rationale    string                     `json:"rationale,omitempty"`
+}
+
+type maintainerFileEditOutput struct {
+	Path           string `json:"path"`
+	ExpectedDigest string `json:"expected_digest,omitempty"`
+	Content        string `json:"content"`
+}
+
+func (output maintainerPlanOutput) modelPlan() knowl.ModelEditPlan {
+	edits := make([]knowl.FileEdit, len(output.Edits))
+	for index, edit := range output.Edits {
+		edits[index] = knowl.FileEdit{
+			Path:           edit.Path,
+			ExpectedDigest: edit.ExpectedDigest,
+			Content:        []byte(edit.Content),
+		}
+	}
+	return knowl.ModelEditPlan{
+		SchemaDigest: output.SchemaDigest,
+		SourceRefs:   append([]string(nil), output.SourceRefs...),
+		Edits:        edits,
+		Rationale:    output.Rationale,
+	}
 }
 
 func planEventText(event *session.Event) string {

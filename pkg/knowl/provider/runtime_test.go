@@ -20,10 +20,10 @@ import (
 const wantMaintainerError = "maintainer"
 
 func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
-	plan := knowl.ModelEditPlan{
+	plan := maintainerPlanOutput{
 		SchemaDigest: "schema-digest",
 		SourceRefs:   []string{"source:1"},
-		Edits:        []knowl.FileEdit{{Path: "wiki/page.md", Content: []byte("# page\n")}},
+		Edits:        []maintainerFileEditOutput{{Path: "wiki/page.md", Content: "# page\n"}},
 		Rationale:    "maintain page",
 	}
 	encodedPlan, err := json.Marshal(plan)
