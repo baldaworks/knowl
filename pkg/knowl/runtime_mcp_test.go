@@ -46,7 +46,7 @@ func TestHostServesMCPContract(t *testing.T) {
 	defer shutdownHost(t, host)
 
 	client := sdkmcp.NewClient(
-		&sdkmcp.Implementation{Name: "knowl-test-client", Version: "1.0.0"},
+		&sdkmcp.Implementation{Name: hostMCPClientName, Version: hostMCPClientVersion},
 		nil,
 	)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{
@@ -218,7 +218,54 @@ func TestStreamableMCPIngestRunsInBackground(t *testing.T) {
 	waitForMCPHostOperation(t, session, operationID)
 }
 
+func TestStreamableMCPIngestPersistsPlanValidationFailure(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+	host, err := knowl.NewHost(ctx, config, provider.Fixture{Result: domain.ModelEditPlan{
+		SchemaDigest: "wrong-schema-digest",
+		SourceRefs:   []string{hostSourceRef},
+		Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
+	}})
+	if err != nil {
+		t.Fatalf("compose host: %v", err)
+	}
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("start host: %v", err)
+	}
+	defer shutdownHost(t, host)
+
+	session := connectMCPClient(t, ctx, host)
+	defer closeMCPClient(t, session)
+	operationID := callMCPIngest(t, ctx, session)
+	operation := waitForMCPHostOperationStatus(t, session, operationID)
+	if operation["status"] != hostFailedStatus {
+		t.Fatalf("operation = %#v, want failed", operation)
+	}
+	failure, ok := operation["failure"].(map[string]any)
+	if !ok || failure["class"] != "plan_validation" {
+		t.Fatalf("operation failure = %#v, want plan_validation", operation["failure"])
+	}
+}
+
 func waitForMCPHostOperation(t *testing.T, session *sdkmcp.ClientSession, operationID string) {
+	t.Helper()
+	operation := waitForMCPHostOperationStatus(t, session, operationID)
+	if operation["status"] == hostFailedStatus {
+		t.Fatalf("operation %q failed", operationID)
+	}
+}
+
+func waitForMCPHostOperationStatus(t *testing.T, session *sdkmcp.ClientSession, operationID string) map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -235,11 +282,59 @@ func waitForMCPHostOperation(t *testing.T, session *sdkmcp.ClientSession, operat
 		}
 		switch result["status"] {
 		case "completed":
-			return
-		case "failed":
-			t.Fatalf("operation %q failed", operationID)
+			return result
+		case hostFailedStatus:
+			return result
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("operation %q did not complete", operationID)
+	return nil
+}
+
+func connectMCPClient(t *testing.T, ctx context.Context, host *knowl.Host) *sdkmcp.ClientSession {
+	t.Helper()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: hostMCPClientName, Version: hostMCPClientVersion}, nil)
+	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{
+		Endpoint:             "http://" + host.Addr() + "/mcp",
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client: %v", err)
+	}
+	return session
+}
+
+func closeMCPClient(t *testing.T, session *sdkmcp.ClientSession) {
+	t.Helper()
+	if err := session.Close(); err != nil {
+		t.Errorf("close MCP session: %v", err)
+	}
+}
+
+func callMCPIngest(t *testing.T, ctx context.Context, session *sdkmcp.ClientSession) string {
+	t.Helper()
+	response, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
+		Name: hostIngestToolName,
+		Arguments: map[string]any{
+			hostSourceContentKey:         hostSourceContent,
+			hostSourceOriginKey:          hostSourceOrigin,
+			hostSourceIdempotencyKeyName: hostSourceIdempotencyKey,
+		},
+	})
+	if err != nil || response.IsError {
+		t.Fatalf("call knowl_ingest = (%v, %#v)", err, response)
+	}
+	result, ok := response.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("ingest result type = %T", response.StructuredContent)
+	}
+	if result["status"] != hostQueuedStatus {
+		t.Fatalf("ingest result = %#v, want queued", result)
+	}
+	operationID, _ := result["operation_id"].(string)
+	if operationID == "" {
+		t.Fatalf("ingest operation ID missing: %#v", result)
+	}
+	return operationID
 }

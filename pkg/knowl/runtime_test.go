@@ -26,6 +26,9 @@ import (
 
 const hostSourceRef = "inline:source-1@1"
 const hostCompletedStatus = "completed"
+const hostFailedStatus = "failed"
+const hostMCPClientName = "knowl-test-client"
+const hostMCPClientVersion = "1.0.0"
 const hostSourceContent = "source text"
 const hostSourceOrigin = "source-1"
 const hostSourceIdempotencyKey = "1"
