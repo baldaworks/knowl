@@ -75,11 +75,31 @@ func TestCodexACPIngestProducesValidPlan(t *testing.T) {
 	if operation["status"] != hostCompletedStatus {
 		t.Fatalf("operation = %#v, want completed", operation)
 	}
+	assertCodexIntegrationRetrieve(t, ctx, session, "Balda")
 
 	secondID := callCodexIntegrationIngest(t, ctx, session, "second source", "source-2", "1")
 	second := waitForMCPHostOperationStatusUntil(t, ctx, session, secondID)
 	if second["status"] != hostCompletedStatus {
 		t.Fatalf("second operation = %#v, want completed with reused ACP runtime", second)
+	}
+}
+
+func assertCodexIntegrationRetrieve(t *testing.T, ctx context.Context, session *sdkmcp.ClientSession, query string) {
+	t.Helper()
+	response, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
+		Name:      hostRetrieveToolName,
+		Arguments: map[string]any{hostQueryKey: query},
+	})
+	if err != nil || response.IsError {
+		t.Fatalf("call knowl_retrieve = (%v, %#v)", err, response)
+	}
+	result, ok := response.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("retrieve result type = %T", response.StructuredContent)
+	}
+	evidence, ok := result["evidence"].([]any)
+	if !ok || len(evidence) == 0 {
+		t.Fatalf("retrieve result = %#v, want evidence for %q", result, query)
 	}
 }
 
