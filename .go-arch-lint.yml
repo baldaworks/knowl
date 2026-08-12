@@ -27,6 +27,8 @@ components:
     in: pkg/knowl/provider
   mcp:
     in: pkg/knowl/mcp
+  mcphttp:
+    in: internal/mcphttp
   httpapi:
     in: internal/httpapi/**
   bootstrap:
@@ -56,6 +58,9 @@ deps:
     mayDependOn:
       - app
       - types
+  mcphttp:
+    mayDependOn:
+      - mcp
   httpapi:
     mayDependOn:
       - httpapi
@@ -73,6 +78,7 @@ deps:
       - store
       - provider
       - mcp
+      - mcphttp
       - httpapi
   fx:
     mayDependOn:
