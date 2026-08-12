@@ -38,6 +38,7 @@ const hostPageID = "entities/one"
 const hostQuery = "One"
 const hostQueryKey = "query"
 const hostRetrieveToolName = "knowl_retrieve"
+const hostIngestToolName = "knowl_ingest"
 const hostOperationToolName = "knowl_operation"
 
 func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {

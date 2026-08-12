@@ -68,7 +68,7 @@ func TestHostServesMCPContract(t *testing.T) {
 	}
 	wantNames := map[string]bool{
 		hostRetrieveToolName:  false,
-		"knowl_ingest":        false,
+		hostIngestToolName:    false,
 		hostOperationToolName: false,
 	}
 	if len(listed.Tools) != len(wantNames) {
@@ -87,7 +87,7 @@ func TestHostServesMCPContract(t *testing.T) {
 	}
 
 	ingested, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-		Name: "knowl_ingest",
+		Name: hostIngestToolName,
 		Arguments: map[string]any{
 			hostSourceContentKey:         hostSourceContent,
 			hostSourceOriginKey:          hostSourceOrigin,
@@ -134,6 +134,88 @@ func TestHostServesMCPContract(t *testing.T) {
 	if !forbidden.IsError {
 		t.Fatal("scoped knowl_retrieve succeeded, want tool error")
 	}
+}
+
+func TestStreamableMCPIngestRunsInBackground(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	schema, err := workspace.Schema(ctx, "local")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	release := make(chan struct{})
+	maintainer := &blockingMaintainer{
+		started: make(chan struct{}),
+		release: release,
+		plan: domain.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{hostSourceRef},
+			Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
+		},
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+	config.IngestOptions.AutoApply = true
+	host, err := knowl.NewHost(ctx, config, maintainer)
+	if err != nil {
+		t.Fatalf("compose host: %v", err)
+	}
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("start host: %v", err)
+	}
+	defer shutdownHost(t, host)
+
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "knowl-test-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{
+		Endpoint:             "http://" + host.Addr() + "/mcp",
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect MCP client: %v", err)
+	}
+	defer func() {
+		if err := session.Close(); err != nil {
+			t.Errorf("close MCP session: %v", err)
+		}
+	}()
+
+	response, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
+		Name: hostIngestToolName,
+		Arguments: map[string]any{
+			hostSourceContentKey:         hostSourceContent,
+			hostSourceOriginKey:          hostSourceOrigin,
+			hostSourceIdempotencyKeyName: hostSourceIdempotencyKey,
+		},
+	})
+	if err != nil || response.IsError {
+		t.Fatalf("call knowl_ingest = (%v, %#v)", err, response)
+	}
+	result, ok := response.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("ingest result type = %T", response.StructuredContent)
+	}
+	if result["status"] != hostQueuedStatus {
+		t.Fatalf("ingest result = %#v, want queued", result)
+	}
+	operationID, _ := result["operation_id"].(string)
+	if operationID == "" {
+		t.Fatalf("ingest operation ID missing: %#v", result)
+	}
+	select {
+	case <-maintainer.started:
+	case <-time.After(time.Second):
+		t.Fatal("background MCP ingest did not start planning")
+	}
+	close(release)
+	waitForMCPHostOperation(t, session, operationID)
 }
 
 func waitForMCPHostOperation(t *testing.T, session *sdkmcp.ClientSession, operationID string) {
