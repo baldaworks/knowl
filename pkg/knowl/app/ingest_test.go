@@ -101,6 +101,42 @@ func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	}
 }
 
+func TestIngestAcceptsAndCommitsNoOpPlan(t *testing.T) {
+	ctx := context.Background()
+	workspace, _, service, _ := newWorkflow(t, false, nil, func(schema knowl.SchemaDocument) knowl.ModelEditPlan {
+		return knowl.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{testSourceRef},
+			Edits:        []knowl.FileEdit{},
+			Rationale:    "source requires no canonical changes",
+		}
+	})
+	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
+	if err != nil {
+		t.Fatalf("ingest no-op plan: %v", err)
+	}
+	if planned.Operation.Status != knowl.StatusAwaitingReview || len(planned.Plan.Edits) != 0 {
+		t.Fatalf("planned no-op = %#v", planned)
+	}
+	applied, err := service.Apply(ctx, "local", planned.Operation.ID)
+	if err != nil {
+		t.Fatalf("apply no-op plan: %v", err)
+	}
+	if applied.Operation.Status != knowl.StatusCommitted || applied.Commit == nil {
+		t.Fatalf("applied no-op = %#v", applied)
+	}
+	if len(applied.Commit.Files) != 1 || applied.Commit.Files[0] != "wiki/log.md" {
+		t.Fatalf("no-op commit files = %#v, want provenance log", applied.Commit.Files)
+	}
+	logContent, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "log.md"))
+	if err != nil {
+		t.Fatalf("read no-op commit log: %v", err)
+	}
+	if !contains(string(logContent), string(planned.Operation.ID)) {
+		t.Fatalf("no-op commit log does not cite operation: %q", logContent)
+	}
+}
+
 func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	ctx := context.Background()
 	workspace, _, service, maintainer := newWorkflow(t, false, nil)
@@ -232,14 +268,14 @@ func TestIngestRejectsStaleSchemaAtApply(t *testing.T) {
 	}
 }
 
-func TestProjectionFailureLeavesCanonicalCommitCommitted(t *testing.T) {
+func TestProjectionFailureLeavesCanonicalCommitAndFailsOperation(t *testing.T) {
 	ctx := context.Background()
 	workspace, store, service, _ := newWorkflow(t, false, failingIndex{})
 	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
-	_, err = service.Apply(ctx, "local", planned.Operation.ID)
+	result, err := service.Apply(ctx, "local", planned.Operation.ID)
 	if !errors.Is(err, app.ErrProjection) {
 		t.Fatalf("projection error = %v, want projection error", err)
 	}
@@ -247,8 +283,11 @@ func TestProjectionFailureLeavesCanonicalCommitCommitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read committed operation: %v", err)
 	}
-	if operation.Status != knowl.StatusCommitted {
-		t.Fatalf("projection failure status = %q, want committed", operation.Status)
+	if operation.Status != knowl.StatusFailed || operation.Failure == nil || operation.Failure.Class != "projection" {
+		t.Fatalf("projection failure operation = %#v, want failed projection", operation)
+	}
+	if result.Commit == nil {
+		t.Fatal("projection failure did not report the canonical commit")
 	}
 	if _, err := os.Stat(filepath.Join(workspace.Root(), "wiki", "entities", "one.md")); err != nil {
 		t.Fatalf("canonical page missing after projection failure: %v", err)

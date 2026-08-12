@@ -28,6 +28,8 @@ type RuntimeMaintainer struct {
 	factory    RuntimeFactory
 	providerID string
 	workspace  string
+	lifetime   context.Context
+	cancel     context.CancelFunc
 	maxInput   int
 	maxOutput  int
 	newSession func() session.Service

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
@@ -35,7 +36,15 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 	if len(payload) > maintainer.maxInput {
 		return knowl.ModelEditPlan{}, fmt.Errorf("maintenance input exceeds configured limit")
 	}
-	envelope, err := json.Marshal(map[string]string{"input": string(payload)})
+	envelope, err := json.Marshal(struct {
+		Input                json.RawMessage `json:"input"`
+		RequiredSchemaDigest string          `json:"required_schema_digest"`
+		RequiredSourceRef    string          `json:"required_source_ref"`
+	}{
+		Input:                payload,
+		RequiredSchemaDigest: input.Schema.Digest,
+		RequiredSourceRef:    app.SourceRefKey(input.Source),
+	})
 	if err != nil {
 		return knowl.ModelEditPlan{}, fmt.Errorf("encode maintenance request")
 	}

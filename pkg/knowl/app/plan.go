@@ -45,7 +45,7 @@ func ValidatePlan(ctx context.Context, input knowl.MaintenanceInput, plan knowl.
 	if strings.TrimSpace(input.Schema.Digest) == "" || plan.SchemaDigest != input.Schema.Digest {
 		return knowl.ValidatedEditPlan{}, ErrSchemaMismatch
 	}
-	if len(plan.Edits) == 0 || len(plan.Edits) > limits.MaxFiles {
+	if len(plan.Edits) > limits.MaxFiles {
 		return knowl.ValidatedEditPlan{}, fmt.Errorf("plan file count %d: %w", len(plan.Edits), ErrPlanLimitExceeded)
 	}
 	if len(plan.SourceRefs) == 0 || len(plan.SourceRefs) > limits.MaxSourceRefs {

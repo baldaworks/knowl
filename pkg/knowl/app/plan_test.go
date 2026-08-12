@@ -10,15 +10,16 @@ import (
 
 const fixtureAdapter = "fixture"
 const fixtureSourceID = "source"
+const fixtureSchemaDigest = "schema-digest"
 
 func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 	input := knowl.MaintenanceInput{
 		Scope:  "local",
-		Schema: knowl.SchemaDocument{Digest: "schema-digest"},
+		Schema: knowl.SchemaDocument{Digest: fixtureSchemaDigest},
 		Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
 	}
 	plan, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{
-		SchemaDigest: "schema-digest",
+		SchemaDigest: fixtureSchemaDigest,
 		SourceRefs:   []string{"fixture:source-1@1"},
 		Edits: []knowl.FileEdit{
 			{Path: "wiki/entities/z.md", Content: []byte("z")},
@@ -33,6 +34,25 @@ func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 	}
 	if plan.OperationID != "local:fixture:source-1@1" {
 		t.Fatalf("operation id = %q", plan.OperationID)
+	}
+}
+
+func TestValidatePlanAcceptsNoOp(t *testing.T) {
+	input := knowl.MaintenanceInput{
+		Scope:  "local",
+		Schema: knowl.SchemaDocument{Digest: fixtureSchemaDigest},
+		Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
+	}
+	plan, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{
+		SchemaDigest: fixtureSchemaDigest,
+		SourceRefs:   []string{"fixture:source-1@1"},
+		Edits:        []knowl.FileEdit{},
+	}, DefaultPlanLimits())
+	if err != nil {
+		t.Fatalf("validate no-op plan: %v", err)
+	}
+	if len(plan.Edits) != 0 {
+		t.Fatalf("no-op edits = %#v, want empty", plan.Edits)
 	}
 }
 

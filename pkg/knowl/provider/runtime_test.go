@@ -29,7 +29,8 @@ func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode plan: %v", err)
 	}
-	agent := newOutputAgent(t, string(encodedPlan))
+	var requestPayload string
+	agent := newCapturingOutputAgent(t, &requestPayload, string(encodedPlan))
 	factory := &fakeRuntimeFactory{agent: agent}
 	maintainer, err := newRuntimeMaintainer(factory, "codex", t.TempDir(), runtimeMaintainerOptions{})
 	if err != nil {
@@ -37,6 +38,8 @@ func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	}
 
 	got, err := maintainer.Plan(context.Background(), knowl.MaintenanceInput{
+		Schema:     knowl.SchemaDocument{Digest: plan.SchemaDigest},
+		Source:     knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: "inline", ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
 		SourceText: "untrusted source text",
 	})
 	if err != nil {
@@ -56,6 +59,15 @@ func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	}
 	if len(factory.request.Tools) != 0 || len(factory.request.Toolsets) != 0 {
 		t.Fatalf("build request granted tools: tools=%d toolsets=%d", len(factory.request.Tools), len(factory.request.Toolsets))
+	}
+	for _, want := range []string{
+		`"input":{"scope":""`,
+		`"required_schema_digest":"schema-digest"`,
+		`"required_source_ref":"inline:source-1@1"`,
+	} {
+		if !strings.Contains(requestPayload, want) {
+			t.Fatalf("maintainer prompt does not contain %q: %s", want, requestPayload)
+		}
 	}
 
 	if err := maintainer.Close(); err != nil {
@@ -81,7 +93,7 @@ func TestRuntimeMaintainerDeletesEachSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new maintainer: %v", err)
 	}
-	if _, err := maintainer.Plan(context.Background(), knowl.MaintenanceInput{}); err != nil {
+	if _, err := maintainer.Plan(context.Background(), testMaintenanceInput()); err != nil {
 		t.Fatalf("Plan() error: %v", err)
 	}
 	if service.creates.Load() != 1 {
@@ -115,7 +127,7 @@ func TestRuntimeMaintainerRejectsUnsafeOutputAndLimits(t *testing.T) {
 			if err != nil {
 				t.Fatalf("new maintainer: %v", err)
 			}
-			_, err = maintainer.Plan(context.Background(), knowl.MaintenanceInput{})
+			_, err = maintainer.Plan(context.Background(), testMaintenanceInput())
 			if err == nil {
 				t.Fatal("Plan() error = nil, want provider output error")
 			}
@@ -137,7 +149,7 @@ func TestRuntimeMaintainerHonorsCancellationBeforeBuild(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = maintainer.Plan(ctx, knowl.MaintenanceInput{})
+	_, err = maintainer.Plan(ctx, testMaintenanceInput())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Plan() error = %v, want context.Canceled", err)
 	}
@@ -157,7 +169,7 @@ func TestRuntimeMaintainerKeepsCachedRuntimeAfterCanceledPlan(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	planErr := make(chan error, 1)
 	go func() {
-		_, runErr := maintainer.Plan(canceled, knowl.MaintenanceInput{})
+		_, runErr := maintainer.Plan(canceled, testMaintenanceInput())
 		planErr <- runErr
 	}()
 	<-started
@@ -168,7 +180,10 @@ func TestRuntimeMaintainerKeepsCachedRuntimeAfterCanceledPlan(t *testing.T) {
 	if factory.closed.Load() {
 		t.Fatal("canceled plan closed the cached provider runtime")
 	}
-	if _, err := maintainer.Plan(context.Background(), knowl.MaintenanceInput{}); err != nil {
+	if err := factory.buildContext.Err(); err != nil {
+		t.Fatalf("plan cancellation reached host-owned provider context: %v", err)
+	}
+	if _, err := maintainer.Plan(context.Background(), testMaintenanceInput()); err != nil {
 		t.Fatalf("plan after cancellation: %v", err)
 	}
 	if factory.builds != 1 {
@@ -179,6 +194,16 @@ func TestRuntimeMaintainerKeepsCachedRuntimeAfterCanceledPlan(t *testing.T) {
 	}
 	if !factory.closed.Load() {
 		t.Fatal("host-owned maintainer close did not close the provider runtime")
+	}
+}
+
+func testMaintenanceInput() knowl.MaintenanceInput {
+	return knowl.MaintenanceInput{
+		Schema: knowl.SchemaDocument{Digest: "schema"},
+		Source: knowl.AcceptedSource{
+			Source:  knowl.SourceRef{Adapter: "fixture", ID: "source"},
+			Version: knowl.SourceVersion{Version: "1"},
+		},
 	}
 }
 
@@ -214,12 +239,25 @@ func newCancelThenOutputAgent(t *testing.T, started chan<- struct{}, output stri
 }
 
 func newOutputAgent(t *testing.T, output string) adkagent.Agent {
+	return newCapturingOutputAgent(t, nil, output)
+}
+
+func newCapturingOutputAgent(t *testing.T, prompt *string, output string) adkagent.Agent {
 	t.Helper()
 	agent, err := adkagent.New(adkagent.Config{
 		Name:        "fake_provider",
 		Description: "deterministic test provider",
 		Run: func(ctx adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
 			return func(yield func(*session.Event, error) bool) {
+				if prompt != nil && ctx.UserContent() != nil {
+					var request strings.Builder
+					for _, part := range ctx.UserContent().Parts {
+						if part != nil {
+							request.WriteString(part.Text)
+						}
+					}
+					*prompt = request.String()
+				}
 				if output != "" {
 					event := session.NewEvent(context.Background(), ctx.InvocationID())
 					event.Content = genai.NewContentFromText(output, genai.RoleModel)
@@ -240,10 +278,11 @@ func newOutputAgent(t *testing.T, output string) adkagent.Agent {
 }
 
 type fakeRuntimeFactory struct {
-	agent   adkagent.Agent
-	request agentfactory.BuildRequest
-	builds  int
-	closed  atomic.Bool
+	agent        adkagent.Agent
+	request      agentfactory.BuildRequest
+	buildContext context.Context
+	builds       int
+	closed       atomic.Bool
 }
 
 func (factory *fakeRuntimeFactory) Build(ctx context.Context, request agentfactory.BuildRequest) (adkagent.Agent, error) {
@@ -251,6 +290,7 @@ func (factory *fakeRuntimeFactory) Build(ctx context.Context, request agentfacto
 		return nil, err
 	}
 	factory.request = request
+	factory.buildContext = ctx
 	factory.builds++
 	return &closableAgent{Agent: factory.agent, closed: &factory.closed}, nil
 }

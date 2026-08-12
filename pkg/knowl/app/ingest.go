@@ -349,10 +349,18 @@ func (service *IngestService) apply(ctx context.Context, scope knowl.ScopeRef, i
 	if err != nil {
 		return service.failApply(stateCtx, scope, id, operation, "commit", err)
 	}
+	snapshot, err := service.content.Snapshot(ctx, scope)
+	if err != nil {
+		return service.failAfterCommit(stateCtx, scope, id, operation, commit, err)
+	}
+	commit.Snapshot = snapshot
+	if err := service.index.Project(ctx, commit); err != nil {
+		return service.failAfterCommit(stateCtx, scope, id, operation, commit, err)
+	}
 	if err := service.operations.CommitOutcome(stateCtx, id, commit); err != nil {
-		committed, readErr := service.operations.Operation(stateCtx, scope, id)
+		current, readErr := service.operations.Operation(stateCtx, scope, id)
 		if readErr == nil {
-			operation = committed
+			operation = current
 		}
 		return ApplyResult{Operation: operation, Commit: &commit}, fmt.Errorf("record commit outcome: %w", err)
 	}
@@ -360,15 +368,25 @@ func (service *IngestService) apply(ctx context.Context, scope knowl.ScopeRef, i
 	if err != nil {
 		return ApplyResult{Commit: &commit}, fmt.Errorf("read committed operation: %w", err)
 	}
-	snapshot, err := service.content.Snapshot(ctx, scope)
-	if err != nil {
-		return ApplyResult{Operation: operation, Commit: &commit}, fmt.Errorf("%w: %w", ErrProjection, err)
-	}
-	commit.Snapshot = snapshot
-	if err := service.index.Project(ctx, commit); err != nil {
-		return ApplyResult{Operation: operation, Commit: &commit}, fmt.Errorf("%w: %w", ErrProjection, err)
-	}
 	return ApplyResult{Operation: operation, Commit: &commit}, nil
+}
+
+func (service *IngestService) failAfterCommit(
+	ctx context.Context,
+	scope knowl.ScopeRef,
+	id knowl.OperationID,
+	operation knowl.Operation,
+	commit knowl.ContentCommit,
+	cause error,
+) (ApplyResult, error) {
+	err := fmt.Errorf("%w: %w", ErrProjection, cause)
+	if failErr := service.operations.Fail(ctx, id, knowl.Failure{Class: "projection", OperationID: string(id)}); failErr != nil {
+		return ApplyResult{Operation: operation, Commit: &commit}, errors.Join(err, fmt.Errorf("record projection failure: %w", failErr))
+	}
+	if current, readErr := service.operations.Operation(ctx, scope, id); readErr == nil {
+		operation = current
+	}
+	return ApplyResult{Operation: operation, Commit: &commit}, err
 }
 
 func (service *IngestService) failIngest(ctx context.Context, result IngestResult, class string, cause error) (IngestResult, error) {

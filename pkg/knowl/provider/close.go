@@ -18,11 +18,14 @@ func (maintainer *RuntimeMaintainer) Close() error {
 		return nil
 	}
 	maintainer.closed = true
+	if maintainer.cancel != nil {
+		defer maintainer.cancel()
+	}
 	if maintainer.runtime == nil || maintainer.runtime.closer == nil {
 		return nil
 	}
 	if err := maintainer.runtime.closer.Close(); err != nil {
-		return fmt.Errorf("close maintainer provider")
+		return fmt.Errorf("close maintainer provider: %w", err)
 	}
 	return nil
 }

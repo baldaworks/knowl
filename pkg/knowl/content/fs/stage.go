@@ -19,7 +19,7 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 	if err := contextErr(ctx); err != nil {
 		return knowl.StagedChange{}, err
 	}
-	if strings.TrimSpace(plan.OperationID) == "" || len(plan.Edits) == 0 {
+	if strings.TrimSpace(plan.OperationID) == "" {
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
 	workspace.mu.Lock()
