@@ -14,71 +14,7 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-func TestLoadConfigNormalizesCanonicalIngestPolicy(t *testing.T) {
-	ctx := loadTestConfig(t, testConfigOptions{
-		knowl: "provider: codex\ningest:\n  auto_apply: true\n",
-	})
-	loaded, err := configFromContext(ctx)
-	if err != nil {
-		t.Fatalf("configFromContext() error: %v", err)
-	}
-	if loaded.Document.Knowl.Ingest.AutoApply == nil || !*loaded.Document.Knowl.Ingest.AutoApply {
-		t.Fatalf("normalized ingest.auto_apply = %#v, want true", loaded.Document.Knowl.Ingest.AutoApply)
-	}
-	config, err := hostConfig(ctx)
-	if err != nil {
-		t.Fatalf("hostConfig() error: %v", err)
-	}
-	if !config.IngestOptions.AutoApply {
-		t.Fatal("hostConfig().IngestOptions.AutoApply = false, want true")
-	}
-}
-
-func TestLoadConfigNormalizesLegacyMaintenancePolicy(t *testing.T) {
-	tests := []struct {
-		name      string
-		knowl     string
-		wantApply bool
-	}{
-		{
-			name:      "legacy review false",
-			knowl:     "provider: codex\nmaintenance:\n  review: false\n",
-			wantApply: true,
-		},
-		{
-			name:      "legacy auto apply",
-			knowl:     "provider: codex\nmaintenance:\n  auto_apply: true\n",
-			wantApply: true,
-		},
-		{
-			name:      "legacy consistent pair",
-			knowl:     "provider: codex\nmaintenance:\n  auto_apply: false\n  review: true\n",
-			wantApply: false,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			ctx := loadTestConfig(t, testConfigOptions{knowl: test.knowl})
-			loaded, err := configFromContext(ctx)
-			if err != nil {
-				t.Fatalf("configFromContext() error: %v", err)
-			}
-			if loaded.Document.Knowl.Ingest.AutoApply == nil || *loaded.Document.Knowl.Ingest.AutoApply != test.wantApply {
-				t.Fatalf("normalized ingest.auto_apply = %#v, want %t", loaded.Document.Knowl.Ingest.AutoApply, test.wantApply)
-			}
-			config, err := hostConfig(ctx)
-			if err != nil {
-				t.Fatalf("hostConfig() error: %v", err)
-			}
-			if config.IngestOptions.AutoApply != test.wantApply {
-				t.Fatalf("hostConfig().IngestOptions.AutoApply = %t, want %t", config.IngestOptions.AutoApply, test.wantApply)
-			}
-		})
-	}
-}
-
-func TestLoadConfigDefaultsToReviewFirstWhenIngestPolicyAbsent(t *testing.T) {
+func TestLoadConfigUsesDefaultInternalIngestPolicyWhenConfigOmitsIt(t *testing.T) {
 	ctx := loadTestConfig(t, testConfigOptions{knowl: "provider: codex\n"})
 	config, err := hostConfig(ctx)
 	if err != nil {
@@ -89,31 +25,31 @@ func TestLoadConfigDefaultsToReviewFirstWhenIngestPolicyAbsent(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsMixedCanonicalAndLegacyIngestPolicy(t *testing.T) {
+func TestLoadConfigRejectsRemovedIngestConfig(t *testing.T) {
 	_, err := tryLoadTestConfig(t, testConfigOptions{
-		knowl: "provider: codex\ningest:\n  auto_apply: true\nmaintenance:\n  review: false\n",
+		knowl: "provider: codex\ningest:\n  auto_apply: true\n",
 	})
 	if err == nil {
-		t.Fatal("loadConfig() error = nil, want mixed-shape rejection")
+		t.Fatal("loadConfig() error = nil, want removed-section rejection")
 	}
-	if !strings.Contains(err.Error(), "knowl.ingest.auto_apply cannot be combined with legacy knowl.maintenance settings") {
-		t.Fatalf("loadConfig() error = %q, want mixed-shape rejection", err)
+	if !strings.Contains(err.Error(), "knowl.ingest is not supported") {
+		t.Fatalf("loadConfig() error = %q, want ingest rejection", err)
 	}
 }
 
-func TestLoadConfigRejectsContradictoryLegacyMaintenancePolicy(t *testing.T) {
+func TestLoadConfigRejectsRemovedMaintenanceConfig(t *testing.T) {
 	_, err := tryLoadTestConfig(t, testConfigOptions{
-		knowl: "provider: codex\nmaintenance:\n  auto_apply: true\n  review: true\n",
+		knowl: "provider: codex\nmaintenance:\n  auto_apply: true\n",
 	})
 	if err == nil {
-		t.Fatal("loadConfig() error = nil, want contradictory legacy policy rejection")
+		t.Fatal("loadConfig() error = nil, want removed-section rejection")
 	}
-	if !strings.Contains(err.Error(), "knowl.maintenance.auto_apply conflicts with knowl.maintenance.review") {
-		t.Fatalf("loadConfig() error = %q, want contradictory legacy policy rejection", err)
+	if !strings.Contains(err.Error(), "knowl.maintenance is not supported") {
+		t.Fatalf("loadConfig() error = %q, want maintenance rejection", err)
 	}
 }
 
-func TestCanonicalIngestConfigStillExposesCompletedPublicIngest(t *testing.T) {
+func TestPublicIngestStillExposesCompletedResultWithoutConfigPolicy(t *testing.T) {
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("new workspace: %v", err)
@@ -127,14 +63,14 @@ func TestCanonicalIngestConfigStillExposesCompletedPublicIngest(t *testing.T) {
 	}
 
 	ctx := loadTestConfig(t, testConfigOptions{
-		knowl: "provider: codex\nworkspace:\n  path: " + strconvQuote(workspace.Root()) + "\ningest:\n  auto_apply: true\n",
+		knowl: "provider: codex\nworkspace:\n  path: " + strconvQuote(workspace.Root()) + "\n",
 	})
 	config, err := hostConfig(ctx)
 	if err != nil {
 		t.Fatalf("hostConfig() error: %v", err)
 	}
-	if !config.IngestOptions.AutoApply {
-		t.Fatal("hostConfig().IngestOptions.AutoApply = false, want true")
+	if config.IngestOptions.AutoApply {
+		t.Fatal("hostConfig().IngestOptions.AutoApply = true, want default false")
 	}
 	fixture := commandWorkflowFixture{
 		config: config,

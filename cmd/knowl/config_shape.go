@@ -16,7 +16,7 @@ type AppConfig struct {
 	Storage   StorageConfig       `mapstructure:"storage"`
 	Scope     knowltypes.ScopeRef `mapstructure:"scope"`
 	Server    ServerConfig        `mapstructure:"server"`
-	Ingest    IngestConfig        `mapstructure:"ingest"`
+	Operator  OperatorConfig      `mapstructure:"operator"`
 }
 
 // WorkspaceConfig controls the workspace root used by Knowl.
@@ -102,19 +102,9 @@ type ServerConfig struct {
 	ListenAddr string `mapstructure:"listen_addr"`
 }
 
-// IngestConfig controls whether normal ingest stops for review or auto-applies.
-// A nil pointer preserves the default review-first behavior at normalization
-// time.
-type IngestConfig struct {
-	AutoApply *bool `mapstructure:"auto_apply"`
-}
-
-// MaintenanceConfig controls ingest review behavior. Pointers preserve the
-// distinction between an omitted setting and an explicit false value while the
-// document is being normalized.
-type MaintenanceConfig struct {
-	AutoApply *bool `mapstructure:"auto_apply"`
-	Review    *bool `mapstructure:"review"`
+// OperatorConfig controls operator authentication.
+type OperatorConfig struct {
+	Token string `mapstructure:"token"`
 }
 
 type rawAppConfig struct {
@@ -123,15 +113,19 @@ type rawAppConfig struct {
 	Storage     StorageConfig       `mapstructure:"storage"`
 	Scope       knowltypes.ScopeRef `mapstructure:"scope"`
 	Server      ServerConfig        `mapstructure:"server"`
-	Ingest      IngestConfig        `mapstructure:"ingest"`
-	Maintenance MaintenanceConfig   `mapstructure:"maintenance"`
+	Operator    OperatorConfig      `mapstructure:"operator"`
+	Ingest      map[string]any      `mapstructure:"ingest"`
+	Maintenance map[string]any      `mapstructure:"maintenance"`
 }
 
-// Normalize resolves legacy config aliases into the canonical public shape.
+// Normalize validates the public config shape and rejects removed compatibility
+// sections.
 func (config rawAppConfig) Normalize() (AppConfig, error) {
-	ingest, err := normalizeIngestConfig(config.Ingest, config.Maintenance)
-	if err != nil {
-		return AppConfig{}, err
+	if len(config.Ingest) != 0 {
+		return AppConfig{}, fmt.Errorf("knowl.ingest is not supported")
+	}
+	if len(config.Maintenance) != 0 {
+		return AppConfig{}, fmt.Errorf("knowl.maintenance is not supported")
 	}
 	return AppConfig{
 		Provider:  config.Provider,
@@ -139,37 +133,6 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 		Storage:   config.Storage,
 		Scope:     config.Scope,
 		Server:    config.Server,
-		Ingest:    ingest,
+		Operator:  config.Operator,
 	}, nil
-}
-
-func normalizeIngestConfig(canonical IngestConfig, legacy MaintenanceConfig) (IngestConfig, error) {
-	if canonical.configured() {
-		if legacy.configured() {
-			return IngestConfig{}, fmt.Errorf("knowl.ingest.auto_apply cannot be combined with legacy knowl.maintenance settings")
-		}
-		return canonical, nil
-	}
-	if !legacy.configured() {
-		return IngestConfig{}, nil
-	}
-	if legacy.AutoApply != nil && legacy.Review != nil && *legacy.AutoApply != !*legacy.Review {
-		return IngestConfig{}, fmt.Errorf("knowl.maintenance.auto_apply conflicts with knowl.maintenance.review")
-	}
-	if legacy.AutoApply != nil {
-		return IngestConfig{AutoApply: legacy.AutoApply}, nil
-	}
-	return IngestConfig{AutoApply: boolPtr(!*legacy.Review)}, nil
-}
-
-func (config IngestConfig) configured() bool {
-	return config.AutoApply != nil
-}
-
-func (config MaintenanceConfig) configured() bool {
-	return config.AutoApply != nil || config.Review != nil
-}
-
-func boolPtr(value bool) *bool {
-	return &value
 }

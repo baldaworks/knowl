@@ -13,8 +13,6 @@ knowl:
     type: sqlite
     sqlite:
       path: .knowl/knowl.sqlite
-  ingest:
-    auto_apply: false
   scope: local
   server:
     listen_addr: 0.0.0.0:8080

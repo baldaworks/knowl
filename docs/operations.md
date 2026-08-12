@@ -48,8 +48,6 @@ knowl:
   scope: local
   server:
     listen_addr: 127.0.0.1:8080
-  ingest:
-    auto_apply: false
 ```
 
 PostgreSQL example:
@@ -81,8 +79,6 @@ Notes:
 - `knowl.provider` selects one entry from `runtime.providers`.
 - `knowl.storage.type` selects one optional typed storage block.
 - when storage is omitted, Knowl defaults to SQLite.
-- `knowl.ingest.auto_apply` affects internal normal ingest policy; the public
-  KISS ingest contract still returns the simplified durable operation result.
 - default local listen address is `127.0.0.1:8080`; service/sidecar deployments
   may override it with `0.0.0.0:8080` or another literal IP bind.
 
@@ -94,7 +90,6 @@ Common `KNOWL_*` overrides include:
 - `KNOWL_STORAGE_SQLITE_PATH`
 - `KNOWL_STORAGE_POSTGRES_DSN`
 - `KNOWL_SERVER_LISTEN_ADDR`
-- `KNOWL_INGEST_AUTO_APPLY`
 
 ## Supported operator workflow
 

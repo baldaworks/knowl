@@ -169,11 +169,7 @@ knowl:
     type: sqlite
     sqlite:
       path: .knowl/knowl.sqlite
-  ingest:
-    auto_apply: false
 ```
-
-`knowl.ingest.auto_apply` controls the internal normal ingest policy.
 
 Container baseline example:
 

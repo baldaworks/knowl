@@ -167,7 +167,7 @@ func writeConfig(path, workspace string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat config %q: %w", path, err)
 	}
-	contents := fmt.Sprintf("runtime:\n  providers:\n    opencode:\n      type: opencode_acp\n      opencode_acp:\n        model: opencode/big-pickle\nknowl:\n  provider: opencode\n  workspace:\n    path: %q\n  storage:\n    type: sqlite\n    sqlite:\n      path: .knowl/knowl.sqlite\n  ingest:\n    auto_apply: false\n", workspace)
+	contents := fmt.Sprintf("runtime:\n  providers:\n    opencode:\n      type: opencode_acp\n      opencode_acp:\n        model: opencode/big-pickle\nknowl:\n  provider: opencode\n  workspace:\n    path: %q\n  storage:\n    type: sqlite\n    sqlite:\n      path: .knowl/knowl.sqlite\n", workspace)
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		return fmt.Errorf("write config %q: %w", path, err)
 	}
