@@ -68,7 +68,12 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 		})
 	}()
 
-	var output strings.Builder
+	var (
+		plan        knowl.ModelEditPlan
+		planFound   bool
+		outputBytes int
+		decodeErr   error
+	)
 	for event, runErr := range runtime.runner.Run(
 		ctx,
 		maintainerUserID,
@@ -85,22 +90,43 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 		if event == nil || event.Content == nil {
 			continue
 		}
-		for _, part := range event.Content.Parts {
-			if part != nil && !part.Thought {
-				output.WriteString(part.Text)
-			}
+		candidate := planEventText(event)
+		if candidate == "" {
+			continue
 		}
-		if output.Len() > maintainer.maxOutput {
+		outputBytes += len(candidate)
+		if outputBytes > maintainer.maxOutput {
 			return knowl.ModelEditPlan{}, fmt.Errorf("maintainer provider output exceeds configured limit")
 		}
+		var decoded knowl.ModelEditPlan
+		if err := json.Unmarshal([]byte(candidate), &decoded); err != nil {
+			decodeErr = err
+			continue
+		}
+		plan = decoded
+		planFound = true
 	}
-	if strings.TrimSpace(output.String()) == "" {
+	if planFound {
+		return plan, nil
+	}
+	if outputBytes == 0 {
 		return knowl.ModelEditPlan{}, fmt.Errorf("maintainer provider returned empty output")
 	}
-
-	var plan knowl.ModelEditPlan
-	if err := json.Unmarshal([]byte(output.String()), &plan); err != nil {
-		return knowl.ModelEditPlan{}, fmt.Errorf("decode maintainer plan")
+	if decodeErr != nil {
+		return knowl.ModelEditPlan{}, fmt.Errorf("decode maintainer plan: %w", decodeErr)
 	}
-	return plan, nil
+	return knowl.ModelEditPlan{}, fmt.Errorf("decode maintainer plan")
+}
+
+func planEventText(event *session.Event) string {
+	if event == nil || event.Content == nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, part := range event.Content.Parts {
+		if part != nil && !part.Thought {
+			text.WriteString(part.Text)
+		}
+	}
+	return strings.TrimSpace(text.String())
 }

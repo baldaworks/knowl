@@ -12,6 +12,7 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/normahq/runtime/v2/agentfactory"
 	adkagent "google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 )
@@ -139,6 +140,51 @@ func TestRuntimeMaintainerRejectsUnsafeOutputAndLimits(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuntimeMaintainerDecodesRepeatedStructuredEvents(t *testing.T) {
+	planJSON := `{"schema_digest":"schema","source_refs":["fixture:source@1"],"edits":[]}`
+	maintainer, err := newRuntimeMaintainer(
+		&fakeRuntimeFactory{agent: newOutputAgent(t, planJSON)},
+		"provider",
+		t.TempDir(),
+		runtimeMaintainerOptions{newRunner: duplicateOutputRunner},
+	)
+	if err != nil {
+		t.Fatalf("new maintainer: %v", err)
+	}
+	plan, err := maintainer.Plan(context.Background(), testMaintenanceInput())
+	if err != nil {
+		t.Fatalf("Plan() repeated structured events: %v", err)
+	}
+	if plan.SchemaDigest != "schema" {
+		t.Fatalf("Plan() = %#v", plan)
+	}
+}
+
+func duplicateOutputRunner(agent adkagent.Agent, sessions session.Service) (*runner.Runner, error) {
+	duplicate, err := adkagent.New(adkagent.Config{
+		Name:        "duplicate_output_agent",
+		Description: "repeats structured output events",
+		Run: func(ctx adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				for event, runErr := range agent.Run(ctx) {
+					if !yield(event, runErr) || runErr != nil {
+						return
+					}
+					if event != nil && event.Content != nil && !event.TurnComplete {
+						if !yield(event, nil) {
+							return
+						}
+					}
+				}
+			}
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return runner.New(runner.Config{AppName: maintainerAppName, Agent: duplicate, SessionService: sessions})
 }
 
 func TestRuntimeMaintainerHonorsCancellationBeforeBuild(t *testing.T) {

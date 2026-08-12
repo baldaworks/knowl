@@ -60,7 +60,14 @@ func TestCodexACPIngestProducesValidPlan(t *testing.T) {
 
 	session := connectMCPClient(t, ctx, host)
 	defer closeMCPClient(t, session)
-	operationID := callCodexIntegrationIngest(t, ctx, session, "first source", "source-1", "1")
+	operationID := callCodexIntegrationIngest(
+		t,
+		ctx,
+		session,
+		"# Balda\n\nОсновной исходник Balda: https://github.com/baldaworks/balda",
+		"source-1",
+		"1",
+	)
 	operation := waitForMCPHostOperationStatusUntil(t, ctx, session, operationID)
 	if operation["status"] == hostFailedStatus {
 		t.Fatalf("Codex ACP ingest failed: %#v", operation["failure"])
