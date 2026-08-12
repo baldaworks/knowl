@@ -9,20 +9,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // Reserve creates or returns the operation for one source revision.
-func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta knowl.OperationMeta) (knowl.Operation, error) {
+func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta knowl.OperationMeta) (app.OperationReservation, error) {
 	if err := validateOperationKey(key); err != nil {
-		return knowl.Operation{}, err
+		return app.OperationReservation{}, err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return knowl.Operation{}, fmt.Errorf("begin operation reservation: %w", err)
+		return app.OperationReservation{}, fmt.Errorf("begin operation reservation: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -31,7 +32,7 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		now = time.Now().UTC()
 	}
 	operationID := operationID(key)
-	_, err = tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO knowl_operations (
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
 			schema_digest, status, created_at, updated_at
@@ -40,7 +41,11 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version,
 		key.Version.Digest, meta.SchemaDigest, knowl.StatusReceived, now)
 	if err != nil {
-		return knowl.Operation{}, fmt.Errorf("reserve operation: %w", err)
+		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
+	}
+	created, err := result.RowsAffected()
+	if err != nil {
+		return app.OperationReservation{}, fmt.Errorf("inspect operation reservation: %w", err)
 	}
 
 	var existingID, existingDigest string
@@ -52,18 +57,19 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version).
 		Scan(&existingID, &existingDigest)
 	if errors.Is(err, sql.ErrNoRows) {
-		return knowl.Operation{}, fmt.Errorf("reserved operation disappeared: %w", ErrNotFound)
+		return app.OperationReservation{}, fmt.Errorf("reserved operation disappeared: %w", ErrNotFound)
 	}
 	if err != nil {
-		return knowl.Operation{}, fmt.Errorf("inspect existing operation: %w", err)
+		return app.OperationReservation{}, fmt.Errorf("inspect existing operation: %w", err)
 	}
 	if existingDigest != key.Version.Digest {
-		return knowl.Operation{}, ErrConflict
+		return app.OperationReservation{}, ErrConflict
 	}
 	if err := tx.Commit(); err != nil {
-		return knowl.Operation{}, fmt.Errorf("commit operation reservation: %w", err)
+		return app.OperationReservation{}, fmt.Errorf("commit operation reservation: %w", err)
 	}
-	return store.Operation(ctx, key.Scope, knowl.OperationID(existingID))
+	operation, readErr := store.Operation(ctx, key.Scope, knowl.OperationID(existingID))
+	return app.OperationReservation{Operation: operation, New: created == 1}, readErr
 }
 
 // SavePlan persists a redacted plan digest and advances the operation.

@@ -94,10 +94,6 @@ func newIngestCommand() *cobra.Command {
 	)
 }
 
-func newQueryCommand() *cobra.Command {
-	return newQueryReadCommand()
-}
-
 func newOperationCommand() *cobra.Command {
 	return newOperationReadCommand()
 }

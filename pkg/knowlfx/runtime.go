@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/metalagman/appkit/lifecycle"
 	"go.uber.org/fx"
 )
 
@@ -19,7 +20,7 @@ func Module(ctx context.Context, options Options) fx.Option {
 	return fx.Module("knowlfx",
 		fx.Provide(
 			func() (*Host, error) { return knowl.New(ctx, options) },
-			func(host *Host) hostLifecycle { return host },
+			func(host *Host) lifecycle.Lifecycle { return host },
 		),
 		fx.Invoke(registerHostLifecycle),
 	)
@@ -33,16 +34,11 @@ func NewApp(ctx context.Context, options Options, additional ...fx.Option) *fx.A
 	)
 }
 
-type hostLifecycle interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
-}
-
 type hostLifecycleParams struct {
 	fx.In
 
 	Lifecycle fx.Lifecycle
-	Host      hostLifecycle
+	Host      lifecycle.Lifecycle
 }
 
 func registerHostLifecycle(params hostLifecycleParams) {

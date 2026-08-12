@@ -62,9 +62,9 @@ func newJSONBodyWorkflowCommand[T any](use, short, requestPath string) *cobra.Co
 	return command
 }
 
-func newQueryReadCommand() *cobra.Command {
+func newRetrieveCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:           queryCommandName + " <text>",
+		Use:           retrieveCommandName + " <text>",
 		Short:         "Retrieve bounded evidence from Knowl",
 		Long:          "Retrieve bounded evidence from Knowl.\n\nPass the query text as positional arguments. The command prints the " + workflowJSONStdoutHelp + ".",
 		Args:          cobra.MinimumNArgs(1),

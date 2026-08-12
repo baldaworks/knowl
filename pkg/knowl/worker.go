@@ -13,9 +13,7 @@ var (
 )
 
 type workItem struct {
-	ctx    context.Context
-	fn     func(context.Context) error
-	result chan error
+	fn func(context.Context) error
 }
 
 type worker struct {
@@ -54,8 +52,13 @@ func (worker *worker) start(ctx context.Context) error {
 	return nil
 }
 
-func (worker *worker) do(ctx context.Context, fn func(context.Context) error) error {
-	if fn == nil {
+// submit enqueues work for host-owned execution without waiting for completion.
+func (worker *worker) submit(ctx context.Context, fn func(context.Context) error) error {
+	return worker.enqueue(ctx, workItem{fn: fn})
+}
+
+func (worker *worker) enqueue(ctx context.Context, item workItem) error {
+	if item.fn == nil {
 		return fmt.Errorf("worker function is required: %w", errWorkerFull)
 	}
 	if ctx == nil {
@@ -69,7 +72,6 @@ func (worker *worker) do(ctx context.Context, fn func(context.Context) error) er
 		worker.submitMu.RUnlock()
 		return errWorkerStopped
 	}
-	item := workItem{ctx: ctx, fn: fn, result: make(chan error, 1)}
 	select {
 	case worker.queue <- item:
 		worker.submitMu.RUnlock()
@@ -87,14 +89,7 @@ func (worker *worker) do(ctx context.Context, fn func(context.Context) error) er
 			return errWorkerFull
 		}
 	}
-	select {
-	case err := <-item.result:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-worker.done:
-		return errWorkerStopped
-	}
+	return nil
 }
 
 func (worker *worker) stop(ctx context.Context) error {
@@ -135,15 +130,14 @@ func (worker *worker) run(ctx context.Context) {
 			return
 		case item := <-worker.queue:
 			if item.fn == nil {
-				item.result <- errWorkerFull
 				continue
 			}
 			itemContext, cancel := context.WithCancel(ctx)
-			stopRequest := context.AfterFunc(item.ctx, cancel)
-			err := item.fn(itemContext)
-			stopRequest()
+			if err := item.fn(itemContext); err != nil {
+				cancel()
+				continue
+			}
 			cancel()
-			item.result <- err
 		}
 	}
 }
@@ -155,8 +149,7 @@ func (worker *worker) signalStopped() {
 func (worker *worker) drain() {
 	for {
 		select {
-		case item := <-worker.queue:
-			item.result <- errWorkerStopped
+		case <-worker.queue:
 		default:
 			return
 		}

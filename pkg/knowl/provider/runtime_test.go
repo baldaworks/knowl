@@ -146,6 +146,73 @@ func TestRuntimeMaintainerHonorsCancellationBeforeBuild(t *testing.T) {
 	}
 }
 
+func TestRuntimeMaintainerKeepsCachedRuntimeAfterCanceledPlan(t *testing.T) {
+	planJSON := `{"schema_digest":"schema","source_refs":[],"edits":[]}`
+	started := make(chan struct{})
+	factory := &fakeRuntimeFactory{agent: newCancelThenOutputAgent(t, started, planJSON)}
+	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{})
+	if err != nil {
+		t.Fatalf("new maintainer: %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	planErr := make(chan error, 1)
+	go func() {
+		_, runErr := maintainer.Plan(canceled, knowl.MaintenanceInput{})
+		planErr <- runErr
+	}()
+	<-started
+	cancel()
+	if err := <-planErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled plan error = %v, want context.Canceled", err)
+	}
+	if factory.closed.Load() {
+		t.Fatal("canceled plan closed the cached provider runtime")
+	}
+	if _, err := maintainer.Plan(context.Background(), knowl.MaintenanceInput{}); err != nil {
+		t.Fatalf("plan after cancellation: %v", err)
+	}
+	if factory.builds != 1 {
+		t.Fatalf("provider builds = %d, want one cached runtime", factory.builds)
+	}
+	if err := maintainer.Close(); err != nil {
+		t.Fatalf("close maintainer: %v", err)
+	}
+	if !factory.closed.Load() {
+		t.Fatal("host-owned maintainer close did not close the provider runtime")
+	}
+}
+
+func newCancelThenOutputAgent(t *testing.T, started chan<- struct{}, output string) adkagent.Agent {
+	t.Helper()
+	var calls atomic.Int32
+	agent, err := adkagent.New(adkagent.Config{
+		Name:        "cancel_then_output_provider",
+		Description: "deterministic cancellation test provider",
+		Run: func(ctx adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				if calls.Add(1) == 1 {
+					close(started)
+					<-ctx.Done()
+					yield(nil, ctx.Err())
+					return
+				}
+				event := session.NewEvent(context.Background(), ctx.InvocationID())
+				event.Content = genai.NewContentFromText(output, genai.RoleModel)
+				if !yield(event, nil) {
+					return
+				}
+				complete := session.NewEvent(context.Background(), ctx.InvocationID())
+				complete.TurnComplete = true
+				yield(complete, nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("create cancellation test agent: %v", err)
+	}
+	return agent
+}
+
 func newOutputAgent(t *testing.T, output string) adkagent.Agent {
 	t.Helper()
 	agent, err := adkagent.New(adkagent.Config{

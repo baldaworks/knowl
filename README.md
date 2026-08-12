@@ -19,6 +19,10 @@ The intended shape is:
 sources -> Knowl -> grounded evidence -> host agent -> final answer
 ```
 
+The default path is a sidecar service with SQLite. Connect agents over MCP;
+use HTTP for deterministic control and Fx only when a Go process needs the
+same runtime in-process.
+
 ## When to use it
 
 Use Knowl when you want one durable project/domain knowledge layer that can:
@@ -117,7 +121,7 @@ The same listener exposes MCP Streamable HTTP at
 Run one-shot local wrappers over the same KISS contract:
 
 ```bash
-./knowl query "Why was Badger chosen?"
+./knowl retrieve "Why was Badger chosen?"
 ./knowl ingest --input request.json
 ./knowl operation op_01K...
 ```
@@ -217,9 +221,7 @@ remain rebuildable operational state.
 
 - sidecar/service runbook: [docs/sidecar.md](docs/sidecar.md)
 - service config and HTTP contract: [docs/operations.md](docs/operations.md)
-- product requirements: [docs/requirements.md](docs/requirements.md)
-- product and adapter boundaries: [docs/integrations.md](docs/integrations.md)
-- runtime/package ownership: [docs/architecture.md](docs/architecture.md)
+- product design, boundaries, and architecture: [docs/design.md](docs/design.md)
 - workspace semantics: [docs/workspace.md](docs/workspace.md)
 - authoritative HTTP contract: [api/openapi/knowl.yaml](api/openapi/knowl.yaml)
 

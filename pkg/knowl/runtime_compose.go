@@ -94,16 +94,16 @@ func composeRuntime(ctx context.Context, config Config, maintainer app.Maintaine
 	if err != nil {
 		return composedRuntime{}, err
 	}
-	runtime.mcp, err = mcp.NewServer(runtime.query, runtime.service, config.Scope, config.ReadLimits)
+	runtime.mcp, err = mcp.NewServer(runtime.query, runtime.service, workerSubmitter{worker: runtime.worker}, config.Scope, config.ReadLimits)
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose MCP service: %w", err)
 	}
 	runtime.handler = httpserver.NewHandler(httpserver.Dependencies{
-		Scope:  config.Scope,
-		Ingest: runtime.service,
-		Query:  runtime.query,
-		Doer:   workerDoer{worker: runtime.worker},
-		Ready:  func() bool { return false },
+		Scope:     config.Scope,
+		Ingest:    runtime.service,
+		Query:     runtime.query,
+		Submitter: workerSubmitter{worker: runtime.worker},
+		Ready:     func() bool { return false },
 	})
 	return runtime, nil
 }
@@ -173,11 +173,11 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		serverErr:        make(chan error, 1),
 	}
 	httpHandler := httpserver.NewHandler(httpserver.Dependencies{
-		Scope:  runtime.config.Scope,
-		Ingest: runtime.service,
-		Query:  runtime.query,
-		Doer:   workerDoer{worker: runtime.worker},
-		Ready:  host.Ready,
+		Scope:     runtime.config.Scope,
+		Ingest:    runtime.service,
+		Query:     runtime.query,
+		Submitter: workerSubmitter{worker: runtime.worker},
+		Ready:     host.Ready,
 	})
 	mcpHandler, err := mcphttp.NewHandler(runtime.mcp, host.Ready)
 	if err != nil {

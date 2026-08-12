@@ -10,7 +10,10 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
+	"github.com/metalagman/appkit/lifecycle"
 )
+
+var _ lifecycle.Lifecycle = (*Host)(nil)
 
 // Start binds the loopback HTTP listener and marks the host ready after preflight.
 // The context is used for the start operation; Stop owns the server lifetime.
@@ -83,15 +86,15 @@ func (host *Host) Wait(ctx context.Context) error {
 	}
 }
 
-type workerDoer struct {
+type workerSubmitter struct {
 	worker *worker
 }
 
-func (doer workerDoer) Do(ctx context.Context, fn func(context.Context) error) error {
-	if doer.worker == nil {
+func (submitter workerSubmitter) Submit(ctx context.Context, fn func(context.Context) error) error {
+	if submitter.worker == nil {
 		return fn(ctx)
 	}
-	return doer.worker.do(ctx, fn)
+	return submitter.worker.submit(ctx, fn)
 }
 
 // Stop stops HTTP and queued work, recovers content, and closes operational state.

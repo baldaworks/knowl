@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -115,9 +116,10 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	if err := json.Unmarshal(body, &ingested); err != nil {
 		t.Fatalf("decode ingest response: %v", err)
 	}
-	if ingested.Status != "completed" {
-		t.Fatalf("ingest status = %q, want completed", ingested.Status)
+	if ingested.Status != "queued" {
+		t.Fatalf("ingest status = %q, want queued", ingested.Status)
 	}
+	waitForSmokeOperation(t, client, baseURL, ingested.OperationID)
 
 	pagePath := filepath.Join(config.Workspace, workspaceWikiDir, "entities", "one.md")
 	if _, err := os.Stat(pagePath); err != nil {
@@ -143,6 +145,32 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	if result.Query != smokeQueryText || len(result.Evidence) == 0 || result.Evidence[0].PageID != smokePageID {
 		t.Fatalf("retrieve result = %#v, want evidence for %s", result, smokePageID)
 	}
+}
+
+func waitForSmokeOperation(t *testing.T, client *http.Client, baseURL, operationID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	path := "/v1/operations/" + url.PathEscape(operationID)
+	for time.Now().Before(deadline) {
+		body, status, err := doLiveHostRequest(client, baseURL, http.MethodGet, path, nil)
+		if err != nil || status != http.StatusOK {
+			t.Fatalf("operation request = %d, %v, body %s", status, err, body)
+		}
+		var operation struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(body, &operation); err != nil {
+			t.Fatalf("decode operation response: %v", err)
+		}
+		switch operation.Status {
+		case "completed":
+			return
+		case "failed":
+			t.Fatalf("operation %q failed", operationID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("operation %q did not complete", operationID)
 }
 
 func executeRootCommand(args ...string) error {

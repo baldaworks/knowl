@@ -16,7 +16,7 @@ const (
 	bootstrapObsidianName = "obsidian"
 	startCommandName      = "start"
 	ingestCommandName     = "ingest"
-	queryCommandName      = "query"
+	retrieveCommandName   = "retrieve"
 	searchCommandName     = "search"
 	lintCommandName       = "lint"
 	operationCommandName  = "operation"
@@ -41,7 +41,7 @@ func newRootCommand() *cobra.Command {
    - knowl init
    - knowl validate
 3. Run the supported local workflow commands:
-   - knowl query <text>
+   - knowl retrieve <text>
    - knowl ingest --input request.json
    - knowl operation <operation-id>
 4. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
@@ -76,7 +76,7 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 		newBootstrapCommand(),
 		newStartCommand(),
 		newIngestCommand(),
-		newQueryCommand(),
+		newRetrieveCommand(),
 		newOperationCommand(),
 	} {
 		root.AddCommand(command)

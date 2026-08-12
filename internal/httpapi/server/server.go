@@ -20,16 +20,16 @@ const maxBodyBytes = 8 << 20
 
 const serviceName = "knowl"
 
-type Doer interface {
-	Do(ctx context.Context, fn func(context.Context) error) error
+type Submitter interface {
+	Submit(ctx context.Context, fn func(context.Context) error) error
 }
 
 type Dependencies struct {
-	Scope  domain.ScopeRef
-	Ingest *app.IngestService
-	Query  *app.QueryService
-	Ready  func() bool
-	Doer   Doer
+	Scope     domain.ScopeRef
+	Ingest    *app.IngestService
+	Query     *app.QueryService
+	Ready     func() bool
+	Submitter Submitter
 }
 
 func NewHandler(dependencies Dependencies) http.Handler {

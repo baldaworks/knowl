@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
@@ -66,9 +67,9 @@ func TestHostServesMCPContract(t *testing.T) {
 		t.Fatalf("list MCP tools: %v", err)
 	}
 	wantNames := map[string]bool{
-		hostRetrieveToolName: false,
-		"knowl_ingest":       false,
-		"knowl_operation":    false,
+		hostRetrieveToolName:  false,
+		"knowl_ingest":        false,
+		hostOperationToolName: false,
 	}
 	if len(listed.Tools) != len(wantNames) {
 		t.Fatalf("tool count = %d, want %d", len(listed.Tools), len(wantNames))
@@ -107,9 +108,10 @@ func TestHostServesMCPContract(t *testing.T) {
 	if operationID == "" {
 		t.Fatalf("knowl_ingest operation ID missing: %#v", ingestResult)
 	}
+	waitForMCPHostOperation(t, session, operationID)
 
 	operation, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-		Name:      "knowl_operation",
+		Name:      hostOperationToolName,
 		Arguments: map[string]any{"id": operationID},
 	})
 	if err != nil || operation.IsError {
@@ -132,4 +134,30 @@ func TestHostServesMCPContract(t *testing.T) {
 	if !forbidden.IsError {
 		t.Fatal("scoped knowl_retrieve succeeded, want tool error")
 	}
+}
+
+func waitForMCPHostOperation(t *testing.T, session *sdkmcp.ClientSession, operationID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		operation, err := session.CallTool(context.Background(), &sdkmcp.CallToolParams{
+			Name:      hostOperationToolName,
+			Arguments: map[string]any{"id": operationID},
+		})
+		if err != nil || operation.IsError {
+			t.Fatalf("call knowl_operation = (%v, %#v)", err, operation)
+		}
+		result, ok := operation.StructuredContent.(map[string]any)
+		if !ok {
+			t.Fatalf("operation result type = %T", operation.StructuredContent)
+		}
+		switch result["status"] {
+		case "completed":
+			return
+		case "failed":
+			t.Fatalf("operation %q failed", operationID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("operation %q did not complete", operationID)
 }

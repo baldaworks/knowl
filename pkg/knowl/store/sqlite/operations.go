@@ -8,13 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // Reserve creates or returns the operation for one source revision.
-func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta knowl.OperationMeta) (knowl.Operation, error) {
+func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta knowl.OperationMeta) (app.OperationReservation, error) {
 	if strings.TrimSpace(string(key.Scope)) == "" || strings.TrimSpace(key.Source.Adapter) == "" || strings.TrimSpace(key.Source.ID) == "" || strings.TrimSpace(key.Version.Version) == "" || strings.TrimSpace(key.Version.Digest) == "" {
-		return knowl.Operation{}, fmt.Errorf("operation key is incomplete: %w", ErrConflict)
+		return app.OperationReservation{}, fmt.Errorf("operation key is incomplete: %w", ErrConflict)
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -26,12 +27,13 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version).Scan(&existingID, &existingDigest)
 	if err == nil {
 		if existingDigest != key.Version.Digest {
-			return knowl.Operation{}, ErrConflict
+			return app.OperationReservation{}, ErrConflict
 		}
-		return store.Operation(ctx, key.Scope, knowl.OperationID(existingID))
+		operation, readErr := store.Operation(ctx, key.Scope, knowl.OperationID(existingID))
+		return app.OperationReservation{Operation: operation}, readErr
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return knowl.Operation{}, fmt.Errorf("inspect existing operation: %w", err)
+		return app.OperationReservation{}, fmt.Errorf("inspect existing operation: %w", err)
 	}
 	now := meta.CreatedAt
 	if now.IsZero() {
@@ -46,9 +48,10 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.Version.Digest,
 		meta.SchemaDigest, knowl.StatusReceived, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
-		return knowl.Operation{}, fmt.Errorf("reserve operation: %w", err)
+		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
 	}
-	return store.Operation(ctx, key.Scope, knowl.OperationID(operationID))
+	operation, readErr := store.Operation(ctx, key.Scope, knowl.OperationID(operationID))
+	return app.OperationReservation{Operation: operation, New: true}, readErr
 }
 
 // SavePlan persists a redacted plan digest and advances the operation.

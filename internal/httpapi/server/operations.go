@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -61,28 +62,28 @@ func (handler *handler) IngestKnowledge(response http.ResponseWriter, request *h
 		writeServiceError(response, err)
 		return
 	}
-	var result app.IngestResult
-	work := func(ctx context.Context) error {
-		var workErr error
-		result, workErr = handler.dependencies.Ingest.Ingest(ctx, envelope)
-		if workErr != nil {
-			return workErr
-		}
-		if result.Operation.Status != domain.StatusAwaitingReview {
-			return nil
-		}
-		applied, applyErr := handler.dependencies.Ingest.Apply(ctx, handler.dependencies.Scope, result.Operation.ID)
-		if applyErr != nil {
-			return applyErr
-		}
-		result.Operation = applied.Operation
-		return nil
-	}
-	if err := handler.do(request.Context(), work); err != nil {
+	submission, err := handler.dependencies.Ingest.Submit(request.Context(), envelope)
+	if err != nil {
 		writeServiceError(response, err)
 		return
 	}
-	transport := mustConvertJSON[knowlapi.IngestResult](httpIngestResult(result.Operation))
+	if submission.NeedsExecution() {
+		if err := handler.submit(request.Context(), func(ctx context.Context) error {
+			result, executeErr := handler.dependencies.Ingest.Execute(ctx, submission)
+			if executeErr != nil || result.Operation.Status != domain.StatusAwaitingReview {
+				return executeErr
+			}
+			_, executeErr = handler.dependencies.Ingest.Apply(ctx, handler.dependencies.Scope, result.Operation.ID)
+			return executeErr
+		}); err != nil {
+			if failureErr := handler.dependencies.Ingest.FailSubmission(request.Context(), submission, "queue"); failureErr != nil {
+				err = errors.Join(err, failureErr)
+			}
+			writeServiceError(response, err)
+			return
+		}
+	}
+	transport := mustConvertJSON[knowlapi.IngestResult](httpIngestResult(submission.Operation))
 	_ = knowlapi.IngestKnowledge200JSONResponse(transport).VisitIngestKnowledgeResponse(response)
 }
 
@@ -254,9 +255,9 @@ func mustConvertJSON[T any](value any) T {
 	return target
 }
 
-func (handler *handler) do(ctx context.Context, fn func(context.Context) error) error {
-	if handler.dependencies.Doer == nil {
+func (handler *handler) submit(ctx context.Context, fn func(context.Context) error) error {
+	if handler.dependencies.Submitter == nil {
 		return fn(ctx)
 	}
-	return handler.dependencies.Doer.Do(ctx, fn)
+	return handler.dependencies.Submitter.Submit(ctx, fn)
 }

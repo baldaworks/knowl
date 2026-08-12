@@ -114,7 +114,7 @@ Sidecar baseline:
 docker compose -f deploy/sidecar/compose.yaml up --build
 ```
 
-The CLI commands `query`, `ingest`, and `operation` are one-shot operator
+The CLI commands `retrieve`, `ingest`, and `operation` are one-shot operator
 wrappers over the same service semantics. They are not the primary agent
 integration surface.
 
@@ -242,13 +242,3 @@ For Go applications:
 - `pkg/knowlfx.NewApp` wraps the same runtime with Fx lifecycle management.
 
 This is an alternative deployment/composition mode, not a second product API.
-
-## What this service is not
-
-Knowl is not:
-
-- session or chat memory;
-- user-fact memory;
-- a generic memory platform;
-- orchestration or role-agent execution;
-- the final-answer service.

@@ -47,7 +47,7 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new query service: %v", err)
 	}
-	server, err := mcp.NewServer(query, ingest, "local", knowl.ReadLimits{Pages: 1})
+	server, err := mcp.NewServer(query, ingest, inlineSubmitter{}, "local", knowl.ReadLimits{Pages: 1})
 	if err != nil {
 		t.Fatalf("new MCP server: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 		t.Fatalf("knowl_ingest: %v", err)
 	}
 	ingestResult, ok := ingested.(mcp.IngestResult)
-	if !ok || ingestResult.Status != "completed" || ingestResult.OperationID == "" {
+	if !ok || ingestResult.Status != "queued" || ingestResult.OperationID == "" {
 		t.Fatalf("knowl_ingest result = %#v", ingested)
 	}
 	value, err := server.Call(ctx, "knowl_retrieve", map[string]any{"query": "One"})
@@ -92,6 +92,12 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if !ok || polledResult.Status != "completed" || polledResult.ID != ingestResult.OperationID {
 		t.Fatalf("knowl_operation result = %#v", polled)
 	}
+}
+
+type inlineSubmitter struct{}
+
+func (inlineSubmitter) Submit(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 
 type countingMaintainer struct {

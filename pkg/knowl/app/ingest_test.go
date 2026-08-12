@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
@@ -269,6 +270,71 @@ func TestAutoApplyIsExplicit(t *testing.T) {
 	}
 }
 
+func TestSubmitReservesWithoutPlanningAndMarksReplay(t *testing.T) {
+	ctx := context.Background()
+	_, _, service, maintainer := newWorkflow(t, false, nil)
+	envelope := sourceEnvelope([]byte("source text"))
+
+	first, err := service.Submit(ctx, envelope)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if !first.NeedsExecution() || first.Operation.Status != knowl.StatusReceived {
+		t.Fatalf("first submission = %#v, want new received operation", first.Operation)
+	}
+	if maintainer.calls() != 0 {
+		t.Fatalf("maintainer calls after submit = %d, want 0", maintainer.calls())
+	}
+
+	second, err := service.Submit(ctx, envelope)
+	if err != nil {
+		t.Fatalf("replay submit: %v", err)
+	}
+	if second.NeedsExecution() || second.Operation.ID != first.Operation.ID {
+		t.Fatalf("replayed submission = %#v, want existing operation", second.Operation)
+	}
+}
+
+func TestExecuteKeepsReadDeadlineOutOfMaintainerPlan(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	store, err := sqlite.Open(ctx, filepath.Join(workspace.Root(), "state.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	content := &deadlineContentStore{Workspace: workspace}
+	maintainer := &deadlineMaintainer{}
+	service, err := app.NewIngestService(content, store, store, maintainer, app.IngestOptions{
+		ReadLimits: knowl.ReadLimits{Pages: 20, Bytes: 4 << 20, Characters: 32 << 10, Depth: 8, Deadline: time.Second},
+	})
+	if err != nil {
+		t.Fatalf("new ingest service: %v", err)
+	}
+	submission, err := service.Submit(ctx, sourceEnvelope([]byte("source text")))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if !content.schemaHasDeadline {
+		t.Fatal("schema read did not receive the read deadline")
+	}
+	if _, err := service.Execute(ctx, submission); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !content.sourceHasDeadline {
+		t.Fatal("source read did not receive the read deadline")
+	}
+	if maintainer.hasDeadline {
+		t.Fatal("maintainer plan inherited the read deadline")
+	}
+}
+
 const testSourceRef = "fixture:source-1@1"
 
 var (
@@ -281,6 +347,38 @@ type countingMaintainer struct {
 	plan    knowl.ModelEditPlan
 	factory func(knowl.SchemaDocument) knowl.ModelEditPlan
 	counter int
+}
+
+type deadlineContentStore struct {
+	*contentfs.Workspace
+	schemaHasDeadline bool
+	sourceHasDeadline bool
+}
+
+func (store *deadlineContentStore) Schema(ctx context.Context, scope knowl.ScopeRef) (knowl.SchemaDocument, error) {
+	_, store.schemaHasDeadline = ctx.Deadline()
+	return store.Workspace.Schema(ctx, scope)
+}
+
+func (store *deadlineContentStore) ReadSource(ctx context.Context, source knowl.AcceptedSource, limits knowl.ReadLimits) ([]byte, error) {
+	_, store.sourceHasDeadline = ctx.Deadline()
+	return store.Workspace.ReadSource(ctx, source, limits)
+}
+
+type deadlineMaintainer struct {
+	hasDeadline bool
+}
+
+func (maintainer *deadlineMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
+	_, maintainer.hasDeadline = ctx.Deadline()
+	return knowl.ModelEditPlan{
+		SchemaDigest: input.Schema.Digest,
+		SourceRefs:   []string{testSourceRef},
+		Edits: []knowl.FileEdit{
+			{Path: testPagePath, Content: planPageContent},
+			{Path: testPageTwoPath, Content: planSupportingContent},
+		},
+	}, nil
 }
 
 func (maintainer *countingMaintainer) Plan(_ context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {

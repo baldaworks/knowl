@@ -119,17 +119,17 @@ func TestReadCommandsReturnStructuredJSON(t *testing.T) {
 		assert func(*testing.T, string)
 	}{
 		{
-			name: "query",
-			cmd:  newQueryCommand(),
+			name: "retrieve",
+			cmd:  newRetrieveCommand(),
 			args: []string{smokeQueryText},
 			assert: func(t *testing.T, output string) {
 				t.Helper()
 				var result knowlapi.RetrieveResult
 				if err := json.Unmarshal([]byte(output), &result); err != nil {
-					t.Fatalf("decode query output: %v", err)
+					t.Fatalf("decode retrieve output: %v", err)
 				}
 				if result.Query != smokeQueryText || len(result.Evidence) == 0 || result.Evidence[0].PageId != smokePageID {
-					t.Fatalf("query result = %#v", result)
+					t.Fatalf("retrieve result = %#v", result)
 				}
 			},
 		},

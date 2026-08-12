@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"time"
 
 	"github.com/baldaworks/knowl/internal/httpapi/trustedrequest"
@@ -118,11 +120,65 @@ func (runner *localWorkflowRunner) Execute(ctx context.Context, request localWor
 	httpRequest = trustedrequest.Mark(httpRequest)
 	response := httptest.NewRecorder()
 	session.Host.Handler().ServeHTTP(response, httpRequest)
+	if err := waitForLocalIngest(ctx, session.Host.Handler(), request, response); err != nil {
+		return localWorkflowResponse{}, err
+	}
 	return localWorkflowResponse{
 		StatusCode: response.Code,
 		Header:     response.Header().Clone(),
 		Body:       response.Body.Bytes(),
 	}, nil
+}
+
+func waitForLocalIngest(ctx context.Context, handler http.Handler, request localWorkflowRequest, response *httptest.ResponseRecorder) error {
+	if request.Method != http.MethodPost || request.Path != "/v1/ingest" || response.Code != http.StatusOK {
+		return nil
+	}
+	var submitted struct {
+		OperationID string `json:"operation_id"`
+		Status      string `json:"status"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &submitted); err != nil {
+		return fmt.Errorf("decode local ingest submission: %w", err)
+	}
+	if submitted.Status != "queued" || submitted.OperationID == "" {
+		return nil
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		operationRequest := httptest.NewRequest(http.MethodGet, "http://knowl/v1/operations/"+url.PathEscape(submitted.OperationID), nil)
+		operationResponse := httptest.NewRecorder()
+		handler.ServeHTTP(operationResponse, operationRequest)
+		if operationResponse.Code != http.StatusOK {
+			return fmt.Errorf("read local ingest operation: HTTP %d", operationResponse.Code)
+		}
+		var operation struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(operationResponse.Body.Bytes(), &operation); err != nil {
+			return fmt.Errorf("decode local ingest operation: %w", err)
+		}
+		switch operation.Status {
+		case "completed":
+			response.Body.Reset()
+			if err := json.NewEncoder(response.Body).Encode(struct {
+				OperationID string `json:"operation_id"`
+				Status      string `json:"status"`
+			}{OperationID: submitted.OperationID, Status: operation.Status}); err != nil {
+				return fmt.Errorf("encode completed local ingest: %w", err)
+			}
+			return nil
+		case "failed":
+			return fmt.Errorf("local ingest operation %q failed", submitted.OperationID)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 func closeLocalWorkflowHost(host localWorkflowHost) error {

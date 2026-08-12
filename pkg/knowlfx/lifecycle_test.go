@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/metalagman/appkit/lifecycle"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 )
@@ -27,7 +28,7 @@ func (host *testLifecycleHost) Stop(context.Context) error {
 func TestRegisterHostLifecycle(t *testing.T) {
 	host := new(testLifecycleHost)
 	application := fxtest.New(t,
-		fx.Provide(func() hostLifecycle { return host }),
+		fx.Provide(func() lifecycle.Lifecycle { return host }),
 		fx.Invoke(registerHostLifecycle),
 	)
 	application.RequireStart()

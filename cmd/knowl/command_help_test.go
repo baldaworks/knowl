@@ -81,7 +81,7 @@ func TestRootExposesCurrentLifecycleCommands(t *testing.T) {
 		bootstrapCommandName: true,
 		startCommandName:     true,
 		ingestCommandName:    true,
-		queryCommandName:     true,
+		retrieveCommandName:  true,
 		operationCommandName: true,
 	}
 	for _, command := range root.Commands() {
@@ -100,7 +100,7 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 		"Supported local workflow:",
 		"knowl bootstrap wiki <path>",
 		"knowl bootstrap obsidian <path>",
-		"knowl query <text>",
+		"knowl retrieve <text>",
 		"knowl ingest --input request.json",
 		"knowl operation <operation-id>",
 		startCommandUsage,
@@ -145,8 +145,8 @@ func TestImplementedWorkflowHelpDescribesCLIInputs(t *testing.T) {
 			},
 		},
 		{
-			name: "query",
-			cmd:  newQueryCommand(),
+			name: "retrieve",
+			cmd:  newRetrieveCommand(),
 			wantParts: []string{
 				"positional arguments",
 				workflowJSONStdoutHelp,
@@ -208,8 +208,8 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 			wantSubs:  []string{bootstrapWikiName, bootstrapObsidianName},
 		},
 		{
-			name:      queryCommandName,
-			cmd:       newQueryCommand(),
+			name:      retrieveCommandName,
+			cmd:       newRetrieveCommand(),
 			wantShort: "Retrieve bounded evidence from Knowl",
 			wantSubs:  nil,
 		},

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ const hostPageID = "entities/one"
 const hostQuery = "One"
 const hostQueryKey = "query"
 const hostRetrieveToolName = "knowl_retrieve"
+const hostOperationToolName = "knowl_operation"
 
 func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	ctx := context.Background()
@@ -140,26 +142,15 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 		t.Fatalf("decode ingest result: %v", err)
 	}
 	pagePath := filepath.Join(workspace.Root(), "wiki", "entities", "one.md")
-	if ingested.Status != hostCompletedStatus {
-		t.Fatalf("ingest status = %q, want completed", ingested.Status)
+	if ingested.Status != hostQueuedStatus {
+		t.Fatalf("ingest status = %q, want queued", ingested.Status)
 	}
+	operation := waitForHostOperation(t, host, ingested.OperationID)
 	if _, err := os.Stat(pagePath); err != nil {
 		t.Fatalf("committed page missing: %v", err)
 	}
 
 	operationPath := "/v1/operations/" + url.PathEscape(ingested.OperationID)
-	body, status, err = doHostRequest(t, host, http.MethodGet, operationPath, nil)
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("operation status request = %d, %v, body %s", status, err, body)
-	}
-	var operation struct {
-		ID        string    `json:"id"`
-		Status    string    `json:"status"`
-		UpdatedAt time.Time `json:"updated_at"`
-	}
-	if err := json.Unmarshal(body, &operation); err != nil {
-		t.Fatalf("decode operation: %v", err)
-	}
 	if operation.ID != ingested.OperationID || operation.Status != hostCompletedStatus {
 		t.Fatalf("operation status after commit = %q", operation.Status)
 	}
@@ -174,10 +165,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 		t.Fatalf("get ingest Allow header = %q, want %q", allow, http.MethodPost)
 	}
 	assertErrorClass(t, body, "method_not_allowed")
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil)
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("retrieve request = %d, %v, body %s", status, err, body)
-	}
+	body = waitForHostRetrieve(t, host)
 	var retrieve struct {
 		Query    string `json:"query"`
 		Evidence []struct {
@@ -258,8 +246,8 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	if !ok {
 		t.Fatalf("mcp ingest type = %T, want mcp.IngestResult", mcpValue)
 	}
-	if mcpIngest.Status != hostCompletedStatus {
-		t.Fatalf("mcp ingest status = %q, want %q", mcpIngest.Status, hostCompletedStatus)
+	if mcpIngest.Status != hostQueuedStatus {
+		t.Fatalf("mcp ingest status = %q, want queued", mcpIngest.Status)
 	}
 
 	encoded, err := json.Marshal(map[string]string{
@@ -284,13 +272,15 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	if err := json.Unmarshal(body, &httpIngest); err != nil {
 		t.Fatalf("decode http ingest: %v", err)
 	}
-	if httpIngest.Status != hostCompletedStatus {
-		t.Fatalf("http ingest status = %q, want %q", httpIngest.Status, hostCompletedStatus)
+	if httpIngest.Status != hostQueuedStatus {
+		t.Fatalf("http ingest status = %q, want queued", httpIngest.Status)
 	}
 	if httpIngest.OperationID != string(mcpIngest.OperationID) {
 		t.Fatalf("operation IDs differ: http=%q mcp=%q", httpIngest.OperationID, mcpIngest.OperationID)
 	}
+	_ = waitForHostOperation(t, host, httpIngest.OperationID)
 
+	body = waitForHostRetrieve(t, host)
 	mcpRetrieveValue, err := host.MCP().Call(ctx, hostRetrieveToolName, map[string]any{hostQueryKey: hostQuery})
 	if err != nil {
 		t.Fatalf("mcp retrieve: %v", err)
@@ -298,13 +288,6 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	mcpRetrieve, ok := mcpRetrieveValue.(mcp.RetrieveResult)
 	if !ok {
 		t.Fatalf("mcp retrieve type = %T, want mcp.RetrieveResult", mcpRetrieveValue)
-	}
-	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil)
-	if err != nil {
-		t.Fatalf("http retrieve: %v", err)
-	}
-	if status != http.StatusOK {
-		t.Fatalf("http retrieve status = %d, body %s", status, body)
 	}
 	var httpRetrieve struct {
 		Query    string `json:"query"`
@@ -347,6 +330,66 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	if mcpOperation.ID != domain.OperationID(httpOperation.ID) || mcpOperation.Status != httpOperation.Status {
 		t.Fatalf("operation mismatch: mcp=%#v http=%#v", mcpOperation, httpOperation)
 	}
+}
+
+func TestHostIngestReturnsBeforeMaintainerPlanCompletes(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	schema, err := workspace.Schema(ctx, "local")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	release := make(chan struct{})
+	maintainer := &blockingMaintainer{
+		release: release,
+		started: make(chan struct{}),
+		plan: domain.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{hostSourceRef},
+			Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
+		},
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+	config.IngestOptions.AutoApply = true
+	host, err := knowl.NewHost(ctx, config, maintainer)
+	if err != nil {
+		t.Fatalf("compose host: %v", err)
+	}
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("start host: %v", err)
+	}
+	defer shutdownHost(t, host)
+
+	body, status, err := doHostRequest(t, host, http.MethodPost, "/v1/ingest", []byte(`{"content":"source text","origin":"source-1","idempotency_key":"1"}`))
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("ingest request = %d, %v, body %s", status, err, body)
+	}
+	var submitted struct {
+		OperationID string `json:"operation_id"`
+		Status      string `json:"status"`
+	}
+	if err := json.Unmarshal(body, &submitted); err != nil {
+		t.Fatalf("decode ingest response: %v", err)
+	}
+	if submitted.Status != hostQueuedStatus || submitted.OperationID == "" {
+		t.Fatalf("ingest response = %#v, want queued operation", submitted)
+	}
+	select {
+	case <-maintainer.started:
+	case <-time.After(time.Second):
+		t.Fatal("host worker did not begin maintainer plan")
+	}
+	close(release)
+	_ = waitForHostOperation(t, host, submitted.OperationID)
 }
 
 func TestNewRejectsNilMaintainerBeforeOpeningStore(t *testing.T) {
@@ -403,6 +446,23 @@ type validatingRuntimeFactory struct {
 	builds      int
 }
 
+type blockingMaintainer struct {
+	plan    domain.ModelEditPlan
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (maintainer *blockingMaintainer) Plan(ctx context.Context, _ domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+	maintainer.once.Do(func() { close(maintainer.started) })
+	select {
+	case <-maintainer.release:
+		return maintainer.plan, nil
+	case <-ctx.Done():
+		return domain.ModelEditPlan{}, ctx.Err()
+	}
+}
+
 func (factory *validatingRuntimeFactory) ValidateAgent(providerID string) error {
 	factory.validations++
 	if providerID != factory.providerID {
@@ -417,6 +477,7 @@ func (factory *validatingRuntimeFactory) Build(context.Context, agentfactory.Bui
 }
 
 const hostPageContent = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + hostSourceRef + "\n---\n# One\n"
+const hostQueuedStatus = "queued"
 
 func doHostRequest(t *testing.T, host *knowl.Host, method, path string, body []byte) ([]byte, int, error) {
 	t.Helper()
@@ -430,6 +491,60 @@ func doHostRequestDetailed(t *testing.T, host *knowl.Host, method, path string, 
 	response := httptest.NewRecorder()
 	host.Handler().ServeHTTP(response, request)
 	return response.Body.Bytes(), response.Code, response.Header(), nil
+}
+
+type hostOperationResponse struct {
+	ID        string    `json:"id"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func waitForHostOperation(t *testing.T, host *knowl.Host, id string) hostOperationResponse {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	path := "/v1/operations/" + url.PathEscape(id)
+	for time.Now().Before(deadline) {
+		body, status, err := doHostRequest(t, host, http.MethodGet, path, nil)
+		if err != nil || status != http.StatusOK {
+			t.Fatalf("operation status request = %d, %v, body %s", status, err, body)
+		}
+		var operation hostOperationResponse
+		if err := json.Unmarshal(body, &operation); err != nil {
+			t.Fatalf("decode operation: %v", err)
+		}
+		switch operation.Status {
+		case hostCompletedStatus:
+			return operation
+		case "failed":
+			t.Fatalf("operation %q failed", id)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("operation %q did not complete", id)
+	return hostOperationResponse{}
+}
+
+func waitForHostRetrieve(t *testing.T, host *knowl.Host) []byte {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		body, status, err := doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=One", nil)
+		if err != nil || status != http.StatusOK {
+			t.Fatalf("retrieve request = %d, %v, body %s", status, err, body)
+		}
+		var retrieve struct {
+			Evidence []json.RawMessage `json:"evidence"`
+		}
+		if err := json.Unmarshal(body, &retrieve); err != nil {
+			t.Fatalf("decode retrieve response: %v", err)
+		}
+		if len(retrieve.Evidence) > 0 {
+			return body
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("retrieve did not observe the projected page")
+	return nil
 }
 
 func assertErrorClass(t *testing.T, body []byte, want string) {

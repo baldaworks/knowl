@@ -20,4 +20,22 @@ jobs:
         run: go mod verify
 
       - name: Test
-        run: go test -v -race ./...
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Vulnerability scan
+        run: go tool govulncheck ./...

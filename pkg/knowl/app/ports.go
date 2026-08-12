@@ -22,13 +22,20 @@ type ContentStore interface {
 
 // OperationStore owns durable operation state, leases, and redacted outcomes.
 type OperationStore interface {
-	Reserve(ctx context.Context, key knowl.OperationKey, meta knowl.OperationMeta) (knowl.Operation, error)
+	Reserve(ctx context.Context, key knowl.OperationKey, meta knowl.OperationMeta) (OperationReservation, error)
 	SavePlan(ctx context.Context, id knowl.OperationID, summary knowl.PlanSummary) error
 	MarkAwaitingReview(ctx context.Context, id knowl.OperationID) error
 	MarkApplying(ctx context.Context, id knowl.OperationID, lease knowl.Lease) error
 	CommitOutcome(ctx context.Context, id knowl.OperationID, commit knowl.ContentCommit) error
 	Fail(ctx context.Context, id knowl.OperationID, failure knowl.Failure) error
 	Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error)
+}
+
+// OperationReservation is the durable result of reserving one immutable source revision.
+// New reports whether this call created the operation rather than replaying it.
+type OperationReservation struct {
+	knowl.Operation
+	New bool
 }
 
 // SearchIndex owns rebuildable context, text, and link projections.
