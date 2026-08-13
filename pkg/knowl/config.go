@@ -26,6 +26,7 @@ type Config struct {
 	StorePath       string
 	PostgresDSN     string
 	ListenAddr      string
+	OperatorToken   string
 	ReadLimits      domain.ReadLimits
 	IngestOptions   app.IngestOptions
 	WorkerQueueSize int
@@ -88,6 +89,7 @@ func (config Config) normalized() (Config, error) {
 	if err := validateListenAddr(config.ListenAddr); err != nil {
 		return Config{}, err
 	}
+	config.OperatorToken = strings.TrimSpace(config.OperatorToken)
 	if config.ReadLimits == (domain.ReadLimits{}) {
 		config.ReadLimits = app.DefaultReadLimits()
 	}

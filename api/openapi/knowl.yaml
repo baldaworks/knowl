@@ -53,10 +53,16 @@ paths:
       description: |
         Returns bounded grounded evidence and provenance for one query.
 
+        When the host configures an operator token, callers must send it as a
+        bearer token. Trusted in-process operator workflows bypass HTTP auth.
+
         Supplying a non-empty `scope` query parameter is forbidden and yields
         `scope_override_forbidden`.
       parameters:
         - $ref: '#/components/parameters/RetrieveQuery'
+      security:
+        - {}
+        - bearerAuth: []
       responses:
         '200':
           description: Bounded retrieval result.
@@ -66,6 +72,8 @@ paths:
                 $ref: '#/components/schemas/RetrieveResult'
         '400':
           $ref: '#/components/responses/QueryStringBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/ScopeOverrideForbidden'
         '422':
@@ -84,6 +92,9 @@ paths:
 
         Supplying a non-empty `scope` query parameter is forbidden and yields
         `scope_override_forbidden`.
+      security:
+        - {}
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -99,6 +110,8 @@ paths:
                 $ref: '#/components/schemas/IngestResult'
         '400':
           $ref: '#/components/responses/JSONBodyBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/ScopeOverrideForbidden'
         '422':
@@ -118,6 +131,9 @@ paths:
         `scope_override_forbidden`.
       parameters:
         - $ref: '#/components/parameters/OperationID'
+      security:
+        - {}
+        - bearerAuth: []
       responses:
         '200':
           description: Durable operation status.
@@ -127,6 +143,8 @@ paths:
                 $ref: '#/components/schemas/OperationResult'
         '400':
           $ref: '#/components/responses/OperationIDBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/ScopeOverrideForbidden'
         '404':
@@ -136,6 +154,11 @@ paths:
         '503':
           $ref: '#/components/responses/UnavailableError'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Required for business endpoints when `knowl.operator.token` is configured.
   parameters:
     RetrieveQuery:
       name: query
@@ -198,6 +221,19 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             error: scope_override_forbidden
+    Unauthorized:
+      description: The configured operator bearer token is missing or invalid.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: unauthorized
     NotFound:
       description: The requested resource does not exist.
       content:

@@ -173,6 +173,8 @@ knowl:
     type: sqlite
     sqlite:
       path: .knowl/knowl.sqlite
+  operator:
+    token: replace-with-a-local-secret
 ```
 
 Container baseline example:
@@ -186,6 +188,8 @@ knowl:
 ```
 
 Detailed config and service guidance live in [docs/operations.md](docs/operations.md).
+When an operator token is configured, business HTTP and MCP requests require an
+`Authorization: Bearer <token>` header; health probes remain public.
 
 ## Repository layout
 

@@ -79,6 +79,26 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 	}
 }
 
+func TestLocalWorkflowRunnerJoinsRequestAndStopErrors(t *testing.T) {
+	requestErr := errors.New("invalid response")
+	stopErr := errors.New("stop failed")
+	host := &stubLocalWorkflowHost{
+		handler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.WriteHeader(http.StatusOK)
+			_, _ = response.Write([]byte(requestErr.Error()))
+		}),
+		stopErr: stopErr,
+	}
+	runner := &localWorkflowRunner{newSession: func(context.Context) (localWorkflowSession, error) {
+		return localWorkflowSession{Host: host, ShutdownTimeout: time.Second}, nil
+	}}
+
+	_, err := runner.Execute(context.Background(), localWorkflowRequest{Method: http.MethodPost, Path: publicIngestPath})
+	if err == nil || !strings.Contains(err.Error(), "decode local ingest submission") || !errors.Is(err, stopErr) {
+		t.Fatalf("Execute() error = %v, want request and stop errors", err)
+	}
+}
+
 func TestIngestCommandAutoAppliesTrustedLocalWorkflow(t *testing.T) {
 	fixture := newCommandWorkflowFixture(t, true)
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))

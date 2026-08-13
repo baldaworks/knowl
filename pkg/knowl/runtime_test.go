@@ -44,6 +44,51 @@ const hostRetrieveToolName = "knowl_retrieve"
 const hostIngestToolName = "knowl_ingest"
 const hostOperationToolName = "knowl_operation"
 
+func TestHostOperatorTokenProtectsBusinessEndpoints(t *testing.T) {
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+	config.OperatorToken = "local-secret"
+	host, err := knowl.NewHost(context.Background(), config, provider.Fixture{})
+	if err != nil {
+		t.Fatalf("compose host: %v", err)
+	}
+	defer shutdownHost(t, host)
+
+	tests := []struct {
+		name          string
+		path          string
+		authorization string
+		wantStatus    int
+	}{
+		{name: "health remains public", path: "/healthz", wantStatus: http.StatusOK},
+		{name: "http requires token", path: "/v1/retrieve?query=test", wantStatus: http.StatusUnauthorized},
+		{name: "mcp requires token", path: "/mcp", wantStatus: http.StatusUnauthorized},
+		{name: "valid token reaches service", path: "/v1/retrieve?query=test", authorization: "Bearer local-secret", wantStatus: http.StatusServiceUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "http://knowl"+test.path, nil)
+			if test.authorization != "" {
+				request.Header.Set("Authorization", test.authorization)
+			}
+			response := httptest.NewRecorder()
+			host.Handler().ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d, body %s", response.Code, test.wantStatus, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
