@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/metalagman/appkit v0.1.1-0.20260129033342-e19ea914eada
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/normahq/runtime/v2 v2.0.4
 	github.com/oapi-codegen/runtime v1.4.1
@@ -202,7 +203,6 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
-	github.com/metalagman/appkit v0.1.1-0.20260129033342-e19ea914eada // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/mgechev/revive v1.15.0 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect

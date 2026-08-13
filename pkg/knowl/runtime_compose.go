@@ -186,7 +186,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcpHandler)
 	mux.Handle("/", httpHandler)
-	host.handler = mux
+	host.handler = httpserver.WithOperatorAuth(mux, runtime.config.OperatorToken)
 	return host, nil
 }
 

@@ -178,6 +178,7 @@ knowl:
 		t.Fatalf("write config: %v", err)
 	}
 	t.Setenv("KNOWL_WORKSPACE_PATH", "env-workspace")
+	t.Setenv("KNOWL_OPERATOR_TOKEN", "env-secret")
 
 	ctx, err := loadConfig(context.Background(), "", "fast")
 	if err != nil {
@@ -202,6 +203,9 @@ knowl:
 	}
 	if loaded.Document.Knowl.Storage.SQLite == nil || loaded.Document.Knowl.Storage.SQLite.Path != ".knowl/state.db" {
 		t.Fatalf("sqlite config = %#v, want decoded typed section", loaded.Document.Knowl.Storage.SQLite)
+	}
+	if loaded.Document.Knowl.Operator.Token != "env-secret" {
+		t.Fatalf("operator token = %q, want environment override", loaded.Document.Knowl.Operator.Token)
 	}
 }
 

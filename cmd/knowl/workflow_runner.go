@@ -112,7 +112,7 @@ func (runner *localWorkflowRunner) Execute(ctx context.Context, request localWor
 		stopCtx, cancel := context.WithTimeout(context.Background(), session.ShutdownTimeout)
 		defer cancel()
 		if err := session.Host.Stop(stopCtx); err != nil {
-			returnErr = fmt.Errorf("stop local workflow host: %w", err)
+			returnErr = errors.Join(returnErr, fmt.Errorf("stop local workflow host: %w", err))
 		}
 	}()
 

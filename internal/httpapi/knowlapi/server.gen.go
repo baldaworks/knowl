@@ -16,6 +16,10 @@ import (
 	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
 )
 
+const (
+	BearerAuthScopes = "bearerAuth.Scopes"
+)
+
 // Defines values for CitationKind.
 const (
 	Raw  CitationKind = "raw"
@@ -165,6 +169,9 @@ type QueryStringBadRequest = ErrorResponse
 // ScopeOverrideForbidden defines model for ScopeOverrideForbidden.
 type ScopeOverrideForbidden = ErrorResponse
 
+// Unauthorized defines model for Unauthorized.
+type Unauthorized = ErrorResponse
+
 // UnavailableError defines model for UnavailableError.
 type UnavailableError = ErrorResponse
 
@@ -236,6 +243,12 @@ func (siw *ServerInterfaceWrapper) GetReady(w http.ResponseWriter, r *http.Reque
 // IngestKnowledge operation middleware
 func (siw *ServerInterfaceWrapper) IngestKnowledge(w http.ResponseWriter, r *http.Request) {
 
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.IngestKnowledge(w, r)
 	}))
@@ -261,6 +274,12 @@ func (siw *ServerInterfaceWrapper) GetOperation(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetOperation(w, r, operationId)
 	}))
@@ -276,6 +295,12 @@ func (siw *ServerInterfaceWrapper) GetOperation(w http.ResponseWriter, r *http.R
 func (siw *ServerInterfaceWrapper) RetrieveKnowledge(w http.ResponseWriter, r *http.Request) {
 
 	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params RetrieveKnowledgeParams
@@ -447,6 +472,15 @@ type QueryStringBadRequestJSONResponse ErrorResponse
 
 type ScopeOverrideForbiddenJSONResponse ErrorResponse
 
+type UnauthorizedResponseHeaders struct {
+	WWWAuthenticate string
+}
+type UnauthorizedJSONResponse struct {
+	Body ErrorResponse
+
+	Headers UnauthorizedResponseHeaders
+}
+
 type UnavailableErrorJSONResponse ErrorResponse
 
 type GetHealthRequestObject struct {
@@ -516,6 +550,16 @@ func (response IngestKnowledge400JSONResponse) VisitIngestKnowledgeResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type IngestKnowledge401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response IngestKnowledge401JSONResponse) VisitIngestKnowledgeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("WWW-Authenticate", fmt.Sprint(response.Headers.WWWAuthenticate))
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
 type IngestKnowledge403JSONResponse struct {
 	ScopeOverrideForbiddenJSONResponse
 }
@@ -571,6 +615,16 @@ func (response GetOperation400JSONResponse) VisitGetOperationResponse(w http.Res
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
+}
+
+type GetOperation401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetOperation401JSONResponse) VisitGetOperationResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("WWW-Authenticate", fmt.Sprint(response.Headers.WWWAuthenticate))
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type GetOperation403JSONResponse struct {
@@ -637,6 +691,16 @@ func (response RetrieveKnowledge400JSONResponse) VisitRetrieveKnowledgeResponse(
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
+}
+
+type RetrieveKnowledge401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RetrieveKnowledge401JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("WWW-Authenticate", fmt.Sprint(response.Headers.WWWAuthenticate))
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type RetrieveKnowledge403JSONResponse struct {

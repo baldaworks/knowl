@@ -25,6 +25,17 @@ func TestLoadConfigUsesDefaultInternalIngestPolicyWhenConfigOmitsIt(t *testing.T
 	}
 }
 
+func TestHostConfigIncludesOperatorToken(t *testing.T) {
+	ctx := loadTestConfig(t, testConfigOptions{knowl: "provider: codex\noperator:\n  token: local-secret\n"})
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatalf("hostConfig() error: %v", err)
+	}
+	if config.OperatorToken != "local-secret" {
+		t.Fatalf("hostConfig().OperatorToken = %q, want local-secret", config.OperatorToken)
+	}
+}
+
 func TestLoadConfigRejectsRemovedIngestConfig(t *testing.T) {
 	_, err := tryLoadTestConfig(t, testConfigOptions{
 		knowl: "provider: codex\ningest:\n  auto_apply: true\n",

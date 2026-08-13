@@ -48,6 +48,8 @@ knowl:
   scope: local
   server:
     listen_addr: 127.0.0.1:8080
+  operator:
+    token: replace-with-a-local-secret
 ```
 
 PostgreSQL example:
@@ -81,6 +83,10 @@ Notes:
 - when storage is omitted, Knowl defaults to SQLite.
 - default local listen address is `127.0.0.1:8080`; service/sidecar deployments
   may override it with `0.0.0.0:8080` or another literal IP bind.
+- when `knowl.operator.token` is non-empty, `/v1/*` and `/mcp` require an
+  `Authorization: Bearer <token>` header. Health and readiness probes remain
+  unauthenticated. Keep tokenless deployments on a trusted, loopback-only
+  network boundary.
 
 Common `KNOWL_*` overrides include:
 
@@ -90,6 +96,7 @@ Common `KNOWL_*` overrides include:
 - `KNOWL_STORAGE_SQLITE_PATH`
 - `KNOWL_STORAGE_POSTGRES_DSN`
 - `KNOWL_SERVER_LISTEN_ADDR`
+- `KNOWL_OPERATOR_TOKEN`
 
 ## Supported operator workflow
 
@@ -158,6 +165,7 @@ Retrieve:
 
 ```bash
 curl -sS \
+  -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
   "http://127.0.0.1:8080/v1/retrieve?query=Why%20was%20Badger%20chosen%3F"
 ```
 
@@ -165,6 +173,7 @@ Ingest text:
 
 ```bash
 curl -sS \
+  -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/v1/ingest \
   -d '{
@@ -178,6 +187,7 @@ Ingest URI:
 
 ```bash
 curl -sS \
+  -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/v1/ingest \
   -d '{
@@ -188,7 +198,9 @@ curl -sS \
 Poll operation:
 
 ```bash
-curl -sS http://127.0.0.1:8080/v1/operations/op_01K...
+curl -sS \
+  -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
+  http://127.0.0.1:8080/v1/operations/op_01K...
 ```
 
 ## MCP contract
@@ -197,6 +209,9 @@ MCP is the primary agent-facing interface.
 
 The running service exposes MCP Streamable HTTP on its existing listener at
 `http://127.0.0.1:8080/mcp`.
+
+When an operator token is configured, MCP clients must send the same bearer
+token in the HTTP `Authorization` header.
 
 The baseline server exposes exactly:
 
