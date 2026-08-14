@@ -35,8 +35,16 @@ into Knowl's workspace and do not let the agent mutate `wiki/**` itself.
 Build the image:
 
 ```bash
-docker build -t knowl:local .
+docker build \
+  --build-arg VERSION=local \
+  --build-arg REVISION="$(git rev-parse HEAD)" \
+  --build-arg CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -t knowl:local .
 ```
+
+Release images run as a non-root user and carry OCI source, revision, version,
+license, and creation metadata. For a local release-shaped persistence and
+authentication check, run `scripts/smoke-test-sidecar.sh knowl:local`.
 
 Run it directly:
 
@@ -52,6 +60,13 @@ Or use the checked-in Compose example:
 ```bash
 docker compose -f deploy/sidecar/compose.yaml up --build
 ```
+
+Set `KNOWL_IMAGE` to use a prebuilt image with Compose. Production deployments
+should pin an immutable manifest digest instead of a mutable tag.
+
+The first published distribution is documented in the
+[v0.1.0 release notes](releases/v0.1.0.md), including authenticated run,
+upgrade, and non-destructive rollback guidance.
 
 ## Health checks
 

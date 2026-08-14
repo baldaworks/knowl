@@ -20,8 +20,12 @@ import (
 )
 
 const (
-	knownProviderID = "known"
-	commandHelpFlag = "--help"
+	knownProviderID      = "known"
+	commandHelpFlag      = "--help"
+	operatorTokenEnvName = "KNOWL_OPERATOR_TOKEN"
+	mcpRetrieveToolName  = "knowl_retrieve"
+	mcpIngestToolName    = "knowl_ingest"
+	mcpOperationToolName = "knowl_operation"
 )
 
 type stubLocalWorkflowHost struct {
@@ -76,7 +80,7 @@ func clearKnowlEnv(t *testing.T) {
 		"KNOWL_STORAGE_POSTGRES_DSN",
 		"KNOWL_SCOPE",
 		"KNOWL_SERVER_LISTEN_ADDR",
-		"KNOWL_OPERATOR_TOKEN",
+		operatorTokenEnvName,
 	} {
 		t.Setenv(key, "")
 	}

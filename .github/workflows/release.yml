@@ -1,0 +1,186 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/baldaworks/knowl
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag and main ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag"
+          release_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$release_commit" origin/main
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Verify tidy modules
+        run: go mod tidy -diff
+
+      - name: Verify generated OpenAPI bindings
+        run: |
+          go generate ./internal/httpapi/knowlapi
+          git diff --exit-code -- internal/httpapi/knowlapi/server.gen.go
+
+      - name: Test with race detector
+        run: go test -v -race ./...
+
+      - name: Vulnerability scan
+        run: go tool govulncheck ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        with:
+          version: v2.12.2
+
+      - name: Architecture lint
+        run: go run github.com/fe3dback/go-arch-lint@v1.15.0 check --project-path .
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: PostgreSQL integration contract
+        run: go test -tags=integration ./pkg/knowl/store/postgres -run TestStoreContractWithTestcontainers -count=1
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Build release-shaped image
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          created="$(git show -s --format=%cI "$release_commit")"
+          docker build \
+            --build-arg VERSION="$GITHUB_REF_NAME" \
+            --build-arg REVISION="$release_commit" \
+            --build-arg CREATED="$created" \
+            --tag knowl:release-smoke .
+      - name: Smoke empty and reused persistent volumes
+        env:
+          KNOWL_SMOKE_EXPECT_VERSION: ${{ github.ref_name }}
+        run: scripts/smoke-test-sidecar.sh knowl:release-smoke
+
+  publish:
+    needs: [verify, integration, container-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata
+        id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+            type=sha
+
+      - name: Compute reproducible build metadata
+        id: build-metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          echo "created=$(git show -s --format=%cI "$release_commit")" >> "$GITHUB_OUTPUT"
+          echo "revision=$release_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            REVISION=${{ steps.build-metadata.outputs.revision }}
+            CREATED=${{ steps.build-metadata.outputs.created }}
+          sbom: true
+          provenance: mode=max
+
+      - name: Attest published image provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify multi-platform manifest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST" --format '{{json .Manifest}}' > manifest.json
+          jq -e '.manifests | map(.platform.architecture) | index("amd64")' manifest.json >/dev/null
+          jq -e '.manifests | map(.platform.architecture) | index("arm64")' manifest.json >/dev/null
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          notes="$(mktemp)"
+          cp docs/releases/v0.1.0.md "$notes"
+          printf '\n## Published artifact\n\n`%s@%s`\n' "$IMAGE_NAME" "$DIGEST" >> "$notes"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --title "Knowl $GITHUB_REF_NAME" --notes-file "$notes"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "Knowl $GITHUB_REF_NAME" --notes-file "$notes"
+          fi
+          printf 'Published `%s@%s`\n' "$IMAGE_NAME" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

@@ -1,8 +1,17 @@
 # Product design
 
-Knowl is a service-first LLM-wiki knowledge service. It accepts durable source
-material, maintains a readable Markdown knowledge workspace with provenance,
-and returns bounded grounded evidence to a host agent or application.
+**Durable project knowledge for agents.**
+
+Knowl is a self-hosted knowledge sidecar for agentic applications. It turns
+durable sources into an inspectable Markdown knowledge base and returns
+bounded, provenance-backed evidence.
+
+The host decides which events are durable, assigns their immutable source
+revisions, orchestrates tools, and generates the final user answer. Knowl owns
+durable acceptance, canonical raw and Markdown artifacts, operation recovery,
+and bounded evidence with source references. The configured maintainer
+provider proposes validated Markdown updates inside Knowl; it is neither a
+connector nor another public interface.
 
 The default deployment is a sidecar service with SQLite. Agents use MCP; HTTP
 is the deterministic control transport. Go applications may use Fx to run the
@@ -71,6 +80,12 @@ The host owns session and user context, final-answer generation, tool
 orchestration, and the mapping to the trusted Knowl scope. Public callers
 cannot override that scope. Knowl returns bounded evidence and operation status
 only.
+
+Source-system ownership stays outside Knowl. A Balda, Norma, or equivalent host
+decides when an ADR, completed story, investigation, issue, pull request, or
+runbook has become durable and submits that immutable revision. Knowl does not
+own Slack, Telegram, Jira, GitHub, or their workflows, and it does not answer
+the user itself.
 
 The configured provider is an implementation detail. Knowl resolves
 `knowl.provider` through the shared `runtime.providers` configuration and
