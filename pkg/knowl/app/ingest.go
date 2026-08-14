@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
@@ -84,6 +85,7 @@ type IngestService struct {
 var _ interface {
 	Submit(ctx context.Context, envelope knowl.SourceEnvelope) (IngestSubmission, error)
 	Execute(ctx context.Context, submission IngestSubmission) (IngestResult, error)
+	RunToTerminal(ctx context.Context, claim knowl.WorkClaim) (IngestResult, error)
 	Ingest(ctx context.Context, envelope knowl.SourceEnvelope) (IngestResult, error)
 	Apply(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (ApplyResult, error)
 	Recover(ctx context.Context) ([]knowl.RecoveryResult, error)
@@ -139,14 +141,20 @@ func (service *IngestService) Submit(ctx context.Context, envelope knowl.SourceE
 		return IngestSubmission{}, fmt.Errorf("read schema: %w", err)
 	}
 	key := knowl.OperationKey{Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version}
-	reservation, err := service.operations.Reserve(readCtx, key, knowl.OperationMeta{Key: key, SchemaDigest: schema.Digest, CreatedAt: time.Now().UTC()})
+	reservation, err := service.operations.Reserve(readCtx, key, knowl.OperationMeta{
+		Key:            key,
+		AcceptedSource: accepted,
+		Schema:         schema,
+		SchemaDigest:   schema.Digest,
+		CreatedAt:      time.Now().UTC(),
+	})
 	if err != nil {
 		return IngestSubmission{}, fmt.Errorf("reserve operation: %w", err)
 	}
 	return IngestSubmission{
 		Operation: reservation.Operation,
-		accepted:  accepted,
-		schema:    schema,
+		accepted:  reservation.Descriptor.Source,
+		schema:    reservation.Descriptor.Schema,
 		new:       reservation.New,
 	}, nil
 }
@@ -154,6 +162,61 @@ func (service *IngestService) Submit(ctx context.Context, envelope knowl.SourceE
 // Execute runs host-owned maintenance for a previously accepted source revision.
 func (service *IngestService) Execute(ctx context.Context, submission IngestSubmission) (IngestResult, error) {
 	return service.execute(ctx, submission, nil, false)
+}
+
+// RunToTerminal reconciles one exclusively claimed durable operation through
+// the public sidecar path. Review is an internal convenience, not a runner stop.
+func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.WorkClaim) (IngestResult, error) {
+	ctx = nonNilContext(ctx)
+	if err := contextErr(ctx); err != nil {
+		return IngestResult{}, err
+	}
+	id := claim.Operation.ID
+	descriptor := claim.Descriptor
+	if id == "" || descriptor.OperationID != id || strings.TrimSpace(claim.Lease.Token) == "" {
+		return IngestResult{}, ErrExecutionDescriptorUnavailable
+	}
+	operation, err := service.operations.Operation(ctx, descriptor.Source.Scope, id)
+	if err != nil {
+		return IngestResult{}, fmt.Errorf("read claimed operation: %w", err)
+	}
+	if operation.ID != id || operation.Key.Scope != descriptor.Source.Scope {
+		return IngestResult{}, ErrExecutionDescriptorUnavailable
+	}
+	if err := ValidateExecutionDescriptor(operation.Key, descriptor); err != nil {
+		return IngestResult{}, err
+	}
+	result := IngestResult{Operation: operation}
+	if terminalOperation(operation.Status) {
+		return result, nil
+	}
+	submission := IngestSubmission{Operation: operation, accepted: descriptor.Source, schema: descriptor.Schema}
+	staged, loadErr := service.content.LoadStage(ctx, operation.Key.Scope, id)
+	switch {
+	case loadErr == nil:
+		result.Staged = staged
+		if operation.Status == knowl.StatusReceived {
+			if err := service.saveStagedPlan(ctx, operation, staged); err != nil {
+				return service.failIngest(ctx, result, "operation", err)
+			}
+		}
+	case errors.Is(loadErr, ErrStageNotFound) && operation.Status == knowl.StatusReceived:
+		planned, planErr := service.prepareStage(ctx, submission, nil)
+		if planErr != nil {
+			return service.failIngest(ctx, result, failureClass(planErr), planErr)
+		}
+		result.Plan = planned.Plan
+		result.Staged = planned.Staged
+		if err := service.saveStagedPlan(ctx, operation, planned.Staged); err != nil {
+			return service.failIngest(ctx, result, "operation", err)
+		}
+	default:
+		return service.failIngest(ctx, result, "staging", loadErr)
+	}
+	applied, err := service.apply(ctx, operation.Key.Scope, id, result.Staged)
+	result.Operation = applied.Operation
+	result.Commit = applied.Commit
+	return result, err
 }
 
 // FailSubmission records a failure after durable submission could not be scheduled.
@@ -202,55 +265,13 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 		return result, nil
 	}
 
-	readCtx, cancel := service.boundedContext(ctx)
-	sourceText, err := service.content.ReadSource(readCtx, submission.accepted, service.readLimits)
+	prepared, err := service.prepareStage(ctx, submission, suppliedPlan)
 	if err != nil {
-		cancel()
-		return service.failIngest(ctx, result, "source", err)
+		return service.failIngest(ctx, result, failureClass(err), err)
 	}
-	pageIDs, err := service.index.SelectContext(readCtx, submission.accepted.Scope, knowl.SourceSummary{Source: submission.accepted.Source, Version: submission.accepted.Version}, service.readLimits)
-	if err != nil {
-		cancel()
-		return service.failIngest(ctx, result, "context", err)
-	}
-	pages, err := service.content.ReadPages(readCtx, submission.accepted.Scope, pageIDs, service.readLimits)
-	cancel()
-	if err != nil {
-		return service.failIngest(ctx, result, "content", err)
-	}
-	var modelPlan knowl.ModelEditPlan
-	if suppliedPlan != nil {
-		modelPlan = *suppliedPlan
-	} else {
-		modelPlan, err = service.maintainer.Plan(ctx, knowl.MaintenanceInput{
-			Scope:      submission.accepted.Scope,
-			Schema:     submission.schema,
-			Source:     submission.accepted,
-			SourceText: string(sourceText),
-			Pages:      pages,
-			Limits:     service.readLimits,
-		})
-		if err != nil {
-			return service.failIngest(ctx, result, "provider", err)
-		}
-	}
-	validated, err := ValidatePlan(ctx, knowl.MaintenanceInput{
-		Scope:      submission.accepted.Scope,
-		Schema:     submission.schema,
-		Source:     submission.accepted,
-		SourceText: string(sourceText),
-		Pages:      pages,
-		Limits:     service.readLimits,
-	}, modelPlan, service.planLimits)
-	if err != nil {
-		return service.failIngest(ctx, result, "plan_validation", err)
-	}
-	validated.OperationID = string(operation.ID)
-	planDigest, err := PlanDigest(validated)
-	if err != nil {
-		return service.failIngest(ctx, result, "plan", err)
-	}
-	if err := service.operations.SavePlan(ctx, operation.ID, knowl.PlanSummary{OperationID: string(operation.ID), Digest: planDigest, FileCount: len(validated.Edits), CreatedAt: time.Now().UTC()}); err != nil {
+	result.Plan = prepared.Plan
+	result.Staged = prepared.Staged
+	if err := service.saveStagedPlan(ctx, operation, prepared.Staged); err != nil {
 		if advanced, current, readErr := service.advancedIngest(ctx, submission.accepted.Scope, operation.ID); readErr == nil {
 			if advanced {
 				return current, nil
@@ -259,12 +280,6 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 		}
 		return service.failIngest(ctx, result, "operation", err)
 	}
-	staged, err := service.content.StagePlan(ctx, validated)
-	if err != nil {
-		return service.failIngest(ctx, result, "staging", err)
-	}
-	result.Plan = validated
-	result.Staged = staged
 	if forceReview || !service.autoApply {
 		if err := service.operations.MarkAwaitingReview(ctx, operation.ID); err != nil {
 			if advanced, current, readErr := service.advancedIngest(ctx, submission.accepted.Scope, operation.ID); readErr == nil {
@@ -282,10 +297,76 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 		return result, nil
 	}
 
-	applied, err := service.apply(ctx, submission.accepted.Scope, operation.ID, staged)
+	applied, err := service.apply(ctx, submission.accepted.Scope, operation.ID, prepared.Staged)
 	result.Operation = applied.Operation
 	result.Commit = applied.Commit
 	return result, err
+}
+
+type preparedStage struct {
+	Plan   knowl.ValidatedEditPlan
+	Staged knowl.StagedChange
+}
+
+func (service *IngestService) prepareStage(ctx context.Context, submission IngestSubmission, suppliedPlan *knowl.ModelEditPlan) (preparedStage, error) {
+	readCtx, cancel := service.boundedContext(ctx)
+	sourceText, err := service.content.ReadSource(readCtx, submission.accepted, service.readLimits)
+	if err != nil {
+		cancel()
+		return preparedStage{}, fmt.Errorf("source: %w", err)
+	}
+	pageIDs, err := service.index.SelectContext(readCtx, submission.accepted.Scope, knowl.SourceSummary{
+		Source: submission.accepted.Source, Version: submission.accepted.Version, Title: sourceTitle(sourceText),
+	}, service.readLimits)
+	if err != nil {
+		cancel()
+		return preparedStage{}, fmt.Errorf("context: %w", err)
+	}
+	pages, err := service.content.ReadPages(readCtx, submission.accepted.Scope, pageIDs, service.readLimits)
+	cancel()
+	if err != nil {
+		return preparedStage{}, fmt.Errorf("content: %w", err)
+	}
+	var modelPlan knowl.ModelEditPlan
+	if suppliedPlan != nil {
+		modelPlan = *suppliedPlan
+	} else {
+		modelPlan, err = service.maintainer.Plan(ctx, knowl.MaintenanceInput{
+			Scope:      submission.accepted.Scope,
+			Schema:     submission.schema,
+			Source:     submission.accepted,
+			SourceText: string(sourceText),
+			Pages:      pages,
+			Limits:     service.readLimits,
+		})
+		if err != nil {
+			return preparedStage{}, fmt.Errorf("provider: %w", err)
+		}
+	}
+	validated, err := ValidatePlan(ctx, knowl.MaintenanceInput{
+		Scope:      submission.accepted.Scope,
+		Schema:     submission.schema,
+		Source:     submission.accepted,
+		SourceText: string(sourceText),
+		Pages:      pages,
+		Limits:     service.readLimits,
+	}, modelPlan, service.planLimits)
+	if err != nil {
+		return preparedStage{}, fmt.Errorf("plan_validation: %w", err)
+	}
+	validated.OperationID = string(submission.Operation.ID)
+	staged, err := service.content.StagePlan(ctx, validated)
+	if err != nil {
+		return preparedStage{}, fmt.Errorf("staging: %w", err)
+	}
+	return preparedStage{Plan: validated, Staged: staged}, nil
+}
+
+func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {
+	return service.operations.SavePlan(ctx, operation.ID, knowl.PlanSummary{
+		OperationID: string(operation.ID), Digest: staged.Digest,
+		FileCount: len(staged.Files), CreatedAt: time.Now().UTC(),
+	})
 }
 
 // Apply explicitly applies a planned operation after review.
@@ -313,15 +394,6 @@ func (service *IngestService) Recover(ctx context.Context) ([]knowl.RecoveryResu
 	results, err := service.content.Recover(ctx)
 	if err != nil {
 		return nil, err
-	}
-	stateCtx := durableContext(ctx)
-	for _, result := range results {
-		if result.Action != "rolled_back" || result.OperationID == "" {
-			continue
-		}
-		if err := service.operations.Fail(stateCtx, knowl.OperationID(result.OperationID), knowl.Failure{Class: "recovery", OperationID: result.OperationID}); err != nil {
-			return nil, fmt.Errorf("record recovered operation %q: %w", result.OperationID, err)
-		}
 	}
 	return results, nil
 }
@@ -380,9 +452,6 @@ func (service *IngestService) failAfterCommit(
 	cause error,
 ) (ApplyResult, error) {
 	err := fmt.Errorf("%w: %w", ErrProjection, cause)
-	if failErr := service.operations.Fail(ctx, id, knowl.Failure{Class: "projection", OperationID: string(id)}); failErr != nil {
-		return ApplyResult{Operation: operation, Commit: &commit}, errors.Join(err, fmt.Errorf("record projection failure: %w", failErr))
-	}
 	if current, readErr := service.operations.Operation(ctx, scope, id); readErr == nil {
 		operation = current
 	}
@@ -390,6 +459,9 @@ func (service *IngestService) failAfterCommit(
 }
 
 func (service *IngestService) failIngest(ctx context.Context, result IngestResult, class string, cause error) (IngestResult, error) {
+	if retryableExecutionError(cause) {
+		return result, cause
+	}
 	if err := service.operations.Fail(durableContext(ctx), result.Operation.ID, knowl.Failure{Class: class, OperationID: string(result.Operation.ID)}); err != nil {
 		return result, errors.Join(cause, fmt.Errorf("record %s failure: %w", class, err))
 	}
@@ -399,6 +471,9 @@ func (service *IngestService) failIngest(ctx context.Context, result IngestResul
 }
 
 func (service *IngestService) failApply(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, operation knowl.Operation, class string, cause error) (ApplyResult, error) {
+	if retryableExecutionError(cause) {
+		return ApplyResult{Operation: operation}, cause
+	}
 	stateCtx := durableContext(ctx)
 	if err := service.operations.Fail(stateCtx, id, knowl.Failure{Class: class, OperationID: string(id)}); err != nil {
 		return ApplyResult{Operation: operation}, errors.Join(cause, fmt.Errorf("record %s failure: %w", class, err))
@@ -408,6 +483,22 @@ func (service *IngestService) failApply(ctx context.Context, scope knowl.ScopeRe
 		return ApplyResult{Operation: operation}, errors.Join(cause, fmt.Errorf("read failed operation: %w", readErr))
 	}
 	return ApplyResult{Operation: operation}, fmt.Errorf("%s: %w", class, cause)
+}
+
+func terminalOperation(status knowl.OperationStatus) bool {
+	return status == knowl.StatusCommitted || status == knowl.StatusFailed
+}
+
+func retryableExecutionError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrApplyLeaseConflict)
+}
+
+func failureClass(err error) string {
+	message := err.Error()
+	if index := strings.IndexByte(message, ':'); index > 0 {
+		return message[:index]
+	}
+	return "operation"
 }
 
 func (service *IngestService) advancedIngest(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (bool, IngestResult, error) {

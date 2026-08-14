@@ -250,6 +250,86 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	}
 }
 
+func TestHostRestartResumesAcceptedOperationThroughHTTPAndMCP(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	schema, err := workspace.Schema(ctx, "local")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+	maintainer := provider.Fixture{Result: domain.ModelEditPlan{
+		SchemaDigest: schema.Digest,
+		SourceRefs:   []string{hostSourceRef},
+		Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
+	}}
+	firstHost, err := knowl.NewHost(ctx, config, maintainer)
+	if err != nil {
+		t.Fatalf("compose first host: %v", err)
+	}
+	value, err := firstHost.MCP().Call(ctx, hostIngestToolName, map[string]any{
+		hostSourceContentKey: hostSourceContent, hostSourceOriginKey: hostSourceOrigin,
+		hostSourceIdempotencyKeyName: hostSourceIdempotencyKey,
+	})
+	if err != nil {
+		t.Fatalf("accept source before crash: %v", err)
+	}
+	accepted, ok := value.(mcp.IngestResult)
+	if !ok || accepted.OperationID == "" || accepted.Status != hostQueuedStatus {
+		t.Fatalf("accepted operation = %#v, want queued", value)
+	}
+	shutdownHost(t, firstHost)
+
+	restarted, err := knowl.NewHost(ctx, config, maintainer)
+	if err != nil {
+		t.Fatalf("compose restarted host: %v", err)
+	}
+	defer shutdownHost(t, restarted)
+	if err := restarted.Start(ctx); err != nil {
+		t.Fatalf("start restarted host: %v", err)
+	}
+	httpOperation := waitForHostOperation(t, restarted, string(accepted.OperationID))
+	mcpValue, err := restarted.MCP().Call(ctx, hostOperationToolName, map[string]any{"id": string(accepted.OperationID)})
+	if err != nil {
+		t.Fatalf("read resumed MCP operation: %v", err)
+	}
+	mcpOperation, ok := mcpValue.(mcp.OperationResult)
+	if !ok || mcpOperation.Status != httpOperation.Status || mcpOperation.ID != accepted.OperationID {
+		t.Fatalf("public operation mismatch: HTTP=%#v MCP=%#v", httpOperation, mcpValue)
+	}
+	body := []byte(`{"content":"source text","origin":"source-1","idempotency_key":"1"}`)
+	replayBody, status, err := doHostRequest(t, restarted, http.MethodPost, "/v1/ingest", body)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("terminal HTTP replay = %d, %v, body %s", status, err, replayBody)
+	}
+	var replay struct {
+		OperationID string `json:"operation_id"`
+		Status      string `json:"status"`
+	}
+	if err := json.Unmarshal(replayBody, &replay); err != nil {
+		t.Fatalf("decode terminal replay: %v", err)
+	}
+	if replay.OperationID != string(accepted.OperationID) || replay.Status != hostCompletedStatus {
+		t.Fatalf("terminal replay = %#v, want same completed operation", replay)
+	}
+	logContent, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "log.md"))
+	if err != nil {
+		t.Fatalf("read provenance log: %v", err)
+	}
+	if count := bytes.Count(logContent, []byte(accepted.OperationID)); count != 1 {
+		t.Fatalf("resumed operation log entries = %d, want one", count)
+	}
+}
+
 func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
@@ -439,6 +519,153 @@ func TestHostIngestReturnsBeforeMaintainerPlanCompletes(t *testing.T) {
 	}
 	close(release)
 	_ = waitForHostOperation(t, host, submitted.OperationID)
+}
+
+func TestHostStartSchedulesDurablePreStartWorkWithoutWaitingForProvider(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	schema, err := workspace.Schema(ctx, "local")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	release := make(chan struct{})
+	maintainer := &blockingMaintainer{
+		release: release,
+		started: make(chan struct{}),
+		plan: domain.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{hostSourceRef},
+			Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
+		},
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+	host, err := knowl.NewHost(ctx, config, maintainer)
+	if err != nil {
+		t.Fatalf("compose host: %v", err)
+	}
+	defer shutdownHost(t, host)
+	value, err := host.MCP().Call(ctx, hostIngestToolName, map[string]any{
+		"content": hostSourceContent, "origin": hostSourceOrigin, "idempotency_key": hostSourceIdempotencyKey,
+	})
+	if err != nil {
+		t.Fatalf("pre-start MCP ingest: %v", err)
+	}
+	submitted, ok := value.(mcp.IngestResult)
+	if !ok || submitted.Status != hostQueuedStatus || submitted.OperationID == "" {
+		t.Fatalf("pre-start submission = %#v, want queued operation", value)
+	}
+	if host.Ready() {
+		t.Fatal("host became ready before Start initial inspection")
+	}
+	startedHost := make(chan error, 1)
+	go func() { startedHost <- host.Start(ctx) }()
+	select {
+	case err := <-startedHost:
+		if err != nil {
+			t.Fatalf("start host: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Start waited for provider completion instead of initial scan")
+	}
+	if !host.Ready() {
+		t.Fatal("host not ready after durable initial scan handshake")
+	}
+	select {
+	case <-maintainer.started:
+	case <-time.After(time.Second):
+		t.Fatal("pre-start durable operation was not scheduled")
+	}
+	close(release)
+	_ = waitForHostOperation(t, host, string(submitted.OperationID))
+}
+
+func TestHostStopAllowsActiveOperationToFinishAndIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	schema, err := workspace.Schema(ctx, "local")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	release := make(chan struct{})
+	maintainer := &blockingMaintainer{
+		release: release,
+		started: make(chan struct{}),
+		plan: domain.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{hostSourceRef},
+			Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
+		},
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+	host, err := knowl.NewHost(ctx, config, maintainer)
+	if err != nil {
+		t.Fatalf("compose host: %v", err)
+	}
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("start host: %v", err)
+	}
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("repeat start host: %v", err)
+	}
+	body, status, err := doHostRequest(t, host, http.MethodPost, "/v1/ingest", []byte(`{"content":"source text","origin":"source-1","idempotency_key":"1"}`))
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("ingest request = %d, %v, body %s", status, err, body)
+	}
+	select {
+	case <-maintainer.started:
+	case <-time.After(time.Second):
+		t.Fatal("active operation did not start")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- host.Stop(context.Background()) }()
+	deadline := time.Now().Add(time.Second)
+	for host.Ready() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if host.Ready() {
+		t.Fatal("host remained ready during shutdown")
+	}
+	select {
+	case err := <-stopped:
+		t.Fatalf("Stop returned before active work completed: %v", err)
+	default:
+	}
+	close(release)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("stop host: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not finish after active work completed")
+	}
+	if _, err := os.Stat(filepath.Join(workspace.Root(), hostPagePath)); err != nil {
+		t.Fatalf("active operation did not retain terminal content: %v", err)
+	}
+	if err := host.Stop(ctx); err != nil {
+		t.Fatalf("repeat stop host: %v", err)
+	}
+	if err := host.Start(ctx); err == nil {
+		t.Fatal("Start after Stop unexpectedly succeeded")
+	}
 }
 
 func TestNewRejectsNilMaintainerBeforeOpeningStore(t *testing.T) {

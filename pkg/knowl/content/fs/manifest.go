@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,9 +85,17 @@ func readManifest(path string) (sourceManifest, error) {
 }
 
 func readStageManifest(path string) (stageManifest, error) {
-	content, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return stageManifest{}, err
+	}
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(io.LimitReader(file, maxStageManifestBytes+1))
+	if err != nil {
+		return stageManifest{}, err
+	}
+	if len(content) > maxStageManifestBytes {
+		return stageManifest{}, ErrPlanConflict
 	}
 	var manifest stageManifest
 	if err := yaml.Unmarshal(content, &manifest); err != nil {

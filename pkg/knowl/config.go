@@ -20,15 +20,17 @@ const (
 
 // Config controls one local Knowl host. The scope is trusted host context.
 type Config struct {
-	Workspace       string
-	Scope           domain.ScopeRef
-	StoreDriver     string
-	StorePath       string
-	PostgresDSN     string
-	ListenAddr      string
-	OperatorToken   string
-	ReadLimits      domain.ReadLimits
-	IngestOptions   app.IngestOptions
+	Workspace     string
+	Scope         domain.ScopeRef
+	StoreDriver   string
+	StorePath     string
+	PostgresDSN   string
+	ListenAddr    string
+	OperatorToken string
+	ReadLimits    domain.ReadLimits
+	IngestOptions app.IngestOptions
+	// WorkerQueueSize bounds only coalesced in-memory wake hints. Accepted work
+	// remains durable and is recovered by scheduler scans when hints are lost.
 	WorkerQueueSize int
 	ShutdownTimeout time.Duration
 }

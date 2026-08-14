@@ -30,6 +30,10 @@ func (fakeContentStore) StagePlan(context.Context, knowl.ValidatedEditPlan) (kno
 	return knowl.StagedChange{}, nil
 }
 
+func (fakeContentStore) LoadStage(context.Context, knowl.ScopeRef, knowl.OperationID) (knowl.StagedChange, error) {
+	return knowl.StagedChange{}, ErrStageNotFound
+}
+
 func (fakeContentStore) Commit(context.Context, knowl.StagedChange) (knowl.ContentCommit, error) {
 	return knowl.ContentCommit{}, nil
 }

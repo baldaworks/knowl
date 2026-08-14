@@ -23,7 +23,7 @@ type composedRuntime struct {
 	maintainerCloser io.Closer
 	operations       app.OperationStore
 	index            app.SearchIndex
-	worker           *worker
+	scheduler        *operationScheduler
 	service          *app.IngestService
 	query            *app.QueryService
 	lint             *app.LintService
@@ -89,21 +89,24 @@ func composeRuntime(ctx context.Context, config Config, maintainer app.Maintaine
 	runtime.operations = store.operations
 	runtime.index = store.index
 	runtime.closer = store.closer
-	runtime.worker = newWorker(config.WorkerQueueSize)
 	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, runtime.workspace, runtime.operations, runtime.index, store.checker, maintainer)
 	if err != nil {
 		return composedRuntime{}, err
 	}
-	runtime.mcp, err = mcp.NewServer(runtime.query, runtime.service, workerSubmitter{worker: runtime.worker}, config.Scope, config.ReadLimits)
+	runtime.scheduler, err = newOperationScheduler(runtime.operations, runtime.service, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize})
+	if err != nil {
+		return composedRuntime{}, fmt.Errorf("compose operation scheduler: %w", err)
+	}
+	runtime.mcp, err = mcp.NewServer(runtime.query, runtime.service, runtime.scheduler, config.Scope, config.ReadLimits)
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose MCP service: %w", err)
 	}
 	runtime.handler = httpserver.NewHandler(httpserver.Dependencies{
-		Scope:     config.Scope,
-		Ingest:    runtime.service,
-		Query:     runtime.query,
-		Submitter: workerSubmitter{worker: runtime.worker},
-		Ready:     func() bool { return false },
+		Scope:  config.Scope,
+		Ingest: runtime.service,
+		Query:  runtime.query,
+		Waker:  runtime.scheduler,
+		Ready:  func() bool { return false },
 	})
 	return runtime, nil
 }
@@ -165,7 +168,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		maintainerCloser: runtime.maintainerCloser,
 		operations:       runtime.operations,
 		index:            runtime.index,
-		worker:           runtime.worker,
+		scheduler:        runtime.scheduler,
 		service:          runtime.service,
 		query:            runtime.query,
 		lint:             runtime.lint,
@@ -173,11 +176,11 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		serverErr:        make(chan error, 1),
 	}
 	httpHandler := httpserver.NewHandler(httpserver.Dependencies{
-		Scope:     runtime.config.Scope,
-		Ingest:    runtime.service,
-		Query:     runtime.query,
-		Submitter: workerSubmitter{worker: runtime.worker},
-		Ready:     host.Ready,
+		Scope:  runtime.config.Scope,
+		Ingest: runtime.service,
+		Query:  runtime.query,
+		Waker:  runtime.scheduler,
+		Ready:  host.Ready,
 	})
 	mcpHandler, err := mcphttp.NewHandler(runtime.mcp, host.Ready)
 	if err != nil {

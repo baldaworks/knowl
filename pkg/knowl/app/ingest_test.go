@@ -39,6 +39,9 @@ func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	if maintainer.calls() != 1 {
 		t.Fatalf("maintainer calls after initial ingest = %d, want 1", maintainer.calls())
 	}
+	if _, err := workspace.LoadStage(ctx, envelope.Scope, planned.Operation.ID); err != nil {
+		t.Fatalf("load durable review stage: %v", err)
+	}
 
 	applied, err := service.Apply(ctx, envelope.Scope, planned.Operation.ID)
 	if err != nil {
@@ -98,6 +101,52 @@ func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	}
 	if string(secondLog) != string(logContent) {
 		t.Fatal("replay changed the canonical log")
+	}
+}
+
+func TestSubmitReplayUsesDurableExecutionDescriptor(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, service, maintainer := newWorkflow(t, false, nil, func(schema knowl.SchemaDocument) knowl.ModelEditPlan {
+		return knowl.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{testSourceRef},
+			Edits:        []knowl.FileEdit{},
+			Rationale:    "verify durable schema snapshot",
+		}
+	})
+	envelope := sourceEnvelope([]byte("durable source"))
+	first, err := service.Submit(ctx, envelope)
+	if err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	descriptor, err := store.Execution(ctx, envelope.Scope, first.Operation.ID)
+	if err != nil {
+		t.Fatalf("read execution descriptor: %v", err)
+	}
+	if descriptor.Source.Source != envelope.Source || descriptor.Source.Version != envelope.Version {
+		t.Fatalf("stored source = %#v, want envelope identity", descriptor.Source)
+	}
+
+	schemaPath := filepath.Join(workspace.Root(), "schema.md")
+	currentSchema, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatalf("read schema fixture: %v", err)
+	}
+	if err := os.WriteFile(schemaPath, append(currentSchema, []byte("\nReplay policy change.\n")...), 0o600); err != nil {
+		t.Fatalf("change schema fixture: %v", err)
+	}
+	replay, err := service.Submit(ctx, envelope)
+	if err != nil {
+		t.Fatalf("replay submit: %v", err)
+	}
+	if replay.NeedsExecution() {
+		t.Fatal("replay unexpectedly reported newly created work")
+	}
+	if _, err := service.Execute(ctx, replay); !errors.Is(err, contentfs.ErrPrecondition) {
+		t.Fatalf("execute replay error = %v, want stale durable schema precondition", err)
+	}
+	if got := maintainer.schemaDigest(); got != descriptor.Schema.Digest {
+		t.Fatalf("maintainer schema digest = %q, want durable %q", got, descriptor.Schema.Digest)
 	}
 }
 
@@ -268,7 +317,7 @@ func TestIngestRejectsStaleSchemaAtApply(t *testing.T) {
 	}
 }
 
-func TestProjectionFailureLeavesCanonicalCommitAndFailsOperation(t *testing.T) {
+func TestProjectionFailureLeavesCanonicalCommitRetryable(t *testing.T) {
 	ctx := context.Background()
 	workspace, store, service, _ := newWorkflow(t, false, failingIndex{})
 	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
@@ -283,14 +332,266 @@ func TestProjectionFailureLeavesCanonicalCommitAndFailsOperation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read committed operation: %v", err)
 	}
-	if operation.Status != knowl.StatusFailed || operation.Failure == nil || operation.Failure.Class != "projection" {
-		t.Fatalf("projection failure operation = %#v, want failed projection", operation)
+	if operation.Status != knowl.StatusApplying || operation.Failure != nil {
+		t.Fatalf("projection failure operation = %#v, want retryable applying", operation)
 	}
 	if result.Commit == nil {
 		t.Fatal("projection failure did not report the canonical commit")
 	}
 	if _, err := os.Stat(filepath.Join(workspace.Root(), "wiki", "entities", "one.md")); err != nil {
 		t.Fatalf("canonical page missing after projection failure: %v", err)
+	}
+}
+
+func TestRunToTerminalPlansAndCommitsClaimedOperation(t *testing.T) {
+	ctx := context.Background()
+	_, store, service, maintainer := newWorkflow(t, false, nil)
+	submission, err := service.Submit(ctx, sourceEnvelope([]byte("runner source")))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	claim := claimReady(t, store, submission.Operation.Key.Scope)
+
+	result, err := service.RunToTerminal(ctx, claim)
+	if err != nil {
+		t.Fatalf("run to terminal: %v", err)
+	}
+	if result.Operation.Status != knowl.StatusCommitted || result.Commit == nil {
+		t.Fatalf("runner result = %#v, want committed", result)
+	}
+	if maintainer.calls() != 1 {
+		t.Fatalf("maintainer calls = %d, want 1", maintainer.calls())
+	}
+}
+
+func TestRunToTerminalAdoptsDurableStageWithoutReplanning(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, service, maintainer := newWorkflow(t, false, nil)
+	submission, err := service.Submit(ctx, sourceEnvelope([]byte("staged source")))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	schema, err := workspace.Schema(ctx, submission.Operation.Key.Scope)
+	if err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	staged, err := workspace.StagePlan(ctx, knowl.ValidatedEditPlan{
+		OperationID:  string(submission.Operation.ID),
+		Scope:        submission.Operation.Key.Scope,
+		SchemaDigest: schema.Digest,
+		SourceRefs:   []string{testSourceRef},
+		Edits: []knowl.FileEdit{
+			{Path: testPagePath, Content: planPageContent},
+			{Path: testPageTwoPath, Content: planSupportingContent},
+		},
+	})
+	if err != nil {
+		t.Fatalf("stage plan: %v", err)
+	}
+	restartedWorkspace, err := contentfs.New(workspace.Root())
+	if err != nil {
+		t.Fatalf("reopen workspace: %v", err)
+	}
+	restartedService, err := app.NewIngestService(restartedWorkspace, store, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatalf("recreate ingest service: %v", err)
+	}
+	result, err := restartedService.RunToTerminal(ctx, claimReady(t, store, submission.Operation.Key.Scope))
+	if err != nil {
+		t.Fatalf("run staged operation: %v", err)
+	}
+	if result.Operation.Status != knowl.StatusCommitted || result.Staged.Digest != staged.Digest {
+		t.Fatalf("runner result = %#v, want adopted stage %q", result, staged.Digest)
+	}
+	if maintainer.calls() != 0 {
+		t.Fatalf("maintainer calls = %d, want no replanning", maintainer.calls())
+	}
+}
+
+func TestRunToTerminalFailsPlannedOperationWithoutStage(t *testing.T) {
+	ctx := context.Background()
+	_, store, service, maintainer := newWorkflow(t, false, nil)
+	submission, err := service.Submit(ctx, sourceEnvelope([]byte("missing stage")))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := store.SavePlan(ctx, submission.Operation.ID, knowl.PlanSummary{
+		OperationID: string(submission.Operation.ID), Digest: "missing-stage", CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("save plan state: %v", err)
+	}
+	result, err := service.RunToTerminal(ctx, claimReady(t, store, submission.Operation.Key.Scope))
+	if !errors.Is(err, app.ErrStageNotFound) {
+		t.Fatalf("run without stage error = %v, want stage not found", err)
+	}
+	if result.Operation.Status != knowl.StatusFailed || result.Operation.Failure == nil || result.Operation.Failure.Class != "staging" {
+		t.Fatalf("runner result = %#v, want failed staging", result)
+	}
+	if maintainer.calls() != 0 {
+		t.Fatalf("maintainer calls = %d, want 0", maintainer.calls())
+	}
+}
+
+func TestRunToTerminalRetriesAfterCanonicalProjectionFailure(t *testing.T) {
+	ctx := context.Background()
+	index := &failOnceProjectionIndex{}
+	workspace, store, service, maintainer := newWorkflowWithOptions(t, app.IngestOptions{LeaseDuration: time.Nanosecond}, index)
+	submission, err := service.Submit(ctx, sourceEnvelope([]byte("retry projection")))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	claim := claimReady(t, store, submission.Operation.Key.Scope)
+	first, err := service.RunToTerminal(ctx, claim)
+	if !errors.Is(err, app.ErrProjection) {
+		t.Fatalf("first run error = %v, want projection failure", err)
+	}
+	if first.Operation.Status != knowl.StatusApplying || first.Commit == nil {
+		t.Fatalf("first result = %#v, want retryable canonical commit", first)
+	}
+	logBeforeRetry, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "log.md"))
+	if err != nil {
+		t.Fatalf("read log before retry: %v", err)
+	}
+	restartedWorkspace, err := contentfs.New(workspace.Root())
+	if err != nil {
+		t.Fatalf("reopen workspace: %v", err)
+	}
+	restartedService, err := app.NewIngestService(restartedWorkspace, store, index, maintainer, app.IngestOptions{LeaseDuration: time.Nanosecond})
+	if err != nil {
+		t.Fatalf("recreate ingest service: %v", err)
+	}
+	second, err := restartedService.RunToTerminal(ctx, claim)
+	if err != nil {
+		t.Fatalf("retry run: %v", err)
+	}
+	if second.Operation.Status != knowl.StatusCommitted || second.Commit == nil || second.Commit.Generation != first.Commit.Generation {
+		t.Fatalf("retry result = %#v, want same committed generation", second)
+	}
+	logAfterRetry, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "log.md"))
+	if err != nil {
+		t.Fatalf("read log after retry: %v", err)
+	}
+	if string(logAfterRetry) != string(logBeforeRetry) {
+		t.Fatal("retry duplicated the canonical provenance log entry")
+	}
+	if maintainer.calls() != 1 {
+		t.Fatalf("maintainer calls = %d, want stage reuse", maintainer.calls())
+	}
+}
+
+func TestRunToTerminalRetriesAfterCommitOutcomeFailure(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, _, maintainer := newWorkflow(t, false, nil)
+	operations := &failOnceOutcomeStore{OperationStore: store}
+	service, err := app.NewIngestService(workspace, operations, store, maintainer, app.IngestOptions{LeaseDuration: time.Nanosecond})
+	if err != nil {
+		t.Fatalf("new ingest service: %v", err)
+	}
+	submission, err := service.Submit(ctx, sourceEnvelope([]byte("retry outcome")))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	claim := claimReady(t, store, submission.Operation.Key.Scope)
+	first, err := service.RunToTerminal(ctx, claim)
+	if !errors.Is(err, errOutcomeUnavailable) {
+		t.Fatalf("first run error = %v, want outcome failure", err)
+	}
+	if first.Operation.Status != knowl.StatusApplying || first.Commit == nil {
+		t.Fatalf("first result = %#v, want retryable canonical commit", first)
+	}
+	restartedWorkspace, err := contentfs.New(workspace.Root())
+	if err != nil {
+		t.Fatalf("reopen workspace: %v", err)
+	}
+	restartedService, err := app.NewIngestService(restartedWorkspace, operations, store, maintainer, app.IngestOptions{LeaseDuration: time.Nanosecond})
+	if err != nil {
+		t.Fatalf("recreate ingest service: %v", err)
+	}
+	second, err := restartedService.RunToTerminal(ctx, claim)
+	if err != nil {
+		t.Fatalf("retry run: %v", err)
+	}
+	if second.Operation.Status != knowl.StatusCommitted || second.Commit == nil || second.Commit.Generation != first.Commit.Generation {
+		t.Fatalf("retry result = %#v, want same committed generation", second)
+	}
+}
+
+func TestRunToTerminalKeepsActiveApplyLeaseRetryable(t *testing.T) {
+	ctx := context.Background()
+	_, store, service, _ := newWorkflow(t, false, nil)
+	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("leased operation")))
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if err := store.MarkApplying(ctx, planned.Operation.ID, knowl.Lease{
+		Token: "active-apply", ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("mark applying: %v", err)
+	}
+	result, err := service.RunToTerminal(ctx, claimReady(t, store, planned.Operation.Key.Scope))
+	if !errors.Is(err, app.ErrApplyLeaseConflict) {
+		t.Fatalf("runner error = %v, want apply lease conflict", err)
+	}
+	operation, readErr := store.Operation(ctx, planned.Operation.Key.Scope, planned.Operation.ID)
+	if readErr != nil {
+		t.Fatalf("read operation: %v", readErr)
+	}
+	if result.Operation.Status != knowl.StatusApplying || operation.Status != knowl.StatusApplying || operation.Failure != nil {
+		t.Fatalf("leased operation = %#v / %#v, want retryable applying", result.Operation, operation)
+	}
+}
+
+func TestRunToTerminalResumesExpiredApplyingAfterServiceRestart(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, service, maintainer := newWorkflow(t, false, nil)
+	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("expired applying")))
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if err := store.MarkApplying(ctx, planned.Operation.ID, knowl.Lease{
+		Token: "crashed-owner", ExpiresAt: time.Unix(1, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("persist crashed applying state: %v", err)
+	}
+	restartedWorkspace, err := contentfs.New(workspace.Root())
+	if err != nil {
+		t.Fatalf("reopen workspace: %v", err)
+	}
+	restartedService, err := app.NewIngestService(restartedWorkspace, store, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatalf("recreate ingest service: %v", err)
+	}
+	result, err := restartedService.RunToTerminal(ctx, claimReady(t, store, planned.Operation.Key.Scope))
+	if err != nil {
+		t.Fatalf("resume applying operation: %v", err)
+	}
+	if result.Operation.Status != knowl.StatusCommitted || result.Commit == nil {
+		t.Fatalf("resumed applying result = %#v, want committed", result)
+	}
+	if maintainer.calls() != 1 {
+		t.Fatalf("resumed applying maintainer calls = %d, want no replay", maintainer.calls())
+	}
+}
+
+func TestRunToTerminalCancellationDoesNotFailOperation(t *testing.T) {
+	ctx := context.Background()
+	_, store, service, _ := newWorkflow(t, false, nil)
+	submission, err := service.Submit(ctx, sourceEnvelope([]byte("cancelled operation")))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	claim := claimReady(t, store, submission.Operation.Key.Scope)
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := service.RunToTerminal(cancelled, claim); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runner error = %v, want context cancellation", err)
+	}
+	operation, err := store.Operation(ctx, submission.Operation.Key.Scope, submission.Operation.ID)
+	if err != nil {
+		t.Fatalf("read operation: %v", err)
+	}
+	if operation.Status != knowl.StatusReceived || operation.Failure != nil {
+		t.Fatalf("cancelled operation = %#v, want retryable received", operation)
 	}
 }
 
@@ -331,6 +632,23 @@ func TestSubmitReservesWithoutPlanningAndMarksReplay(t *testing.T) {
 	}
 	if second.NeedsExecution() || second.Operation.ID != first.Operation.ID {
 		t.Fatalf("replayed submission = %#v, want existing operation", second.Operation)
+	}
+}
+
+func TestExecutePassesBoundedSourceSummaryToContextSelection(t *testing.T) {
+	ctx := context.Background()
+	index := &recordingContextIndex{}
+	workspace, store, service, maintainer := newWorkflow(t, false, index)
+	_ = workspace
+	_ = store
+	_ = maintainer
+	envelope := sourceEnvelope([]byte("preamble\n\n## Badger session decision\nbody"))
+	if _, err := service.Ingest(ctx, envelope); err != nil {
+		t.Fatalf("Ingest(): %v", err)
+	}
+	want := knowl.SourceSummary{Source: envelope.Source, Version: envelope.Version, Title: "Badger session decision"}
+	if index.summary != want {
+		t.Fatalf("SelectContext() summary = %#v, want %#v", index.summary, want)
 	}
 }
 
@@ -386,6 +704,7 @@ type countingMaintainer struct {
 	plan    knowl.ModelEditPlan
 	factory func(knowl.SchemaDocument) knowl.ModelEditPlan
 	counter int
+	schema  string
 }
 
 type deadlineContentStore struct {
@@ -424,10 +743,17 @@ func (maintainer *countingMaintainer) Plan(_ context.Context, input knowl.Mainte
 	maintainer.mu.Lock()
 	defer maintainer.mu.Unlock()
 	maintainer.counter++
+	maintainer.schema = input.Schema.Digest
 	if maintainer.factory != nil {
 		return maintainer.factory(input.Schema), nil
 	}
 	return maintainer.plan, nil
+}
+
+func (maintainer *countingMaintainer) schemaDigest() string {
+	maintainer.mu.Lock()
+	defer maintainer.mu.Unlock()
+	return maintainer.schema
 }
 
 func (maintainer *countingMaintainer) calls() int {
@@ -437,6 +763,25 @@ func (maintainer *countingMaintainer) calls() int {
 }
 
 type failingIndex struct{}
+
+type recordingContextIndex struct {
+	summary knowl.SourceSummary
+}
+
+func (index *recordingContextIndex) SelectContext(_ context.Context, _ knowl.ScopeRef, summary knowl.SourceSummary, _ knowl.ReadLimits) ([]knowl.PageID, error) {
+	index.summary = summary
+	return nil, nil
+}
+func (*recordingContextIndex) Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits) ([]knowl.PageReference, error) {
+	return nil, nil
+}
+func (*recordingContextIndex) Links(context.Context, knowl.ScopeRef, knowl.PageID, knowl.ReadLimits) ([]knowl.LinkReference, error) {
+	return nil, nil
+}
+func (*recordingContextIndex) Project(context.Context, knowl.ContentCommit) error { return nil }
+func (*recordingContextIndex) Rebuild(context.Context, knowl.WorkspaceSnapshot) error {
+	return nil
+}
 
 func (failingIndex) SelectContext(context.Context, knowl.ScopeRef, knowl.SourceSummary, knowl.ReadLimits) ([]knowl.PageID, error) {
 	return nil, nil
@@ -454,7 +799,59 @@ func (failingIndex) Rebuild(context.Context, knowl.WorkspaceSnapshot) error {
 	return errors.New("projection unavailable")
 }
 
+type failOnceProjectionIndex struct {
+	mu     sync.Mutex
+	failed bool
+}
+
+func (*failOnceProjectionIndex) SelectContext(context.Context, knowl.ScopeRef, knowl.SourceSummary, knowl.ReadLimits) ([]knowl.PageID, error) {
+	return nil, nil
+}
+
+func (*failOnceProjectionIndex) Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits) ([]knowl.PageReference, error) {
+	return nil, nil
+}
+
+func (*failOnceProjectionIndex) Links(context.Context, knowl.ScopeRef, knowl.PageID, knowl.ReadLimits) ([]knowl.LinkReference, error) {
+	return nil, nil
+}
+
+func (index *failOnceProjectionIndex) Project(context.Context, knowl.ContentCommit) error {
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if !index.failed {
+		index.failed = true
+		return errors.New("projection unavailable")
+	}
+	return nil
+}
+
+func (*failOnceProjectionIndex) Rebuild(context.Context, knowl.WorkspaceSnapshot) error { return nil }
+
+var errOutcomeUnavailable = errors.New("outcome unavailable")
+
+type failOnceOutcomeStore struct {
+	app.OperationStore
+	mu     sync.Mutex
+	failed bool
+}
+
+func (store *failOnceOutcomeStore) CommitOutcome(ctx context.Context, id knowl.OperationID, commit knowl.ContentCommit) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if !store.failed {
+		store.failed = true
+		return errOutcomeUnavailable
+	}
+	return store.OperationStore.CommitOutcome(ctx, id, commit)
+}
+
 func newWorkflow(t *testing.T, autoApply bool, indexOverride app.SearchIndex, factory ...func(knowl.SchemaDocument) knowl.ModelEditPlan) (*contentfs.Workspace, *sqlite.Store, *app.IngestService, *countingMaintainer) {
+	t.Helper()
+	return newWorkflowWithOptions(t, app.IngestOptions{AutoApply: autoApply}, indexOverride, factory...)
+}
+
+func newWorkflowWithOptions(t *testing.T, options app.IngestOptions, indexOverride app.SearchIndex, factory ...func(knowl.SchemaDocument) knowl.ModelEditPlan) (*contentfs.Workspace, *sqlite.Store, *app.IngestService, *countingMaintainer) {
 	t.Helper()
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
@@ -486,11 +883,23 @@ func newWorkflow(t *testing.T, autoApply bool, indexOverride app.SearchIndex, fa
 	if indexOverride == nil {
 		indexOverride = store
 	}
-	service, err := app.NewIngestService(workspace, store, indexOverride, maintainer, app.IngestOptions{AutoApply: autoApply})
+	service, err := app.NewIngestService(workspace, store, indexOverride, maintainer, options)
 	if err != nil {
 		t.Fatalf("new ingest service: %v", err)
 	}
 	return workspace, store, service, maintainer
+}
+
+func claimReady(t *testing.T, store *sqlite.Store, scope knowl.ScopeRef) knowl.WorkClaim {
+	t.Helper()
+	claim, err := store.ClaimReady(context.Background(), scope, knowl.WorkLease{
+		Token:     "test-worker",
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("claim ready operation: %v", err)
+	}
+	return claim
 }
 
 func sourceEnvelope(content []byte) knowl.SourceEnvelope {

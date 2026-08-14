@@ -33,6 +33,10 @@ components:
     in: internal/httpapi/**
   bootstrap:
     in: internal/bootstrap
+  testsupport:
+    in: pkg/knowl/internal/**
+  examples:
+    in: examples/**
 
 deps:
   wiki:
@@ -44,10 +48,12 @@ deps:
       - wiki
   content:
     mayDependOn:
+      - app
       - types
       - wiki
   store:
     mayDependOn:
+      - store
       - app
       - types
   provider:
@@ -92,3 +98,8 @@ deps:
       - provider
       - types
       - httpapi
+  testsupport:
+    mayDependOn:
+      - app
+      - content
+      - types

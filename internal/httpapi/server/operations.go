@@ -1,11 +1,9 @@
 package server
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,7 +14,10 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-const inlineSourceAdapter = "inline"
+const (
+	inlineSourceAdapter = "inline"
+	httpQueuedStatus    = "queued"
+)
 
 func (handler *handler) GetHealth(response http.ResponseWriter, _ *http.Request) {
 	health := knowlapi.GetHealth200JSONResponse{
@@ -67,21 +68,8 @@ func (handler *handler) IngestKnowledge(response http.ResponseWriter, request *h
 		writeServiceError(response, err)
 		return
 	}
-	if submission.NeedsExecution() {
-		if err := handler.submit(request.Context(), func(ctx context.Context) error {
-			result, executeErr := handler.dependencies.Ingest.Execute(ctx, submission)
-			if executeErr != nil || result.Operation.Status != domain.StatusAwaitingReview {
-				return executeErr
-			}
-			_, executeErr = handler.dependencies.Ingest.Apply(ctx, handler.dependencies.Scope, result.Operation.ID)
-			return executeErr
-		}); err != nil {
-			if failureErr := handler.dependencies.Ingest.FailSubmission(request.Context(), submission, "queue"); failureErr != nil {
-				err = errors.Join(err, failureErr)
-			}
-			writeServiceError(response, err)
-			return
-		}
+	if handler.dependencies.Waker != nil && submission.Operation.Status != domain.StatusCommitted && submission.Operation.Status != domain.StatusFailed {
+		handler.dependencies.Waker.Wake(submission.Operation.ID)
 	}
 	transport := mustConvertJSON[knowlapi.IngestResult](httpIngestResult(submission.Operation))
 	_ = knowlapi.IngestKnowledge200JSONResponse(transport).VisitIngestKnowledgeResponse(response)
@@ -173,7 +161,7 @@ func httpOperationStatus(status domain.OperationStatus) string {
 	case domain.StatusFailed:
 		return "failed"
 	default:
-		return "queued"
+		return httpQueuedStatus
 	}
 }
 
@@ -253,11 +241,4 @@ func mustConvertJSON[T any](value any) T {
 		panic(fmt.Errorf("decode generated transport value: %w", err))
 	}
 	return target
-}
-
-func (handler *handler) submit(ctx context.Context, fn func(context.Context) error) error {
-	if handler.dependencies.Submitter == nil {
-		return fn(ctx)
-	}
-	return handler.dependencies.Submitter.Submit(ctx, fn)
 }

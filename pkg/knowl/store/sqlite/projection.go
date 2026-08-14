@@ -44,6 +44,10 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		now = time.Now().UTC()
 	}
 	for _, page := range snapshot.Pages {
+		updatedAt := page.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = now
+		}
 		sourceRefs, marshalErr := json.Marshal(page.SourceRefs)
 		if marshalErr != nil {
 			return fmt.Errorf("encode page source refs: %w", marshalErr)
@@ -52,7 +56,7 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 			INSERT INTO knowl_pages (page_id, scope, path, title, body, digest, source_refs, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, updated_at=excluded.updated_at`,
-			page.ID, snapshot.Scope, page.Path, page.Title, page.Content, page.Digest, sourceRefs, now.Format(time.RFC3339Nano)); err != nil {
+			page.ID, snapshot.Scope, page.Path, page.Title, page.Content, page.Digest, sourceRefs, updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, body, source_refs) VALUES (?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, page.Title, page.Content, sourceRefs); err != nil {
@@ -131,6 +135,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		Title      string
 		Content    string
 		SourceRefs []string
+		UpdatedAt  time.Time
 	}
 	type digestLink struct {
 		From     knowl.PageID
@@ -141,7 +146,10 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	for _, page := range snapshot.Pages {
 		sourceRefs := append([]string(nil), page.SourceRefs...)
 		sort.Strings(sourceRefs)
-		pages = append(pages, digestPage{ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title, Content: page.Content, SourceRefs: sourceRefs})
+		pages = append(pages, digestPage{
+			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
+			Content: page.Content, SourceRefs: sourceRefs, UpdatedAt: page.UpdatedAt.UTC(),
+		})
 	}
 	sort.Slice(pages, func(left, right int) bool {
 		if pages[left].Path == pages[right].Path {

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
 )
@@ -433,6 +435,153 @@ func TestWorkspaceStagePlanRejectsInvalidExistingStageReplay(t *testing.T) {
 	if !errors.Is(err, ErrContentInvalid) {
 		t.Fatalf("StagePlan() replay error = %v, want content invalid", err)
 	}
+}
+
+func TestWorkspaceLoadStageSurvivesReopen(t *testing.T) {
+	workspace, staged, _ := stageLoadFixture(t)
+	reopened, err := New(workspace.Root())
+	if err != nil {
+		t.Fatalf("reopen workspace: %v", err)
+	}
+	loaded, err := reopened.LoadStage(context.Background(), testScope, knowl.OperationID(staged.OperationID))
+	if err != nil {
+		t.Fatalf("load staged artifact: %v", err)
+	}
+	if loaded.OperationID != staged.OperationID || loaded.Digest != staged.Digest || !slices.Equal(loaded.Files, staged.Files) {
+		t.Fatalf("loaded stage = %#v, want %#v", loaded, staged)
+	}
+}
+
+func TestWorkspaceLoadStageFailsClosed(t *testing.T) {
+	t.Run("absent", func(t *testing.T) {
+		workspace, err := New(t.TempDir())
+		if err != nil {
+			t.Fatalf("new workspace: %v", err)
+		}
+		if err := workspace.Init(); err != nil {
+			t.Fatalf("init workspace: %v", err)
+		}
+		_, err = workspace.LoadStage(context.Background(), testScope, "absent")
+		if !errors.Is(err, app.ErrStageNotFound) {
+			t.Fatalf("absent stage error = %v", err)
+		}
+	})
+
+	tests := []struct {
+		name   string
+		load   func(knowl.StagedChange) (knowl.ScopeRef, knowl.OperationID)
+		mutate func(t *testing.T, workspace *Workspace, staged knowl.StagedChange, stageDir string)
+		want   error
+	}{
+		{
+			name: "missing manifest",
+			mutate: func(t *testing.T, _ *Workspace, _ knowl.StagedChange, stageDir string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(stageDir, "manifest.yaml")); err != nil {
+					t.Fatalf("remove manifest: %v", err)
+				}
+			},
+			want: ErrPlanConflict,
+		},
+		{
+			name: "cross scope",
+			load: func(staged knowl.StagedChange) (knowl.ScopeRef, knowl.OperationID) {
+				return "other", knowl.OperationID(staged.OperationID)
+			},
+			want: ErrPlanConflict,
+		},
+		{
+			name: "content digest mismatch",
+			mutate: func(t *testing.T, _ *Workspace, _ knowl.StagedChange, stageDir string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(stageDir, filepath.FromSlash(testPageOnePath)), []byte("corrupt"), 0o600); err != nil {
+					t.Fatalf("corrupt staged file: %v", err)
+				}
+			},
+			want: ErrPlanConflict,
+		},
+		{
+			name: "oversized staged content",
+			mutate: func(t *testing.T, _ *Workspace, _ knowl.StagedChange, stageDir string) {
+				t.Helper()
+				oversized := make([]byte, app.DefaultPlanLimits().MaxFileBytes+1)
+				if err := os.WriteFile(filepath.Join(stageDir, filepath.FromSlash(testPageOnePath)), oversized, 0o600); err != nil {
+					t.Fatalf("write oversized staged file: %v", err)
+				}
+			},
+			want: ErrPlanConflict,
+		},
+		{
+			name: "stale schema",
+			mutate: func(t *testing.T, workspace *Workspace, _ knowl.StagedChange, _ string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(workspace.Root(), schemaFile), []byte("# Changed schema\n"), 0o600); err != nil {
+					t.Fatalf("change schema: %v", err)
+				}
+			},
+			want: ErrPrecondition,
+		},
+		{
+			name: "symlinked content",
+			mutate: func(t *testing.T, _ *Workspace, _ knowl.StagedChange, stageDir string) {
+				t.Helper()
+				path := filepath.Join(stageDir, filepath.FromSlash(testPageOnePath))
+				if err := os.Remove(path); err != nil {
+					t.Fatalf("remove staged file: %v", err)
+				}
+				if err := os.Symlink(filepath.Join(stageDir, "manifest.yaml"), path); err != nil {
+					t.Skipf("create symlink: %v", err)
+				}
+			},
+			want: ErrPathRejected,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, staged, stageDir := stageLoadFixture(t)
+			if test.mutate != nil {
+				test.mutate(t, workspace, staged, stageDir)
+			}
+			scope, id := knowl.ScopeRef(testScope), knowl.OperationID(staged.OperationID)
+			if test.load != nil {
+				scope, id = test.load(staged)
+			}
+			_, err := workspace.LoadStage(context.Background(), scope, id)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("LoadStage() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func stageLoadFixture(t *testing.T) (*Workspace, knowl.StagedChange, string) {
+	t.Helper()
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	acceptWorkspaceSource(t, workspace)
+	schema, err := workspace.Schema(context.Background(), testScope)
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	staged, err := workspace.StagePlan(context.Background(), knowl.ValidatedEditPlan{
+		OperationID:  "load-stage",
+		Scope:        testScope,
+		SchemaDigest: schema.Digest,
+		SourceRefs:   []string{testWorkspaceSourceRef},
+		Edits: []knowl.FileEdit{{
+			Path:    testPageOnePath,
+			Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, ""),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("stage fixture: %v", err)
+	}
+	return workspace, staged, filepath.Join(workspace.Root(), knowlDir, "staging", token(staged.OperationID))
 }
 
 func TestWorkspaceCommitRejectsBrokenProspectiveStateBeforeJournal(t *testing.T) {

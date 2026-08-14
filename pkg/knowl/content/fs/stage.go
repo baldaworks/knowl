@@ -2,6 +2,8 @@ package fs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -10,9 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
 )
+
+const maxStageManifestBytes = 1 << 20
 
 // StagePlan writes a validated plan below .knowl/staging without touching canonical files.
 func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedEditPlan) (knowl.StagedChange, error) {
@@ -138,6 +143,109 @@ func entryTargets(entries []stageEntry) []string {
 	}
 	sort.Strings(targets)
 	return targets
+}
+
+// LoadStage returns one complete, verified operation-keyed staged artifact.
+func (workspace *Workspace) LoadStage(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.StagedChange, error) {
+	if err := contextErr(ctx); err != nil {
+		return knowl.StagedChange{}, err
+	}
+	if strings.TrimSpace(string(scope)) == "" || strings.TrimSpace(string(id)) == "" {
+		return knowl.StagedChange{}, ErrPlanConflict
+	}
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(string(id)))
+	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
+		return knowl.StagedChange{}, err
+	}
+	info, err := os.Stat(stageDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return knowl.StagedChange{}, app.ErrStageNotFound
+	}
+	if err != nil {
+		return knowl.StagedChange{}, fmt.Errorf("inspect staged artifact: %w", err)
+	}
+	if !info.IsDir() {
+		return knowl.StagedChange{}, ErrPlanConflict
+	}
+	manifestPath := filepath.Join(stageDir, "manifest.yaml")
+	if err := rejectSymlinkPath(workspace.root, manifestPath); err != nil {
+		return knowl.StagedChange{}, err
+	}
+	manifest, err := readStageManifest(manifestPath)
+	if err != nil {
+		return knowl.StagedChange{}, fmt.Errorf("read staged artifact manifest: %w", ErrPlanConflict)
+	}
+	if manifest.OperationID != string(id) || manifestScope(manifest) != scope || !validStageManifest(manifest) {
+		return knowl.StagedChange{}, ErrPlanConflict
+	}
+	if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
+		return knowl.StagedChange{}, err
+	}
+	if err := validateStagedFileBounds(stageDir, manifest.Entries, app.DefaultPlanLimits().MaxFileBytes); err != nil {
+		return knowl.StagedChange{}, err
+	}
+	schema, err := os.ReadFile(filepath.Join(workspace.root, schemaFile))
+	if err != nil {
+		return knowl.StagedChange{}, fmt.Errorf("read schema for staged artifact: %w", err)
+	}
+	if digestBytes(schema) != manifest.SchemaDigest {
+		return knowl.StagedChange{}, ErrPrecondition
+	}
+	staged, err := stagedChangeFromManifest(stageDir, manifest)
+	if err != nil {
+		return knowl.StagedChange{}, err
+	}
+	return staged, nil
+}
+
+func validStageManifest(manifest stageManifest) bool {
+	limits := app.DefaultPlanLimits()
+	if !validSHA256(manifest.SchemaDigest) || !validSHA256(manifest.LogExpectedDigest) || !validSHA256(manifest.LogDigest) ||
+		len(manifest.SourceRefs) == 0 || len(manifest.SourceRefs) > limits.MaxSourceRefs || len(manifest.Entries) > limits.MaxFiles {
+		return false
+	}
+	seenRefs := make(map[string]struct{}, len(manifest.SourceRefs))
+	for _, ref := range manifest.SourceRefs {
+		trimmed := strings.TrimSpace(ref)
+		if trimmed == "" {
+			return false
+		}
+		if _, exists := seenRefs[trimmed]; exists {
+			return false
+		}
+		seenRefs[trimmed] = struct{}{}
+	}
+	seenTargets := make(map[string]struct{}, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		if validateCommitTarget(entry.Target) != nil || !validSHA256(entry.Digest) || (entry.ExpectedDigest != "" && !validSHA256(entry.ExpectedDigest)) {
+			return false
+		}
+		if _, exists := seenTargets[entry.Target]; exists {
+			return false
+		}
+		seenTargets[entry.Target] = struct{}{}
+	}
+	return stageGeneration(manifest) != ""
+}
+
+func validSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validateStagedFileBounds(stageDir string, entries []stageEntry, maxBytes int) error {
+	for _, entry := range entries {
+		info, err := os.Stat(filepath.Join(stageDir, filepath.FromSlash(entry.Target)))
+		if err != nil || !info.Mode().IsRegular() || info.Size() > int64(maxBytes) {
+			return ErrPlanConflict
+		}
+	}
+	return nil
 }
 
 func stagedChangeFromManifest(stageDir string, manifest stageManifest) (knowl.StagedChange, error) {
