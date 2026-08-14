@@ -54,6 +54,11 @@ func TestSidecarAssetsMentionCanonicalRuntimePaths(t *testing.T) {
 		{
 			path: filepath.Join(repoRoot, "Dockerfile"),
 			want: []string{
+				"golang:1.26.6@sha256:" +
+					"640a234f4bea3e399c056b7b8f9c667c4939befae8db2f14e9785e16eccd4205",
+				"org.opencontainers.image.version",
+				"USER 65532:65532",
+				"HEALTHCHECK",
 				"/usr/local/bin/knowl-entrypoint",
 				"/etc/knowl/config.yaml",
 				"VOLUME [\"/var/lib/knowl\"]",
@@ -67,8 +72,19 @@ func TestSidecarAssetsMentionCanonicalRuntimePaths(t *testing.T) {
 			},
 		},
 		{
+			path: filepath.Join(repoRoot, "scripts", "smoke-test-sidecar.sh"),
+			want: []string{
+				operatorTokenEnvName,
+				"/v1/retrieve?query=session",
+				"$base_url/mcp",
+				"docker volume rm \"$volume\"",
+				"docker rm -f \"$container\"",
+			},
+		},
+		{
 			path: filepath.Join(repoRoot, "deploy", "sidecar", "compose.yaml"),
 			want: []string{
+				"ghcr.io/baldaworks/knowl:local",
 				"127.0.0.1:8080:8080",
 				"/var/lib/knowl",
 				"/readyz",

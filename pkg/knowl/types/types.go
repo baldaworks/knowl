@@ -120,11 +120,36 @@ type OperationKey struct {
 	Version SourceVersion `json:"version"`
 }
 
-// OperationMeta contains redacted operation metadata.
+// OperationMeta contains the bounded internal inputs persisted at reservation.
 type OperationMeta struct {
-	Key          OperationKey `json:"key"`
-	SchemaDigest string       `json:"schema_digest"`
-	CreatedAt    time.Time    `json:"created_at"`
+	Key            OperationKey   `json:"key"`
+	AcceptedSource AcceptedSource `json:"accepted_source"`
+	Schema         SchemaDocument `json:"schema"`
+	SchemaDigest   string         `json:"schema_digest"`
+	CreatedAt      time.Time      `json:"created_at"`
+}
+
+// ExecutionDescriptor contains the bounded durable inputs needed to resume an
+// accepted operation. It is internal operational state, not a public operation
+// read model.
+type ExecutionDescriptor struct {
+	OperationID OperationID    `json:"operation_id"`
+	Source      AcceptedSource `json:"source"`
+	Schema      SchemaDocument `json:"schema"`
+}
+
+// WorkLease grants temporary ownership of application-level operation work.
+// It is separate from Lease, which fences canonical content application.
+type WorkLease struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// WorkClaim combines an exclusively claimed operation with its durable inputs.
+type WorkClaim struct {
+	Operation  Operation           `json:"operation"`
+	Descriptor ExecutionDescriptor `json:"descriptor"`
+	Lease      WorkLease           `json:"lease"`
 }
 
 // OperationStatus is the lifecycle state of a maintenance operation.

@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,16 +19,16 @@ const maxBodyBytes = 8 << 20
 
 const serviceName = "knowl"
 
-type Submitter interface {
-	Submit(ctx context.Context, fn func(context.Context) error) error
+type Waker interface {
+	Wake(id domain.OperationID)
 }
 
 type Dependencies struct {
-	Scope     domain.ScopeRef
-	Ingest    *app.IngestService
-	Query     *app.QueryService
-	Ready     func() bool
-	Submitter Submitter
+	Scope  domain.ScopeRef
+	Ingest *app.IngestService
+	Query  *app.QueryService
+	Ready  func() bool
+	Waker  Waker
 }
 
 func NewHandler(dependencies Dependencies) http.Handler {

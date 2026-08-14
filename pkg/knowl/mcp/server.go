@@ -24,25 +24,25 @@ type Tool struct {
 	InputSchema map[string]any `json:"input_schema"`
 }
 
-// Submitter accepts host-owned background work without waiting for completion.
-type Submitter interface {
-	Submit(ctx context.Context, fn func(context.Context) error) error
+// Waker hints that durable work should be scanned. Delivery is best-effort.
+type Waker interface {
+	Wake(id knowl.OperationID)
 }
 
 // Server is a transport-neutral MCP tool registry with a trusted scope.
 type Server struct {
-	query     *app.QueryService
-	ingest    *app.IngestService
-	scope     knowl.ScopeRef
-	limits    knowl.ReadLimits
-	submitter Submitter
-	tools     []Tool
+	query  *app.QueryService
+	ingest *app.IngestService
+	scope  knowl.ScopeRef
+	limits knowl.ReadLimits
+	waker  Waker
+	tools  []Tool
 }
 
 // NewServer constructs the supported KISS MCP tool surface.
-func NewServer(query *app.QueryService, ingest *app.IngestService, submitter Submitter, scope knowl.ScopeRef, limits knowl.ReadLimits) (*Server, error) {
-	if query == nil || ingest == nil || submitter == nil {
-		return nil, fmt.Errorf("query, ingest, and submitter are required")
+func NewServer(query *app.QueryService, ingest *app.IngestService, waker Waker, scope knowl.ScopeRef, limits knowl.ReadLimits) (*Server, error) {
+	if query == nil || ingest == nil || waker == nil {
+		return nil, fmt.Errorf("query, ingest, and waker are required")
 	}
 	if strings.TrimSpace(string(scope)) == "" {
 		return nil, fmt.Errorf("MCP scope is required")
@@ -53,7 +53,7 @@ func NewServer(query *app.QueryService, ingest *app.IngestService, submitter Sub
 	if limits.Pages < 0 || limits.Bytes < 0 || limits.Characters < 0 || limits.Depth < 0 || limits.Deadline < 0 {
 		return nil, fmt.Errorf("MCP read limits are invalid: %w", ErrInvalidArguments)
 	}
-	server := &Server{query: query, ingest: ingest, submitter: submitter, scope: scope, limits: limits}
+	server := &Server{query: query, ingest: ingest, waker: waker, scope: scope, limits: limits}
 	server.tools = []Tool{
 		{Name: "knowl_retrieve", Description: "Retrieve bounded evidence from the trusted Knowl scope", ReadOnly: true, InputSchema: objectSchema("query")},
 		{Name: "knowl_ingest", Description: "Submit one bounded source to the trusted Knowl ingest pipeline", ReadOnly: false, InputSchema: ingestSchema()},
@@ -106,20 +106,8 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 		if err != nil {
 			return nil, err
 		}
-		if submission.NeedsExecution() {
-			if err := server.submitter.Submit(ctx, func(workCtx context.Context) error {
-				result, executeErr := server.ingest.Execute(workCtx, submission)
-				if executeErr != nil || result.Operation.Status != knowl.StatusAwaitingReview {
-					return executeErr
-				}
-				_, executeErr = server.ingest.Apply(workCtx, server.scope, result.Operation.ID)
-				return executeErr
-			}); err != nil {
-				if failureErr := server.ingest.FailSubmission(ctx, submission, "queue"); failureErr != nil {
-					return nil, errors.Join(err, failureErr)
-				}
-				return nil, err
-			}
+		if submission.Operation.Status != knowl.StatusCommitted && submission.Operation.Status != knowl.StatusFailed {
+			server.waker.Wake(submission.Operation.ID)
 		}
 		public := operationResult(submission.Operation)
 		return IngestResult{OperationID: public.ID, Status: public.Status}, nil

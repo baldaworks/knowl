@@ -2,13 +2,26 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"errors"
+	"fmt"
+	"io/fs"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/internal/knowledgetest"
+	"github.com/baldaworks/knowl/pkg/knowl/internal/runnertest"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/contexttest"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/searchtest"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/storetest"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/pressly/goose/v3"
 )
 
 const (
@@ -41,16 +54,42 @@ func runStoreContract(t *testing.T, dsn string) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	scope := knowl.ScopeRef("test_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
-	key := knowl.OperationKey{
-		Scope:   scope,
-		Source:  knowl.SourceRef{Adapter: "fixture", ID: "source"},
-		Version: knowl.SourceVersion{Version: "1", Digest: "digest-a"},
-	}
-	operation, err := store.Reserve(ctx, key, knowl.OperationMeta{Key: key, SchemaDigest: testSchemaDigest})
+	storetest.RunWorkContract(t, storetest.WorkHarness{
+		Store: store,
+		OpenPeer: func(t *testing.T) app.OperationStore {
+			t.Helper()
+			peer, err := Open(ctx, dsn)
+			if err != nil {
+				t.Fatalf("open contract peer: %v", err)
+			}
+			t.Cleanup(func() { _ = peer.Close() })
+			return peer
+		},
+		Expire: func(t *testing.T, _ knowl.ScopeRef, id knowl.OperationID) {
+			t.Helper()
+			if _, err := store.db.ExecContext(ctx, `UPDATE knowl_operations SET work_lease_expires_at = $1 WHERE operation_id = $2`, time.Unix(1, 0).UTC(), id); err != nil {
+				t.Fatalf("expire contract work lease: %v", err)
+			}
+		},
+		WorkAttempts: func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID) int {
+			t.Helper()
+			var attempts int
+			if err := store.db.QueryRowContext(ctx, `SELECT work_attempt FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id).Scan(&attempts); err != nil {
+				t.Fatalf("read contract work attempts: %v", err)
+			}
+			return attempts
+		},
+		IsConflict: func(err error) bool { return errors.Is(err, ErrConflict) },
+		Scope:      knowl.ScopeRef(string(scope) + "_shared_contract"),
+	})
+	runnertest.Run(t, store, store, knowl.ScopeRef(string(scope)+"_runner"))
+	assertResumableMigration(t, ctx, store, dsn)
+	key, meta := postgresExecutionFixture(scope, "source", time.Unix(1, 0).UTC())
+	operation, err := store.Reserve(ctx, key, meta)
 	if err != nil {
 		t.Fatalf("reserve operation: %v", err)
 	}
-	replayed, err := store.Reserve(ctx, key, knowl.OperationMeta{Key: key, SchemaDigest: testSchemaDigest})
+	replayed, err := store.Reserve(ctx, key, meta)
 	if err != nil {
 		t.Fatalf("replay operation: %v", err)
 	}
@@ -58,9 +97,56 @@ func runStoreContract(t *testing.T, dsn string) {
 		t.Fatalf("replayed operation = %#v", replayed)
 	}
 	conflict := key
-	conflict.Version.Digest = "digest-b"
+	conflict.Version.Digest = strings.Repeat("b", 64)
 	if _, err := store.Reserve(ctx, conflict, knowl.OperationMeta{Key: conflict}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflict error = %v, want conflict", err)
+	}
+	if replayed.Descriptor.Schema.Digest != meta.Schema.Digest {
+		t.Fatalf("replayed descriptor = %#v", replayed.Descriptor)
+	}
+	descriptor, err := store.Execution(ctx, scope, operation.ID)
+	if err != nil || descriptor.Source != meta.AcceptedSource {
+		t.Fatalf("execution descriptor = %#v, err = %v", descriptor, err)
+	}
+	ready, err := store.ResumeReady(ctx, scope, 10)
+	if err != nil || len(ready) != 1 || ready[0] != operation.ID {
+		t.Fatalf("ready = %v, err = %v", ready, err)
+	}
+	assertConcurrentPostgresClaim(t, ctx, dsn, scope, operation.ID)
+	if err := store.ReleaseClaim(ctx, scope, operation.ID, "worker-0"); err != nil {
+		if err := store.ReleaseClaim(ctx, scope, operation.ID, "worker-1"); err != nil {
+			t.Fatalf("release concurrent claim: %v", err)
+		}
+	}
+	claim, err := store.ClaimReady(ctx, scope, knowl.WorkLease{Token: "expiry-owner", ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("claim expiry fixture: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE knowl_operations SET work_lease_expires_at = $1 WHERE operation_id = $2`, time.Unix(1, 0).UTC(), claim.Operation.ID); err != nil {
+		t.Fatalf("expire work lease: %v", err)
+	}
+	reclaimed, err := store.ClaimReady(ctx, scope, knowl.WorkLease{Token: "reclaimer", ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil || reclaimed.Operation.ID != operation.ID {
+		t.Fatalf("reclaimed = %#v, err = %v", reclaimed, err)
+	}
+	if err := store.ReleaseClaim(ctx, scope, operation.ID, "reclaimer"); err != nil {
+		t.Fatalf("release reclaimed work: %v", err)
+	}
+	legacyKey := knowl.OperationKey{
+		Scope:   scope,
+		Source:  knowl.SourceRef{Adapter: "fixture", ID: "legacy"},
+		Version: knowl.SourceVersion{Version: "1", Digest: strings.Repeat("c", 64)},
+	}
+	legacy, err := store.Reserve(ctx, legacyKey, knowl.OperationMeta{Key: legacyKey, SchemaDigest: "historical-schema"})
+	if err != nil {
+		t.Fatalf("reserve legacy operation: %v", err)
+	}
+	if _, err := store.Execution(ctx, scope, legacy.ID); !errors.Is(err, app.ErrExecutionDescriptorUnavailable) {
+		t.Fatalf("legacy descriptor error = %v", err)
+	}
+	failures, err := store.DescriptorFailures(ctx, scope, 10)
+	if err != nil || len(failures) != 1 || failures[0] != legacy.ID {
+		t.Fatalf("descriptor failures = %v, err = %v", failures, err)
 	}
 
 	if err := store.SavePlan(ctx, operation.ID, knowl.PlanSummary{Digest: "plan"}); err != nil {
@@ -112,5 +198,198 @@ func runStoreContract(t *testing.T, dsn string) {
 	drifted.Pages[0].Content = "changed canonical text"
 	if err := store.CheckProjection(ctx, drifted); !errors.Is(err, ErrProjectionDrift) {
 		t.Fatalf("drift error = %v, want projection drift", err)
+	}
+	searchtest.Run(t, store, func(err error) bool { return errors.Is(err, ErrInvalidQuery) })
+	contexttest.Run(t, store)
+	metrics, err := knowledgetest.EvaluateProjectionReplay(ctx, store, knowl.ScopeRef(string(scope)+"_golden"))
+	if err != nil {
+		t.Fatalf("evaluate golden projection replay: %v", err)
+	}
+	if metrics.Total != knowledgetest.QueryCount || metrics.Hits < knowledgetest.MinimumHits {
+		t.Fatalf("golden metrics = %#v", metrics)
+	}
+}
+
+func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, dsn string) {
+	t.Helper()
+	schema := fmt.Sprintf("knowl_migration_%d", time.Now().UTC().UnixNano())
+	quotedSchema := `"` + strings.ReplaceAll(schema, `"`, `""`) + `"`
+	if _, err := root.db.ExecContext(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create migration schema: %v", err)
+	}
+	t.Cleanup(func() { _, _ = root.db.ExecContext(context.Background(), "DROP SCHEMA "+quotedSchema+" CASCADE") })
+	migrationDSN, err := dsnWithSearchPath(dsn, schema)
+	if err != nil {
+		t.Fatalf("build migration DSN: %v", err)
+	}
+	db, err := sql.Open("pgx", migrationDSN)
+	if err != nil {
+		t.Fatalf("open version-one fixture: %v", err)
+	}
+	directory, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open migration fixtures: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, directory)
+	if err != nil {
+		t.Fatalf("create version-one provider: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 1); err != nil {
+		t.Fatalf("migrate fixture to version one: %v", err)
+	}
+	const (
+		scope       = "postgres_migration"
+		committedID = "postgres_migration:fixture:committed@1#aaaaaaaaaaaaaaaa"
+		applyingID  = "postgres_migration:fixture:applying@1#bbbbbbbbbbbbbbbb"
+		failedID    = "postgres_migration:fixture:failed@1#cccccccccccccccc"
+	)
+	createdAt := time.Unix(10, 0).UTC()
+	leaseExpiry := time.Unix(100, 0).UTC()
+	insert := `INSERT INTO knowl_operations (
+		operation_id, scope, source_adapter, source_id, source_version, source_digest,
+		schema_digest, status, attempt, plan_digest, failure_class, commit_generation,
+		lease_token, lease_expires_at, created_at, updated_at
+	) VALUES ($1, $2, 'fixture', $3, '1', $4, 'schema-v1', $5, $6, $7, $8, $9, $10, $11, $12, $12)`
+	if _, err := db.ExecContext(ctx, insert, committedID, scope, "committed", strings.Repeat("a", 64), knowl.StatusCommitted, 2, "plan-committed", "", "generation-1", "", nil, createdAt); err != nil {
+		t.Fatalf("insert committed version-one row: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, insert, applyingID, scope, "applying", strings.Repeat("b", 64), knowl.StatusApplying, 3, "plan-applying", "", "", "apply-owner", leaseExpiry, createdAt); err != nil {
+		t.Fatalf("insert applying version-one row: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, insert, failedID, scope, "failed", strings.Repeat("c", 64), knowl.StatusFailed, 1, "plan-failed", "provider", "", "", nil, createdAt); err != nil {
+		t.Fatalf("insert failed version-one row: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version-one fixture: %v", err)
+	}
+
+	migrated, err := Open(ctx, migrationDSN)
+	if err != nil {
+		t.Fatalf("apply resumable migration: %v", err)
+	}
+	t.Cleanup(func() { _ = migrated.Close() })
+	committed, err := migrated.Operation(ctx, scope, committedID)
+	if err != nil || committed.Status != knowl.StatusCommitted || committed.Attempt != 2 {
+		t.Fatalf("migrated committed operation = %#v, err = %v", committed, err)
+	}
+	applying, err := migrated.Operation(ctx, scope, applyingID)
+	if err != nil || applying.Status != knowl.StatusApplying || applying.Attempt != 3 {
+		t.Fatalf("migrated applying operation = %#v, err = %v", applying, err)
+	}
+	failed, err := migrated.Operation(ctx, scope, failedID)
+	if err != nil || failed.Status != knowl.StatusFailed || failed.Failure == nil || failed.Failure.Class != "provider" {
+		t.Fatalf("migrated failed operation = %#v, err = %v", failed, err)
+	}
+	var planDigest, generation, leaseToken string
+	var migratedLeaseExpiry, workReadyAt time.Time
+	if err := migrated.db.QueryRowContext(ctx, `SELECT plan_digest, commit_generation, lease_token, lease_expires_at, work_ready_at FROM knowl_operations WHERE operation_id = $1`, applyingID).Scan(
+		&planDigest, &generation, &leaseToken, &migratedLeaseExpiry, &workReadyAt,
+	); err != nil {
+		t.Fatalf("read preserved applying fields: %v", err)
+	}
+	if planDigest != "plan-applying" || generation != "" || leaseToken != "apply-owner" || !migratedLeaseExpiry.Equal(leaseExpiry) || !workReadyAt.Equal(createdAt) {
+		t.Fatalf("preserved applying fields = %q %q %q %s %s", planDigest, generation, leaseToken, migratedLeaseExpiry, workReadyAt)
+	}
+	var committedGeneration string
+	if err := migrated.db.QueryRowContext(ctx, `SELECT commit_generation FROM knowl_operations WHERE operation_id = $1`, committedID).Scan(&committedGeneration); err != nil {
+		t.Fatalf("read preserved commit generation: %v", err)
+	}
+	if committedGeneration != "generation-1" {
+		t.Fatalf("preserved commit generation = %q", committedGeneration)
+	}
+	failures, err := migrated.DescriptorFailures(ctx, scope, 10)
+	if err != nil || len(failures) != 1 || failures[0] != applyingID {
+		t.Fatalf("migrated descriptor failures = %v, err = %v", failures, err)
+	}
+	ready, err := migrated.ResumeReady(ctx, scope, 10)
+	if err != nil || len(ready) != 0 {
+		t.Fatalf("migrated ready operations = %v, err = %v", ready, err)
+	}
+}
+
+func dsnWithSearchPath(dsn, schema string) (string, error) {
+	parsed, err := url.Parse(dsn)
+	if err == nil && parsed.Scheme != "" {
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		return parsed.String(), nil
+	}
+	if strings.ContainsAny(schema, " \\t\\r\\n'") {
+		return "", fmt.Errorf("invalid postgres schema name")
+	}
+	return strings.TrimSpace(dsn) + " search_path=" + schema, nil
+}
+
+func assertConcurrentPostgresClaim(t *testing.T, ctx context.Context, dsn string, scope knowl.ScopeRef, wantID knowl.OperationID) {
+	t.Helper()
+	stores := make([]*Store, 2)
+	for index := range stores {
+		store, err := Open(ctx, dsn)
+		if err != nil {
+			t.Fatalf("open concurrent store: %v", err)
+		}
+		stores[index] = store
+		t.Cleanup(func() { _ = store.Close() })
+	}
+	start := make(chan struct{})
+	results := make(chan error, len(stores))
+	claims := make(chan knowl.WorkClaim, len(stores))
+	var wait sync.WaitGroup
+	for index, store := range stores {
+		wait.Add(1)
+		go func(index int, store *Store) {
+			defer wait.Done()
+			<-start
+			claim, err := store.ClaimReady(ctx, scope, knowl.WorkLease{
+				Token: fmt.Sprintf("worker-%d", index), ExpiresAt: time.Now().Add(time.Minute),
+			})
+			if err == nil {
+				claims <- claim
+			}
+			results <- err
+		}(index, store)
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(claims)
+	var successes, empty int
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, app.ErrNoReadyOperation):
+			empty++
+		default:
+			t.Fatalf("concurrent claim error = %v", err)
+		}
+	}
+	if successes != 1 || empty != 1 {
+		t.Fatalf("concurrent claims: successes=%d empty=%d", successes, empty)
+	}
+	claim := <-claims
+	if claim.Operation.ID != wantID {
+		t.Fatalf("claimed %q, want %q", claim.Operation.ID, wantID)
+	}
+}
+
+func postgresExecutionFixture(scope knowl.ScopeRef, id string, createdAt time.Time) (knowl.OperationKey, knowl.OperationMeta) {
+	schema := []byte("# Schema\n\nversion: 1\n")
+	digest := fmt.Sprintf("%x", sha256.Sum256(schema))
+	key := knowl.OperationKey{
+		Scope:   scope,
+		Source:  knowl.SourceRef{Adapter: "fixture", ID: id},
+		Version: knowl.SourceVersion{Version: "1", Digest: strings.Repeat("a", 64)},
+	}
+	return key, knowl.OperationMeta{
+		Key: key,
+		AcceptedSource: knowl.AcceptedSource{
+			Scope: scope, Source: key.Source, Version: key.Version,
+			MediaType: "text/markdown", ManifestRef: "raw/source/version/manifest.yaml",
+		},
+		Schema:       knowl.SchemaDocument{Scope: scope, Digest: digest, Version: "1", Content: schema},
+		SchemaDigest: digest,
+		CreatedAt:    createdAt,
 	}
 }

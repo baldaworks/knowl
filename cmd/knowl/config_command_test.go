@@ -178,7 +178,7 @@ knowl:
 		t.Fatalf("write config: %v", err)
 	}
 	t.Setenv("KNOWL_WORKSPACE_PATH", "env-workspace")
-	t.Setenv("KNOWL_OPERATOR_TOKEN", "env-secret")
+	t.Setenv(operatorTokenEnvName, "env-secret")
 
 	ctx, err := loadConfig(context.Background(), "", "fast")
 	if err != nil {

@@ -1,5 +1,6 @@
 services:
   knowl:
+    image: ${KNOWL_IMAGE:-ghcr.io/baldaworks/knowl:local}
     build:
       context: ../..
       dockerfile: Dockerfile

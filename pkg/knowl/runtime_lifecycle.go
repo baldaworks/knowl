@@ -34,13 +34,13 @@ func (host *Host) Start(_ context.Context) error {
 	host.listener = listener
 	host.server = &http.Server{Handler: host.handler, ReadHeaderTimeout: host.config.ReadLimits.Deadline}
 	host.cancel = cancel
-	if err := host.worker.start(serverCtx); err != nil {
+	if err := host.scheduler.start(serverCtx); err != nil {
 		cancel()
 		_ = listener.Close()
 		host.listener = nil
 		host.server = nil
 		host.cancel = nil
-		return fmt.Errorf("start Knowl worker: %w", err)
+		return fmt.Errorf("start Knowl scheduler: %w", err)
 	}
 	host.started = true
 	host.ready.Store(true)
@@ -68,8 +68,9 @@ func (host *Host) Run(ctx context.Context) error {
 		defer cancel()
 		return host.Stop(shutdownCtx)
 	case err := <-host.serverErr:
-		_ = host.Stop(context.Background())
-		return err
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), host.config.ShutdownTimeout)
+		defer cancel()
+		return errors.Join(err, host.Stop(shutdownCtx))
 	}
 }
 
@@ -86,24 +87,16 @@ func (host *Host) Wait(ctx context.Context) error {
 	}
 }
 
-type workerSubmitter struct {
-	worker *worker
-}
-
-func (submitter workerSubmitter) Submit(ctx context.Context, fn func(context.Context) error) error {
-	if submitter.worker == nil {
-		return fn(ctx)
-	}
-	return submitter.worker.submit(ctx, fn)
-}
-
-// Stop stops HTTP and queued work, recovers content, and closes operational state.
+// Stop makes the host unavailable, stops request intake and new claims, gives
+// active work the caller's bound, and then closes owned resources.
 func (host *Host) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	host.stopMu.Lock()
+	defer host.stopMu.Unlock()
 	host.mu.Lock()
-	if host.closed {
+	if host.resourcesClosed {
 		host.mu.Unlock()
 		return nil
 	}
@@ -112,20 +105,32 @@ func (host *Host) Stop(ctx context.Context) error {
 	server := host.server
 	cancel := host.cancel
 	host.mu.Unlock()
+	var shutdownErrs []error
+	type shutdownResult struct {
+		component string
+		err       error
+	}
+	results := make(chan shutdownResult, 2)
+	components := 1
+	go func() { results <- shutdownResult{component: "scheduler", err: host.scheduler.stop(ctx)} }()
+	if server != nil {
+		components++
+		// MCP stream requests may intentionally remain open for the lifetime of a
+		// client session, so stop intake and active transport streams promptly.
+		// Accepted ingest work is already durable and does not depend on them.
+		go func() { results <- shutdownResult{component: "HTTP endpoint", err: server.Close()} }()
+	}
+	for range components {
+		result := <-results
+		if result.err != nil {
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("stop Knowl %s: %w", result.component, result.err))
+		}
+	}
 	if cancel != nil {
 		cancel()
 	}
-	var shutdownErrs []error
-	if err := host.worker.stop(ctx); err != nil {
-		shutdownErrs = append(shutdownErrs, fmt.Errorf("stop Knowl worker: %w", err))
-	}
-	if server != nil {
-		if err := server.Shutdown(ctx); err != nil {
-			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown Knowl HTTP endpoint: %w", err))
-		}
-	}
-	if _, err := host.service.Recover(ctx); err != nil {
-		shutdownErrs = append(shutdownErrs, fmt.Errorf("recover Knowl workspace during shutdown: %w", err))
+	if len(shutdownErrs) != 0 {
+		return errors.Join(shutdownErrs...)
 	}
 	if host.maintainerCloser != nil {
 		if err := host.maintainerCloser.Close(); err != nil {
@@ -134,6 +139,11 @@ func (host *Host) Stop(ctx context.Context) error {
 	}
 	if err := host.closer.Close(); err != nil {
 		shutdownErrs = append(shutdownErrs, fmt.Errorf("close Knowl operational store: %w", err))
+	}
+	if len(shutdownErrs) == 0 {
+		host.mu.Lock()
+		host.resourcesClosed = true
+		host.mu.Unlock()
 	}
 	return errors.Join(shutdownErrs...)
 }

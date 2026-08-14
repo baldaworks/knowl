@@ -1,10 +1,18 @@
 # Knowl
 
-Knowl is a service-first LLM-wiki knowledge service.
+**Durable project knowledge for agents.**
 
-It accepts durable source material, keeps provenance, maintains a readable
-Markdown knowledge workspace, and returns grounded evidence to a host agent or
-application.
+Knowl is a self-hosted knowledge sidecar for agentic applications. It turns
+durable sources into an inspectable Markdown knowledge base and returns
+bounded, provenance-backed evidence.
+
+The ownership boundary is deliberate:
+
+| Component | Owns |
+| --- | --- |
+| Host agent or application | Deciding which events are durable, assigning immutable source revisions, orchestrating tools, and generating the final user answer. |
+| Knowl | Accepting durable sources, maintaining canonical raw and Markdown artifacts, resuming operations, and retrieving bounded evidence with source references. |
+| Maintainer provider | Proposing Markdown updates inside Knowl's validated write path; it is an implementation detail, not a connector or public interface. |
 
 Knowl is not:
 
@@ -13,11 +21,19 @@ Knowl is not:
 - workflow orchestration;
 - the primary final-answer generator.
 
+Knowl does not own Slack, Telegram, Jira, GitHub, or other source connectors.
+The host already knows which events should become durable and submits those
+events through `knowl_ingest`. Knowl does not answer the user itself.
+
 The intended shape is:
 
 ```text
 sources -> Knowl -> grounded evidence -> host agent -> final answer
 ```
+
+See the [project-decisions host example](examples/project-decisions/README.md)
+for the complete ADR ingest, operation polling, provenance retrieval, and
+host-owned answer flow over MCP.
 
 The default path is a sidecar service with SQLite. Connect agents over MCP;
 use HTTP for deterministic control and Fx only when a Go process needs the
@@ -224,6 +240,7 @@ remain rebuildable operational state.
 ## Where to look next
 
 - sidecar/service runbook: [docs/sidecar.md](docs/sidecar.md)
+- v0.1.0 release and rollback notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md)
 - service config and HTTP contract: [docs/operations.md](docs/operations.md)
 - product design, boundaries, and architecture: [docs/design.md](docs/design.md)
 - workspace semantics: [docs/workspace.md](docs/workspace.md)

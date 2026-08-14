@@ -24,7 +24,7 @@ var (
 	ErrConflict           = errors.New("knowl operation conflict")
 	ErrNotFound           = app.ErrOperationNotFound
 	ErrInvalidState       = errors.New("knowl operation state transition is invalid")
-	ErrLeaseConflict      = errors.New("knowl operation lease is active")
+	ErrLeaseConflict      = app.ErrApplyLeaseConflict
 	ErrInvalidQuery       = errors.New("knowl search query is invalid")
 	ErrProjectionNotReady = errors.New("knowl projection is not ready")
 	ErrProjectionDrift    = errors.New("knowl projection drift detected")

@@ -32,21 +32,23 @@ type Host struct {
 
 	operations app.OperationStore
 	index      app.SearchIndex
-	worker     *worker
+	scheduler  *operationScheduler
 	service    *app.IngestService
 	query      *app.QueryService
 	lint       *app.LintService
 	mcp        *mcp.Server
 	handler    http.Handler
 
-	ready     atomic.Bool
-	mu        sync.Mutex
-	server    *http.Server
-	listener  net.Listener
-	cancel    context.CancelFunc
-	started   bool
-	closed    bool
-	serverErr chan error
+	ready           atomic.Bool
+	stopMu          sync.Mutex
+	mu              sync.Mutex
+	server          *http.Server
+	listener        net.Listener
+	cancel          context.CancelFunc
+	started         bool
+	closed          bool
+	resourcesClosed bool
+	serverErr       chan error
 }
 
 // NewHost is an explicit constructor alias for callers composing one local host.

@@ -9,12 +9,16 @@ import (
 )
 
 const fixtureAdapter = "fixture"
+const fixtureDecisionID = "decision"
+const fixtureOperationID = "operation-1"
+const fixtureScope = "local"
+const fixtureSchema = "schema"
 const fixtureSourceID = "source"
 const fixtureSchemaDigest = "schema-digest"
 
 func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 	input := knowl.MaintenanceInput{
-		Scope:  "local",
+		Scope:  fixtureScope,
 		Schema: knowl.SchemaDocument{Digest: fixtureSchemaDigest},
 		Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
 	}
@@ -39,7 +43,7 @@ func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 
 func TestValidatePlanAcceptsNoOp(t *testing.T) {
 	input := knowl.MaintenanceInput{
-		Scope:  "local",
+		Scope:  fixtureScope,
 		Schema: knowl.SchemaDocument{Digest: fixtureSchemaDigest},
 		Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
 	}
@@ -57,9 +61,9 @@ func TestValidatePlanAcceptsNoOp(t *testing.T) {
 }
 
 func TestValidatePlanRejectsSchemaAndRawTargets(t *testing.T) {
-	input := knowl.MaintenanceInput{Schema: knowl.SchemaDocument{Digest: "schema"}, Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: fixtureSourceID}, Version: knowl.SourceVersion{Version: "1"}}}
+	input := knowl.MaintenanceInput{Schema: knowl.SchemaDocument{Digest: fixtureSchema}, Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: fixtureSourceID}, Version: knowl.SourceVersion{Version: "1"}}}
 	for _, path := range []string{"schema.md", "raw/source", "wiki/../schema.md", "wiki/log.md"} {
-		_, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{SchemaDigest: "schema", SourceRefs: []string{"fixture:source@1"}, Edits: []knowl.FileEdit{{Path: path}}}, DefaultPlanLimits())
+		_, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{SchemaDigest: fixtureSchema, SourceRefs: []string{"fixture:source@1"}, Edits: []knowl.FileEdit{{Path: path}}}, DefaultPlanLimits())
 		if !errors.Is(err, ErrForbiddenEdit) {
 			t.Errorf("path %q error = %v, want forbidden edit", path, err)
 		}

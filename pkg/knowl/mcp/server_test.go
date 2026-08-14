@@ -6,12 +6,22 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+)
+
+const (
+	testContentKey        = "content"
+	testOriginKey         = "origin"
+	testIdempotencyKey    = "idempotency_key"
+	testIngestContent     = "source"
+	testIngestOrigin      = "source-1"
+	testIngestIdempotency = "1"
 )
 
 func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
@@ -47,7 +57,8 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new query service: %v", err)
 	}
-	server, err := mcp.NewServer(query, ingest, inlineSubmitter{}, "local", knowl.ReadLimits{Pages: 1})
+	waker := &recordingWaker{}
+	server, err := mcp.NewServer(query, ingest, waker, "local", knowl.ReadLimits{Pages: 1})
 	if err != nil {
 		t.Fatalf("new MCP server: %v", err)
 	}
@@ -62,9 +73,9 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 		t.Fatalf("read-only flags = %#v", tools)
 	}
 	ingested, err := server.Call(ctx, "knowl_ingest", map[string]any{
-		"content":         "source",
-		"origin":          "source-1",
-		"idempotency_key": "1",
+		testContentKey:     testIngestContent,
+		testOriginKey:      testIngestOrigin,
+		testIdempotencyKey: testIngestIdempotency,
 	})
 	if err != nil {
 		t.Fatalf("knowl_ingest: %v", err)
@@ -72,6 +83,31 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	ingestResult, ok := ingested.(mcp.IngestResult)
 	if !ok || ingestResult.Status != "queued" || ingestResult.OperationID == "" {
 		t.Fatalf("knowl_ingest result = %#v", ingested)
+	}
+	replayed, err := server.Call(ctx, "knowl_ingest", map[string]any{
+		testContentKey:     testIngestContent,
+		testOriginKey:      testIngestOrigin,
+		testIdempotencyKey: testIngestIdempotency,
+	})
+	if err != nil {
+		t.Fatalf("replay knowl_ingest: %v", err)
+	}
+	replayResult, ok := replayed.(mcp.IngestResult)
+	if !ok || replayResult.OperationID != ingestResult.OperationID || replayResult.Status != "queued" {
+		t.Fatalf("replayed ingest = %#v, want same queued operation", replayed)
+	}
+	if got := waker.IDs(); len(got) != 2 || got[0] != ingestResult.OperationID || got[1] != ingestResult.OperationID {
+		t.Fatalf("wake IDs = %#v, want new and non-terminal replay", got)
+	}
+	if maintainer.calls() != 0 {
+		t.Fatalf("transport invoked maintainer %d times", maintainer.calls())
+	}
+	claim, err := store.ClaimReady(ctx, "local", knowl.WorkLease{Token: "test-worker", ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("claim submitted operation: %v", err)
+	}
+	if result, err := ingest.RunToTerminal(ctx, claim); err != nil || result.Operation.Status != knowl.StatusCommitted {
+		t.Fatalf("run submitted operation = %#v, err = %v", result, err)
 	}
 	value, err := server.Call(ctx, "knowl_retrieve", map[string]any{"query": "One"})
 	if err != nil {
@@ -92,12 +128,37 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if !ok || polledResult.Status != "completed" || polledResult.ID != ingestResult.OperationID {
 		t.Fatalf("knowl_operation result = %#v", polled)
 	}
+	terminalReplay, err := server.Call(ctx, "knowl_ingest", map[string]any{
+		testContentKey:     testIngestContent,
+		testOriginKey:      testIngestOrigin,
+		testIdempotencyKey: testIngestIdempotency,
+	})
+	if err != nil {
+		t.Fatalf("terminal replay knowl_ingest: %v", err)
+	}
+	if result, ok := terminalReplay.(mcp.IngestResult); !ok || result.Status != "completed" {
+		t.Fatalf("terminal replay = %#v, want completed", terminalReplay)
+	}
+	if got := waker.IDs(); len(got) != 2 {
+		t.Fatalf("terminal replay emitted wake: %#v", got)
+	}
 }
 
-type inlineSubmitter struct{}
+type recordingWaker struct {
+	mu  sync.Mutex
+	ids []knowl.OperationID
+}
 
-func (inlineSubmitter) Submit(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
+func (waker *recordingWaker) Wake(id knowl.OperationID) {
+	waker.mu.Lock()
+	defer waker.mu.Unlock()
+	waker.ids = append(waker.ids, id)
+}
+
+func (waker *recordingWaker) IDs() []knowl.OperationID {
+	waker.mu.Lock()
+	defer waker.mu.Unlock()
+	return append([]knowl.OperationID(nil), waker.ids...)
 }
 
 type countingMaintainer struct {
@@ -111,4 +172,10 @@ func (maintainer *countingMaintainer) Plan(_ context.Context, _ knowl.Maintenanc
 	defer maintainer.mu.Unlock()
 	maintainer.counter++
 	return maintainer.plan, nil
+}
+
+func (maintainer *countingMaintainer) calls() int {
+	maintainer.mu.Lock()
+	defer maintainer.mu.Unlock()
+	return maintainer.counter
 }

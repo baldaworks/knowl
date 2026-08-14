@@ -20,6 +20,17 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	operationIDValue := knowl.OperationID(operationID(key))
+	var descriptor knowl.ExecutionDescriptor
+	hasDescriptor := meta.AcceptedSource != (knowl.AcceptedSource{}) ||
+		meta.Schema.Scope != "" || meta.Schema.Digest != "" || meta.Schema.Version != "" || len(meta.Schema.Content) != 0
+	if hasDescriptor {
+		var descriptorErr error
+		descriptor, descriptorErr = app.ExecutionDescriptorFromMeta(operationIDValue, key, meta)
+		if descriptorErr != nil {
+			return app.OperationReservation{}, descriptorErr
+		}
+	}
 
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -31,15 +42,17 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	operationID := operationID(key)
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO knowl_operations (
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
-			schema_digest, status, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+			schema_digest, status, created_at, updated_at, accepted_media_type,
+			source_manifest_ref, schema_version, schema_snapshot, work_ready_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $9)
 		ON CONFLICT (scope, source_adapter, source_id, source_version) DO NOTHING`,
-		operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version,
-		key.Version.Digest, meta.SchemaDigest, knowl.StatusReceived, now)
+		operationIDValue, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version,
+		key.Version.Digest, meta.SchemaDigest, knowl.StatusReceived, now,
+		descriptor.Source.MediaType, descriptor.Source.ManifestRef, descriptor.Schema.Version,
+		nullBytes(descriptor.Schema.Content))
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
 	}
@@ -69,7 +82,23 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		return app.OperationReservation{}, fmt.Errorf("commit operation reservation: %w", err)
 	}
 	operation, readErr := store.Operation(ctx, key.Scope, knowl.OperationID(existingID))
-	return app.OperationReservation{Operation: operation, New: created == 1}, readErr
+	if readErr != nil {
+		return app.OperationReservation{}, readErr
+	}
+	if hasDescriptor {
+		descriptor, readErr = store.Execution(ctx, key.Scope, operation.ID)
+		if readErr != nil {
+			return app.OperationReservation{}, readErr
+		}
+	}
+	return app.OperationReservation{Operation: operation, Descriptor: descriptor, New: created == 1}, nil
+}
+
+func nullBytes(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
 }
 
 // SavePlan persists a redacted plan digest and advances the operation.

@@ -19,6 +19,17 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	operationID := knowl.OperationID(operationID(key))
+	var descriptor knowl.ExecutionDescriptor
+	hasDescriptor := meta.AcceptedSource != (knowl.AcceptedSource{}) ||
+		meta.Schema.Scope != "" || meta.Schema.Digest != "" || meta.Schema.Version != "" || len(meta.Schema.Content) != 0
+	if hasDescriptor {
+		var err error
+		descriptor, err = app.ExecutionDescriptorFromMeta(operationID, key, meta)
+		if err != nil {
+			return app.OperationReservation{}, err
+		}
+	}
 	var existingID, existingDigest string
 	err := store.db.QueryRowContext(ctx, `
 		SELECT operation_id, source_digest
@@ -30,7 +41,16 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 			return app.OperationReservation{}, ErrConflict
 		}
 		operation, readErr := store.Operation(ctx, key.Scope, knowl.OperationID(existingID))
-		return app.OperationReservation{Operation: operation}, readErr
+		if readErr != nil {
+			return app.OperationReservation{}, readErr
+		}
+		if hasDescriptor {
+			descriptor, readErr = store.Execution(ctx, key.Scope, operation.ID)
+			if readErr != nil {
+				return app.OperationReservation{}, readErr
+			}
+		}
+		return app.OperationReservation{Operation: operation, Descriptor: descriptor}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return app.OperationReservation{}, fmt.Errorf("inspect existing operation: %w", err)
@@ -39,19 +59,28 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	operationID := operationID(key)
 	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO knowl_operations (
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
-			schema_digest, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			schema_digest, status, created_at, updated_at, accepted_media_type,
+			source_manifest_ref, schema_version, schema_snapshot, work_ready_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.Version.Digest,
-		meta.SchemaDigest, knowl.StatusReceived, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+		meta.SchemaDigest, knowl.StatusReceived, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
+		descriptor.Source.MediaType, descriptor.Source.ManifestRef, descriptor.Schema.Version,
+		nullBytes(descriptor.Schema.Content), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
 	}
-	operation, readErr := store.Operation(ctx, key.Scope, knowl.OperationID(operationID))
-	return app.OperationReservation{Operation: operation, New: true}, readErr
+	operation, readErr := store.Operation(ctx, key.Scope, operationID)
+	return app.OperationReservation{Operation: operation, Descriptor: descriptor, New: true}, readErr
+}
+
+func nullBytes(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
 }
 
 // SavePlan persists a redacted plan digest and advances the operation.
