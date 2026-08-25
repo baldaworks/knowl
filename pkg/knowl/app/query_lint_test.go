@@ -36,14 +36,14 @@ func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
 	if !page.Untrusted || page.ID != testPageID {
 		t.Fatalf("page = %#v, want untrusted entities/one", page)
 	}
-	search, err := queryService.Search(ctx, "local", "One", knowl.ReadLimits{Pages: 1})
+	search, err := queryService.Search(ctx, "local", "One", knowl.ReadLimits{Pages: 1}, nil)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
 	if len(search) != 1 || !search[0].Untrusted || search[0].ID != testPageID {
 		t.Fatalf("search = %#v", search)
 	}
-	result, err := queryService.Query(ctx, "local", "One", knowl.ReadLimits{Pages: 1})
+	result, err := queryService.Query(ctx, "local", "One", knowl.ReadLimits{Pages: 1}, nil)
 	if err != nil {
 		t.Fatalf("query assembly: %v", err)
 	}

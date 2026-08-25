@@ -54,19 +54,31 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		if err != nil {
 			return fmt.Errorf("encode page source refs: %w", err)
 		}
+		var sourceID any
+		var sourceDocument any
+		if page.SourceDocument != nil {
+			sourceID = string(page.SourceDocument.SourceID)
+			encodedDocument, encodeErr := json.Marshal(page.SourceDocument)
+			if encodeErr != nil {
+				return fmt.Errorf("encode page source document: %w", encodeErr)
+			}
+			sourceDocument = string(encodedDocument)
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO knowl_pages (
-				scope, page_id, path, title, body, digest, source_refs, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+				scope, page_id, path, title, body, digest, source_refs, source_id, source_document, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10)
 			ON CONFLICT (scope, path) DO UPDATE SET
 				page_id = EXCLUDED.page_id,
 				title = EXCLUDED.title,
 				body = EXCLUDED.body,
 				digest = EXCLUDED.digest,
 				source_refs = EXCLUDED.source_refs,
+				source_id = EXCLUDED.source_id,
+				source_document = EXCLUDED.source_document,
 				updated_at = EXCLUDED.updated_at`,
 			snapshot.Scope, page.ID, page.Path, page.Title, page.Content, page.Digest,
-			string(sourceRefs), updatedAt.UTC()); err != nil {
+			string(sourceRefs), sourceID, sourceDocument, updatedAt.UTC()); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
 	}
@@ -143,13 +155,14 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 
 func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	type digestPage struct {
-		ID         knowl.PageID
-		Path       string
-		Digest     string
-		Title      string
-		Content    string
-		SourceRefs []string
-		UpdatedAt  time.Time
+		ID             knowl.PageID
+		Path           string
+		Digest         string
+		Title          string
+		Content        string
+		SourceRefs     []string
+		SourceDocument *knowl.SourceDocument
+		UpdatedAt      time.Time
 	}
 	type digestLink struct {
 		From     knowl.PageID
@@ -162,7 +175,8 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		sort.Strings(sourceRefs)
 		pages = append(pages, digestPage{
 			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
-			Content: page.Content, SourceRefs: sourceRefs, UpdatedAt: page.UpdatedAt.UTC(),
+			Content: page.Content, SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
+			UpdatedAt: page.UpdatedAt.UTC(),
 		})
 	}
 	sort.Slice(pages, func(left, right int) bool {

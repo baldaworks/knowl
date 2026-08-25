@@ -17,7 +17,9 @@ immutable source files; the SQL adapter is an operational index and projection.
 │   ├── log.md
 │   ├── entities/*.md
 │   ├── concepts/*.md
-│   └── syntheses/*.md
+│   ├── syntheses/*.md
+│   └── sources/
+│       └── <source_id>/**
 └── .knowl/
     ├── staging/
     ├── recovery/
@@ -38,6 +40,9 @@ Ownership is intentionally split:
   record; the same identity/version with a different digest is a conflict.
 - `wiki/**/*.md` is the accumulated knowledge artifact. Pages, `index.md`, and
   the append-only `log.md` are readable and Git-compatible.
+- `wiki/sources/<source_id>/**` is an active materialized mirror owned by the
+  matching source reconciler. Maintainer plans cannot create, replace, or
+  delete this subtree. Equal relative paths are isolated by source ID.
 - `.knowl/staging/` and `.knowl/recovery/` are implementation state used for
   preview, atomic commit, and interruption recovery. They are not knowledge
   content. The SQLite file is also rebuildable operational state.
@@ -80,9 +85,16 @@ The enforced and linted conventions are:
   graph extraction records the page target. Broken and malformed links are
   rejected before canonical mutation, and deterministic lint reports the same
   classes against the committed workspace.
-- Edit plans may target `wiki/**/*.md` except `wiki/log.md`. The plan must
-  carry the current schema digest, cite the accepted source, use unique paths,
-  and stay within the configured file/count limits.
+- Maintainer edit plans may target safe `wiki/**/*.md` except `wiki/log.md` and
+  the complete `wiki/sources/**` ownership boundary. The plan must carry the
+  current schema digest, cite the accepted source, use unique paths, and stay
+  within the configured file/count limits.
+
+Source pages add a `source_document` block containing `source_id`,
+`document_id`, immutable `revision`, and canonical `uri`. A successful complete
+scan may remove a deleted document from the active mirror and projection, while
+its raw revisions and durable tombstone remain. An interrupted scan never
+authorizes deletion, so retrieval continues from the last successful snapshot.
 
 The starter `schema.md` is deliberately small. Operators should extend it with
 page types, frontmatter fields, citation rules, link conventions, ingest and
@@ -119,6 +131,12 @@ inspectable through redacted operation status. Do not hand-edit staging or
 recovery files while a host is running. For a backup, stop the host first and
 copy the complete workspace; the SQL projection can be rebuilt from its
 Markdown snapshot.
+
+Source synchronization uses the same staged canonical writer and recovery
+journal. On restart, filesystem recovery completes before resumable source runs
+and projection preparation. One source failure does not remove another source's
+content or make the prior successful snapshot unavailable. These deterministic
+source writes do not require a maintainer provider.
 
 The workspace is suitable for Git review, but Knowl never commits, pushes, or
 synchronizes a remote repository. Operators commonly version `schema.md`,

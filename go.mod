@@ -4,6 +4,7 @@ go 1.26.6
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/gobwas/glob v0.2.3
 	github.com/metalagman/appkit v0.1.1-0.20260129033342-e19ea914eada
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/normahq/runtime/v2 v2.0.4
@@ -133,7 +134,6 @@ require (
 	github.com/go-toolsmith/typep v1.1.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-xmlfmt/xmlfmt v1.1.3 // indirect
-	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/godoc-lint/godoc-lint v0.11.2 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect

@@ -1,14 +1,32 @@
-runtime:
-  providers:
-    opencode:
-      type: opencode_acp
-      opencode_acp:
-        model: opencode/big-pickle
-
 knowl:
-  provider: opencode
+  provider: ""
   workspace:
     path: /var/lib/knowl/knowledge
+  sources:
+    - id: engineering
+      type: filesystem
+      enabled: true
+      filesystem:
+        root: /sources/engineering
+        include: ["**/*.md"]
+        flavor: obsidian
+      sync:
+        on_start: true
+        interval: 5m
+        retry_initial: 1s
+        retry_maximum: 1m
+    - id: operations
+      type: filesystem
+      enabled: true
+      filesystem:
+        root: /sources/operations
+        include: ["**/*.md"]
+        flavor: markdown
+      sync:
+        on_start: true
+        interval: 5m
+        retry_initial: 1s
+        retry_maximum: 1m
   storage:
     type: sqlite
     sqlite:

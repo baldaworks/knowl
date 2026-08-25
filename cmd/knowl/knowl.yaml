@@ -6,9 +6,23 @@ runtime:
         model: opencode/big-pickle
 
 knowl:
+  # Omit provider/runtime providers in an on-disk config for provider-free
+  # retrieval, lint, and source-only use.
   provider: opencode
   workspace:
     path: .
+  # Named read-only wiki sources use a typed union. Example:
+  # sources:
+  #   - id: engineering
+  #     type: filesystem
+  #     filesystem:
+  #       root: /sources/engineering
+  #       include: ["**/*.md"]
+  #       flavor: obsidian
+  #     sync:
+  #       on_start: true
+  #       interval: 1m
+  sources: []
   # Select exactly one typed backend in an on-disk config. The embedded
   # default leaves this section absent so a Postgres override cannot inherit
   # the SQLite block through YAML merge; the loader supplies SQLite by default.

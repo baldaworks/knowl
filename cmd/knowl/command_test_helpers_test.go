@@ -20,12 +20,17 @@ import (
 )
 
 const (
-	knownProviderID      = "known"
-	commandHelpFlag      = "--help"
-	operatorTokenEnvName = "KNOWL_OPERATOR_TOKEN"
-	mcpRetrieveToolName  = "knowl_retrieve"
-	mcpIngestToolName    = "knowl_ingest"
-	mcpOperationToolName = "knowl_operation"
+	knownProviderID           = "known"
+	commandHelpFlag           = "--help"
+	commandOperationsSourceID = "operations"
+	sourceSyncAllFlag         = "--all"
+	retrieveSourceFlag        = "--source"
+	designDocRelativePath     = "docs/design.md"
+	sourceNamespacePattern    = "wiki/sources/<source_id>/**"
+	operatorTokenEnvName      = "KNOWL_OPERATOR_TOKEN"
+	mcpRetrieveToolName       = "knowl_retrieve"
+	mcpIngestToolName         = "knowl_ingest"
+	mcpOperationToolName      = "knowl_operation"
 )
 
 type stubLocalWorkflowHost struct {

@@ -16,6 +16,7 @@ func (workspace *Workspace) Init() error {
 		filepath.Join(workspaceWikiDir, "syntheses"),
 		filepath.Join(knowlDir, "staging"),
 		filepath.Join(knowlDir, "recovery"),
+		filepath.Join(knowlDir, "commits"),
 	} {
 		if err := os.MkdirAll(filepath.Join(workspace.root, relative), 0o700); err != nil {
 			return fmt.Errorf("create workspace directory %q: %w", relative, err)

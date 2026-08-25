@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -42,7 +43,7 @@ func (store *Store) contextCandidates(ctx context.Context, scope knowl.ScopeRef,
 	if len(terms) == 0 || limit <= 0 {
 		return nil, nil
 	}
-	references, err := store.Search(ctx, scope, strings.Join(terms, " "), knowl.ReadLimits{Pages: limit, Characters: 1})
+	references, err := store.Search(ctx, scope, strings.Join(terms, " "), knowl.ReadLimits{Pages: limit, Characters: 1}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("select relevant context: %w", err)
 	}
@@ -134,7 +135,7 @@ func (store *Store) recentContext(ctx context.Context, scope knowl.ScopeRef, exc
 }
 
 // Search returns bounded, untrusted FTS references.
-func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits) ([]knowl.PageReference, error) {
+func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
@@ -143,7 +144,7 @@ func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return nil, fmt.Errorf("normalize search query: %w", ErrInvalidQuery)
 	}
 	limit := boundedLimit(limits.Pages)
-	strict, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "AND"), limit, limits.Characters, normalized.Terms)
+	strict, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "AND"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +152,7 @@ func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return strict, nil
 	}
 
-	relaxed, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "OR"), limit, limits.Characters, normalized.Terms)
+	relaxed, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "OR"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -174,14 +175,28 @@ func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query stri
 	return references, nil
 }
 
-func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string) ([]knowl.PageReference, error) {
-	rows, err := store.db.QueryContext(ctx, `
-		SELECT page_id, path, title, body, source_refs,
+func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string, sources []knowl.SourceID) ([]knowl.PageReference, error) {
+	statement := `
+		SELECT p.page_id, p.path, p.title, p.body, p.source_refs, p.source_document,
 		       snippet(knowl_pages_fts, -1, '', '', ' … ', 64)
 		FROM knowl_pages_fts
-		WHERE knowl_pages_fts MATCH ? AND scope = ?
-		ORDER BY bm25(knowl_pages_fts, 0.0, 0.0, 0.0, 8.0, 1.0, 0.0) ASC, path ASC
-		LIMIT ?`, match, scope, limit)
+		JOIN knowl_pages p ON p.scope = knowl_pages_fts.scope AND p.page_id = knowl_pages_fts.page_id
+		WHERE knowl_pages_fts MATCH ? AND knowl_pages_fts.scope = ?`
+	arguments := make([]any, 0, len(sources)+3)
+	arguments = append(arguments, match, scope)
+	if len(sources) > 0 {
+		placeholders := make([]string, len(sources))
+		for index, source := range sources {
+			placeholders[index] = "?"
+			arguments = append(arguments, source)
+		}
+		statement += ` AND p.source_id IN (` + strings.Join(placeholders, ", ") + `)`
+	}
+	statement += `
+		ORDER BY bm25(knowl_pages_fts, 0.0, 0.0, 0.0, 8.0, 1.0, 0.0) ASC, p.path ASC
+		LIMIT ?`
+	arguments = append(arguments, limit)
+	rows, err := store.db.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("search pages: %w", err)
 	}
@@ -190,11 +205,19 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 	for rows.Next() {
 		var reference knowl.PageReference
 		var body, sourceRefs, nativeSnippet string
-		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &body, &sourceRefs, &nativeSnippet); err != nil {
+		var sourceDocument sql.NullString
+		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &body, &sourceRefs, &sourceDocument, &nativeSnippet); err != nil {
 			return nil, fmt.Errorf("scan search page: %w", err)
 		}
 		if err := json.Unmarshal([]byte(sourceRefs), &reference.SourceRefs); err != nil {
 			return nil, fmt.Errorf("decode page source refs: %w", err)
+		}
+		if sourceDocument.Valid {
+			document := new(knowl.SourceDocument)
+			if err := json.Unmarshal([]byte(sourceDocument.String), document); err != nil {
+				return nil, fmt.Errorf("decode page source document: %w", err)
+			}
+			reference.SourceDocument = document
 		}
 		reference.Snippet = lexical.Excerpt(nativeSnippet, reference.Title, body, terms, maxCharacters)
 		reference.Untrusted = true

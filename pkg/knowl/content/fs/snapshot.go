@@ -64,13 +64,14 @@ func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) 
 			return infoErr
 		}
 		pages = append(pages, knowl.PageSnapshot{
-			ID:         pageID,
-			Path:       relative,
-			Digest:     digest,
-			Title:      markdownTitle(content),
-			Content:    string(content),
-			SourceRefs: markdownSourceRefs(content),
-			UpdatedAt:  info.ModTime().UTC(),
+			ID:             pageID,
+			Path:           relative,
+			Digest:         digest,
+			Title:          markdownTitle(content),
+			Content:        string(content),
+			SourceRefs:     markdownSourceRefs(content),
+			SourceDocument: markdownSourceDocument(content),
+			UpdatedAt:      info.ModTime().UTC(),
 		})
 		links = append(links, markdownLinks(pageID, content)...)
 		return nil

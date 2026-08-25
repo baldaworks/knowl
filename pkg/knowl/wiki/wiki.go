@@ -20,10 +20,11 @@ const (
 
 // Frontmatter is the bounded YAML metadata recognized on ordinary pages.
 type Frontmatter struct {
-	ID         string   `yaml:"id"`
-	Title      string   `yaml:"title"`
-	Type       string   `yaml:"type"`
-	SourceRefs []string `yaml:"source_refs"`
+	ID             string                `yaml:"id"`
+	Title          string                `yaml:"title"`
+	Type           string                `yaml:"type"`
+	SourceRefs     []string              `yaml:"source_refs"`
+	SourceDocument *knowl.SourceDocument `yaml:"source_document,omitempty"`
 }
 
 // ParseFrontmatter reads and trims the leading YAML frontmatter block.
@@ -52,7 +53,23 @@ func ParseFrontmatter(content string) (Frontmatter, error) {
 	for index := range metadata.SourceRefs {
 		metadata.SourceRefs[index] = strings.TrimSpace(metadata.SourceRefs[index])
 	}
+	if metadata.SourceDocument != nil {
+		metadata.SourceDocument.SourceID = knowl.SourceID(strings.TrimSpace(string(metadata.SourceDocument.SourceID)))
+		metadata.SourceDocument.DocumentID = knowl.DocumentID(strings.TrimSpace(string(metadata.SourceDocument.DocumentID)))
+		metadata.SourceDocument.Revision = strings.TrimSpace(metadata.SourceDocument.Revision)
+		metadata.SourceDocument.URI = strings.TrimSpace(metadata.SourceDocument.URI)
+	}
 	return metadata, nil
+}
+
+// SourceDocument returns a copy of optional structured source provenance.
+func SourceDocument(content string) *knowl.SourceDocument {
+	metadata, err := ParseFrontmatter(content)
+	if err != nil || metadata.SourceDocument == nil {
+		return nil
+	}
+	document := *metadata.SourceDocument
+	return &document
 }
 
 // SourceRefs returns a deterministic, deduplicated source-ref list.

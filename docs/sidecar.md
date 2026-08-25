@@ -29,6 +29,9 @@ The container owns:
 
 Mount a persistent volume at `/var/lib/knowl`. Do not mount the agent directly
 into Knowl's workspace and do not let the agent mutate `wiki/**` itself.
+Mount authoritative wiki roots separately and read-only. The checked-in Compose
+example mounts `/sources/engineering` and `/sources/operations`; the source
+reconciler alone materializes them below `wiki/sources/<source_id>/**`.
 
 ## Build and run
 
@@ -52,6 +55,8 @@ Run it directly:
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -v knowl-data:/var/lib/knowl \
+  -v /path/to/engineering:/sources/engineering:ro \
+  -v /path/to/operations:/sources/operations:ro \
   knowl:local
 ```
 
@@ -64,9 +69,20 @@ docker compose -f deploy/sidecar/compose.yaml up --build
 Set `KNOWL_IMAGE` to use a prebuilt image with Compose. Production deployments
 should pin an immutable manifest digest instead of a mutable tag.
 
-The first published distribution is documented in the
-[v0.1.0 release notes](releases/v0.1.0.md), including authenticated run,
-upgrade, and non-destructive rollback guidance.
+The multi-source rollout is documented in the
+[v0.2.0 release notes](releases/v0.2.0.md). The first published distribution and
+its non-destructive rollback guidance remain in the
+[v0.1.0 release notes](releases/v0.1.0.md).
+
+The baseline v0.2 config is provider-free. Retrieval, lint, health, source sync,
+and status work without a provider; ingest remains registered but returns
+`maintainer_unavailable`. Configure `runtime.providers` plus `knowl.provider`
+only when provider-backed ingest/curation is required.
+
+Each source syncs on start and periodically with bounded retry. A failed source
+does not make the service unready or discard the last successful snapshots.
+Persist the whole `/var/lib/knowl` volume so source status, tombstones, raw
+history, recovery journals, and SQLite state survive restart.
 
 ## Health checks
 

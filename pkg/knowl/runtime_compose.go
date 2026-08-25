@@ -2,13 +2,19 @@ package knowl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"sort"
 	"strings"
 
 	httpserver "github.com/baldaworks/knowl/internal/httpapi/server"
 	"github.com/baldaworks/knowl/internal/mcphttp"
+	sourcefilesystem "github.com/baldaworks/knowl/internal/source/filesystem"
+	sourcenormalize "github.com/baldaworks/knowl/internal/source/normalize"
+	"github.com/baldaworks/knowl/internal/source/reconcile"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
@@ -23,6 +29,10 @@ type composedRuntime struct {
 	maintainerCloser io.Closer
 	operations       app.OperationStore
 	index            app.SearchIndex
+	sourceState      app.SourceStateStore
+	sourceSync       *reconcile.Service
+	sources          []domain.Source
+	sourceObserver   SourceObserver
 	scheduler        *operationScheduler
 	service          *app.IngestService
 	query            *app.QueryService
@@ -44,7 +54,14 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := composeRuntime(ctx, config, maintainer, maintainerCloser)
+	adapters, err := composeSourceAdapters(options.SourceAdapters)
+	if err != nil {
+		if maintainerCloser != nil {
+			_ = maintainerCloser.Close()
+		}
+		return nil, err
+	}
+	runtime, err := composeRuntime(ctx, config, maintainer, maintainerCloser, adapters, options.SourceObserver)
 	if err != nil {
 		return nil, err
 	}
@@ -61,10 +78,11 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	return host, nil
 }
 
-func composeRuntime(ctx context.Context, config Config, maintainer app.Maintainer, maintainerCloser io.Closer) (_ composedRuntime, err error) {
+func composeRuntime(ctx context.Context, config Config, maintainer app.Maintainer, maintainerCloser io.Closer, adapters map[domain.SourceType]app.SourceAdapter, observer SourceObserver) (_ composedRuntime, err error) {
 	runtime := composedRuntime{
 		config:           config,
 		maintainerCloser: maintainerCloser,
+		sourceObserver:   observer,
 	}
 	defer func() {
 		if err == nil {
@@ -88,10 +106,22 @@ func composeRuntime(ctx context.Context, config Config, maintainer app.Maintaine
 	}
 	runtime.operations = store.operations
 	runtime.index = store.index
+	runtime.sourceState = store.sources
 	runtime.closer = store.closer
 	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, runtime.workspace, runtime.operations, runtime.index, store.checker, maintainer)
 	if err != nil {
 		return composedRuntime{}, err
+	}
+	runtime.sources = cloneSources(config.Sources)
+	runtime.sourceSync, err = reconcile.NewService(reconcile.Dependencies{
+		Adapters: adapters, Normalizer: sourcenormalize.NewDefaultAdapter(), State: runtime.sourceState,
+		Content: runtime.workspace, SourceContent: runtime.workspace, Search: runtime.index,
+	}, reconcile.Options{})
+	if err != nil {
+		return composedRuntime{}, fmt.Errorf("compose source reconciliation: %w", err)
+	}
+	if _, err = runtime.sourceSync.Recover(ctx, config.Scope, runtime.sources); err != nil && !errors.Is(err, reconcile.ErrSyncPartial) {
+		return composedRuntime{}, fmt.Errorf("recover Knowl sources: %w", err)
 	}
 	runtime.scheduler, err = newOperationScheduler(runtime.operations, runtime.service, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize})
 	if err != nil {
@@ -161,6 +191,10 @@ func composeServices(
 }
 
 func newHost(runtime composedRuntime) (*Host, error) {
+	sourceJobs, err := newSourceScheduler(runtime.sourceSync.SyncSource, runtime.config.Scope, runtime.sources, runtime.sourceObserver, sourceSchedulerOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("compose source scheduler: %w", err)
+	}
 	host := &Host{
 		config:           runtime.config,
 		workspace:        runtime.workspace,
@@ -168,6 +202,11 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		maintainerCloser: runtime.maintainerCloser,
 		operations:       runtime.operations,
 		index:            runtime.index,
+		sourceState:      runtime.sourceState,
+		sourceSync:       runtime.sourceSync,
+		sources:          cloneSources(runtime.sources),
+		sourceByID:       sourceIndex(runtime.sources),
+		sourceJobs:       sourceJobs,
 		scheduler:        runtime.scheduler,
 		service:          runtime.service,
 		query:            runtime.query,
@@ -193,6 +232,35 @@ func newHost(runtime composedRuntime) (*Host, error) {
 	return host, nil
 }
 
+func composeSourceAdapters(overrides map[domain.SourceType]app.SourceAdapter) (map[domain.SourceType]app.SourceAdapter, error) {
+	adapters := map[domain.SourceType]app.SourceAdapter{domain.SourceTypeFilesystem: sourcefilesystem.NewDefault()}
+	types := make([]domain.SourceType, 0, len(overrides))
+	for sourceType, adapter := range overrides {
+		if strings.TrimSpace(string(sourceType)) == "" || nilSourceAdapter(adapter) {
+			return nil, fmt.Errorf("source adapter registration is invalid: %w", app.ErrSourceInvalid)
+		}
+		types = append(types, sourceType)
+	}
+	sort.Slice(types, func(left, right int) bool { return types[left] < types[right] })
+	for _, sourceType := range types {
+		adapters[sourceType] = overrides[sourceType]
+	}
+	return adapters, nil
+}
+
+func nilSourceAdapter(adapter app.SourceAdapter) bool {
+	if adapter == nil {
+		return true
+	}
+	value := reflect.ValueOf(adapter)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func (options Options) maintainer(config Config) (app.Maintainer, io.Closer, error) {
 	if options.Maintainer != nil {
 		closer, _ := options.Maintainer.(io.Closer)
@@ -200,7 +268,7 @@ func (options Options) maintainer(config Config) (app.Maintainer, io.Closer, err
 	}
 	providerID := strings.TrimSpace(options.ProviderID)
 	if options.RuntimeFactory == nil && providerID == "" {
-		return nil, nil, fmt.Errorf("knowl maintainer is required")
+		return nil, nil, nil
 	}
 	if providerID == "" {
 		return nil, nil, fmt.Errorf("knowl.provider is required")

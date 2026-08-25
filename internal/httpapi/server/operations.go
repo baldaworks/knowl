@@ -39,11 +39,19 @@ func (handler *handler) GetReady(response http.ResponseWriter, _ *http.Request) 
 }
 
 func (handler *handler) RetrieveKnowledge(response http.ResponseWriter, request *http.Request, params knowlapi.RetrieveKnowledgeParams) {
+	var sources []domain.SourceID
+	if params.Source != nil {
+		sources = make([]domain.SourceID, len(*params.Source))
+		for index, source := range *params.Source {
+			sources[index] = domain.SourceID(source)
+		}
+	}
 	result, err := handler.dependencies.Query.Query(
 		request.Context(),
 		handler.dependencies.Scope,
 		strings.TrimSpace(params.Query),
 		domain.ReadLimits{},
+		sources,
 	)
 	if err != nil {
 		writeServiceError(response, err)
@@ -95,6 +103,10 @@ type httpEvidenceItem struct {
 	Title      string        `json:"title"`
 	Snippet    string        `json:"snippet"`
 	SourceRefs []string      `json:"source_refs,omitempty"`
+	SourceID   string        `json:"source_id,omitempty"`
+	DocumentID string        `json:"document_id,omitempty"`
+	Revision   string        `json:"revision,omitempty"`
+	URI        string        `json:"uri,omitempty"`
 	Untrusted  bool          `json:"untrusted"`
 }
 
@@ -119,13 +131,20 @@ type httpOperationResponse struct {
 func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
 	evidence := make([]httpEvidenceItem, 0, len(result.Pages))
 	for _, page := range result.Pages {
-		evidence = append(evidence, httpEvidenceItem{
+		item := httpEvidenceItem{
 			PageID:     page.ID,
 			Title:      page.Title,
 			Snippet:    page.Snippet,
 			SourceRefs: append([]string(nil), page.SourceRefs...),
 			Untrusted:  page.Untrusted,
-		})
+		}
+		if page.SourceDocument != nil {
+			item.SourceID = string(page.SourceDocument.SourceID)
+			item.DocumentID = string(page.SourceDocument.DocumentID)
+			item.Revision = page.SourceDocument.Revision
+			item.URI = page.SourceDocument.URI
+		}
+		evidence = append(evidence, item)
 	}
 	citations := make([]app.Citation, len(result.Citations))
 	copy(citations, result.Citations)

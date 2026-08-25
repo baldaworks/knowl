@@ -20,13 +20,15 @@ const (
 	Scope            knowl.ScopeRef = "search-contract"
 	ForeignScope     knowl.ScopeRef = "search-contract-foreign"
 	decisionBadgerID knowl.PageID   = "decision-badger"
+	engineeringID    knowl.SourceID = "engineering"
+	operationsID     knowl.SourceID = "operations"
 )
 
 var capturedAt = time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
 
 // Index is the narrow adapter surface exercised by the retrieval contract.
 type Index interface {
-	Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits) ([]knowl.PageReference, error)
+	Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error)
 	Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error
 }
 
@@ -74,6 +76,11 @@ func Snapshot() knowl.WorkspaceSnapshot {
 		path := fmt.Sprintf("limits/%d.md", index)
 		pages = append(pages, page(id, path, "Boundedfixture", "boundedfixture result", fmt.Sprintf("source:limit-%d", index)))
 	}
+	pages = append(pages,
+		page("source-curated", "curated/shared.md", "Sourcefilterbeacon Curated", "sourcefilterbeacon curated evidence", "source:curated"),
+		sourcePage("source-engineering", "wiki/sources/engineering/shared.md", "Sourcefilterbeacon Engineering", engineeringID),
+		sourcePage("source-operations", "wiki/sources/operations/shared.md", "Sourcefilterbeacon Operations", operationsID),
+	)
 	digests := make(map[string]string, len(pages))
 	for _, fixturePage := range pages {
 		digests[fixturePage.Path] = fixturePage.Digest
@@ -148,8 +155,15 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 			}
 		}
 	})
+	t.Run("source filter", func(t *testing.T) {
+		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", nil), "source-curated", "source-engineering", "source-operations")
+		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{engineeringID}), "source-engineering")
+		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{operationsID, engineeringID}), "source-engineering", "source-operations")
+		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{engineeringID, engineeringID}), "source-engineering")
+		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{"ghost"}))
+	})
 	t.Run("invalid normalization", func(t *testing.T) {
-		_, err := index.Search(ctx, Scope, "what is why", knowl.ReadLimits{Pages: 5, Characters: 48})
+		_, err := index.Search(ctx, Scope, "what is why", knowl.ReadLimits{Pages: 5, Characters: 48}, nil)
 		if err == nil || invalid == nil || !invalid(err) {
 			t.Fatalf("Search() error = %v, want adapter invalid-query classification", err)
 		}
@@ -186,6 +200,14 @@ func page(id knowl.PageID, path, title, content, sourceRef string) knowl.PageSna
 	}
 }
 
+func sourcePage(id knowl.PageID, path, title string, sourceID knowl.SourceID) knowl.PageSnapshot {
+	fixture := page(id, path, title, "sourcefilterbeacon sourced evidence", "source:"+string(sourceID))
+	fixture.SourceDocument = &knowl.SourceDocument{
+		SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md",
+	}
+	return fixture
+}
+
 func longText(term string) string {
 	return "This deliberately long investigation starts with unrelated consensus background. " +
 		"Several alternatives and operational constraints were evaluated before the decisive " + term +
@@ -194,7 +216,7 @@ func longText(term string) string {
 
 func search(t *testing.T, index Index, scope knowl.ScopeRef, query string, pages, characters int) []knowl.PageReference {
 	t.Helper()
-	got, err := index.Search(context.Background(), scope, query, knowl.ReadLimits{Pages: pages, Characters: characters})
+	got, err := index.Search(context.Background(), scope, query, knowl.ReadLimits{Pages: pages, Characters: characters}, nil)
 	if err != nil {
 		t.Fatalf("Search(%q): %v", query, err)
 	}
@@ -206,6 +228,15 @@ func search(t *testing.T, index Index, scope knowl.ScopeRef, query string, pages
 		t.Fatalf("Normalize(%q): %v", query, err)
 	}
 	assertEvidence(t, got, normalized.Terms, characters)
+	return got
+}
+
+func searchSources(t *testing.T, index Index, query string, sources []knowl.SourceID) []knowl.PageReference {
+	t.Helper()
+	got, err := index.Search(context.Background(), Scope, query, knowl.ReadLimits{Pages: 10, Characters: 64}, sources)
+	if err != nil {
+		t.Fatalf("Search(%q, %v): %v", query, sources, err)
+	}
 	return got
 }
 

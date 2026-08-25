@@ -38,7 +38,7 @@ func TestPublicDocumentationSurface(t *testing.T) {
 	}
 	readmeText := strings.Join(strings.Fields(string(readme)), " ")
 	for _, link := range []string{
-		"docs/design.md",
+		designDocRelativePath,
 		"docs/operations.md",
 		"docs/workspace.md",
 		"docs/sidecar.md",

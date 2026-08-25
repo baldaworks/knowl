@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -135,6 +136,36 @@ func TestWorkspaceSnapshotIncludesMarkdownDigests(t *testing.T) {
 	}
 }
 
+func TestWorkspaceReadsAndSnapshotsSourceDocumentProvenance(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	relative := "wiki/sources/engineering/auth.md"
+	content := []byte("---\nid: sources/engineering/auth\ntitle: Auth\ntype: source\nsource_refs:\n  - raw:auth@1\nsource_document:\n  source_id: engineering\n  document_id: architecture/auth.md\n  revision: revision-1\n  uri: https://wiki.example.test/auth\n---\n# Auth\n")
+	target := filepath.Join(workspace.Root(), filepath.FromSlash(relative))
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := workspace.ReadPages(context.Background(), testScope, []knowl.PageID{"sources/engineering/auth"}, knowl.ReadLimits{Pages: 1, Bytes: len(content)})
+	if err != nil || len(pages) != 1 || pages[0].SourceDocument == nil || pages[0].SourceDocument.DocumentID != "architecture/auth.md" {
+		t.Fatalf("ReadPages() = %#v, %v", pages, err)
+	}
+	snapshot, err := workspace.Snapshot(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Pages) != 1 || snapshot.Pages[0].SourceDocument == nil || snapshot.Pages[0].SourceDocument.SourceID != "engineering" {
+		t.Fatalf("Snapshot() pages = %#v", snapshot.Pages)
+	}
+}
+
 func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing.T) {
 	workspace, err := New(t.TempDir())
 	if err != nil {
@@ -184,7 +215,7 @@ func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing
 		State:       recoveryPrepared,
 		Entries: []recoveryEntry{
 			{Target: "wiki/entities/recovered.md", HadOld: false},
-			{Target: "wiki/log.md", Backup: logBackup, HadOld: true},
+			{Target: canonicalLogPath, Backup: logBackup, HadOld: true},
 		},
 	}
 	journalPath := filepath.Join(workspace.Root(), knowlDir, "recovery", token(plan.OperationID)+".yaml")
@@ -195,7 +226,7 @@ func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
-	if len(results) != 1 || results[0].Action != "rolled_back" {
+	if len(results) != 1 || results[0].Action != recoveryRolledBack {
 		t.Fatalf("recovery results = %#v", results)
 	}
 	if _, err := os.Stat(pagePath); !errors.Is(err, os.ErrNotExist) {
@@ -437,6 +468,36 @@ func TestWorkspaceStagePlanRejectsInvalidExistingStageReplay(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStagePlanRejectsProtectedSourceNamespace(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := workspace.Schema(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, target := range []string{
+		"wiki/sources/engineering/page.md",
+		"wiki/entities/../sources/engineering/page.md",
+		`wiki\sources\engineering\page.md`,
+	} {
+		plan := knowl.ValidatedEditPlan{
+			OperationID: fmt.Sprintf("protected-source-%d", index), Scope: testScope, SchemaDigest: schema.Digest,
+			SourceRefs: []string{"fixture:source@1"}, Edits: []knowl.FileEdit{{Path: target, Content: []byte("protected")}},
+		}
+		if _, err := workspace.StagePlan(context.Background(), plan); !errors.Is(err, ErrPathRejected) {
+			t.Fatalf("StagePlan(%q) error = %v, want ErrPathRejected", target, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace.Root(), "wiki", "sources", "engineering", "page.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("protected canonical target stat = %v", err)
+	}
+}
+
 func TestWorkspaceLoadStageSurvivesReopen(t *testing.T) {
 	workspace, staged, _ := stageLoadFixture(t)
 	reopened, err := New(workspace.Root())
@@ -671,7 +732,7 @@ func captureCanonicalState(t *testing.T, workspace *Workspace, extraPaths ...str
 		content: make(map[string][]byte),
 		missing: make(map[string]struct{}),
 	}
-	for _, relative := range append([]string{testIndexPath, "wiki/log.md"}, extraPaths...) {
+	for _, relative := range append([]string{testIndexPath, canonicalLogPath}, extraPaths...) {
 		path := filepath.Join(workspace.Root(), filepath.FromSlash(relative))
 		content, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {

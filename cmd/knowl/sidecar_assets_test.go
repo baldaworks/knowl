@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 )
 
 func TestSidecarConfigLoadsThroughProductionTypes(t *testing.T) {
@@ -42,6 +45,69 @@ func TestSidecarConfigLoadsThroughProductionTypes(t *testing.T) {
 	}
 	if config.StorePath != "/var/lib/knowl/knowledge/.knowl/knowl.sqlite" {
 		t.Fatalf("store path = %q, want /var/lib/knowl/knowledge/.knowl/knowl.sqlite", config.StorePath)
+	}
+	if loaded, err := configFromContext(ctx); err != nil || loaded.Document.Knowl.Provider != "" {
+		t.Fatalf("sidecar provider = %q, %v; want provider-free", loaded.Document.Knowl.Provider, err)
+	}
+	if len(config.Sources) != 2 || config.Sources[0].ID != commandEngineeringSourceID || config.Sources[1].ID != commandOperationsSourceID {
+		t.Fatalf("sidecar sources = %#v", config.Sources)
+	}
+	for _, source := range config.Sources {
+		if !source.Enabled || !source.Sync.OnStart || source.Sync.Interval != 5*time.Minute || source.Sync.RetryMaximum != time.Minute {
+			t.Fatalf("sidecar source policy = %#v", source)
+		}
+	}
+}
+
+func TestProviderFreeSidecarConfigRunsSourceCLIAndRetrieval(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	content, err := os.ReadFile(filepath.Join(repoRoot, "deploy", "sidecar", "knowl.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceRoot := t.TempDir()
+	workspace, err := contentfs.New(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	engineeringRoot := t.TempDir()
+	operationsRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(engineeringRoot, "Shared.md"), []byte("# Shared\n\nSidecarengineeringbeacon\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(operationsRoot, "Shared.md"), []byte("# Shared\n\nSidecaroperationsbeacon\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adjusted := strings.ReplaceAll(string(content), "/var/lib/knowl/knowledge", workspaceRoot)
+	adjusted = strings.ReplaceAll(adjusted, "/sources/engineering", engineeringRoot)
+	adjusted = strings.ReplaceAll(adjusted, "/sources/operations", operationsRoot)
+	configRoot := t.TempDir()
+	configDir := filepath.Join(configRoot, appName)
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(adjusted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	clearKnowlEnv(t)
+	t.Chdir(t.TempDir())
+	stdout, stderr, err := executeCLICommand(newRootCommand(), []string{"--config-dir", configRoot, sourceCommandName, sourceSyncCommandName, sourceSyncAllFlag}, nil)
+	if err != nil {
+		t.Fatalf("sidecar source sync --all: %v, stderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, `"source_id":"`+commandEngineeringSourceID+`"`) || !strings.Contains(stdout, `"source_id":"`+commandOperationsSourceID+`"`) {
+		t.Fatalf("sidecar sync output = %s", stdout)
+	}
+	stdout, stderr, err = executeCLICommand(newRootCommand(), []string{"--config-dir", configRoot, retrieveCommandName, retrieveSourceFlag, commandEngineeringSourceID, "Sidecarengineeringbeacon"}, nil)
+	if err != nil {
+		t.Fatalf("sidecar provider-free retrieval: %v, stderr=%s", err, stderr)
+	}
+	if !strings.Contains(stdout, `"source_id":"`+commandEngineeringSourceID+`"`) || strings.Contains(stdout, `"source_id":"`+commandOperationsSourceID+`"`) {
+		t.Fatalf("sidecar filtered retrieval = %s", stdout)
 	}
 }
 
@@ -87,6 +153,8 @@ func TestSidecarAssetsMentionCanonicalRuntimePaths(t *testing.T) {
 				"ghcr.io/baldaworks/knowl:local",
 				"127.0.0.1:8080:8080",
 				"/var/lib/knowl",
+				"/sources/engineering:ro",
+				"/sources/operations:ro",
 				"/readyz",
 			},
 		},
@@ -98,6 +166,8 @@ func TestSidecarAssetsMentionCanonicalRuntimePaths(t *testing.T) {
 				"/v1/retrieve",
 				publicIngestPath,
 				"/v1/operations/{operation_id}",
+				"maintainer_unavailable",
+				sourceNamespacePattern,
 			},
 		},
 	}

@@ -8,10 +8,12 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/baldaworks/knowl/internal/source/reconcile"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
 	runtimeprovider "github.com/baldaworks/knowl/pkg/knowl/provider"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // Options supplies the host configuration plus either an explicit maintainer
@@ -21,6 +23,8 @@ type Options struct {
 	Maintainer     app.Maintainer
 	RuntimeFactory runtimeprovider.RuntimeFactory
 	ProviderID     string
+	SourceAdapters map[domain.SourceType]app.SourceAdapter
+	SourceObserver SourceObserver
 }
 
 // Host composes canonical content, operational state, application services, HTTP, and MCP.
@@ -30,14 +34,19 @@ type Host struct {
 	closer           io.Closer
 	maintainerCloser io.Closer
 
-	operations app.OperationStore
-	index      app.SearchIndex
-	scheduler  *operationScheduler
-	service    *app.IngestService
-	query      *app.QueryService
-	lint       *app.LintService
-	mcp        *mcp.Server
-	handler    http.Handler
+	operations  app.OperationStore
+	index       app.SearchIndex
+	sourceState app.SourceStateStore
+	sourceSync  *reconcile.Service
+	sources     []domain.Source
+	sourceByID  map[domain.SourceID]domain.Source
+	sourceJobs  *sourceScheduler
+	scheduler   *operationScheduler
+	service     *app.IngestService
+	query       *app.QueryService
+	lint        *app.LintService
+	mcp         *mcp.Server
+	handler     http.Handler
 
 	ready           atomic.Bool
 	stopMu          sync.Mutex

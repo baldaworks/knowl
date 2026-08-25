@@ -25,6 +25,27 @@ func TestParseFrontmatterTrimsFields(t *testing.T) {
 	}
 }
 
+func TestParseFrontmatterCarriesOptionalSourceDocument(t *testing.T) {
+	content := "---\nid: sources/engineering/auth\ntitle: Auth\ntype: source\nsource_refs:\n  - raw:auth@1\nsource_document:\n  source_id: ' engineering '\n  document_id: ' architecture/auth.md '\n  revision: ' revision-1 '\n  uri: ' https://wiki.example.test/auth '\n---\n# Auth\n"
+	metadata, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &knowl.SourceDocument{SourceID: "engineering", DocumentID: "architecture/auth.md", Revision: "revision-1", URI: "https://wiki.example.test/auth"}
+	if !reflect.DeepEqual(metadata.SourceDocument, want) || !reflect.DeepEqual(SourceDocument(content), want) {
+		t.Fatalf("source document = %#v", metadata.SourceDocument)
+	}
+	copied := SourceDocument(content)
+	copied.Revision = "changed"
+	if metadata.SourceDocument.Revision != "revision-1" {
+		t.Fatal("SourceDocument() returned aliased metadata")
+	}
+	curated, err := ParseFrontmatter("---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs: [raw:one@1]\n---\n# One\n")
+	if err != nil || curated.SourceDocument != nil || SourceDocument("# no frontmatter") != nil {
+		t.Fatalf("curated source document = %#v, %v", curated.SourceDocument, err)
+	}
+}
+
 func TestParseFrontmatterRejectsMalformedBlocks(t *testing.T) {
 	t.Run("missing opening", func(t *testing.T) {
 		if _, err := ParseFrontmatter("# no frontmatter\n"); err == nil {

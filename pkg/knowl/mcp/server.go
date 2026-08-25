@@ -55,7 +55,7 @@ func NewServer(query *app.QueryService, ingest *app.IngestService, waker Waker, 
 	}
 	server := &Server{query: query, ingest: ingest, waker: waker, scope: scope, limits: limits}
 	server.tools = []Tool{
-		{Name: "knowl_retrieve", Description: "Retrieve bounded evidence from the trusted Knowl scope", ReadOnly: true, InputSchema: objectSchema("query")},
+		{Name: "knowl_retrieve", Description: "Retrieve bounded evidence from the trusted Knowl scope", ReadOnly: true, InputSchema: retrieveSchema()},
 		{Name: "knowl_ingest", Description: "Submit one bounded source to the trusted Knowl ingest pipeline", ReadOnly: false, InputSchema: ingestSchema()},
 		{Name: "knowl_operation", Description: "Read one durable Knowl operation status", ReadOnly: true, InputSchema: objectSchema("id")},
 	}
@@ -92,7 +92,11 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 		if err != nil {
 			return nil, err
 		}
-		result, err := server.query.Query(ctx, server.scope, query, server.limits)
+		sources, err := optionalSourceIDs(arguments, "sources")
+		if err != nil {
+			return nil, err
+		}
+		result, err := server.query.Query(ctx, server.scope, query, server.limits, sources)
 		if err != nil {
 			return nil, err
 		}

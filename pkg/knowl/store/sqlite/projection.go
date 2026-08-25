@@ -52,11 +52,21 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		if marshalErr != nil {
 			return fmt.Errorf("encode page source refs: %w", marshalErr)
 		}
+		var sourceID any
+		var sourceDocument any
+		if page.SourceDocument != nil {
+			sourceID = string(page.SourceDocument.SourceID)
+			encodedDocument, encodeErr := json.Marshal(page.SourceDocument)
+			if encodeErr != nil {
+				return fmt.Errorf("encode page source document: %w", encodeErr)
+			}
+			sourceDocument = string(encodedDocument)
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO knowl_pages (page_id, scope, path, title, body, digest, source_refs, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, updated_at=excluded.updated_at`,
-			page.ID, snapshot.Scope, page.Path, page.Title, page.Content, page.Digest, sourceRefs, updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			INSERT INTO knowl_pages (page_id, scope, path, title, body, digest, source_refs, source_id, source_document, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, updated_at=excluded.updated_at`,
+			page.ID, snapshot.Scope, page.Path, page.Title, page.Content, page.Digest, sourceRefs, sourceID, sourceDocument, updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, body, source_refs) VALUES (?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, page.Title, page.Content, sourceRefs); err != nil {
@@ -129,13 +139,14 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 
 func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	type digestPage struct {
-		ID         knowl.PageID
-		Path       string
-		Digest     string
-		Title      string
-		Content    string
-		SourceRefs []string
-		UpdatedAt  time.Time
+		ID             knowl.PageID
+		Path           string
+		Digest         string
+		Title          string
+		Content        string
+		SourceRefs     []string
+		SourceDocument *knowl.SourceDocument
+		UpdatedAt      time.Time
 	}
 	type digestLink struct {
 		From     knowl.PageID
@@ -148,7 +159,8 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		sort.Strings(sourceRefs)
 		pages = append(pages, digestPage{
 			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
-			Content: page.Content, SourceRefs: sourceRefs, UpdatedAt: page.UpdatedAt.UTC(),
+			Content: page.Content, SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
+			UpdatedAt: page.UpdatedAt.UTC(),
 		})
 	}
 	sort.Slice(pages, func(left, right int) bool {

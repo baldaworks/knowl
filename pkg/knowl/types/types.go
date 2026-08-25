@@ -51,14 +51,15 @@ type PageID string
 
 // PageSnapshot is a bounded read of a canonical Markdown page.
 type PageSnapshot struct {
-	ID         PageID    `json:"id"`
-	Path       string    `json:"path"`
-	Digest     string    `json:"digest"`
-	Title      string    `json:"title"`
-	Content    string    `json:"content"`
-	SourceRefs []string  `json:"source_refs,omitempty"`
-	Untrusted  bool      `json:"untrusted"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID             PageID          `json:"id"`
+	Path           string          `json:"path"`
+	Digest         string          `json:"digest"`
+	Title          string          `json:"title"`
+	Content        string          `json:"content"`
+	SourceRefs     []string        `json:"source_refs,omitempty"`
+	SourceDocument *SourceDocument `json:"source_document,omitempty"`
+	Untrusted      bool            `json:"untrusted"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 // ReadLimits bounds context and retrieval operations.
@@ -203,12 +204,13 @@ type SourceSummary struct {
 
 // PageReference is an untrusted bounded search result.
 type PageReference struct {
-	ID         PageID   `json:"id"`
-	Path       string   `json:"path"`
-	Title      string   `json:"title"`
-	Snippet    string   `json:"snippet"`
-	SourceRefs []string `json:"source_refs"`
-	Untrusted  bool     `json:"untrusted"`
+	ID             PageID          `json:"id"`
+	Path           string          `json:"path"`
+	Title          string          `json:"title"`
+	Snippet        string          `json:"snippet"`
+	SourceRefs     []string        `json:"source_refs"`
+	SourceDocument *SourceDocument `json:"source_document,omitempty"`
+	Untrusted      bool            `json:"untrusted"`
 }
 
 // LinkReference is an untrusted bounded graph result.

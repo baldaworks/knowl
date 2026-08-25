@@ -64,11 +64,7 @@ func newProductionLocalWorkflowSession(ctx context.Context) (localWorkflowSessio
 		return localWorkflowSession{}, err
 	}
 	config.ListenAddr = loopbackListenAddr
-	host, err := knowl.New(ctx, knowl.Options{
-		Config:         config,
-		RuntimeFactory: runtimeFactory,
-		ProviderID:     providerID,
-	})
+	host, err := knowl.New(ctx, selectedHostOptions(config, runtimeFactory, providerID))
 	if err != nil {
 		return localWorkflowSession{}, err
 	}

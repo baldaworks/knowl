@@ -4,15 +4,85 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
 )
+
+// SourceDigests inventories regular canonical files beneath exactly one source
+// namespace with their SHA-256 content digests, sorted by canonical path.
+func (workspace *Workspace) SourceDigests(ctx context.Context, scope knowl.ScopeRef, sourceID knowl.SourceID, limit int) ([]app.SourceDigestEntry, error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(scope)) == "" || app.ValidateSourceID(sourceID) != nil || app.ValidateSourceDigestLimit(limit) != nil {
+		return nil, app.ErrSourceInvalid
+	}
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+	prefix := "wiki/sources/" + string(sourceID) + "/"
+	namespace := filepath.Join(workspace.root, filepath.FromSlash("wiki/sources/"+string(sourceID)))
+	if _, err := os.Lstat(namespace); errors.Is(err, os.ErrNotExist) {
+		return []app.SourceDigestEntry{}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("stat source namespace: %w", err)
+	}
+	if err := rejectSymlinkPath(workspace.root, namespace); err != nil {
+		return nil, err
+	}
+	entries := make([]app.SourceDigestEntry, 0, 16)
+	walkErr := filepath.WalkDir(namespace, func(path string, item iofs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := contextErr(ctx); err != nil {
+			return err
+		}
+		switch {
+		case item.IsDir():
+			return nil
+		case !item.Type().IsRegular():
+			return fmt.Errorf("source namespace entry is not a regular file: %w", ErrPathRejected)
+		}
+		relative, relErr := filepath.Rel(workspace.root, path)
+		if relErr != nil {
+			return relErr
+		}
+		canonical := filepath.ToSlash(relative)
+		if !strings.HasPrefix(canonical, prefix) {
+			return fmt.Errorf("source inventory path %q: %w", canonical, ErrPathRejected)
+		}
+		info, statErr := item.Info()
+		if statErr != nil {
+			return statErr
+		}
+		if info.Size() > maxSourceStageFile {
+			return fmt.Errorf("source file %q exceeds the inventory bound: %w", canonical, ErrInvalidSource)
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return fmt.Errorf("read source file %q: %w", canonical, readErr)
+		}
+		if len(entries) >= limit {
+			return app.ErrSourceMutationLimit
+		}
+		entries = append(entries, app.SourceDigestEntry{Path: canonical, Digest: digestBytes(content)})
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	sort.Slice(entries, func(left, right int) bool { return entries[left].Path < entries[right].Path })
+	return entries, nil
+}
 
 // AcceptSource persists one immutable source version and its manifest.
 func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.SourceEnvelope) (knowl.AcceptedSource, error) {

@@ -38,6 +38,15 @@ func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workdir, ".config", appName, "config.yaml")); err != nil {
 		t.Fatalf("expected config artifact: %v", err)
 	}
+	configContent, err := os.ReadFile(filepath.Join(workdir, ".config", appName, "config.yaml"))
+	if err != nil {
+		t.Fatalf("read bootstrap config: %v", err)
+	}
+	for _, want := range []string{"provider: \"\"", "id: bootstrap-wiki", "type: filesystem", "flavor: markdown", sourceDir} {
+		if !strings.Contains(string(configContent), want) {
+			t.Fatalf("bootstrap config missing %q:\n%s", want, configContent)
+		}
+	}
 	if err := validateWorkspace(workdir); err != nil {
 		t.Fatalf("validate bootstrapped workspace: %v", err)
 	}
@@ -56,16 +65,18 @@ func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
 		t.Fatalf("bootstrapped raw sources = %d, want 2", len(inspection.RawSources))
 	}
 
-	content, err := os.ReadFile(filepath.Join(workdir, workspaceWikiDir, "notes", "Home.md"))
+	content, err := os.ReadFile(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapWikiSourceID), "Home.md"))
 	if err != nil {
 		t.Fatalf("read canonical page: %v", err)
 	}
 	for _, want := range []string{
-		"id: notes/Home",
+		"id: sources/bootstrap-wiki/Home",
 		"title: Home",
-		"type: note",
+		"type: source",
 		"source_refs:",
-		"bootstrap_wiki:Home.md@",
+		"wiki-filesystem:bootstrap-wiki/Home.md@",
+		"source_id: bootstrap-wiki",
+		"document_id: Home.md",
 		"tags:",
 		"- imported",
 	} {
@@ -78,8 +89,16 @@ func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read index: %v", err)
 	}
-	if !strings.Contains(string(indexContent), "[[notes/Home|Home]]") || !strings.Contains(string(indexContent), "[[notes/guide|Guide]]") {
-		t.Fatalf("index missing bootstrapped pages:\n%s", indexContent)
+	if string(indexContent) != "# Knowl index\n\nNo pages have been committed yet.\n" {
+		t.Fatalf("bootstrap changed curated index:\n%s", indexContent)
+	}
+
+	statusOut, statusErr, err := executeCLICommand(newRootCommand(), []string{sourceCommandName, sourceStatusCommandName, string(bootstrapWikiSourceID)}, nil)
+	if err != nil {
+		t.Fatalf("source status after bootstrap error: %v, stderr=%s", err, statusErr)
+	}
+	if !strings.Contains(statusOut, `"source_id":"bootstrap-wiki"`) || !strings.Contains(statusOut, `"status":"succeeded"`) {
+		t.Fatalf("source status after bootstrap = %s", statusOut)
 	}
 }
 
@@ -115,23 +134,23 @@ func TestBootstrapObsidianRewritesWikiLinksAndCopiesAssets(t *testing.T) {
 		t.Fatalf("bootstrap obsidian stderr missing zerolog summary:\n%s", stderr)
 	}
 
-	alphaContent, err := os.ReadFile(filepath.Join(workdir, workspaceWikiDir, "notes", "Alpha.md"))
+	alphaContent, err := os.ReadFile(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapObsidianSourceID), "Alpha.md"))
 	if err != nil {
 		t.Fatalf("read alpha page: %v", err)
 	}
 	for _, want := range []string{
-		"[[notes/Beta|Second]]",
+		"[[sources/bootstrap-obsidian/Beta|Second]]",
 		"![](diagram.png)",
-		"bootstrap_obsidian:Alpha.md@",
+		"wiki-filesystem:bootstrap-obsidian/Alpha.md@",
 	} {
 		if !strings.Contains(string(alphaContent), want) {
 			t.Fatalf("bootstrapped obsidian page missing %q:\n%s", want, alphaContent)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(workdir, workspaceWikiDir, "notes", "diagram.png")); err != nil {
+	if _, err := os.Stat(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapObsidianSourceID), "diagram.png")); err != nil {
 		t.Fatalf("expected copied asset: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workdir, workspaceWikiDir, ".obsidian")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapObsidianSourceID), ".obsidian")); !os.IsNotExist(err) {
 		t.Fatalf("obsidian metadata directory should not be copied, stat err = %v", err)
 	}
 
@@ -145,12 +164,120 @@ func TestBootstrapObsidianRewritesWikiLinksAndCopiesAssets(t *testing.T) {
 	}
 	found := false
 	for _, link := range snapshot.Links {
-		if link.From == "notes/Alpha" && link.To == "notes/Beta" {
+		if link.From == "sources/bootstrap-obsidian/Alpha" && link.To == "sources/bootstrap-obsidian/Beta" {
 			found = true
 			break
 		}
 	}
 	if !found {
 		t.Fatalf("expected rewritten obsidian wiki link in snapshot: %#v", snapshot.Links)
+	}
+}
+
+func TestBootstrapRejectsNonFreshWorkspaceBeforeMutation(t *testing.T) {
+	clearKnowlEnv(t)
+	workdir := t.TempDir()
+	sourceDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workdir, workspaceWikiDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	curatedPath := filepath.Join(workdir, workspaceWikiDir, "curated.md")
+	const curated = "# Curated\n"
+	if err := os.WriteFile(curatedPath, []byte(curated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "Page.md"), []byte("# Page\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(workdir)
+	_, _, err := executeCLICommand(newRootCommand(), []string{bootstrapCommandName, bootstrapWikiName, sourceDir}, nil)
+	if err == nil || !strings.Contains(err.Error(), "not fresh") {
+		t.Fatalf("bootstrap error = %v, want freshness rejection", err)
+	}
+	content, readErr := os.ReadFile(curatedPath)
+	if readErr != nil || string(content) != curated {
+		t.Fatalf("curated content after rejection = %q, %v", content, readErr)
+	}
+	for _, path := range []string{
+		filepath.Join(workdir, ".config"),
+		filepath.Join(workdir, ".knowl"),
+		filepath.Join(workdir, "raw"),
+		filepath.Join(workdir, workspaceWikiDir, "sources"),
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("bootstrap freshness rejection created %q: %v", path, statErr)
+		}
+	}
+}
+
+func TestBootstrapPreservesExistingConfig(t *testing.T) {
+	clearKnowlEnv(t)
+	workdir := t.TempDir()
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "Page.md"), []byte("# Page\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(workdir, ".config", appName, "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	existing := "knowl:\n  provider: \"\"\n  workspace:\n    path: " + workdir + "\n  storage:\n    type: sqlite\n    sqlite:\n      path: .knowl/knowl.sqlite\n  scope: local\n# operator-owned marker\n"
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(workdir)
+	_, stderr, err := executeCLICommand(newRootCommand(), []string{bootstrapCommandName, bootstrapWikiName, sourceDir}, nil)
+	if err != nil {
+		t.Fatalf("bootstrap with existing config error: %v, stderr=%s", err, stderr)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil || string(content) != existing {
+		t.Fatalf("existing config changed:\n%s\nerror=%v", content, err)
+	}
+}
+
+func TestBootstrapRejectsAssetOnlySourceBeforeCanonicalContent(t *testing.T) {
+	clearKnowlEnv(t)
+	workdir := t.TempDir()
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "asset.bin"), []byte("asset"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(workdir)
+	_, _, err := executeCLICommand(newRootCommand(), []string{bootstrapCommandName, bootstrapWikiName, sourceDir}, nil)
+	if err == nil || !strings.Contains(err.Error(), "contains no Markdown files") {
+		t.Fatalf("bootstrap error = %v, want empty Markdown rejection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapWikiSourceID), "asset.bin")); !os.IsNotExist(statErr) {
+		t.Fatalf("asset-only bootstrap created canonical content: %v", statErr)
+	}
+}
+
+func TestBootstrapRejectsSymlinkedSourceWorkspaceOverlap(t *testing.T) {
+	clearKnowlEnv(t)
+	workdir := t.TempDir()
+	containedSource := filepath.Join(workdir, "source")
+	if err := os.MkdirAll(containedSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(containedSource, "Page.md"), []byte("# Page\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := t.TempDir()
+	linkedSource := filepath.Join(linkRoot, "linked-source")
+	if err := os.Symlink(containedSource, linkedSource); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	t.Chdir(workdir)
+	_, _, err := executeCLICommand(newRootCommand(), []string{bootstrapCommandName, bootstrapWikiName, linkedSource}, nil)
+	if err == nil || !strings.Contains(err.Error(), "must be separate") {
+		t.Fatalf("bootstrap error = %v, want canonical overlap rejection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workdir, ".knowl")); !os.IsNotExist(statErr) {
+		t.Fatalf("overlap rejection created state: %v", statErr)
 	}
 }

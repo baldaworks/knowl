@@ -184,6 +184,24 @@ func TestReadCommandsReturnStructuredJSON(t *testing.T) {
 	}
 }
 
+func TestRetrieveCommandForwardsRepeatableSourceFlags(t *testing.T) {
+	_, _ = prepareCommittedCommandWorkflow(t)
+	stdout, stderr, err := executeCLICommand(newRetrieveCommand(), []string{retrieveSourceFlag, "ghost", retrieveSourceFlag, "unknown", smokeQueryText}, nil)
+	if err != nil {
+		t.Fatalf("retrieve Execute() error: %v", err)
+	}
+	if strings.TrimSpace(stderr) != "" {
+		t.Fatalf("retrieve stderr = %q, want empty", stderr)
+	}
+	var result knowlapi.RetrieveResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("decode retrieve output: %v", err)
+	}
+	if len(result.Evidence) != 0 {
+		t.Fatalf("filtered retrieve evidence = %#v, want empty", result.Evidence)
+	}
+}
+
 func TestOperationCommandPrintsStructuredNotFoundError(t *testing.T) {
 	fixture := newCommandWorkflowFixture(t, true)
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))

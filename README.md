@@ -44,7 +44,8 @@ same runtime in-process.
 Use Knowl when you want one durable project/domain knowledge layer that can:
 
 - bootstrap an existing Markdown wiki or Obsidian vault into a Knowl-owned
-  workspace;
+  workspace through the production source synchronization engine;
+- mirror multiple named read-only filesystem wikis without path collisions;
 - ingest new text or URI sources through one canonical pipeline;
 - answer retrieval requests with bounded evidence and provenance;
 - run next to an agent as a sidecar service or inside a Go process through Fx.
@@ -117,6 +118,12 @@ Bootstrap an existing wiki:
 ./knowl bootstrap wiki /path/to/existing/wiki
 ```
 
+Bootstrap is a freshness-guarded first sync. It creates the deterministic
+`bootstrap-wiki` source (or `bootstrap-obsidian`) and writes mirrors below
+`wiki/sources/<source_id>/**`; it does not replace curated `wiki/index.md`.
+The generated local config is provider-free, so later `source list`, `sync`,
+and `status` commands work without an LLM provider.
+
 Or initialize an empty local workspace:
 
 ```bash
@@ -140,6 +147,9 @@ Run one-shot local wrappers over the same KISS contract:
 ./knowl retrieve "Why was Badger chosen?"
 ./knowl ingest --input request.json
 ./knowl operation op_01K...
+./knowl source list
+./knowl source sync engineering
+./knowl source status engineering
 ```
 
 These CLI commands are operator conveniences. They are not the primary product
@@ -169,7 +179,9 @@ workspace mutation.
 ## Configuration shape
 
 Knowl config lives under the `knowl:` section and stays aligned with Balda's
-typed runtime/provider shape.
+typed runtime/provider shape. The provider is optional: retrieval, lint, source
+synchronization, and status work without it; ingest remains registered and
+returns the stable `maintainer_unavailable` outcome until a provider is configured.
 
 Minimal SQLite example:
 
@@ -192,6 +204,44 @@ knowl:
   operator:
     token: replace-with-a-local-secret
 ```
+
+For provider-free source operation, omit `runtime.providers` and
+`knowl.provider`, then configure one or more `knowl.sources` entries.
+
+```yaml
+knowl:
+  provider: ""
+  workspace:
+    path: .
+  sources:
+    - id: engineering
+      type: filesystem
+      filesystem:
+        root: /wikis/engineering
+        include: ["**/*.md"]
+        flavor: obsidian
+      sync:
+        on_start: true
+        interval: 5m
+    - id: operations
+      type: filesystem
+      filesystem:
+        root: /wikis/operations
+        include: ["**/*.md"]
+        flavor: markdown
+      sync:
+        on_start: true
+        interval: 5m
+  storage:
+    type: sqlite
+    sqlite:
+      path: .knowl/knowl.sqlite
+```
+
+Source IDs are part of document identity. Equal paths such as `Shared.md` are
+stored independently under `wiki/sources/engineering/Shared.md` and
+`wiki/sources/operations/Shared.md`. Repeated syncs fetch no unchanged bytes;
+complete scans tombstone deletions while immutable raw revisions remain.
 
 Container baseline example:
 
@@ -218,6 +268,7 @@ workspace/
 ├── wiki/
 │   ├── index.md
 │   ├── log.md
+│   ├── sources/<source_id>/
 │   ├── entities/
 │   ├── concepts/
 │   └── syntheses/
@@ -240,6 +291,7 @@ remain rebuildable operational state.
 ## Where to look next
 
 - sidecar/service runbook: [docs/sidecar.md](docs/sidecar.md)
+- v0.2.0 multi-source release and migration notes: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md)
 - v0.1.0 release and rollback notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md)
 - service config and HTTP contract: [docs/operations.md](docs/operations.md)
 - product design, boundaries, and architecture: [docs/design.md](docs/design.md)

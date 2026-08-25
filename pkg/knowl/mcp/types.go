@@ -20,6 +20,10 @@ type EvidenceItem struct {
 	Title      string       `json:"title"`
 	Snippet    string       `json:"snippet"`
 	SourceRefs []string     `json:"source_refs,omitempty"`
+	SourceID   string       `json:"source_id,omitempty"`
+	DocumentID string       `json:"document_id,omitempty"`
+	Revision   string       `json:"revision,omitempty"`
+	URI        string       `json:"uri,omitempty"`
 	Untrusted  bool         `json:"untrusted"`
 }
 

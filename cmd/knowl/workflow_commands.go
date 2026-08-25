@@ -63,7 +63,8 @@ func newJSONBodyWorkflowCommand[T any](use, short, requestPath string) *cobra.Co
 }
 
 func newRetrieveCommand() *cobra.Command {
-	return &cobra.Command{
+	var sources []string
+	command := &cobra.Command{
 		Use:           retrieveCommandName + " <text>",
 		Short:         "Retrieve bounded evidence from Knowl",
 		Long:          "Retrieve bounded evidence from Knowl.\n\nPass the query text as positional arguments. The command prints the " + workflowJSONStdoutHelp + ".",
@@ -71,12 +72,19 @@ func newRetrieveCommand() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			parameters := url.Values{}
+			parameters.Set("query", strings.TrimSpace(strings.Join(args, " ")))
+			for _, source := range sources {
+				parameters.Add("source", source)
+			}
 			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
 				Method: http.MethodGet,
-				Path:   publicRetrievePath + "?query=" + url.QueryEscape(strings.TrimSpace(strings.Join(args, " "))),
+				Path:   publicRetrievePath + "?" + parameters.Encode(),
 			})
 		},
 	}
+	command.Flags().StringArrayVar(&sources, "source", nil, "restrict evidence to a source ID (repeatable)")
+	return command
 }
 
 func newOperationReadCommand() *cobra.Command {

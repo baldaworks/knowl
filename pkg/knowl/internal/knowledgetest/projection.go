@@ -12,7 +12,7 @@ import (
 // corpus contract.
 type Projection interface {
 	Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error
-	Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits) ([]knowl.PageReference, error)
+	Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error)
 }
 
 // EvaluateProjectionReplay rebuilds and evaluates the exact final corpus
@@ -31,7 +31,7 @@ func EvaluateProjectionReplay(ctx context.Context, projection Projection, scope 
 		}
 		observed := make(map[string][]knowl.PageReference, QueryCount)
 		retrieve := func(ctx context.Context, query string, limits knowl.ReadLimits) ([]knowl.PageReference, error) {
-			references, err := projection.Search(ctx, scope, query, limits)
+			references, err := projection.Search(ctx, scope, query, limits, nil)
 			if err == nil {
 				observed[query] = cloneReferences(references)
 			}

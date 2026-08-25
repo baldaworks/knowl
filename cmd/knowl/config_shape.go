@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl"
 	knowltypes "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -17,6 +18,7 @@ type AppConfig struct {
 	Scope     knowltypes.ScopeRef `mapstructure:"scope"`
 	Server    ServerConfig        `mapstructure:"server"`
 	Operator  OperatorConfig      `mapstructure:"operator"`
+	Sources   []SourceConfig      `mapstructure:"sources"`
 }
 
 // WorkspaceConfig controls the workspace root used by Knowl.
@@ -107,6 +109,31 @@ type OperatorConfig struct {
 	Token string `mapstructure:"token"`
 }
 
+// SourceConfig configures one named authoritative knowledge source.
+type SourceConfig struct {
+	ID         knowltypes.SourceID     `mapstructure:"id"`
+	Type       knowltypes.SourceType   `mapstructure:"type"`
+	Enabled    *bool                   `mapstructure:"enabled"`
+	Filesystem *FilesystemSourceConfig `mapstructure:"filesystem"`
+	Sync       SourceSyncConfig        `mapstructure:"sync"`
+}
+
+// FilesystemSourceConfig configures one local Markdown tree.
+type FilesystemSourceConfig struct {
+	Root    string   `mapstructure:"root"`
+	Include []string `mapstructure:"include"`
+	Flavor  string   `mapstructure:"flavor"`
+	URIBase string   `mapstructure:"uri_base"`
+}
+
+// SourceSyncConfig controls on-start, periodic, and bounded retry scheduling.
+type SourceSyncConfig struct {
+	OnStart      bool          `mapstructure:"on_start"`
+	Interval     time.Duration `mapstructure:"interval"`
+	RetryInitial time.Duration `mapstructure:"retry_initial"`
+	RetryMaximum time.Duration `mapstructure:"retry_maximum"`
+}
+
 type rawAppConfig struct {
 	Provider    string              `mapstructure:"provider"`
 	Workspace   WorkspaceConfig     `mapstructure:"workspace"`
@@ -114,6 +141,7 @@ type rawAppConfig struct {
 	Scope       knowltypes.ScopeRef `mapstructure:"scope"`
 	Server      ServerConfig        `mapstructure:"server"`
 	Operator    OperatorConfig      `mapstructure:"operator"`
+	Sources     []SourceConfig      `mapstructure:"sources"`
 	Ingest      map[string]any      `mapstructure:"ingest"`
 	Maintenance map[string]any      `mapstructure:"maintenance"`
 }
@@ -134,5 +162,6 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 		Scope:     config.Scope,
 		Server:    config.Server,
 		Operator:  config.Operator,
+		Sources:   config.Sources,
 	}, nil
 }

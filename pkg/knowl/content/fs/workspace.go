@@ -9,20 +9,25 @@ import (
 )
 
 const (
-	schemaFile        = "schema.md"
-	workspaceWikiDir  = "wiki"
-	workspaceRawDir   = "raw"
-	knowlDir          = ".knowl"
-	markdownExt       = ".md"
-	defaultMaxBytes   = 4 << 20
-	recoveryPrepared  = "prepared"
-	recoveryCommitted = "committed"
+	schemaFile         = "schema.md"
+	workspaceWikiDir   = "wiki"
+	workspaceRawDir    = "raw"
+	knowlDir           = ".knowl"
+	markdownExt        = ".md"
+	defaultMaxBytes    = 4 << 20
+	canonicalLogPath   = "wiki/log.md"
+	recoveryPrepared   = "prepared"
+	recoveryCommitted  = "committed"
+	recoveryRolledBack = "rolled_back"
+	recoveryCompleted  = "completed"
+	commitFaultApplied = "applied"
 )
 
 // Workspace owns canonical filesystem content for one local Knowl workspace.
 type Workspace struct {
 	root           string
 	maxSourceBytes int
+	commitFault    func(point string, index int) error
 	mu             sync.Mutex
 }
 

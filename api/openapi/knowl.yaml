@@ -60,6 +60,7 @@ paths:
         `scope_override_forbidden`.
       parameters:
         - $ref: '#/components/parameters/RetrieveQuery'
+        - $ref: '#/components/parameters/RetrieveSource'
       security:
         - {}
         - bearerAuth: []
@@ -168,6 +169,17 @@ components:
         type: string
         minLength: 1
       description: Free-text retrieval query.
+    RetrieveSource:
+      name: source
+      in: query
+      required: false
+      style: form
+      explode: true
+      schema:
+        type: array
+        items:
+          type: string
+      description: Optional repeatable source identity filter. Empty means all sources and curated pages.
     OperationID:
       name: operation_id
       in: path
@@ -189,6 +201,9 @@ components:
             invalid_request:
               value:
                 error: invalid_request
+            invalid_source_filter:
+              value:
+                error: invalid_source_filter
     JSONBodyBadRequest:
       description: Invalid JSON body or invalid request semantics.
       content:
@@ -255,6 +270,9 @@ components:
             service_unavailable:
               value:
                 error: service_unavailable
+            maintainer_unavailable:
+              value:
+                error: maintainer_unavailable
     OperationFailed:
       description: The operation failed or an unclassified application error occurred.
       content:
@@ -325,6 +343,14 @@ components:
           type: array
           items:
             type: string
+        source_id:
+          type: string
+        document_id:
+          type: string
+        revision:
+          type: string
+        uri:
+          type: string
         untrusted:
           type: boolean
     RetrieveResult:

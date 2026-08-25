@@ -36,6 +36,36 @@ func TestOpenRequiresDSN(t *testing.T) {
 	}
 }
 
+func TestSourceStateMigrationAndBindingArePostgresNative(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00003_source_sync.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"CREATE TABLE knowl_sources", "CREATE TABLE knowl_sync_runs", "CREATE TABLE knowl_source_documents", "TIMESTAMPTZ"} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("source migration missing %q", required)
+		}
+	}
+	if got, want := bindSourceQuery("SELECT id FROM source WHERE scope = ? AND id = ?"), "SELECT id FROM source WHERE scope = $1 AND id = $2"; got != want {
+		t.Fatalf("bindSourceQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestPageSourceMetadataMigrationIsPostgresNative(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00004_page_source_metadata.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"ADD COLUMN source_id TEXT", "ADD COLUMN source_document JSONB", "WHERE source_id IS NOT NULL"} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("page source metadata migration missing %q", required)
+		}
+	}
+	if strings.Contains(string(content), "source_id TEXT NOT NULL") {
+		t.Fatal("page source metadata migration makes curated source_id non-null")
+	}
+}
+
 func TestStoreContract(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("KNOWL_POSTGRES_DSN"))
 	if dsn == "" {
@@ -82,6 +112,25 @@ func runStoreContract(t *testing.T, dsn string) {
 		IsConflict: func(err error) bool { return errors.Is(err, ErrConflict) },
 		Scope:      knowl.ScopeRef(string(scope) + "_shared_contract"),
 	})
+	sourceScope := knowl.ScopeRef(string(scope) + "_source_contract")
+	storetest.RunSourceContract(t, storetest.SourceHarness{
+		Store: store,
+		OpenPeer: func(t *testing.T) app.SourceStateStore {
+			t.Helper()
+			peer, err := Open(ctx, dsn)
+			if err != nil {
+				t.Fatalf("open source-state peer: %v", err)
+			}
+			t.Cleanup(func() { _ = peer.Close() })
+			return peer
+		},
+		IsConflict: func(err error) bool { return errors.Is(err, app.ErrSyncConflict) },
+		Scope:      sourceScope,
+	})
+	var sourceOperationRows int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM knowl_operations WHERE scope = $1`, sourceScope).Scan(&sourceOperationRows); err != nil || sourceOperationRows != 0 {
+		t.Fatalf("source sync operation rows = %d, %v", sourceOperationRows, err)
+	}
 	runnertest.Run(t, store, store, knowl.ScopeRef(string(scope)+"_runner"))
 	assertResumableMigration(t, ctx, store, dsn)
 	key, meta := postgresExecutionFixture(scope, "source", time.Unix(1, 0).UTC())
@@ -165,23 +214,26 @@ func runStoreContract(t *testing.T, dsn string) {
 		t.Fatalf("commit operation: %v", err)
 	}
 
+	sourceDocument := &knowl.SourceDocument{
+		SourceID: "engineering", DocumentID: "docs/one.md", Revision: "revision-1", URI: "file:///source/docs/one.md",
+	}
 	snapshot := knowl.WorkspaceSnapshot{
 		Scope: scope, SchemaDigest: testSchemaDigest, CapturedAt: time.Unix(1, 0).UTC(),
 		Pages: []knowl.PageSnapshot{{
 			ID: testPageID, Path: "wiki/entities/one.md", Title: "One",
 			Content: "alpha knowledge", Digest: "digest",
-			SourceRefs: []string{"fixture:source@1"},
+			SourceRefs: []string{"fixture:source@1"}, SourceDocument: sourceDocument,
 		}},
 		Links: []knowl.LinkReference{{From: testPageID, To: "two", Relation: "related"}},
 	}
 	if err := store.Rebuild(ctx, snapshot); err != nil {
 		t.Fatalf("rebuild projections: %v", err)
 	}
-	results, err := store.Search(ctx, scope, "alpha", knowl.ReadLimits{Pages: 5, Characters: 20})
+	results, err := store.Search(ctx, scope, "alpha", knowl.ReadLimits{Pages: 5, Characters: 20}, nil)
 	if err != nil {
 		t.Fatalf("search projection: %v", err)
 	}
-	if len(results) != 1 || results[0].ID != testPageID || !results[0].Untrusted {
+	if len(results) != 1 || results[0].ID != testPageID || !results[0].Untrusted || results[0].SourceDocument == nil || *results[0].SourceDocument != *sourceDocument {
 		t.Fatalf("search results = %#v", results)
 	}
 	links, err := store.Links(ctx, scope, testPageID, knowl.ReadLimits{Pages: 5})
@@ -234,8 +286,8 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	if err != nil {
 		t.Fatalf("create version-one provider: %v", err)
 	}
-	if _, err := provider.UpTo(ctx, 1); err != nil {
-		t.Fatalf("migrate fixture to version one: %v", err)
+	if _, err := provider.UpTo(ctx, 2); err != nil {
+		t.Fatalf("migrate fixture to version two: %v", err)
 	}
 	const (
 		scope       = "postgres_migration"
@@ -248,8 +300,8 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	insert := `INSERT INTO knowl_operations (
 		operation_id, scope, source_adapter, source_id, source_version, source_digest,
 		schema_digest, status, attempt, plan_digest, failure_class, commit_generation,
-		lease_token, lease_expires_at, created_at, updated_at
-	) VALUES ($1, $2, 'fixture', $3, '1', $4, 'schema-v1', $5, $6, $7, $8, $9, $10, $11, $12, $12)`
+		lease_token, lease_expires_at, created_at, updated_at, work_ready_at
+	) VALUES ($1, $2, 'fixture', $3, '1', $4, 'schema-v1', $5, $6, $7, $8, $9, $10, $11, $12, $12, $12)`
 	if _, err := db.ExecContext(ctx, insert, committedID, scope, "committed", strings.Repeat("a", 64), knowl.StatusCommitted, 2, "plan-committed", "", "generation-1", "", nil, createdAt); err != nil {
 		t.Fatalf("insert committed version-one row: %v", err)
 	}
@@ -258,6 +310,12 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	}
 	if _, err := db.ExecContext(ctx, insert, failedID, scope, "failed", strings.Repeat("c", 64), knowl.StatusFailed, 1, "plan-failed", "provider", "", "", nil, createdAt); err != nil {
 		t.Fatalf("insert failed version-one row: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_pages (scope, page_id, path, title, body, digest, source_refs, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`, scope, "legacy-page", "wiki/legacy.md", "Legacy page", "preserved projection body", "page-digest", `["raw/legacy.json"]`, createdAt); err != nil {
+		t.Fatalf("insert version-two projection page: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_projection_state (scope, schema_digest, snapshot_digest, page_count, link_count, ready_at) VALUES ($1, $2, $3, $4, $5, $6)`, scope, "schema-v1", "snapshot-v2", 1, 0, createdAt); err != nil {
+		t.Fatalf("insert version-two projection state: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close version-one fixture: %v", err)
@@ -296,6 +354,23 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	}
 	if committedGeneration != "generation-1" {
 		t.Fatalf("preserved commit generation = %q", committedGeneration)
+	}
+	var pageTitle, pageBody, pageDigest string
+	var sourceRefs, sourceDocument []byte
+	var sourceID sql.NullString
+	if err := migrated.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document FROM knowl_pages WHERE scope = $1 AND page_id = $2`, scope, "legacy-page").Scan(&pageTitle, &pageBody, &pageDigest, &sourceRefs, &sourceID, &sourceDocument); err != nil {
+		t.Fatalf("read preserved projection page: %v", err)
+	}
+	if pageTitle != "Legacy page" || pageBody != "preserved projection body" || pageDigest != "page-digest" || string(sourceRefs) != `["raw/legacy.json"]` || sourceID.Valid || len(sourceDocument) != 0 {
+		t.Fatalf("preserved projection page = %q %q %q %s %#v %s", pageTitle, pageBody, pageDigest, sourceRefs, sourceID, sourceDocument)
+	}
+	var snapshotDigest string
+	var pageCount, linkCount int
+	if err := migrated.db.QueryRowContext(ctx, `SELECT snapshot_digest, page_count, link_count FROM knowl_projection_state WHERE scope = $1`, scope).Scan(&snapshotDigest, &pageCount, &linkCount); err != nil {
+		t.Fatalf("read preserved projection state: %v", err)
+	}
+	if snapshotDigest != "snapshot-v2" || pageCount != 1 || linkCount != 0 {
+		t.Fatalf("preserved projection state = %q %d %d", snapshotDigest, pageCount, linkCount)
 	}
 	failures, err := migrated.DescriptorFailures(ctx, scope, 10)
 	if err != nil || len(failures) != 1 || failures[0] != applyingID {

@@ -22,7 +22,7 @@ same host runtime in-process.
 Knowl supports these baseline use cases:
 
 1. Bootstrap an existing Markdown wiki or Obsidian vault into a Knowl-owned
-   workspace.
+   workspace as the first production filesystem-source sync.
 2. Ingest one text or URI source through one canonical pipeline.
 3. Retrieve bounded evidence and provenance for a host query.
 4. Read durable ingest-operation status.
@@ -65,16 +65,19 @@ The filesystem workspace is the canonical content owner:
 
 - `raw/` stores immutable accepted source versions;
 - `wiki/` stores the human-readable Markdown knowledge artifact;
+- `wiki/sources/<source_id>/**` stores active read-only source mirrors and is
+  writable only by the source reconciler;
 - `schema.md` is operator-owned policy;
 - `wiki/index.md` and `wiki/log.md` are maintained control files.
 
 SQL and search state are operational and rebuildable, never canonical content.
 The detailed filesystem contract is in [workspace.md](workspace.md).
 
-A source adapter may translate text, a URI, origin, and idempotency hints into
-one public ingest request. It must not write the workspace or SQL directly,
-select an arbitrary trusted scope, or submit page IDs, Markdown paths, or
-ready-made changesets.
+An ingest-side connector may translate text, a URI, origin, and idempotency
+hints into one public ingest request. Separately, the built-in read-only
+filesystem source adapter lists and fetches configured wiki documents for the
+source reconciler. Neither may write the workspace or SQL directly, select an
+arbitrary trusted scope, or submit ready-made canonical changesets.
 
 The host owns session and user context, final-answer generation, tool
 orchestration, and the mapping to the trusted Knowl scope. Public callers
@@ -87,10 +90,12 @@ runbook has become durable and submits that immutable revision. Knowl does not
 own Slack, Telegram, Jira, GitHub, or their workflows, and it does not answer
 the user itself.
 
-The configured provider is an implementation detail. Knowl resolves
-`knowl.provider` through the shared `runtime.providers` configuration and
-validates returned plans before canonical mutation. Provider code does not
-receive unrestricted filesystem authority.
+An optional configured provider is an implementation detail. When present,
+Knowl resolves `knowl.provider` through the shared `runtime.providers`
+configuration and validates returned plans before canonical mutation. Without
+one, deterministic reads, lint, source synchronization, status, health, HTTP,
+and MCP reads remain available; ingest fails before accepting or reserving work.
+Provider code does not receive unrestricted filesystem authority.
 
 ## Supported usage surfaces
 
@@ -133,7 +138,7 @@ content/fs, store/*, provider
 pkg/knowl/mcp         MCP adapter
 internal/httpapi      HTTP adapter
 internal/mcphttp      Streamable HTTP transport for MCP
-internal/bootstrap    workspace bootstrap support
+internal/source       filesystem adapter, normalization, and reconciliation
 pkg/knowl             composition root and host API
 pkg/knowlfx, cmd/knowl
                        Fx and CLI entrypoints
@@ -143,6 +148,13 @@ pkg/knowlfx, cmd/knowl
 business policy and ports; adapters depend on it, not the reverse.
 `pkg/knowl` is the only package that composes multiple adapters. Fx and the
 CLI must not become second composition roots with separate business rules.
+
+Bootstrap is deliberately only a CLI preflight: it checks freshness and path
+separation, initializes the local workspace/config, constructs one deterministic
+filesystem source, and calls `Host.SyncSource` once. Ordinary sync has no
+freshness rule, never replaces `wiki/index.md`, and converges only the exact
+`wiki/sources/<source_id>/**` namespace. Sidecar and embedded callers use this
+same Host engine and durable recovery order.
 
 When code becomes difficult to read, split files within its package first.
 Create a package only for a distinct usage surface, external technology

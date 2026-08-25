@@ -74,3 +74,47 @@ func TestReleaseNotesPreserveDistributionContract(t *testing.T) {
 		}
 	}
 }
+
+func TestV020ReleaseNotesDescribeMultiSourceCompatibility(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "releases", "v0.2.0.md"))
+	if err != nil {
+		t.Fatalf("read v0.2.0 release notes: %v", err)
+	}
+	notes := strings.Join(strings.Fields(string(content)), " ")
+	for _, required := range []string{
+		"Multi-source Wiki Sync",
+		"bootstrap-wiki",
+		sourceNamespacePattern,
+		"source sync --all",
+		"maintainer_unavailable",
+		mcpRetrieveToolName,
+		mcpIngestToolName,
+		mcpOperationToolName,
+		"legacy `wiki/notes/**`",
+		"Never run destructive down migrations",
+	} {
+		if !strings.Contains(notes, required) {
+			t.Errorf("v0.2.0 release notes missing %q", required)
+		}
+	}
+}
+
+func TestMultiSourceDocumentationSurfacesStayAligned(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	for _, relative := range []string{"README.md", designDocRelativePath, "docs/workspace.md", "docs/operations.md", "docs/sidecar.md"} {
+		content, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(relative)))
+		if err != nil {
+			t.Fatalf("read %s: %v", relative, err)
+		}
+		text := string(content)
+		for _, required := range []string{sourceNamespacePattern, "provider"} {
+			if !strings.Contains(text, required) {
+				t.Errorf("%s missing %q", relative, required)
+			}
+		}
+		if relative == designDocRelativePath && strings.Contains(text, "internal/bootstrap") {
+			t.Errorf("%s still describes a standalone bootstrap package", relative)
+		}
+	}
+}

@@ -56,7 +56,7 @@ func (workspace *Workspace) ReadPages(ctx context.Context, scope knowl.ScopeRef,
 		if infoErr != nil {
 			return nil, fmt.Errorf("stat page %q: %w", id, infoErr)
 		}
-		pages = append(pages, knowl.PageSnapshot{ID: id, Path: relative, Digest: digestBytes(content), Title: markdownTitle(content), Content: string(content), SourceRefs: markdownSourceRefs(content), UpdatedAt: info.ModTime().UTC()})
+		pages = append(pages, knowl.PageSnapshot{ID: id, Path: relative, Digest: digestBytes(content), Title: markdownTitle(content), Content: string(content), SourceRefs: markdownSourceRefs(content), SourceDocument: markdownSourceDocument(content), UpdatedAt: info.ModTime().UTC()})
 	}
 	return pages, nil
 }
@@ -89,5 +89,5 @@ func (workspace *Workspace) readControlPage(ctx context.Context, id knowl.PageID
 	if err != nil {
 		return knowl.PageSnapshot{}, fmt.Errorf("stat control page %q: %w", id, err)
 	}
-	return knowl.PageSnapshot{ID: id, Path: relative, Digest: digestBytes(content), Title: markdownTitle(content), Content: string(content), SourceRefs: markdownSourceRefs(content), UpdatedAt: info.ModTime().UTC()}, nil
+	return knowl.PageSnapshot{ID: id, Path: relative, Digest: digestBytes(content), Title: markdownTitle(content), Content: string(content), SourceRefs: markdownSourceRefs(content), SourceDocument: markdownSourceDocument(content), UpdatedAt: info.ModTime().UTC()}, nil
 }

@@ -21,6 +21,10 @@ func markdownSourceRefs(content []byte) []string {
 	return knowlwiki.SourceRefs(string(content))
 }
 
+func markdownSourceDocument(content []byte) *knowl.SourceDocument {
+	return knowlwiki.SourceDocument(string(content))
+}
+
 func markdownLinks(from knowl.PageID, content []byte) []knowl.LinkReference {
 	return knowlwiki.Links(from, string(content))
 }

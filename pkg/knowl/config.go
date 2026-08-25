@@ -22,6 +22,7 @@ const (
 type Config struct {
 	Workspace     string
 	Scope         domain.ScopeRef
+	Sources       []domain.Source
 	StoreDriver   string
 	StorePath     string
 	PostgresDSN   string
@@ -64,6 +65,10 @@ func (config Config) normalized() (Config, error) {
 		return Config{}, fmt.Errorf("resolve workspace: %w", err)
 	}
 	config.Workspace = filepath.Clean(workspace)
+	config.Sources, err = normalizeSources(config.Workspace, "", config.Sources)
+	if err != nil {
+		return Config{}, err
+	}
 	if strings.TrimSpace(string(config.Scope)) == "" {
 		config.Scope = DefaultScope
 	}

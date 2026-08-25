@@ -73,11 +73,15 @@ type ErrorResponse struct {
 
 // EvidenceItem defines model for EvidenceItem.
 type EvidenceItem struct {
+	DocumentId *string   `json:"document_id,omitempty"`
 	PageId     string    `json:"page_id"`
+	Revision   *string   `json:"revision,omitempty"`
 	Snippet    string    `json:"snippet"`
+	SourceId   *string   `json:"source_id,omitempty"`
 	SourceRefs *[]string `json:"source_refs,omitempty"`
 	Title      string    `json:"title"`
 	Untrusted  bool      `json:"untrusted"`
+	Uri        *string   `json:"uri,omitempty"`
 }
 
 // Failure defines model for Failure.
@@ -151,6 +155,9 @@ type OperationID = string
 // RetrieveQuery defines model for RetrieveQuery.
 type RetrieveQuery = string
 
+// RetrieveSource defines model for RetrieveSource.
+type RetrieveSource = []string
+
 // JSONBodyBadRequest defines model for JSONBodyBadRequest.
 type JSONBodyBadRequest = ErrorResponse
 
@@ -179,6 +186,9 @@ type UnavailableError = ErrorResponse
 type RetrieveKnowledgeParams struct {
 	// Query Free-text retrieval query.
 	Query RetrieveQuery `form:"query" json:"query"`
+
+	// Source Optional repeatable source identity filter. Empty means all sources and curated pages.
+	Source *RetrieveSource `form:"source,omitempty" json:"source,omitempty"`
 }
 
 // IngestKnowledgeJSONRequestBody defines body for IngestKnowledge for application/json ContentType.
@@ -317,6 +327,14 @@ func (siw *ServerInterfaceWrapper) RetrieveKnowledge(w http.ResponseWriter, r *h
 	err = runtime.BindQueryParameter("form", true, true, "query", r.URL.Query(), &params.Query)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "query", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "source" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "source", r.URL.Query(), &params.Source)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
 		return
 	}
 

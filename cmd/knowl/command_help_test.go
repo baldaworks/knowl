@@ -141,7 +141,7 @@ func TestImplementedWorkflowHelpDescribesCLIInputs(t *testing.T) {
 			wantParts: []string{
 				"<path>",
 				"fresh Knowl workspace",
-				"wiki/notes/**",
+				"wiki/sources/bootstrap-wiki/**",
 			},
 		},
 		{
@@ -224,6 +224,12 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 			cmd:       newOperationCommand(),
 			wantShort: "Read one durable operation status",
 			wantSubs:  nil,
+		},
+		{
+			name:      sourceCommandName,
+			cmd:       newSourceCommand(),
+			wantShort: "Inspect and synchronize configured knowledge sources",
+			wantSubs:  []string{sourceListCommandName, sourceSyncCommandName, sourceStatusCommandName},
 		},
 	}
 

@@ -18,6 +18,7 @@ type projectionChecker interface {
 type operationalStore struct {
 	operations app.OperationStore
 	index      app.SearchIndex
+	sources    app.SourceStateStore
 	closer     io.Closer
 	checker    projectionChecker
 }
@@ -32,6 +33,7 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 		return operationalStore{
 			operations: store,
 			index:      store,
+			sources:    store,
 			closer:     store,
 			checker:    store,
 		}, nil
@@ -43,6 +45,7 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 		return operationalStore{
 			operations: store,
 			index:      store,
+			sources:    store,
 			closer:     store,
 			checker:    store,
 		}, nil

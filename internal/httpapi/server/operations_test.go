@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,13 @@ import (
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
+)
+
+const (
+	httpTestScope       = "local"
+	httpTestEngineering = "engineering"
+	httpTestOperations  = "operations"
+	httpTransportQuery  = "transportbeacon"
 )
 
 func TestHTTPIngestWakesNewAndNonTerminalReplayOnly(t *testing.T) {
@@ -31,7 +39,7 @@ func TestHTTPIngestWakesNewAndNonTerminalReplayOnly(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	schema, err := workspace.Schema(ctx, "local")
+	schema, err := workspace.Schema(ctx, httpTestScope)
 	if err != nil {
 		t.Fatalf("read schema: %v", err)
 	}
@@ -52,7 +60,7 @@ func TestHTTPIngestWakesNewAndNonTerminalReplayOnly(t *testing.T) {
 		t.Fatalf("new query service: %v", err)
 	}
 	waker := &httpRecordingWaker{}
-	handler := NewHandler(Dependencies{Scope: "local", Ingest: ingest, Query: query, Waker: waker})
+	handler := NewHandler(Dependencies{Scope: httpTestScope, Ingest: ingest, Query: query, Waker: waker})
 	body := []byte(`{"content":"source","origin":"source-1","idempotency_key":"1"}`)
 
 	first := postIngest(t, handler, body)
@@ -67,7 +75,7 @@ func TestHTTPIngestWakesNewAndNonTerminalReplayOnly(t *testing.T) {
 		t.Fatalf("HTTP transport invoked maintainer %d times", maintainer.Calls())
 	}
 
-	claim, err := store.ClaimReady(ctx, "local", domain.WorkLease{Token: "test-worker", ExpiresAt: time.Now().Add(time.Minute)})
+	claim, err := store.ClaimReady(ctx, httpTestScope, domain.WorkLease{Token: "test-worker", ExpiresAt: time.Now().Add(time.Minute)})
 	if err != nil {
 		t.Fatalf("claim operation: %v", err)
 	}
@@ -81,6 +89,66 @@ func TestHTTPIngestWakesNewAndNonTerminalReplayOnly(t *testing.T) {
 	if ids := waker.IDs(); len(ids) != 2 {
 		t.Fatalf("terminal replay emitted wake: %#v", ids)
 	}
+}
+
+func TestHTTPRetrieveBindsRepeatableSourceFilterAndMapsEvidence(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.Open(ctx, filepath.Join(workspace.Root(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Rebuild(ctx, httpTransportSearchSnapshot()); err != nil {
+		t.Fatal(err)
+	}
+	ingest, err := app.NewIngestService(workspace, store, store, &httpCountingMaintainer{}, app.IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := app.NewQueryService(workspace, store, store, nil, app.QueryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(Dependencies{Scope: httpTestScope, Ingest: ingest, Query: query, Waker: &httpRecordingWaker{}})
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/retrieve?query=transportbeacon&source=operations&source=engineering", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("retrieve status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var result httpRetrieveResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Evidence) != 2 || result.Evidence[0].SourceID != httpTestEngineering || result.Evidence[1].SourceID != httpTestOperations || result.Evidence[0].DocumentID != "shared.md" || result.Evidence[0].Revision != "revision-1" || result.Evidence[0].URI == "" {
+		t.Fatalf("filtered HTTP evidence = %#v", result.Evidence)
+	}
+
+	invalid := httptest.NewRequest(http.MethodGet, "/v1/retrieve?query=transportbeacon&source=Engineering", nil)
+	invalidResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest || !strings.Contains(invalidResponse.Body.String(), `"error":"invalid_source_filter"`) {
+		t.Fatalf("invalid filter response = %d, %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
+func httpTransportSearchSnapshot() domain.WorkspaceSnapshot {
+	document := func(sourceID domain.SourceID) *domain.SourceDocument {
+		return &domain.SourceDocument{SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md"}
+	}
+	return domain.WorkspaceSnapshot{Scope: httpTestScope, Pages: []domain.PageSnapshot{
+		{ID: "curated", Path: "wiki/curated.md", Title: "Transportbeacon Curated", Content: httpTransportQuery, Digest: "curated"},
+		{ID: httpTestEngineering, Path: "wiki/sources/engineering/shared.md", Title: "Transportbeacon Engineering", Content: httpTransportQuery, Digest: httpTestEngineering, SourceDocument: document(httpTestEngineering)},
+		{ID: httpTestOperations, Path: "wiki/sources/operations/shared.md", Title: "Transportbeacon Operations", Content: httpTransportQuery, Digest: httpTestOperations, SourceDocument: document(httpTestOperations)},
+	}}
 }
 
 func postIngest(t *testing.T, handler http.Handler, body []byte) httpIngestResponse {

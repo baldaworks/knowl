@@ -3,23 +3,39 @@ package mcp
 const (
 	schemaTypeKey       = "type"
 	schemaStringType    = "string"
+	schemaObjectType    = "object"
+	schemaPropertiesKey = "properties"
 	inlineSourceAdapter = "inline"
 )
 
 func objectSchema(required string) map[string]any {
 	return map[string]any{
-		schemaTypeKey: "object",
+		schemaTypeKey: schemaObjectType,
 		"required":    []string{required},
-		"properties": map[string]any{
+		schemaPropertiesKey: map[string]any{
 			required: map[string]any{schemaTypeKey: schemaStringType},
+		},
+	}
+}
+
+func retrieveSchema() map[string]any {
+	return map[string]any{
+		schemaTypeKey: schemaObjectType,
+		"required":    []string{"query"},
+		schemaPropertiesKey: map[string]any{
+			"query": map[string]any{schemaTypeKey: schemaStringType},
+			"sources": map[string]any{
+				schemaTypeKey: "array",
+				"items":       map[string]any{schemaTypeKey: schemaStringType},
+			},
 		},
 	}
 }
 
 func ingestSchema() map[string]any {
 	return map[string]any{
-		schemaTypeKey: "object",
-		"properties": map[string]any{
+		schemaTypeKey: schemaObjectType,
+		schemaPropertiesKey: map[string]any{
 			"content":         map[string]any{schemaTypeKey: schemaStringType},
 			"uri":             map[string]any{schemaTypeKey: schemaStringType},
 			"media_type":      map[string]any{schemaTypeKey: schemaStringType},

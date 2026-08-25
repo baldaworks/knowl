@@ -1,0 +1,41 @@
+runtime:
+  providers:
+    codex:
+      type: codex_acp
+      codex_acp:
+        model: gpt-5-codex
+
+knowl:
+  provider: codex
+  workspace:
+    path: /var/lib/knowl/knowledge
+  sources:
+    - id: engineering
+      type: filesystem
+      enabled: true
+      filesystem:
+        root: /sources/engineering
+        include: ["**/*.md"]
+        flavor: obsidian
+        uri_base: https://wiki.example.test/engineering
+      sync:
+        on_start: true
+        interval: 1m
+        retry_initial: 2s
+        retry_maximum: 30s
+    - id: operations
+      type: filesystem
+      enabled: true
+      filesystem:
+        root: /sources/operations
+        include: ["runbooks/**/*.md"]
+        flavor: markdown
+        uri_base: https://wiki.example.test/operations
+      sync:
+        on_start: false
+        interval: 5m
+        retry_initial: 5s
+        retry_maximum: 1m
+  scope: local
+  server:
+    listen_addr: 127.0.0.1:8080

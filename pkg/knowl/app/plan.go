@@ -7,9 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -20,6 +21,8 @@ var (
 	ErrForbiddenEdit     = errors.New("edit plan targets a forbidden path")
 	ErrPlanLimitExceeded = errors.New("edit plan exceeds a limit")
 )
+
+const maxEditPathBytes = 2048
 
 // PlanLimits bounds model output before it reaches a content adapter.
 type PlanLimits struct {
@@ -115,11 +118,15 @@ func planOperationID(input knowl.MaintenanceInput) string {
 }
 
 func validateEditPath(raw string) (string, error) {
-	path := filepath.ToSlash(filepath.Clean(strings.TrimSpace(raw)))
-	if path == "." || filepath.IsAbs(path) || strings.HasPrefix(path, "../") || strings.Contains(path, "/../") || !strings.HasPrefix(path, "wiki/") || path == "wiki/log.md" || filepath.Ext(path) != ".md" {
+	if raw == "" || len(raw) > maxEditPathBytes || strings.TrimSpace(raw) != raw || !utf8.ValidString(raw) || strings.Contains(raw, "\\") || path.IsAbs(raw) || path.Clean(raw) != raw || !strings.HasPrefix(raw, "wiki/") || raw == "wiki/log.md" || path.Ext(raw) != ".md" || raw == "wiki/sources" || strings.HasPrefix(raw, "wiki/sources/") {
 		return "", fmt.Errorf("edit path %q: %w", raw, ErrForbiddenEdit)
 	}
-	return path, nil
+	for _, character := range raw {
+		if character < ' ' || character == 0x7f {
+			return "", fmt.Errorf("edit path %q: %w", raw, ErrForbiddenEdit)
+		}
+	}
+	return raw, nil
 }
 
 func contextErr(ctx context.Context) error {
