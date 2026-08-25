@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
@@ -33,7 +34,14 @@ type stageError struct {
 }
 
 func (e *stageError) Error() string {
-	return fmt.Sprintf("source sync failed: %s", e.class)
+	message := fmt.Sprintf("source sync failed: %s", e.class)
+	var detailed interface{ SafeDetail() string }
+	if errors.As(e.cause, &detailed) {
+		if detail := strings.TrimSpace(detailed.SafeDetail()); detail != "" {
+			return message + ": " + detail
+		}
+	}
+	return message
 }
 
 func (e *stageError) Unwrap() error { return e.cause }

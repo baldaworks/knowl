@@ -15,8 +15,27 @@ func sourceRefKey(source knowl.AcceptedSource) string {
 	return source.Source.Adapter + ":" + source.Source.ID + "@" + source.Version.Version
 }
 
+type contentValidationError struct {
+	target string
+	rule   string
+}
+
+func (err *contentValidationError) Error() string {
+	return err.SafeDetail() + ": " + ErrContentInvalid.Error()
+}
+
+func (err *contentValidationError) Unwrap() error { return ErrContentInvalid }
+
+// SafeDetail exposes only the validated canonical target and stable rule. It
+// deliberately excludes source content, absolute workspace paths, and adapter
+// errors so operator-facing staging failures remain useful without leaking
+// untrusted data.
+func (err *contentValidationError) SafeDetail() string {
+	return fmt.Sprintf("content validation failed for %q (%s)", err.target, err.rule)
+}
+
 func contentInvalidError(target, rule string) error {
-	return fmt.Errorf("content validation failed for %q (%s): %w", target, rule, ErrContentInvalid)
+	return &contentValidationError{target: target, rule: rule}
 }
 
 func digestBytes(content []byte) string {

@@ -102,6 +102,10 @@ func MarkdownTargets(content string) ([]string, bool) {
 		if separator := strings.IndexAny(target, "|#"); separator >= 0 {
 			target = target[:separator]
 		}
+		if isNavigationDirective(target) {
+			offset = start + end + 2
+			continue
+		}
 		target = NormalizePageTarget(target)
 		if target != "" {
 			targets = append(targets, target)
@@ -109,6 +113,15 @@ func MarkdownTargets(content string) ([]string, bool) {
 		offset = start + end + 2
 	}
 	return targets, malformed
+}
+
+func isNavigationDirective(target string) bool {
+	switch strings.TrimSpace(target) {
+	case "_TOC_", "_TOSP_":
+		return true
+	default:
+		return false
+	}
 }
 
 // IndexTargets extracts both wiki links and bare list-item targets from index content.

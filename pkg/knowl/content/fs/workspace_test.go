@@ -61,6 +61,31 @@ func TestWorkspaceInitAcceptsImmutableSourceAndReplaysIt(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAcceptsEmptyImmutableSource(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	emptyDigest := sha256.Sum256(nil)
+	accepted, err := workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
+		Scope:     testScope,
+		Source:    knowl.SourceRef{Adapter: testFixtureAdapter, ID: "empty-navigation.md"},
+		Version:   knowl.SourceVersion{Version: hex.EncodeToString(emptyDigest[:]), Digest: hex.EncodeToString(emptyDigest[:])},
+		MediaType: "text/markdown",
+		Content:   []byte{},
+	})
+	if err != nil {
+		t.Fatalf("accept empty source: %v", err)
+	}
+	content, err := workspace.ReadSource(context.Background(), accepted, knowl.ReadLimits{})
+	if err != nil || len(content) != 0 {
+		t.Fatalf("read empty source = %q, %v", content, err)
+	}
+}
+
 func TestWorkspaceReadsAcceptedSourceWithBoundedDigest(t *testing.T) {
 	workspace, err := New(t.TempDir())
 	if err != nil {

@@ -89,7 +89,7 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 	if err := contextErr(ctx); err != nil {
 		return knowl.AcceptedSource{}, err
 	}
-	if strings.TrimSpace(string(envelope.Scope)) == "" || strings.TrimSpace(envelope.Source.Adapter) == "" || strings.TrimSpace(envelope.Source.ID) == "" || strings.TrimSpace(envelope.Version.Version) == "" || len(envelope.Content) == 0 || len(envelope.Content) > workspace.maxSourceBytes {
+	if strings.TrimSpace(string(envelope.Scope)) == "" || strings.TrimSpace(envelope.Source.Adapter) == "" || strings.TrimSpace(envelope.Source.ID) == "" || strings.TrimSpace(envelope.Version.Version) == "" || len(envelope.Content) > workspace.maxSourceBytes {
 		return knowl.AcceptedSource{}, ErrInvalidSource
 	}
 	digest := digestBytes(envelope.Content)

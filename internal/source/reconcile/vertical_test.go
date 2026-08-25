@@ -356,6 +356,54 @@ func TestVerticalCatalogOnlyRerenderAndEqualPaths(t *testing.T) {
 	assertVerticalSourceIDs(t, env, []knowl.SourceID{"ghost"})
 }
 
+func TestVerticalAzureWikiEmptyNavigationAndUnicodePaths(t *testing.T) {
+	ctx := context.Background()
+	env := newVerticalEnv(t)
+	root := t.TempDir()
+	writeVerticalFile(t, root, "Архитектура.md", "")
+	writeVerticalFile(t, root, "Архитектура/Обзор.md", "# Обзор\n\n[[_TOC_]]\n[[_TOSP_]]\nСм. [[Архитектура]].\n")
+	source := env.source("azure-wiki", root, knowl.SourceFlavorObsidian)
+
+	result, err := env.service.SyncSource(ctx, env.scope, source)
+	requireSyncSuccess(t, result, err)
+	if !result.Changed {
+		t.Fatal("initial Azure Wiki synchronization reported no change")
+	}
+	placeholder, err := env.state.DocumentState(ctx, env.scope, source.ID, "Архитектура.md")
+	if err != nil {
+		t.Fatalf("empty navigation state: %v", err)
+	}
+	raw, err := env.workspace.ReadSource(ctx, placeholder.AcceptedSource, knowl.ReadLimits{})
+	if err != nil || len(raw) != 0 {
+		t.Fatalf("empty navigation raw source = %q, %v", raw, err)
+	}
+	mirror, err := os.ReadFile(filepath.Join(env.workspace.Root(), "wiki", "sources", string(source.ID), "Архитектура", "Обзор.md"))
+	if err != nil {
+		t.Fatalf("read Unicode mirror: %v", err)
+	}
+	if !strings.Contains(string(mirror), "[[sources/azure-wiki/Архитектура]]") {
+		t.Fatalf("Azure navigation link was not resolved: %s", mirror)
+	}
+	if !strings.Contains(string(mirror), "[[_TOC_]]") || !strings.Contains(string(mirror), "[[_TOSP_]]") {
+		t.Fatalf("Azure navigation directives were not preserved: %s", mirror)
+	}
+}
+
+func TestVerticalStagingFailureReportsSafePathAndRule(t *testing.T) {
+	env := newVerticalEnv(t)
+	root := t.TempDir()
+	writeVerticalFile(t, root, "Раздел/Страница.md", "# Страница\n\n[[Отсутствует]]\n")
+	source := env.source("azure-wiki", root, knowl.SourceFlavorMarkdown)
+
+	_, err := env.service.SyncSource(context.Background(), env.scope, source)
+	if err == nil || !strings.Contains(err.Error(), "source sync failed: staging: content validation failed for \"wiki/sources/azure-wiki/Раздел/Страница.md\" (link.broken)") {
+		t.Fatalf("staging error = %v, want safe target and validation rule", err)
+	}
+	if strings.Contains(err.Error(), root) {
+		t.Fatalf("staging error disclosed absolute source root: %v", err)
+	}
+}
+
 func assertVerticalSourceIDs(t *testing.T, env *verticalEnv, sources []knowl.SourceID, want ...knowl.SourceID) {
 	t.Helper()
 	pages, err := env.search.Search(context.Background(), env.scope, "equalpathbeacon", knowl.ReadLimits{Pages: 10}, sources)

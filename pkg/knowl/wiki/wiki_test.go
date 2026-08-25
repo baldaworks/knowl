@@ -93,6 +93,17 @@ func TestIndexTargetsIncludeBareListItems(t *testing.T) {
 	}
 }
 
+func TestMarkdownTargetsIgnoreAzureWikiNavigationDirectives(t *testing.T) {
+	targets, malformed := MarkdownTargets("[[_TOC_]]\n[[_TOSP_]]\n[[Архитектура/Обзор]]\n")
+	if malformed {
+		t.Fatal("MarkdownTargets() malformed = true, want false")
+	}
+	want := []string{"Архитектура/Обзор"}
+	if !reflect.DeepEqual(targets, want) {
+		t.Fatalf("MarkdownTargets() = %#v, want %#v", targets, want)
+	}
+}
+
 func TestPageIDFromPath(t *testing.T) {
 	tests := []struct {
 		path string
