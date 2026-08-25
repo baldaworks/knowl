@@ -39,6 +39,27 @@ const (
 	IngestResultStatusRunning   IngestResultStatus = "running"
 )
 
+// Defines values for OKFMetadataEffectiveStatus.
+const (
+	OKFMetadataEffectiveStatusDeprecated OKFMetadataEffectiveStatus = "deprecated"
+	OKFMetadataEffectiveStatusDraft      OKFMetadataEffectiveStatus = "draft"
+	OKFMetadataEffectiveStatusStable     OKFMetadataEffectiveStatus = "stable"
+)
+
+// Defines values for OKFMetadataStatus.
+const (
+	OKFMetadataStatusDeprecated OKFMetadataStatus = "deprecated"
+	OKFMetadataStatusDraft      OKFMetadataStatus = "draft"
+	OKFMetadataStatusStable     OKFMetadataStatus = "stable"
+)
+
+// Defines values for OKFMetadataTrustTier.
+const (
+	HumanReviewed    OKFMetadataTrustTier = "human-reviewed"
+	MachineConfirmed OKFMetadataTrustTier = "machine-confirmed"
+	Unverified       OKFMetadataTrustTier = "unverified"
+)
+
 // Defines values for OperationResultStatus.
 const (
 	OperationResultStatusCompleted OperationResultStatus = "completed"
@@ -73,15 +94,16 @@ type ErrorResponse struct {
 
 // EvidenceItem defines model for EvidenceItem.
 type EvidenceItem struct {
-	DocumentId *string   `json:"document_id,omitempty"`
-	PageId     string    `json:"page_id"`
-	Revision   *string   `json:"revision,omitempty"`
-	Snippet    string    `json:"snippet"`
-	SourceId   *string   `json:"source_id,omitempty"`
-	SourceRefs *[]string `json:"source_refs,omitempty"`
-	Title      string    `json:"title"`
-	Untrusted  bool      `json:"untrusted"`
-	Uri        *string   `json:"uri,omitempty"`
+	DocumentId *string      `json:"document_id,omitempty"`
+	Okf        *OKFMetadata `json:"okf,omitempty"`
+	PageId     string       `json:"page_id"`
+	Revision   *string      `json:"revision,omitempty"`
+	Snippet    string       `json:"snippet"`
+	SourceId   *string      `json:"source_id,omitempty"`
+	SourceRefs *[]string    `json:"source_refs,omitempty"`
+	Title      string       `json:"title"`
+	Untrusted  bool         `json:"untrusted"`
+	Uri        *string      `json:"uri,omitempty"`
 }
 
 // Failure defines model for Failure.
@@ -119,6 +141,96 @@ type IngestResult struct {
 
 // IngestResultStatus defines model for IngestResult.Status.
 type IngestResultStatus string
+
+// OKFAttester defines model for OKFAttester.
+type OKFAttester struct {
+	Extensions *OKFExtensions `json:"extensions,omitempty"`
+	Resource   string         `json:"resource"`
+}
+
+// OKFExecutor defines model for OKFExecutor.
+type OKFExecutor struct {
+	Extensions *OKFExtensions `json:"extensions,omitempty"`
+	Receipt    *[]string      `json:"receipt,omitempty"`
+	Resource   string         `json:"resource"`
+}
+
+// OKFExtensions defines model for OKFExtensions.
+type OKFExtensions map[string]interface{}
+
+// OKFGeneration defines model for OKFGeneration.
+type OKFGeneration struct {
+	At         *time.Time     `json:"at,omitempty"`
+	By         string         `json:"by"`
+	Extensions *OKFExtensions `json:"extensions,omitempty"`
+}
+
+// OKFMetadata defines model for OKFMetadata.
+type OKFMetadata struct {
+	Attester        *OKFAttester                `json:"attester,omitempty"`
+	Computation     *string                     `json:"computation,omitempty"`
+	Description     *string                     `json:"description,omitempty"`
+	EffectiveStatus *OKFMetadataEffectiveStatus `json:"effective_status,omitempty"`
+	Executor        *OKFExecutor                `json:"executor,omitempty"`
+	Extensions      *OKFExtensions              `json:"extensions,omitempty"`
+	Generated       *OKFGeneration              `json:"generated,omitempty"`
+	Parameters      *[]OKFParameter             `json:"parameters,omitempty"`
+	Resource        *string                     `json:"resource,omitempty"`
+	Runtime         *string                     `json:"runtime,omitempty"`
+	Sources         *[]OKFSource                `json:"sources,omitempty"`
+	Stale           *bool                       `json:"stale,omitempty"`
+	StaleAfter      *time.Time                  `json:"stale_after,omitempty"`
+	Status          *OKFMetadataStatus          `json:"status,omitempty"`
+	Tags            *[]string                   `json:"tags,omitempty"`
+	Title           *string                     `json:"title,omitempty"`
+	TrustTier       *OKFMetadataTrustTier       `json:"trust_tier,omitempty"`
+	Type            string                      `json:"type"`
+	UsageWindow     *OKFUsageWindow             `json:"usage_window,omitempty"`
+	Verified        *[]OKFVerification          `json:"verified,omitempty"`
+}
+
+// OKFMetadataEffectiveStatus defines model for OKFMetadata.EffectiveStatus.
+type OKFMetadataEffectiveStatus string
+
+// OKFMetadataStatus defines model for OKFMetadata.Status.
+type OKFMetadataStatus string
+
+// OKFMetadataTrustTier defines model for OKFMetadata.TrustTier.
+type OKFMetadataTrustTier string
+
+// OKFParameter defines model for OKFParameter.
+type OKFParameter struct {
+	Extensions *OKFExtensions `json:"extensions,omitempty"`
+	Name       string         `json:"name"`
+	Required   bool           `json:"required"`
+	Type       string         `json:"type"`
+}
+
+// OKFSource defines model for OKFSource.
+type OKFSource struct {
+	Author       *string         `json:"author,omitempty"`
+	Extensions   *OKFExtensions  `json:"extensions,omitempty"`
+	Id           *string         `json:"id,omitempty"`
+	LastModified *time.Time      `json:"last_modified,omitempty"`
+	Resource     string          `json:"resource"`
+	Title        *string         `json:"title,omitempty"`
+	UsageCount   *uint64         `json:"usage_count,omitempty"`
+	UsageWindow  *OKFUsageWindow `json:"usage_window,omitempty"`
+}
+
+// OKFUsageWindow defines model for OKFUsageWindow.
+type OKFUsageWindow struct {
+	Extensions *OKFExtensions `json:"extensions,omitempty"`
+	From       time.Time      `json:"from"`
+	To         time.Time      `json:"to"`
+}
+
+// OKFVerification defines model for OKFVerification.
+type OKFVerification struct {
+	At         time.Time      `json:"at"`
+	By         string         `json:"by"`
+	Extensions *OKFExtensions `json:"extensions,omitempty"`
+}
 
 // OperationResult defines model for OperationResult.
 type OperationResult struct {

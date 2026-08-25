@@ -327,7 +327,7 @@ func TestHostRestartResumesAcceptedOperationThroughHTTPAndMCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read provenance log: %v", err)
 	}
-	if count := bytes.Count(logContent, []byte(accepted.OperationID)); count != 1 {
+	if count := bytes.Count(logContent, []byte(strings.ReplaceAll(string(accepted.OperationID), "-", `\u002d`))); count != 1 {
 		t.Fatalf("resumed operation log entries = %d, want one", count)
 	}
 }

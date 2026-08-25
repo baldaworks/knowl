@@ -4,12 +4,15 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 const (
-	pageOneID = "entities/one"
-	pageTwoID = "entities/two"
+	pageOneID         = "entities/one"
+	pageTwoID         = "entities/two"
+	conceptLinkFromID = "sources/engineering/docs/one"
+	testReferenceType = "Reference"
 )
 
 func TestParseFrontmatterTrimsFields(t *testing.T) {
@@ -46,6 +49,24 @@ func TestParseFrontmatterCarriesOptionalSourceDocument(t *testing.T) {
 	}
 }
 
+func TestParseFrontmatterReadsNamespacedKnowlMetadata(t *testing.T) {
+	content := "---\ntype: Reference\ntitle: Auth\nknowl:\n  vendor: retained\n  id: sources/engineering/auth\n  source_refs: [raw:auth@1]\n  source_document:\n    source_id: engineering\n    document_id: architecture/auth.md\n    revision: revision-1\n    uri: https://wiki.example.test/auth\n---\n# Auth\n"
+	metadata, err := ParseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("ParseFrontmatter() error = %v", err)
+	}
+	if metadata.Legacy || metadata.ID != "sources/engineering/auth" || metadata.Type != testReferenceType || len(metadata.SourceRefs) != 1 || metadata.SourceDocument == nil {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+}
+
+func TestParseFrontmatterRejectsEnvelopeCollision(t *testing.T) {
+	content := "---\ntype: Reference\ntitle: Auth\nid: legacy\nknowl:\n  id: namespaced\n  source_refs: [raw:auth@1]\n---\n# Auth\n"
+	if _, err := ParseFrontmatter(content); err == nil {
+		t.Fatal("ParseFrontmatter() accepted ambiguous legacy and namespaced IDs")
+	}
+}
+
 func TestParseFrontmatterRejectsMalformedBlocks(t *testing.T) {
 	t.Run("missing opening", func(t *testing.T) {
 		if _, err := ParseFrontmatter("# no frontmatter\n"); err == nil {
@@ -64,6 +85,18 @@ func TestParseFrontmatterRejectsMalformedBlocks(t *testing.T) {
 	})
 }
 
+func TestBodyStripsOnlyCompleteLeadingFrontmatter(t *testing.T) {
+	content := "---\ntitle: Глоссарий-проекта\nsource_refs:\n  - raw:glossary@1\n---\n\nПолезный пользовательский текст.\n"
+	if got, want := Body(content), "Полезный пользовательский текст.\n"; got != want {
+		t.Fatalf("Body() = %q, want %q", got, want)
+	}
+	for _, unchanged := range []string{"# Heading\nBody\n", "---\ntitle: incomplete\n"} {
+		if got := Body(unchanged); got != unchanged {
+			t.Fatalf("Body(%q) = %q, want unchanged", unchanged, got)
+		}
+	}
+}
+
 func TestMarkdownTargetsAndLinksNormalizeAndDedupe(t *testing.T) {
 	content := "[[wiki/" + pageOneID + ".md|One]] [[" + pageTwoID + "#anchor]] [[" + pageOneID + "]] [[../bad]] [[ ]] [[broken"
 	targets, malformed := MarkdownTargets(content)
@@ -79,6 +112,29 @@ func TestMarkdownTargetsAndLinksNormalizeAndDedupe(t *testing.T) {
 		{From: "entities/source", To: pageTwoID, Relation: relationWiki},
 	}; !reflect.DeepEqual(links, want) {
 		t.Fatalf("Links() = %#v, want %#v", links, want)
+	}
+}
+
+func TestConceptLinksResolveRelativeCommonMarkAndIgnoreNonConcepts(t *testing.T) {
+	content := "[Two](../two.md) [Bundle root](/root.md) [Unicode](%D0%9E%D0%B1%D0%B7%D0%BE%D1%80.md#part) [External](https://example.test/page.md) [Asset](logo.png) [Anchor](#local) [Broken](../missing.md) [Reference][deep]\n\n[deep]: nested/deep.md \"title\"\n`[Code](../code.md)`\n```md\n[Fenced](../fenced.md)\n```\n"
+	links := ConceptLinks(conceptLinkFromID, content)
+	want := []knowl.LinkReference{
+		{From: conceptLinkFromID, To: "sources/engineering/two", Relation: relationOKF},
+		{From: conceptLinkFromID, To: "sources/engineering/root", Relation: relationOKF},
+		{From: conceptLinkFromID, To: "sources/engineering/docs/Обзор", Relation: relationOKF},
+		{From: conceptLinkFromID, To: "sources/engineering/missing", Relation: relationOKF},
+		{From: conceptLinkFromID, To: "sources/engineering/docs/nested/deep", Relation: relationOKF},
+	}
+	if !reflect.DeepEqual(links, want) {
+		t.Fatalf("ConceptLinks() = %#v, want %#v", links, want)
+	}
+}
+
+func TestConceptLinksResolveCuratedBundleRoot(t *testing.T) {
+	links := ConceptLinks("concepts/nested/one", "[Entity](/entities/two.md)")
+	want := []knowl.LinkReference{{From: "concepts/nested/one", To: "entities/two", Relation: relationOKF}}
+	if !reflect.DeepEqual(links, want) {
+		t.Fatalf("ConceptLinks() = %#v, want %#v", links, want)
 	}
 }
 
@@ -113,6 +169,8 @@ func TestPageIDFromPath(t *testing.T) {
 		{path: "wiki/" + pageOneID + ".md", want: pageOneID, ok: true},
 		{path: "wiki/index.md", ok: false},
 		{path: "wiki/log.md", ok: false},
+		{path: "wiki/nested/index.md", ok: false},
+		{path: "wiki/nested/log.md", ok: false},
 		{path: "schema.md", ok: false},
 		{path: "wiki/../one.md", ok: false},
 	}
@@ -121,5 +179,35 @@ func TestPageIDFromPath(t *testing.T) {
 		if got != tt.want || ok != tt.ok {
 			t.Fatalf("PageIDFromPath(%q) = (%q, %t), want (%q, %t)", tt.path, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestMigrateLegacyEnvelopePreservesUnknownExtensions(t *testing.T) {
+	metadata := okf.Metadata{Type: testReferenceType, Extensions: map[string]any{
+		ownedID: "concepts/one", ownedSourceRefs: []any{"raw:one@1"},
+		"custom": map[string]any{"retained": true}, "knowl": map[string]any{"future": "value"},
+	}}
+	migrated, changed, err := MigrateLegacyEnvelope(metadata)
+	if err != nil || !changed {
+		t.Fatalf("MigrateLegacyEnvelope() = %#v, %v, %v", migrated, changed, err)
+	}
+	if _, exists := migrated.Extensions["id"]; exists {
+		t.Fatal("flat ID survived migration")
+	}
+	knowlExtension, ok := migrated.Extensions["knowl"].(map[string]any)
+	if !ok || knowlExtension["id"] != "concepts/one" || knowlExtension["future"] != "value" || migrated.Extensions["custom"] == nil {
+		t.Fatalf("migrated extensions = %#v", migrated.Extensions)
+	}
+	if _, exists := metadata.Extensions["knowl"].(map[string]any)["id"]; exists {
+		t.Fatal("migration mutated input metadata")
+	}
+}
+
+func TestMigrateLegacyEnvelopeRejectsOwnedCollision(t *testing.T) {
+	metadata := okf.Metadata{Type: testReferenceType, Extensions: map[string]any{
+		ownedID: "flat", "knowl": map[string]any{ownedID: "namespaced"},
+	}}
+	if _, _, err := MigrateLegacyEnvelope(metadata); err == nil {
+		t.Fatal("MigrateLegacyEnvelope() error = nil")
 	}
 }

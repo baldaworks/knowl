@@ -18,7 +18,7 @@ knowl:
   #     filesystem:
   #       root: /sources/engineering
   #       include: ["**/*.md"]
-  #       flavor: obsidian
+  #       flavor: obsidian # markdown, obsidian, or okf
   #     sync:
   #       on_start: true
   #       interval: 1m

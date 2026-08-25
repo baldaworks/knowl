@@ -3,11 +3,23 @@ package fs
 import (
 	"strings"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
+func okfLimits(maxBytes int) okf.Limits {
+	limits := okf.DefaultLimits()
+	if maxBytes > 0 && maxBytes <= 64<<20 {
+		limits.MaxBytes = maxBytes
+	}
+	return limits
+}
+
 func markdownTitle(content []byte) string {
+	if metadata, err := knowlwiki.ParseFrontmatter(string(content)); err == nil && metadata.Title != "" {
+		return metadata.Title
+	}
 	for _, line := range strings.Split(string(content), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "# ") {
@@ -26,7 +38,8 @@ func markdownSourceDocument(content []byte) *knowl.SourceDocument {
 }
 
 func markdownLinks(from knowl.PageID, content []byte) []knowl.LinkReference {
-	return knowlwiki.Links(from, string(content))
+	links := knowlwiki.Links(from, string(content))
+	return append(links, knowlwiki.ConceptLinks(from, string(content))...)
 }
 
 func uniqueLinks(links []knowl.LinkReference) []knowl.LinkReference {

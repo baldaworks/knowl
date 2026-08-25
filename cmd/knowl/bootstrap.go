@@ -34,8 +34,8 @@ type bootstrapFlavor struct {
 func newBootstrapCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   bootstrapCommandName,
-		Short: "Bootstrap a Knowl workspace from an existing Markdown wiki or Obsidian vault",
-		Long: `Bootstrap reads an existing Markdown tree or Obsidian vault and creates a
+		Short: "Bootstrap a Knowl workspace from an existing Markdown, Obsidian, or OKF tree",
+		Long: `Bootstrap reads an existing Markdown tree, Obsidian vault, or OKF bundle and creates a
 normalized Knowl-owned workspace in the configured workspace path.
 
 The bootstrap command is a one-time adoption flow. It initializes the workspace
@@ -49,6 +49,11 @@ same engine for ongoing sync.`,
 			Name:     bootstrapWikiName,
 			SourceID: bootstrapWikiSourceID,
 			Flavor:   domain.SourceFlavorMarkdown,
+		}),
+		newBootstrapSourceCommand(bootstrapFlavor{
+			Name:     bootstrapOKFName,
+			SourceID: "bootstrap-okf",
+			Flavor:   domain.SourceFlavorOKF,
 		}),
 		newBootstrapSourceCommand(bootstrapFlavor{
 			Name:     bootstrapObsidianName,

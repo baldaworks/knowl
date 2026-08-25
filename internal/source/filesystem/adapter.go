@@ -214,7 +214,7 @@ func (adapter *Adapter) validateSource(source knowl.Source) (*knowl.FilesystemSo
 	}
 	config := source.Config.Filesystem
 	if !filepath.IsAbs(config.Root) || filepath.Clean(config.Root) != config.Root || len(config.Include) == 0 ||
-		(config.Flavor != knowl.SourceFlavorMarkdown && config.Flavor != knowl.SourceFlavorObsidian) {
+		(config.Flavor != knowl.SourceFlavorMarkdown && config.Flavor != knowl.SourceFlavorObsidian && config.Flavor != knowl.SourceFlavorOKF) {
 		return nil, nil, app.ErrSourceInvalid
 	}
 	if !validURIBase(config.URIBase) {

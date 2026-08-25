@@ -66,6 +66,18 @@ func TestPageSourceMetadataMigrationIsPostgresNative(t *testing.T) {
 	}
 }
 
+func TestOKFProjectionMigrationIsPostgresNative(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00005_okf_projection.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"ADD COLUMN format TEXT", "ADD COLUMN description TEXT", "ADD COLUMN okf_metadata JSONB", "coalesce(description", "DELETE FROM knowl_projection_state"} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("OKF projection migration missing %q", required)
+		}
+	}
+}
+
 func TestStoreContract(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("KNOWL_POSTGRES_DSN"))
 	if dsn == "" {
@@ -355,22 +367,19 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	if committedGeneration != "generation-1" {
 		t.Fatalf("preserved commit generation = %q", committedGeneration)
 	}
-	var pageTitle, pageBody, pageDigest string
-	var sourceRefs, sourceDocument []byte
+	var pageTitle, pageBody, pageDigest, pageFormat, pageDescription string
+	var sourceRefs, sourceDocument, metadata []byte
 	var sourceID sql.NullString
-	if err := migrated.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document FROM knowl_pages WHERE scope = $1 AND page_id = $2`, scope, "legacy-page").Scan(&pageTitle, &pageBody, &pageDigest, &sourceRefs, &sourceID, &sourceDocument); err != nil {
+	if err := migrated.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document, format, description, okf_metadata FROM knowl_pages WHERE scope = $1 AND page_id = $2`, scope, "legacy-page").Scan(&pageTitle, &pageBody, &pageDigest, &sourceRefs, &sourceID, &sourceDocument, &pageFormat, &pageDescription, &metadata); err != nil {
 		t.Fatalf("read preserved projection page: %v", err)
 	}
-	if pageTitle != "Legacy page" || pageBody != "preserved projection body" || pageDigest != "page-digest" || string(sourceRefs) != `["raw/legacy.json"]` || sourceID.Valid || len(sourceDocument) != 0 {
-		t.Fatalf("preserved projection page = %q %q %q %s %#v %s", pageTitle, pageBody, pageDigest, sourceRefs, sourceID, sourceDocument)
+	if pageTitle != "Legacy page" || pageBody != "preserved projection body" || pageDigest != "page-digest" || string(sourceRefs) != `["raw/legacy.json"]` || sourceID.Valid || len(sourceDocument) != 0 || pageFormat != "" || pageDescription != "" || len(metadata) != 0 {
+		t.Fatalf("preserved projection page = %q %q %q %s %#v %s %q %q %s", pageTitle, pageBody, pageDigest, sourceRefs, sourceID, sourceDocument, pageFormat, pageDescription, metadata)
 	}
 	var snapshotDigest string
 	var pageCount, linkCount int
-	if err := migrated.db.QueryRowContext(ctx, `SELECT snapshot_digest, page_count, link_count FROM knowl_projection_state WHERE scope = $1`, scope).Scan(&snapshotDigest, &pageCount, &linkCount); err != nil {
-		t.Fatalf("read preserved projection state: %v", err)
-	}
-	if snapshotDigest != "snapshot-v2" || pageCount != 1 || linkCount != 0 {
-		t.Fatalf("preserved projection state = %q %d %d", snapshotDigest, pageCount, linkCount)
+	if err := migrated.db.QueryRowContext(ctx, `SELECT snapshot_digest, page_count, link_count FROM knowl_projection_state WHERE scope = $1`, scope).Scan(&snapshotDigest, &pageCount, &linkCount); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("projection readiness after metadata migration = %v, want invalidated", err)
 	}
 	failures, err := migrated.DescriptorFailures(ctx, scope, 10)
 	if err != nil || len(failures) != 1 || failures[0] != applyingID {

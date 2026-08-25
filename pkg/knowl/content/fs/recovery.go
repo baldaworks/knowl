@@ -99,6 +99,8 @@ func (workspace *Workspace) Recover(ctx context.Context) ([]knowl.RecoveryResult
 				}); err != nil {
 					return nil, err
 				}
+			} else if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterMigration && !recoveryEntriesMatch(workspace.root, journal.Entries) {
+				return nil, fmt.Errorf("committed migration recovery diverged: %w", ErrWorkspaceInvalid)
 			}
 			results = append(results, knowl.RecoveryResult{OperationID: journal.OperationID, Action: recoveryCompleted})
 		default:
@@ -188,18 +190,25 @@ func (workspace *Workspace) preflightPreparedRecovery(journal recoveryJournal, j
 
 func validateRecoveryJournal(fileName string, journal recoveryJournal) (string, error) {
 	writer := manifestWriter(stageManifest{Writer: journal.Writer})
-	if (writer != stageWriterMaintainer && writer != stageWriterSource) ||
+	if (writer != stageWriterMaintainer && writer != stageWriterSource && writer != stageWriterMigration) ||
 		(journal.State != recoveryPrepared && journal.State != recoveryCommitted) || len(journal.Entries) == 0 || len(journal.Entries) > maxRecoveryEntries {
 		return "", fmt.Errorf("invalid recovery journal: %w", ErrWorkspaceInvalid)
 	}
 	recoveryKey := journal.OperationID
-	if writer == stageWriterSource {
+	switch writer {
+	case stageWriterSource:
 		if app.ValidateSyncRunID(knowl.SyncRunID(journal.OperationID)) != nil || app.ValidateSourceID(knowl.SourceID(journal.SourceID)) != nil || strings.TrimSpace(journal.Scope) == "" || !validSHA256(journal.Generation) || len(journal.Files) == 0 {
 			return "", fmt.Errorf("invalid source recovery journal: %w", ErrWorkspaceInvalid)
 		}
 		recoveryKey = sourceRecoveryKey(journal.Scope, journal.OperationID)
-	} else if strings.TrimSpace(journal.OperationID) == "" || journal.SourceID != "" {
-		return "", fmt.Errorf("invalid maintainer recovery identity: %w", ErrWorkspaceInvalid)
+	case stageWriterMigration:
+		if journal.OperationID != migrationOperationID || journal.SourceID != "" || journal.Scope != "" {
+			return "", fmt.Errorf("invalid migration recovery identity: %w", ErrWorkspaceInvalid)
+		}
+	default:
+		if strings.TrimSpace(journal.OperationID) == "" || journal.SourceID != "" {
+			return "", fmt.Errorf("invalid maintainer recovery identity: %w", ErrWorkspaceInvalid)
+		}
 	}
 	if fileName != token(recoveryKey)+".yaml" {
 		return "", fmt.Errorf("recovery journal identity mismatch: %w", ErrWorkspaceInvalid)

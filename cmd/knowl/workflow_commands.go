@@ -49,9 +49,10 @@ func newJSONBodyWorkflowCommand[T any](use, short, requestPath string) *cobra.Co
 				return fmt.Errorf("decode %s input: %w", cmd.CommandPath(), err)
 			}
 			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
-				Method: http.MethodPost,
-				Path:   requestPath,
-				Body:   normalized,
+				Method:    http.MethodPost,
+				Path:      requestPath,
+				Body:      normalized,
+				StartHost: true,
 			})
 		},
 	}

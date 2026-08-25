@@ -28,6 +28,48 @@ const (
 	runtimeZetaSourceID  = domain.SourceID("zeta")
 )
 
+func TestPrepareReadOnlyDoesNotRunOnStartSourceSync(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &runtimeSourceAdapter{}
+	source := runtimeFilesystemSource(runtimeAlphaSourceID, t.TempDir(), true)
+	source.Sync = domain.SourceSyncPolicy{OnStart: true}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.Sources = []domain.Source{source}
+	host, err := knowl.New(ctx, knowl.Options{
+		Config: config,
+		SourceAdapters: map[domain.SourceType]app.SourceAdapter{
+			domain.SourceTypeFilesystem: adapter,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.PrepareReadOnly(); err != nil {
+		t.Fatalf("PrepareReadOnly() error: %v", err)
+	}
+	body, status, err := doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=absentbeacon", nil)
+	if err != nil || status != http.StatusOK || !strings.Contains(string(body), `"evidence":[]`) {
+		t.Fatalf("read-only retrieve = %d, %v, %s", status, err, body)
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := host.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop() error: %v", err)
+	}
+	if lists, fetches := adapter.calls(); lists != 0 || fetches != 0 {
+		t.Fatalf("read-only host source calls = (%d lists, %d fetches), want zero", lists, fetches)
+	}
+}
+
 func TestProviderFreeSourceRuntimeVerticalAndFailureIsolation(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
@@ -204,7 +246,7 @@ func TestProductionHostMultiSourceLifecycleAcceptance(t *testing.T) {
 	if err := workspace.Init(); err != nil {
 		t.Fatal(err)
 	}
-	const curatedIndex = "# Curated index\n\nKeep this exact content.\n"
+	const curatedIndex = "---\nokf_version: \"0.2\"\n---\n# Curated Index\n"
 	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "index.md"), []byte(curatedIndex), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -37,32 +37,32 @@ func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, 
 	case knowl.SyncStatusPrepared:
 		generation, committedFiles, err = service.commitPrepared(ctx, scope, sourceID, input)
 		if err != nil {
-			return Result{SourceID: sourceID, Run: service.refreshRun(ctx, scope, run), Changed: input.changed}, err
+			return sagaResult(sourceID, service.refreshRun(ctx, scope, run), input), err
 		}
 	case knowl.SyncStatusContentCommitted, knowl.SyncStatusProjected:
 		generation = run.ContentGeneration
 		if strings.TrimSpace(generation) == "" {
-			return Result{SourceID: sourceID, Run: run, Changed: input.changed}, failStage(classState, errors.New("committed run lost its generation"))
+			return sagaResult(sourceID, run, input), failStage(classState, errors.New("committed run lost its generation"))
 		}
 	default:
-		return Result{SourceID: sourceID, Run: run, Changed: input.changed}, failStage(classState, app.ErrSyncStateTransition)
+		return sagaResult(sourceID, run, input), failStage(classState, app.ErrSyncStateTransition)
 	}
 	snapshot, err := service.content.Snapshot(ctx, scope)
 	if err != nil {
-		return Result{SourceID: sourceID, Run: service.refreshRun(ctx, scope, run), Changed: input.changed}, failStage(classProjection, err)
+		return sagaResult(sourceID, service.refreshRun(ctx, scope, run), input), failStage(classProjection, err)
 	}
 	commit := knowl.ContentCommit{
 		OperationID: string(run.ID), Generation: generation,
 		Files: committedFiles, Snapshot: snapshot,
 	}
 	if err := service.search.Project(ctx, commit); err != nil {
-		return Result{SourceID: sourceID, Run: service.refreshRun(ctx, scope, run), Changed: input.changed}, failStage(classProjection, err)
+		return sagaResult(sourceID, service.refreshRun(ctx, scope, run), input), failStage(classProjection, err)
 	}
 	if err := service.markProjected(ctx, app.SyncGeneration{
 		RunID: run.ID, Scope: scope, SourceID: sourceID,
 		Generation: generation, UpdatedAt: service.options.Clock(),
 	}); err != nil {
-		return Result{SourceID: sourceID, Run: service.refreshRun(ctx, scope, run), Changed: input.changed}, err
+		return sagaResult(sourceID, service.refreshRun(ctx, scope, run), input), err
 	}
 	stateCtx, cancel := service.durableContext(ctx)
 	defer cancel()
@@ -73,9 +73,16 @@ func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, 
 		FinalizedAt: service.options.Clock(),
 	})
 	if err != nil {
-		return Result{SourceID: sourceID, Run: service.refreshRun(ctx, scope, run), Changed: input.changed}, failStage(classState, err)
+		return sagaResult(sourceID, service.refreshRun(ctx, scope, run), input), failStage(classState, err)
 	}
-	return Result{SourceID: sourceID, Run: finalized, Changed: input.changed}, nil
+	return sagaResult(sourceID, finalized, input), nil
+}
+
+func sagaResult(sourceID knowl.SourceID, run knowl.SyncRun, input sagaInput) Result {
+	return Result{
+		SourceID: sourceID, Run: run, Changed: input.changed,
+		Diagnostics: append([]knowl.SourceDiagnostic(nil), input.diagnostics...),
+	}
 }
 
 // refreshRun re-reads the durable run row so error results expose the exact

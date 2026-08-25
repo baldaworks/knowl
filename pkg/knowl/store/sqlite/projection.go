@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -44,6 +45,10 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		now = time.Now().UTC()
 	}
 	for _, page := range snapshot.Pages {
+		format, description, body, metadata, valuesErr := projectionmeta.PageValues(page)
+		if valuesErr != nil {
+			return fmt.Errorf("project page %q: %w", page.Path, valuesErr)
+		}
 		updatedAt := page.UpdatedAt
 		if updatedAt.IsZero() {
 			updatedAt = now
@@ -63,13 +68,13 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 			sourceDocument = string(encodedDocument)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO knowl_pages (page_id, scope, path, title, body, digest, source_refs, source_id, source_document, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, updated_at=excluded.updated_at`,
-			page.ID, snapshot.Scope, page.Path, page.Title, page.Content, page.Digest, sourceRefs, sourceID, sourceDocument, updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			INSERT INTO knowl_pages (page_id, scope, path, title, description, body, digest, source_refs, source_id, source_document, format, okf_metadata, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, description=excluded.description, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, format=excluded.format, okf_metadata=excluded.okf_metadata, updated_at=excluded.updated_at`,
+			page.ID, snapshot.Scope, page.Path, page.Title, description, body, page.Digest, sourceRefs, sourceID, sourceDocument, format, nullableJSON(metadata), updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, body, source_refs) VALUES (?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, page.Title, page.Content, sourceRefs); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, description, body, source_refs) VALUES (?, ?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, page.Title, description, body, sourceRefs); err != nil {
 			return fmt.Errorf("project page search %q: %w", page.Path, err)
 		}
 	}
@@ -143,7 +148,10 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		Path           string
 		Digest         string
 		Title          string
-		Content        string
+		Format         string
+		Description    string
+		Body           string
+		OKF            json.RawMessage
 		SourceRefs     []string
 		SourceDocument *knowl.SourceDocument
 		UpdatedAt      time.Time
@@ -155,11 +163,16 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	}
 	pages := make([]digestPage, 0, len(snapshot.Pages))
 	for _, page := range snapshot.Pages {
+		format, description, body, metadata, err := projectionmeta.PageValues(page)
+		if err != nil {
+			return ""
+		}
 		sourceRefs := append([]string(nil), page.SourceRefs...)
 		sort.Strings(sourceRefs)
 		pages = append(pages, digestPage{
 			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
-			Content: page.Content, SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
+			Format: format, Description: description, Body: body, OKF: metadata,
+			SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
 			UpdatedAt: page.UpdatedAt.UTC(),
 		})
 	}
@@ -195,4 +208,11 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:])
+}
+
+func nullableJSON(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return string(value)
 }

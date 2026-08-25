@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strings"
 
@@ -81,6 +82,9 @@ func (service *QueryService) Page(ctx context.Context, scope knowl.ScopeRef, id 
 	if strings.TrimSpace(string(scope)) == "" || strings.TrimSpace(string(id)) == "" {
 		return knowl.PageSnapshot{}, ErrQueryInvalid
 	}
+	if reservedOKFPage(id) {
+		return knowl.PageSnapshot{}, fmt.Errorf("%s: %w", id, ErrPageNotFound)
+	}
 	readLimits, err := service.limitsFor(limits)
 	if err != nil {
 		return knowl.PageSnapshot{}, err
@@ -100,6 +104,11 @@ func (service *QueryService) Page(ctx context.Context, scope knowl.ScopeRef, id 
 	page := pages[0]
 	page.Untrusted = true
 	return page, nil
+}
+
+func reservedOKFPage(id knowl.PageID) bool {
+	base := path.Base(strings.TrimSuffix(string(id), ".md"))
+	return base == "index" || base == "log"
 }
 
 // Search returns bounded, untrusted page references from the projection.

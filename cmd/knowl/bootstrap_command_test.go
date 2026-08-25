@@ -70,9 +70,10 @@ func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
 		t.Fatalf("read canonical page: %v", err)
 	}
 	for _, want := range []string{
+		"knowl:",
 		"id: sources/bootstrap-wiki/Home",
 		"title: Home",
-		"type: source",
+		"type: Reference",
 		"source_refs:",
 		"wiki-filesystem:bootstrap-wiki/Home.md@",
 		"source_id: bootstrap-wiki",
@@ -89,7 +90,7 @@ func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read index: %v", err)
 	}
-	if string(indexContent) != "# Knowl index\n\nNo pages have been committed yet.\n" {
+	if string(indexContent) != defaultIndex {
 		t.Fatalf("bootstrap changed curated index:\n%s", indexContent)
 	}
 

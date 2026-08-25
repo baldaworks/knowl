@@ -78,6 +78,16 @@ func TestNormalizeSourcesIsDeterministicForTwoNamedSources(t *testing.T) {
 	}
 }
 
+func TestNormalizeSourcesAcceptsOKFFlavor(t *testing.T) {
+	root := t.TempDir()
+	source := filesystemSource("catalog", filepath.Join(root, "catalog"), nil)
+	source.Config.Filesystem.Flavor = domain.SourceFlavorOKF
+	normalized, err := NormalizeSources(filepath.Join(root, "workspace"), root, []domain.Source{source})
+	if err != nil || len(normalized) != 1 || normalized[0].Config.Filesystem.Flavor != domain.SourceFlavorOKF || normalized[0].ConfigDigest == "" {
+		t.Fatalf("NormalizeSources(OKF) = %#v, %v", normalized, err)
+	}
+}
+
 func TestNormalizeSourcesRejectsInvalidConfiguration(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")

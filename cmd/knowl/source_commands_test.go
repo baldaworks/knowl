@@ -146,6 +146,7 @@ func TestProviderFreeSourceCommandsUseRealHost(t *testing.T) {
 	config.Sources = []domain.Source{{
 		ID: commandEngineeringSourceID, Type: domain.SourceTypeFilesystem, Enabled: true,
 		Config: domain.SourceConfig{Filesystem: &domain.FilesystemSourceConfig{Root: sourceRoot, Flavor: domain.SourceFlavorMarkdown}},
+		Sync:   domain.SourceSyncPolicy{OnStart: true},
 	}}
 	newLocalSourceSession = func(ctx context.Context) (localSourceSession, error) {
 		host, hostErr := knowl.New(ctx, knowl.Options{Config: config})

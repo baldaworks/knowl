@@ -11,9 +11,12 @@ const (
 	appName                 = "knowl"
 	initCommandName         = "init"
 	validateCommandName     = "validate"
+	migrateCommandName      = "migrate"
+	migrateOKFV02Name       = "okf-v0.2"
 	bootstrapCommandName    = "bootstrap"
 	bootstrapWikiName       = "wiki"
 	bootstrapObsidianName   = "obsidian"
+	bootstrapOKFName        = "okf"
 	startCommandName        = "start"
 	ingestCommandName       = "ingest"
 	retrieveCommandName     = "retrieve"
@@ -41,6 +44,7 @@ func newRootCommand() *cobra.Command {
 1. Bootstrap a fresh Knowl workspace from an existing wiki or Obsidian vault:
    - knowl bootstrap wiki <path>
    - knowl bootstrap obsidian <path>
+   - knowl bootstrap okf <path>
 2. Or initialize an empty workspace explicitly:
    - knowl init
    - knowl validate
@@ -81,6 +85,7 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 	for _, command := range []*cobra.Command{
 		newInitCommand(),
 		newValidateCommand(),
+		newMigrateCommand(),
 		newBootstrapCommand(),
 		newStartCommand(),
 		newIngestCommand(),

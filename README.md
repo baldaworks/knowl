@@ -43,8 +43,8 @@ same runtime in-process.
 
 Use Knowl when you want one durable project/domain knowledge layer that can:
 
-- bootstrap an existing Markdown wiki or Obsidian vault into a Knowl-owned
-  workspace through the production source synchronization engine;
+- bootstrap an existing Markdown wiki, Obsidian vault, or OKF v0.2 bundle into
+  a Knowl-owned workspace through the production source synchronization engine;
 - mirror multiple named read-only filesystem wikis without path collisions;
 - ingest new text or URI sources through one canonical pipeline;
 - answer retrieval requests with bounded evidence and provenance;
@@ -116,11 +116,14 @@ Bootstrap an existing wiki:
 
 ```bash
 ./knowl bootstrap wiki /path/to/existing/wiki
+# or preserve an existing Open Knowledge Format v0.2 bundle
+./knowl bootstrap okf /path/to/okf-bundle
 ```
 
 Bootstrap is a freshness-guarded first sync. It creates the deterministic
-`bootstrap-wiki` source (or `bootstrap-obsidian`) and writes mirrors below
-`wiki/sources/<source_id>/**`; it does not replace curated `wiki/index.md`.
+`bootstrap-wiki` source (or `bootstrap-obsidian` / `bootstrap-okf`) and writes
+mirrors below `wiki/sources/<source_id>/**`; it does not replace curated
+`wiki/index.md`.
 The generated local config is provider-free, so later `source list`, `sync`,
 and `status` commands work without an LLM provider.
 
@@ -232,6 +235,15 @@ knowl:
       sync:
         on_start: true
         interval: 5m
+    - id: catalog
+      type: filesystem
+      filesystem:
+        root: /knowledge/catalog
+        include: ["**/*"]
+        flavor: okf
+      sync:
+        on_start: true
+        interval: 5m
   storage:
     type: sqlite
     sqlite:
@@ -280,6 +292,24 @@ workspace/
 
 `raw/` and `wiki/` are canonical knowledge artifacts. SQL state and projections
 remain rebuildable operational state.
+
+`wiki/` itself is a portable Open Knowledge Format v0.2 bundle. Its root
+`index.md` declares `okf_version: "0.2"`; ordinary Markdown concepts retain
+standard OKF metadata and unknown extension fields. Retrieval exposes that
+metadata as a structured `okf` object over CLI, HTTP, and MCP. Reserved
+`index.md` and `log.md` files are control documents, not search evidence.
+
+Legacy workspaces are never rewritten implicitly. Back them up and run:
+
+```bash
+./knowl migrate okf-v0.2
+./knowl validate
+```
+
+The migration is journaled, interruption-safe, idempotent, preserves legacy
+content and logs, and rebuilds the configured SQL projection. Attested
+Computation fields are stored and returned only as inert metadata; Knowl never
+executes computations, executors, attesters, or referenced resources.
 
 ## Public packages
 

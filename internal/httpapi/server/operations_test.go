@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -124,12 +126,26 @@ func TestHTTPRetrieveBindsRepeatableSourceFilterAndMapsEvidence(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("retrieve status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var result httpRetrieveResponse
+	var result knowlapi.RetrieveResult
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Evidence) != 2 || result.Evidence[0].SourceID != httpTestEngineering || result.Evidence[1].SourceID != httpTestOperations || result.Evidence[0].DocumentID != "shared.md" || result.Evidence[0].Revision != "revision-1" || result.Evidence[0].URI == "" {
+	if len(result.Evidence) != 2 {
 		t.Fatalf("filtered HTTP evidence = %#v", result.Evidence)
+	}
+	bySource := make(map[string]knowlapi.EvidenceItem, len(result.Evidence))
+	for _, evidence := range result.Evidence {
+		if evidence.SourceId != nil {
+			bySource[*evidence.SourceId] = evidence
+		}
+	}
+	engineering := bySource[httpTestEngineering]
+	if len(bySource) != 2 || bySource[httpTestOperations].SourceId == nil || engineering.DocumentId == nil || *engineering.DocumentId != "shared.md" || engineering.Revision == nil || *engineering.Revision != "revision-1" || engineering.Uri == nil || *engineering.Uri == "" {
+		t.Fatalf("filtered HTTP evidence = %#v", result.Evidence)
+	}
+	metadata := engineering.Okf
+	if metadata == nil || metadata.Type != "Reference" || metadata.Executor == nil || metadata.Attester == nil || metadata.Extensions == nil || (*metadata.Extensions)["unknown_nested"] == nil || !engineering.Untrusted {
+		t.Fatalf("HTTP OKF evidence = %#v", engineering)
 	}
 
 	invalid := httptest.NewRequest(http.MethodGet, "/v1/retrieve?query=transportbeacon&source=Engineering", nil)
@@ -144,9 +160,17 @@ func httpTransportSearchSnapshot() domain.WorkspaceSnapshot {
 	document := func(sourceID domain.SourceID) *domain.SourceDocument {
 		return &domain.SourceDocument{SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md"}
 	}
+	body := httpTransportQuery + " user body"
+	metadata := &okf.Metadata{
+		Type: "Reference", Title: "Transportbeacon Engineering", Runtime: "python",
+		Computation: "https://127.0.0.1:1/inert-computation",
+		Executor:    &okf.Executor{Resource: "https://127.0.0.1:1/inert-executor", Receipt: []string{"sha256"}},
+		Attester:    &okf.Attester{Resource: "https://127.0.0.1:1/inert-attester"},
+		Extensions:  map[string]any{"unknown_nested": map[string]any{"enabled": true}},
+	}
 	return domain.WorkspaceSnapshot{Scope: httpTestScope, Pages: []domain.PageSnapshot{
 		{ID: "curated", Path: "wiki/curated.md", Title: "Transportbeacon Curated", Content: httpTransportQuery, Digest: "curated"},
-		{ID: httpTestEngineering, Path: "wiki/sources/engineering/shared.md", Title: "Transportbeacon Engineering", Content: httpTransportQuery, Digest: httpTestEngineering, SourceDocument: document(httpTestEngineering)},
+		{ID: httpTestEngineering, Path: "wiki/sources/engineering/shared.md", Title: "Transportbeacon Engineering", Content: body, Body: body, OKF: metadata, Digest: httpTestEngineering, SourceDocument: document(httpTestEngineering)},
 		{ID: httpTestOperations, Path: "wiki/sources/operations/shared.md", Title: "Transportbeacon Operations", Content: httpTransportQuery, Digest: httpTestOperations, SourceDocument: document(httpTestOperations)},
 	}}
 }

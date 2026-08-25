@@ -1,17 +1,15 @@
 package normalize
 
 import (
-	"fmt"
 	"path"
-	"sort"
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
-	"gopkg.in/yaml.v3"
 )
 
-const sourcePageType = "source"
+const sourcePageType = "Reference"
 
 // RenderInput contains one fetched or restored raw document and its complete
 // source-local catalog.
@@ -28,6 +26,12 @@ type Result struct {
 	catalogDigest string
 	files         []RenderedFile
 	mirrorDigest  string
+	diagnostics   []knowl.SourceDiagnostic
+}
+
+// Diagnostics returns detached, bounded non-fatal compatibility observations.
+func (result Result) Diagnostics() []knowl.SourceDiagnostic {
+	return append([]knowl.SourceDiagnostic(nil), result.diagnostics...)
 }
 
 // FormatVersion returns the rendering contract version.
@@ -58,15 +62,16 @@ func Render(input RenderInput, limits Limits) (Result, error) {
 		input.Document.ExternalID != knowl.DocumentID(input.Document.Path) || !validSHA256(input.Catalog.Digest()) ||
 		!input.Catalog.contains(input.Document.ExternalID, input.Document.Path) || !validAcceptedSource(input.RawSource) ||
 		input.RawSource.Version.Version != input.Document.Revision || input.RawSource.Version.Digest != input.Document.Revision ||
-		(input.Source.Config.Filesystem.Flavor != knowl.SourceFlavorMarkdown && input.Source.Config.Filesystem.Flavor != knowl.SourceFlavorObsidian) {
+		(input.Source.Config.Filesystem.Flavor != knowl.SourceFlavorMarkdown && input.Source.Config.Filesystem.Flavor != knowl.SourceFlavorObsidian && input.Source.Config.Filesystem.Flavor != knowl.SourceFlavorOKF) {
 		return Result{}, ErrInvalid
 	}
 	var (
-		file RenderedFile
-		err  error
+		file        RenderedFile
+		diagnostics []knowl.SourceDiagnostic
+		err         error
 	)
 	if strings.EqualFold(path.Ext(input.Document.Path), ".md") {
-		file, err = renderMarkdown(input, limits)
+		file, diagnostics, err = renderMarkdown(input, limits)
 	} else {
 		file, err = renderAsset(input, limits)
 	}
@@ -76,68 +81,152 @@ func Render(input RenderInput, limits Limits) (Result, error) {
 	if err := validateRenderedFile(input, file); err != nil {
 		return Result{}, err
 	}
+	version := formatVersion(input.Source.Config.Filesystem.Flavor)
 	digest, err := MirrorDigest(MirrorIdentity{
-		SourceID: input.Source.ID, DocumentID: input.Document.ExternalID, Revision: input.Document.Revision,
+		FormatVersion: version,
+		SourceID:      input.Source.ID, DocumentID: input.Document.ExternalID, Revision: input.Document.Revision,
 		RawSource: input.RawSource, CatalogDigest: input.Catalog.Digest(), Files: []RenderedFile{file},
 	})
 	if err != nil {
 		return Result{}, err
 	}
 	return Result{
-		formatVersion: FormatVersion,
+		formatVersion: version,
 		catalogDigest: input.Catalog.Digest(),
 		files:         []RenderedFile{file},
 		mirrorDigest:  digest,
+		diagnostics:   diagnostics,
 	}, nil
 }
 
-type canonicalFrontmatter struct {
-	ID             string               `yaml:"id"`
-	Title          string               `yaml:"title"`
-	Type           string               `yaml:"type"`
-	SourceRefs     []string             `yaml:"source_refs"`
-	SourceDocument knowl.SourceDocument `yaml:"source_document"`
-}
-
-func renderMarkdown(input RenderInput, limits Limits) (RenderedFile, error) {
-	body, metadata := splitMarkdownFrontmatter(string(input.Document.Content))
-	title := resolveTitle(metadata, body, input.Document.Path)
+func renderMarkdown(input RenderInput, limits Limits) (RenderedFile, []knowl.SourceDiagnostic, error) {
+	target := sourceTarget(input.Source.ID, trimMarkdownExtension(input.Document.Path)+".md")
+	bundleRelative := strings.TrimPrefix(target, "wiki/")
+	formatLimits := okf.DefaultLimits()
+	formatLimits.MaxBytes = limits.MaxRenderedBytes
+	if input.Source.Config.Filesystem.Flavor == knowl.SourceFlavorOKF {
+		kind, err := okf.ClassifyPath(input.Document.Path)
+		if err != nil {
+			return RenderedFile{}, nil, err
+		}
+		switch kind {
+		case okf.DocumentIndex:
+			index, err := okf.ValidateIndex(input.Document.Path, input.Document.Content, formatLimits)
+			if err != nil {
+				return RenderedFile{}, nil, err
+			}
+			var diagnostics []knowl.SourceDiagnostic
+			if index.ObservedVersion != "" && index.ObservedVersion != okf.Version {
+				diagnostics = []knowl.SourceDiagnostic{{Code: "okf.version.best_effort", Path: input.Document.Path, ObservedVersion: boundedObservedVersion(index.ObservedVersion)}}
+			}
+			index.ObservedVersion = ""
+			content, err := okf.RenderIndex(strings.TrimPrefix(target, "wiki/sources/"+string(input.Source.ID)+"/"), index, formatLimits)
+			if err != nil {
+				return RenderedFile{}, nil, err
+			}
+			file, err := NewRenderedFile(target, content, limits)
+			return file, diagnostics, err
+		case okf.DocumentLog:
+			if _, err := okf.ValidateLog(input.Document.Path, input.Document.Content, formatLimits); err != nil {
+				return RenderedFile{}, nil, err
+			}
+			file, err := NewRenderedFile(target, input.Document.Content, limits)
+			return file, nil, err
+		}
+	}
+	document, parseErr := okf.ParseConceptWithDefaultType(bundleRelative, input.Document.Content, sourcePageType, formatLimits)
+	if parseErr != nil {
+		if input.Source.Config.Filesystem.Flavor == knowl.SourceFlavorOKF {
+			return RenderedFile{}, nil, parseErr
+		}
+		document = okf.Document{Metadata: okf.Metadata{Type: sourcePageType}, Body: string(input.Document.Content)}
+	}
+	title := resolveTitle(document.Metadata.Title, document.Body, input.Document.Path)
 	if !validText(title, 1024) {
-		return RenderedFile{}, ErrInvalid
+		return RenderedFile{}, nil, ErrInvalid
 	}
 	if input.Source.Config.Filesystem.Flavor == knowl.SourceFlavorObsidian {
-		body = rewriteObsidianReferences(input.Source.ID, input.Document.Path, input.Catalog, body)
+		document.Body = rewriteObsidianReferences(input.Source.ID, input.Document.Path, input.Catalog, document.Body)
 	}
-	target := sourceTarget(input.Source.ID, trimMarkdownExtension(input.Document.Path)+".md")
 	pageID := strings.TrimSuffix(strings.TrimPrefix(target, "wiki/"), ".md")
 	provenance := knowl.SourceDocument{
 		SourceID: input.Source.ID, DocumentID: input.Document.ExternalID,
 		Revision: input.Document.Revision, URI: input.Document.URI,
 	}
 	if app.ValidateOwnedSourceDocument(input.Source.ID, provenance) != nil {
-		return RenderedFile{}, ErrInvalid
+		return RenderedFile{}, nil, ErrInvalid
 	}
-	base, err := yaml.Marshal(canonicalFrontmatter{
-		ID: pageID, Title: title, Type: sourcePageType,
-		SourceRefs: []string{app.SourceRefKey(input.RawSource)}, SourceDocument: provenance,
-	})
+	document.Metadata.Title = title
+	if document.Metadata.Extensions == nil {
+		document.Metadata.Extensions = make(map[string]any)
+	}
+	if input.Source.Config.Filesystem.Flavor == knowl.SourceFlavorOKF {
+		for _, owned := range []string{"id", "source_refs", "source_document"} {
+			if _, exists := document.Metadata.Extensions[owned]; exists {
+				return RenderedFile{}, nil, ErrInvalid
+			}
+		}
+	}
+	delete(document.Metadata.Extensions, "id")
+	delete(document.Metadata.Extensions, "source_refs")
+	delete(document.Metadata.Extensions, "source_document")
+	if err := mergeKnowlExtension(document.Metadata.Extensions, pageID, app.SourceRefKey(input.RawSource), provenance); err != nil {
+		return RenderedFile{}, nil, err
+	}
+	document.Body = strings.TrimLeft(document.Body, "\n")
+	if document.Body == "" || document.Body[len(document.Body)-1] != '\n' {
+		document.Body += "\n"
+	}
+	content, err := okf.RenderConcept(bundleRelative, document, formatLimits)
 	if err != nil {
-		return RenderedFile{}, ErrInvalid
+		return RenderedFile{}, nil, ErrInvalid
 	}
-	extras, err := marshalExtras(metadata)
-	if err != nil {
-		return RenderedFile{}, err
+	file, err := NewRenderedFile(target, content, limits)
+	return file, nil, err
+}
+
+func boundedObservedVersion(version string) string {
+	const maxVersionBytes = 128
+	version = strings.TrimSpace(version)
+	if len(version) > maxVersionBytes {
+		return "<oversized>"
 	}
-	content := make([]byte, 0, len(base)+len(extras)+len(body)+16)
-	content = append(content, "---\n"...)
-	content = append(content, base...)
-	content = append(content, extras...)
-	content = append(content, "---\n"...)
-	content = append(content, strings.TrimLeft(body, "\n")...)
-	if len(content) == 0 || content[len(content)-1] != '\n' {
-		content = append(content, '\n')
+	return version
+}
+
+func formatVersion(flavor string) string {
+	if flavor == knowl.SourceFlavorOKF {
+		return OKFFormatVersion
 	}
-	return NewRenderedFile(target, content, limits)
+	return FormatVersion
+}
+
+func mergeKnowlExtension(metadata map[string]any, pageID, sourceRef string, provenance knowl.SourceDocument) error {
+	extension := make(map[string]any)
+	if raw, present := metadata["knowl"]; present {
+		values, ok := raw.(map[string]any)
+		if !ok {
+			return ErrInvalid
+		}
+		for key, value := range values {
+			switch key {
+			case "id", "source_refs", "source_document":
+				return ErrInvalid
+			default:
+				extension[key] = value
+			}
+		}
+	}
+	extension["id"] = pageID
+	extension["source_refs"] = []string{sourceRef}
+	extension["source_document"] = map[string]any{
+		"source_id":   string(provenance.SourceID),
+		"document_id": string(provenance.DocumentID),
+		"revision":    provenance.Revision,
+		"uri":         provenance.URI,
+	}
+	metadata["knowl"] = extension
+	return nil
 }
 
 func renderAsset(input RenderInput, limits Limits) (RenderedFile, error) {
@@ -159,31 +248,9 @@ func sourceTarget(sourceID knowl.SourceID, relative string) string {
 	return "wiki/sources/" + string(sourceID) + "/" + relative
 }
 
-func splitMarkdownFrontmatter(content string) (string, map[string]any) {
-	lines := strings.Split(content, "\n")
-	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "---" {
-		return content, nil
-	}
-	end := -1
-	for index := 1; index < len(lines); index++ {
-		if strings.TrimSpace(lines[index]) == "---" {
-			end = index
-			break
-		}
-	}
-	if end < 0 {
-		return content, nil
-	}
-	metadata := make(map[string]any)
-	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:end], "\n")), &metadata); err != nil {
-		return content, nil
-	}
-	return strings.Join(lines[end+1:], "\n"), metadata
-}
-
-func resolveTitle(metadata map[string]any, body, relative string) string {
-	if title, ok := metadata["title"].(string); ok && strings.TrimSpace(title) != "" {
-		return strings.TrimSpace(title)
+func resolveTitle(explicit, body, relative string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit)
 	}
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -196,43 +263,4 @@ func resolveTitle(metadata map[string]any, body, relative string) string {
 		return "Source document"
 	}
 	return title
-}
-
-func marshalExtras(metadata map[string]any) ([]byte, error) {
-	if len(metadata) == 0 {
-		return nil, nil
-	}
-	reserved := map[string]struct{}{
-		"id": {}, "title": {}, "type": {}, "source_refs": {}, "source_document": {},
-	}
-	keys := make([]string, 0, len(metadata))
-	extras := make(map[string]any, len(metadata))
-	for key, value := range metadata {
-		normalized := strings.TrimSpace(key)
-		if !validText(normalized, 256) {
-			return nil, ErrInvalid
-		}
-		if _, exists := reserved[normalized]; exists {
-			continue
-		}
-		if _, exists := extras[normalized]; exists {
-			return nil, ErrInvalid
-		}
-		extras[normalized] = value
-		keys = append(keys, normalized)
-	}
-	if len(keys) == 0 {
-		return nil, nil
-	}
-	sort.Strings(keys)
-	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	for _, key := range keys {
-		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
-		valueNode := &yaml.Node{}
-		if err := valueNode.Encode(extras[key]); err != nil {
-			return nil, fmt.Errorf("encode source frontmatter extra: %w", ErrInvalid)
-		}
-		node.Content = append(node.Content, keyNode, valueNode)
-	}
-	return yaml.Marshal(node)
 }

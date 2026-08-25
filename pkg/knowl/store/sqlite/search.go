@@ -9,6 +9,7 @@ import (
 
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/contextpolicy"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -43,7 +44,7 @@ func (store *Store) contextCandidates(ctx context.Context, scope knowl.ScopeRef,
 	if len(terms) == 0 || limit <= 0 {
 		return nil, nil
 	}
-	references, err := store.Search(ctx, scope, strings.Join(terms, " "), knowl.ReadLimits{Pages: limit, Characters: 1}, nil)
+	references, err := store.search(ctx, scope, strings.Join(terms, " "), knowl.ReadLimits{Pages: limit, Characters: 1}, nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("select relevant context: %w", err)
 	}
@@ -136,6 +137,10 @@ func (store *Store) recentContext(ctx context.Context, scope knowl.ScopeRef, exc
 
 // Search returns bounded, untrusted FTS references.
 func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
+	return store.search(ctx, scope, query, limits, sources, true)
+}
+
+func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID, enforceRelevance bool) ([]knowl.PageReference, error) {
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
@@ -144,7 +149,7 @@ func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return nil, fmt.Errorf("normalize search query: %w", ErrInvalidQuery)
 	}
 	limit := boundedLimit(limits.Pages)
-	strict, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "AND"), limit, limits.Characters, normalized.Terms, sources)
+	strict, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "AND"), limit, limits.Characters, normalized.Terms, sources, enforceRelevance)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +157,7 @@ func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return strict, nil
 	}
 
-	relaxed, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "OR"), limit, limits.Characters, normalized.Terms, sources)
+	relaxed, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "OR"), limit, limits.Characters, normalized.Terms, sources, enforceRelevance)
 	if err != nil {
 		return nil, err
 	}
@@ -175,10 +180,10 @@ func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query stri
 	return references, nil
 }
 
-func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string, sources []knowl.SourceID) ([]knowl.PageReference, error) {
+func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string, sources []knowl.SourceID, enforceRelevance bool) ([]knowl.PageReference, error) {
 	statement := `
-		SELECT p.page_id, p.path, p.title, p.body, p.source_refs, p.source_document,
-		       snippet(knowl_pages_fts, -1, '', '', ' … ', 64)
+		SELECT p.page_id, p.path, p.title, p.description, p.body, p.source_refs, p.source_document,
+		       p.format, p.okf_metadata, snippet(knowl_pages_fts, 5, '', '', ' … ', 64)
 		FROM knowl_pages_fts
 		JOIN knowl_pages p ON p.scope = knowl_pages_fts.scope AND p.page_id = knowl_pages_fts.page_id
 		WHERE knowl_pages_fts MATCH ? AND knowl_pages_fts.scope = ?`
@@ -193,9 +198,9 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 		statement += ` AND p.source_id IN (` + strings.Join(placeholders, ", ") + `)`
 	}
 	statement += `
-		ORDER BY bm25(knowl_pages_fts, 0.0, 0.0, 0.0, 8.0, 1.0, 0.0) ASC, p.path ASC
+		ORDER BY bm25(knowl_pages_fts, 0.0, 0.0, 0.0, 8.0, 4.0, 1.0, 0.0) ASC, p.path ASC
 		LIMIT ?`
-	arguments = append(arguments, limit)
+	arguments = append(arguments, maxPageLimit)
 	rows, err := store.db.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("search pages: %w", err)
@@ -204,9 +209,9 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 	var references []knowl.PageReference
 	for rows.Next() {
 		var reference knowl.PageReference
-		var body, sourceRefs, nativeSnippet string
-		var sourceDocument sql.NullString
-		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &body, &sourceRefs, &sourceDocument, &nativeSnippet); err != nil {
+		var description, body, sourceRefs, format, nativeSnippet string
+		var sourceDocument, metadata sql.NullString
+		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &description, &body, &sourceRefs, &sourceDocument, &format, &metadata, &nativeSnippet); err != nil {
 			return nil, fmt.Errorf("scan search page: %w", err)
 		}
 		if err := json.Unmarshal([]byte(sourceRefs), &reference.SourceRefs); err != nil {
@@ -219,9 +224,23 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 			}
 			reference.SourceDocument = document
 		}
-		reference.Snippet = lexical.Excerpt(nativeSnippet, reference.Title, body, terms, maxCharacters)
+		var encodedMetadata []byte
+		if metadata.Valid {
+			encodedMetadata = []byte(metadata.String)
+		}
+		reference.OKF, err = projectionmeta.Decode(format, encodedMetadata)
+		if err != nil {
+			return nil, fmt.Errorf("decode page %q metadata: %w", reference.ID, err)
+		}
+		if enforceRelevance && !lexical.Relevant(reference.Title+"\n"+description+"\n"+body, terms) {
+			continue
+		}
+		reference.Snippet = lexical.Excerpt(nativeSnippet, reference.Title, description+"\n"+body, terms, maxCharacters)
 		reference.Untrusted = true
 		references = append(references, reference)
+		if len(references) == limit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate search pages: %w", err)

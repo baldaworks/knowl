@@ -138,6 +138,7 @@ type Result struct {
 	Run          knowl.SyncRun
 	Changed      bool
 	FailureClass string
+	Diagnostics  []knowl.SourceDiagnostic
 }
 
 // AllResult aggregates one deterministic result per attempted source.

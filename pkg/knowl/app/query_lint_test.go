@@ -33,7 +33,7 @@ func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read page: %v", err)
 	}
-	if !page.Untrusted || page.ID != testPageID {
+	if !page.Untrusted || page.ID != testPageID || page.OKF == nil || page.OKF.Type != "entity" || page.Body != "# One\n\n[[entities/two]]\n" {
 		t.Fatalf("page = %#v, want untrusted entities/one", page)
 	}
 	search, err := queryService.Search(ctx, "local", "One", knowl.ReadLimits{Pages: 1}, nil)
@@ -55,6 +55,11 @@ func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
 	}
 	if _, err := queryService.Page(ctx, "local", "entities/missing", knowl.ReadLimits{Pages: 1}); !errors.Is(err, app.ErrPageNotFound) {
 		t.Fatalf("missing page error = %v, want page-not-found", err)
+	}
+	for _, reserved := range []knowl.PageID{"index", "log", "entities/index"} {
+		if _, err := queryService.Page(ctx, "local", reserved, knowl.ReadLimits{Pages: 1}); !errors.Is(err, app.ErrPageNotFound) {
+			t.Errorf("reserved page %q error = %v, want page-not-found", reserved, err)
+		}
 	}
 }
 
@@ -167,7 +172,7 @@ func prepareCanonicalQueryWorkspace(t *testing.T, workspace interface {
 	for relative, content := range map[string]string{
 		testPagePath:    cleanPageOne,
 		testPageTwoPath: cleanPageTwo,
-		"wiki/index.md": "# Knowl index\n\n- entities/one\n- entities/two\n",
+		"wiki/index.md": "---\nokf_version: \"0.2\"\n---\n# Knowl Index\n\n* [One](entities/one.md)\n* [Two](entities/two.md)\n",
 	} {
 		if err := os.WriteFile(filepath.Join(workspace.Root(), filepath.FromSlash(relative)), []byte(content), 0o600); err != nil {
 			t.Fatalf("write query fixture %q: %v", relative, err)

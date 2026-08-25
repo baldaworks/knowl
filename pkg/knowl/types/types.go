@@ -1,6 +1,10 @@
 package knowl
 
-import "time"
+import (
+	"time"
+
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
+)
 
 // ScopeRef identifies an opaque knowledge scope. Knowl does not interpret it.
 type ScopeRef string
@@ -56,6 +60,8 @@ type PageSnapshot struct {
 	Digest         string          `json:"digest"`
 	Title          string          `json:"title"`
 	Content        string          `json:"content"`
+	Body           string          `json:"body"`
+	OKF            *okf.Metadata   `json:"okf,omitempty"`
 	SourceRefs     []string        `json:"source_refs,omitempty"`
 	SourceDocument *SourceDocument `json:"source_document,omitempty"`
 	Untrusted      bool            `json:"untrusted"`
@@ -210,6 +216,7 @@ type PageReference struct {
 	Snippet        string          `json:"snippet"`
 	SourceRefs     []string        `json:"source_refs"`
 	SourceDocument *SourceDocument `json:"source_document,omitempty"`
+	OKF            *okf.Metadata   `json:"okf,omitempty"`
 	Untrusted      bool            `json:"untrusted"`
 }
 

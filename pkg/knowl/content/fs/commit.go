@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
 )
@@ -346,6 +347,52 @@ func appendLogEntry(existing []byte, manifest stageManifest, generation string) 
 	if err != nil {
 		return nil, fmt.Errorf("marshal commit log entry: %w", err)
 	}
+	if manifest.LogDate == "" {
+		return appendLegacyLogEntry(existing, entry), nil
+	}
+	limits := okfLimits(defaultMaxBytes)
+	logDocument, err := okf.ValidateLog("log.md", existing, limits)
+	if err != nil {
+		return nil, fmt.Errorf("parse canonical OKF log: %w", ErrWorkspaceInvalid)
+	}
+	date, err := time.Parse(time.DateOnly, manifest.LogDate)
+	if err != nil || date.Format(time.DateOnly) != manifest.LogDate {
+		return nil, fmt.Errorf("invalid staged log date: %w", ErrPlanConflict)
+	}
+	auditJSON := strings.ReplaceAll(string(entry), "-", `\u002d`)
+	if len(auditJSON) > maxLogAuditBytes {
+		return nil, fmt.Errorf("commit log audit exceeds bound: %w", ErrPlanConflict)
+	}
+	audit := "**Update**: Committed a Knowl operation. <!-- knowl:" + auditJSON + " -->"
+	inserted := false
+	for index := range logDocument.Groups {
+		if logDocument.Groups[index].Date.Equal(date) {
+			logDocument.Groups[index].Entries = append([]string{audit}, logDocument.Groups[index].Entries...)
+			inserted = true
+			break
+		}
+		if logDocument.Groups[index].Date.Before(date) {
+			group := okf.LogGroup{Date: date, Entries: []string{audit}}
+			logDocument.Groups = append(logDocument.Groups, okf.LogGroup{})
+			copy(logDocument.Groups[index+1:], logDocument.Groups[index:])
+			logDocument.Groups[index] = group
+			inserted = true
+			break
+		}
+	}
+	if !inserted {
+		logDocument.Groups = append(logDocument.Groups, okf.LogGroup{Date: date, Entries: []string{audit}})
+	}
+	rendered, err := okf.RenderLog("log.md", logDocument, limits)
+	if err != nil {
+		return nil, fmt.Errorf("render canonical OKF log: %w", ErrPlanConflict)
+	}
+	return rendered, nil
+}
+
+const maxLogAuditBytes = 128 << 10
+
+func appendLegacyLogEntry(existing, entry []byte) []byte {
 	content := append([]byte(nil), existing...)
 	if len(content) > 0 && content[len(content)-1] != '\n' {
 		content = append(content, '\n')
@@ -353,7 +400,7 @@ func appendLogEntry(existing []byte, manifest stageManifest, generation string) 
 	content = append(content, []byte("- ")...)
 	content = append(content, entry...)
 	content = append(content, '\n')
-	return content, nil
+	return content
 }
 
 func canonicalEntriesMatch(root string, entries []stageEntry) bool {

@@ -78,6 +78,7 @@ func TestRootExposesCurrentLifecycleCommands(t *testing.T) {
 	want := map[string]bool{
 		initCommandName:      true,
 		validateCommandName:  true,
+		migrateCommandName:   true,
 		bootstrapCommandName: true,
 		startCommandName:     true,
 		ingestCommandName:    true,
@@ -100,6 +101,7 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 		"Supported local workflow:",
 		"knowl bootstrap wiki <path>",
 		"knowl bootstrap obsidian <path>",
+		"knowl bootstrap okf <path>",
 		"knowl retrieve <text>",
 		"knowl ingest --input request.json",
 		"knowl operation <operation-id>",
@@ -204,8 +206,8 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 		{
 			name:      bootstrapCommandName,
 			cmd:       newBootstrapCommand(),
-			wantShort: "Bootstrap a Knowl workspace from an existing Markdown wiki or Obsidian vault",
-			wantSubs:  []string{bootstrapWikiName, bootstrapObsidianName},
+			wantShort: "Bootstrap a Knowl workspace from an existing Markdown, Obsidian, or OKF tree",
+			wantSubs:  []string{bootstrapWikiName, bootstrapObsidianName, bootstrapOKFName},
 		},
 		{
 			name:      retrieveCommandName,

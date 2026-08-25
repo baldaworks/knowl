@@ -13,6 +13,7 @@ func retrieveResult(result app.QueryResult) RetrieveResult {
 			Title:      page.Title,
 			Snippet:    page.Snippet,
 			SourceRefs: append([]string(nil), page.SourceRefs...),
+			OKF:        page.OKF,
 			Untrusted:  page.Untrusted,
 		}
 		if page.SourceDocument != nil {

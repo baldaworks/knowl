@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 	"gopkg.in/yaml.v3"
@@ -221,9 +222,31 @@ func (workspace *Workspace) validateProspectiveSourcePlanLocked(plan knowl.Sourc
 		return err
 	}
 	for _, mutation := range plan.Mutations {
-		pageID, markdown := knowlwiki.PageIDFromPath(mutation.Path)
-		if !markdown || mutation.Action != knowl.SourceMutationWrite {
+		if mutation.Action != knowl.SourceMutationWrite {
 			continue
+		}
+		bundleRelative := strings.TrimPrefix(mutation.Path, workspaceWikiDir+"/")
+		kind, classifyErr := okf.ClassifyPath(bundleRelative)
+		if classifyErr != nil {
+			return okfContentInvalidError(mutation.Path, classifyErr)
+		}
+		switch kind {
+		case okf.DocumentIndex:
+			if _, validateErr := okf.ValidateIndex(bundleRelative, mutation.Content, okfLimits(len(mutation.Content))); validateErr != nil {
+				return okfContentInvalidError(mutation.Path, validateErr)
+			}
+			continue
+		case okf.DocumentLog:
+			if _, validateErr := okf.ValidateLog(bundleRelative, mutation.Content, okfLimits(len(mutation.Content))); validateErr != nil {
+				return okfContentInvalidError(mutation.Path, validateErr)
+			}
+			continue
+		case okf.DocumentAsset:
+			continue
+		}
+		pageID, markdown := knowlwiki.PageIDFromPath(mutation.Path)
+		if !markdown {
+			return contentInvalidError(mutation.Path, string(okf.RulePathInvalid))
 		}
 		content := string(mutation.Content)
 		if err := validateOrdinaryPageEdit(mutation.Path, pageID, content, rawRefs, pageTargets); err != nil {

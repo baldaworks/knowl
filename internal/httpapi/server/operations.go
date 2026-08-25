@@ -11,6 +11,7 @@ import (
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -107,6 +108,7 @@ type httpEvidenceItem struct {
 	DocumentID string        `json:"document_id,omitempty"`
 	Revision   string        `json:"revision,omitempty"`
 	URI        string        `json:"uri,omitempty"`
+	OKF        *okf.Metadata `json:"okf,omitempty"`
 	Untrusted  bool          `json:"untrusted"`
 }
 
@@ -136,6 +138,7 @@ func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
 			Title:      page.Title,
 			Snippet:    page.Snippet,
 			SourceRefs: append([]string(nil), page.SourceRefs...),
+			OKF:        page.OKF,
 			Untrusted:  page.Untrusted,
 		}
 		if page.SourceDocument != nil {

@@ -35,6 +35,7 @@ func TestFilesystemNormalizationVerticalSlice(t *testing.T) {
 	sources := []knowl.Source{
 		integrationSource(t, "alpha", knowl.SourceFlavorObsidian, pageBody, assetBody),
 		integrationSource(t, "beta", knowl.SourceFlavorMarkdown, pageBody, assetBody),
+		integrationSource(t, "gamma", knowl.SourceFlavorOKF, "[Guide](../guides/Guide.md)\n", assetBody),
 	}
 	outputs := make(map[knowl.SourceID]map[string]normalize.RenderedFile, len(sources))
 	selectedFetches := 0
@@ -100,7 +101,8 @@ func TestFilesystemNormalizationVerticalSlice(t *testing.T) {
 			t.Fatalf("Fetch(%s, stale) error is not stable and redacted: %v", source.ID, staleErr)
 		}
 
-		if source.ID == "alpha" {
+		switch source.ID {
+		case "alpha":
 			content := string(pageFile.Content())
 			for _, wanted := range []string{
 				"[[sources/alpha/guides/Guide]]", "[[Topic]]", "[[sources/alpha/one/Topic]]", "![](../assets/logo.bin)",
@@ -129,13 +131,19 @@ func TestFilesystemNormalizationVerticalSlice(t *testing.T) {
 			if !strings.Contains(string(rerendered.Files()[0].Content()), "[[guides/Guide]]") || rerendered.MirrorDigest() == renderedMirrorDigest(t, source, page, catalog) {
 				t.Fatal("catalog-only change did not produce a distinct unresolved mirror")
 			}
-		} else if !strings.Contains(string(pageFile.Content()), "[[guides/Guide]]") || strings.Contains(string(pageFile.Content()), "sources/beta/guides/Guide") {
-			t.Fatalf("Markdown source references were unexpectedly rewritten:\n%s", pageFile.Content())
+		case "beta":
+			if !strings.Contains(string(pageFile.Content()), "[[guides/Guide]]") || strings.Contains(string(pageFile.Content()), "sources/beta/guides/Guide") {
+				t.Fatalf("Markdown source references were unexpectedly rewritten:\n%s", pageFile.Content())
+			}
+		case "gamma":
+			if metadata.Type != "Metric" || !strings.Contains(string(pageFile.Content()), "vendor: retained") || !strings.Contains(string(pageFile.Content()), "[Guide](../guides/Guide.md)") {
+				t.Fatalf("OKF semantics were not preserved:\n%s", pageFile.Content())
+			}
 		}
 	}
 
-	if selectedFetches != 4 {
-		t.Fatalf("selective fetch count = %d, want 4 for 10 listed descriptors", selectedFetches)
+	if selectedFetches != 6 {
+		t.Fatalf("selective fetch count = %d, want 6 for 15 listed descriptors", selectedFetches)
 	}
 	if outputs["alpha"][pagePath].Path() == outputs["beta"][pagePath].Path() || outputs["alpha"][assetPath].Path() == outputs["beta"][assetPath].Path() {
 		t.Fatal("equal source-relative paths collided across source namespaces")
@@ -151,6 +159,12 @@ func integrationSource(t *testing.T, id knowl.SourceID, flavor, pageBody string,
 		"one/Topic.md":    []byte("# Topic one\n"),
 		"two/Topic.md":    []byte("# Topic two\n"),
 		"assets/logo.bin": assetBody,
+	}
+	if flavor == knowl.SourceFlavorOKF {
+		fixtures["same/Page.md"] = []byte("---\ntype: Metric\ntitle: Shared page\nvendor: retained\n---\n" + pageBody)
+		fixtures["guides/Guide.md"] = []byte("---\ntype: Reference\ntitle: Guide\n---\n# Guide\n")
+		fixtures["one/Topic.md"] = []byte("---\ntype: Reference\ntitle: Topic one\n---\n# Topic one\n")
+		fixtures["two/Topic.md"] = []byte("---\ntype: Reference\ntitle: Topic two\n---\n# Topic two\n")
 	}
 	for relative, content := range fixtures {
 		target := filepath.Join(root, filepath.FromSlash(relative))

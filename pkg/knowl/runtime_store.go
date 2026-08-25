@@ -54,6 +54,20 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 	}
 }
 
+// RebuildProjection replaces the configured rebuildable search projection from
+// one canonical workspace snapshot without starting a Host.
+func RebuildProjection(ctx context.Context, config Config, snapshot domain.WorkspaceSnapshot) error {
+	store, err := openStore(ctx, config)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.closer.Close() }()
+	if err := store.index.Rebuild(ctx, snapshot); err != nil {
+		return fmt.Errorf("rebuild search projection: %w", err)
+	}
+	return nil
+}
+
 func ensureProjection(ctx context.Context, index app.SearchIndex, checker projectionChecker, snapshot domain.WorkspaceSnapshot) error {
 	if checker == nil {
 		return fmt.Errorf("operational store does not expose projection readiness")

@@ -16,9 +16,11 @@ import (
 )
 
 const (
-	// FormatVersion identifies the deterministic filesystem-wiki rendering contract.
-	FormatVersion = "filesystem-wiki-v1"
-	maxDigestText = 4096
+	// FormatVersion identifies the deterministic generic filesystem rendering contract.
+	FormatVersion = "filesystem-wiki-v2"
+	// OKFFormatVersion identifies the strict OKF filesystem rendering contract.
+	OKFFormatVersion = "filesystem-okf-v1"
+	maxDigestText    = 4096
 )
 
 var (
@@ -308,6 +310,7 @@ type mirrorFile struct {
 
 // MirrorIdentity contains every independent input to a mirror digest.
 type MirrorIdentity struct {
+	FormatVersion string
 	SourceID      knowl.SourceID
 	DocumentID    knowl.DocumentID
 	Revision      string
@@ -318,7 +321,7 @@ type MirrorIdentity struct {
 
 // MirrorDigest returns the canonical digest for one rendered source document.
 func MirrorDigest(identity MirrorIdentity) (string, error) {
-	if app.ValidateSourceID(identity.SourceID) != nil || app.ValidateDocumentID(identity.DocumentID) != nil ||
+	if !validText(identity.FormatVersion, maxDigestText) || app.ValidateSourceID(identity.SourceID) != nil || app.ValidateDocumentID(identity.DocumentID) != nil ||
 		!validText(identity.Revision, maxDigestText) || !validSHA256(identity.CatalogDigest) || !validAcceptedSource(identity.RawSource) || len(identity.Files) == 0 {
 		return "", ErrInvalid
 	}
@@ -343,7 +346,7 @@ func MirrorDigest(identity MirrorIdentity) (string, error) {
 		RawSource     knowl.AcceptedSource `json:"raw_source"`
 		CatalogDigest string               `json:"catalog_digest"`
 		Files         []mirrorFile         `json:"files"`
-	}{FormatVersion, identity.SourceID, identity.DocumentID, identity.Revision, identity.RawSource, identity.CatalogDigest, files})
+	}{identity.FormatVersion, identity.SourceID, identity.DocumentID, identity.Revision, identity.RawSource, identity.CatalogDigest, files})
 	if err != nil {
 		return "", ErrInvalid
 	}

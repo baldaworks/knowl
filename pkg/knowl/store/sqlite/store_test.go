@@ -233,21 +233,18 @@ func TestSourceMigrationPreservesVersionTwoOperation(t *testing.T) {
 	if err != nil || operation.ID != "legacy-operation" {
 		t.Fatalf("preserved operation = %#v, %v", operation, err)
 	}
-	var title, body, digest, sourceRefs string
-	var sourceID, sourceDocument sql.NullString
-	if err := store.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document FROM knowl_pages WHERE scope = ? AND page_id = ?`, "legacy", "legacy-page").Scan(&title, &body, &digest, &sourceRefs, &sourceID, &sourceDocument); err != nil {
+	var title, body, digest, sourceRefs, format, description string
+	var sourceID, sourceDocument, metadata sql.NullString
+	if err := store.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document, format, description, okf_metadata FROM knowl_pages WHERE scope = ? AND page_id = ?`, "legacy", "legacy-page").Scan(&title, &body, &digest, &sourceRefs, &sourceID, &sourceDocument, &format, &description, &metadata); err != nil {
 		t.Fatalf("read preserved projection page: %v", err)
 	}
-	if title != "Legacy page" || body != "preserved projection body" || digest != "page-digest" || sourceRefs != `["raw/legacy.json"]` || sourceID.Valid || sourceDocument.Valid {
-		t.Fatalf("preserved projection page = %q %q %q %q %#v %#v", title, body, digest, sourceRefs, sourceID, sourceDocument)
+	if title != "Legacy page" || body != "preserved projection body" || digest != "page-digest" || sourceRefs != `["raw/legacy.json"]` || sourceID.Valid || sourceDocument.Valid || format != "" || description != "" || metadata.Valid {
+		t.Fatalf("preserved projection page = %q %q %q %q %#v %#v %q %q %#v", title, body, digest, sourceRefs, sourceID, sourceDocument, format, description, metadata)
 	}
 	var snapshotDigest string
 	var pageCount, linkCount int
-	if err := store.db.QueryRowContext(ctx, `SELECT snapshot_digest, page_count, link_count FROM knowl_projection_state WHERE scope = ?`, "legacy").Scan(&snapshotDigest, &pageCount, &linkCount); err != nil {
-		t.Fatalf("read preserved projection state: %v", err)
-	}
-	if snapshotDigest != "snapshot" || pageCount != 1 || linkCount != 0 {
-		t.Fatalf("preserved projection state = %q %d %d", snapshotDigest, pageCount, linkCount)
+	if err := store.db.QueryRowContext(ctx, `SELECT snapshot_digest, page_count, link_count FROM knowl_projection_state WHERE scope = ?`, "legacy").Scan(&snapshotDigest, &pageCount, &linkCount); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("projection readiness after metadata migration = %v, want invalidated", err)
 	}
 	var syncRows int
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM knowl_sync_runs`).Scan(&syncRows); err != nil || syncRows != 0 {

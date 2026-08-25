@@ -27,7 +27,7 @@ func TestWorkspaceRecoversSourceCommitAtEveryFaultPoint(t *testing.T) {
 		{name: "after create", point: commitFaultApplied, index: 0, wantAction: recoveryRolledBack},
 		{name: "after delete", point: commitFaultApplied, index: 1, wantAction: recoveryRolledBack},
 		{name: "after replace", point: commitFaultApplied, index: 2, wantAction: recoveryRolledBack},
-		{name: "committed", point: "committed", index: -1, wantAfter: true, wantAction: recoveryCompleted},
+		{name: "durably committed", point: recoveryCommitted, index: -1, wantAfter: true, wantAction: recoveryCompleted},
 		{name: "receipt", point: "receipt", index: -1, wantAfter: true, wantAction: recoveryCompleted},
 	}
 	for _, test := range tests {

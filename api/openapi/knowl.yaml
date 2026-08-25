@@ -351,8 +351,158 @@ components:
           type: string
         uri:
           type: string
+        okf:
+          $ref: '#/components/schemas/OKFMetadata'
         untrusted:
           type: boolean
+    OKFMetadata:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        resource:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/OKFSource'
+        usage_window:
+          $ref: '#/components/schemas/OKFUsageWindow'
+        generated:
+          $ref: '#/components/schemas/OKFGeneration'
+        verified:
+          type: array
+          items:
+            $ref: '#/components/schemas/OKFVerification'
+        status:
+          type: string
+          enum: [draft, stable, deprecated]
+        stale_after:
+          type: string
+          format: date-time
+        runtime:
+          type: string
+        parameters:
+          type: array
+          items:
+            $ref: '#/components/schemas/OKFParameter'
+        computation:
+          type: string
+        executor:
+          $ref: '#/components/schemas/OKFExecutor'
+        attester:
+          $ref: '#/components/schemas/OKFAttester'
+        extensions:
+          $ref: '#/components/schemas/OKFExtensions'
+        trust_tier:
+          type: string
+          enum: [unverified, machine-confirmed, human-reviewed]
+        effective_status:
+          type: string
+          enum: [draft, stable, deprecated]
+        stale:
+          type: boolean
+    OKFSource:
+      type: object
+      required: [resource]
+      properties:
+        id:
+          type: string
+        resource:
+          type: string
+        title:
+          type: string
+        author:
+          type: string
+        usage_count:
+          type: integer
+          format: uint64
+          minimum: 0
+        last_modified:
+          type: string
+          format: date-time
+        usage_window:
+          $ref: '#/components/schemas/OKFUsageWindow'
+        extensions:
+          $ref: '#/components/schemas/OKFExtensions'
+    OKFUsageWindow:
+      type: object
+      required: [from, to]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        extensions:
+          $ref: '#/components/schemas/OKFExtensions'
+    OKFGeneration:
+      type: object
+      required: [by]
+      properties:
+        by:
+          type: string
+        at:
+          type: string
+          format: date-time
+        extensions:
+          $ref: '#/components/schemas/OKFExtensions'
+    OKFVerification:
+      type: object
+      required: [by, at]
+      properties:
+        by:
+          type: string
+        at:
+          type: string
+          format: date-time
+        extensions:
+          $ref: '#/components/schemas/OKFExtensions'
+    OKFParameter:
+      type: object
+      required: [name, type, required]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        required:
+          type: boolean
+        extensions:
+          $ref: '#/components/schemas/OKFExtensions'
+    OKFExecutor:
+      type: object
+      required: [resource]
+      properties:
+        resource:
+          type: string
+        receipt:
+          type: array
+          items:
+            type: string
+        extensions:
+          $ref: '#/components/schemas/OKFExtensions'
+    OKFAttester:
+      type: object
+      required: [resource]
+      properties:
+        resource:
+          type: string
+        extensions:
+          $ref: '#/components/schemas/OKFExtensions'
+    OKFExtensions:
+      type: object
+      additionalProperties: {}
     RetrieveResult:
       type: object
       required: [query, evidence]

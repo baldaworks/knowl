@@ -118,7 +118,7 @@ func planOperationID(input knowl.MaintenanceInput) string {
 }
 
 func validateEditPath(raw string) (string, error) {
-	if raw == "" || len(raw) > maxEditPathBytes || strings.TrimSpace(raw) != raw || !utf8.ValidString(raw) || strings.Contains(raw, "\\") || path.IsAbs(raw) || path.Clean(raw) != raw || !strings.HasPrefix(raw, "wiki/") || raw == "wiki/log.md" || path.Ext(raw) != ".md" || raw == "wiki/sources" || strings.HasPrefix(raw, "wiki/sources/") {
+	if raw == "" || len(raw) > maxEditPathBytes || strings.TrimSpace(raw) != raw || !utf8.ValidString(raw) || strings.Contains(raw, "\\") || path.IsAbs(raw) || path.Clean(raw) != raw || !strings.HasPrefix(raw, "wiki/") || path.Base(raw) == "log.md" || path.Ext(raw) != ".md" || raw == "wiki/sources" || strings.HasPrefix(raw, "wiki/sources/") {
 		return "", fmt.Errorf("edit path %q: %w", raw, ErrForbiddenEdit)
 	}
 	for _, character := range raw {

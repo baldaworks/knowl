@@ -49,15 +49,19 @@ func TestLocalWorkflowRunnerExecutesInjectedHostRequest(t *testing.T) {
 	}
 
 	response, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
-		Method: http.MethodPost,
-		Path:   publicIngestPath,
-		Body:   []byte(`{"hello":"world"}`),
+		Method:    http.MethodPost,
+		Path:      publicIngestPath,
+		Body:      []byte(`{"hello":"world"}`),
+		StartHost: true,
 	})
 	if err != nil {
 		t.Fatalf("Execute() error: %v", err)
 	}
 	if host.startCalls != 1 {
 		t.Fatalf("Start() calls = %d, want 1", host.startCalls)
+	}
+	if host.readCalls != 0 {
+		t.Fatalf("PrepareReadOnly() calls = %d, want 0", host.readCalls)
 	}
 	if host.stopCalls != 1 {
 		t.Fatalf("Stop() calls = %d, want 1", host.stopCalls)
@@ -93,7 +97,7 @@ func TestLocalWorkflowRunnerJoinsRequestAndStopErrors(t *testing.T) {
 		return localWorkflowSession{Host: host, ShutdownTimeout: time.Second}, nil
 	}}
 
-	_, err := runner.Execute(context.Background(), localWorkflowRequest{Method: http.MethodPost, Path: publicIngestPath})
+	_, err := runner.Execute(context.Background(), localWorkflowRequest{Method: http.MethodPost, Path: publicIngestPath, StartHost: true})
 	if err == nil || !strings.Contains(err.Error(), "decode local ingest submission") || !errors.Is(err, stopErr) {
 		t.Fatalf("Execute() error = %v, want request and stop errors", err)
 	}
@@ -148,7 +152,7 @@ func TestReadCommandsReturnStructuredJSON(t *testing.T) {
 				if err := json.Unmarshal([]byte(output), &result); err != nil {
 					t.Fatalf("decode retrieve output: %v", err)
 				}
-				if result.Query != smokeQueryText || len(result.Evidence) == 0 || result.Evidence[0].PageId != smokePageID {
+				if result.Query != smokeQueryText || len(result.Evidence) == 0 || result.Evidence[0].PageId != smokePageID || result.Evidence[0].Okf == nil || result.Evidence[0].Okf.Type != "entity" || !result.Evidence[0].Untrusted {
 					t.Fatalf("retrieve result = %#v", result)
 				}
 			},
@@ -260,8 +264,9 @@ func TestLocalWorkflowRunnerPropagatesStartError(t *testing.T) {
 	}
 
 	_, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
-		Method: http.MethodGet,
-		Path:   "/v1/retrieve?query=test",
+		Method:    http.MethodPost,
+		Path:      publicIngestPath,
+		StartHost: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "start local workflow host") {
 		t.Fatalf("Execute() error = %v, want start error", err)
@@ -289,8 +294,9 @@ func TestLocalWorkflowRunnerClosesHostAfterStartError(t *testing.T) {
 	}
 
 	_, err := newLocalWorkflowRunner().Execute(context.Background(), localWorkflowRequest{
-		Method: http.MethodGet,
-		Path:   "/v1/retrieve?query=test",
+		Method:    http.MethodPost,
+		Path:      publicIngestPath,
+		StartHost: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "start local workflow host") {
 		t.Fatalf("Execute() error = %v, want start error", err)
@@ -300,5 +306,37 @@ func TestLocalWorkflowRunnerClosesHostAfterStartError(t *testing.T) {
 	}
 	if host.stopCalls != 0 {
 		t.Fatalf("Stop() calls = %d, want 0 when cleanup uses Close()", host.stopCalls)
+	}
+}
+
+func TestLocalWorkflowRunnerDoesNotStartHostForReadOnlyRequest(t *testing.T) {
+	host := &stubLocalWorkflowHost{
+		handler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.WriteHeader(http.StatusOK)
+			_, _ = response.Write([]byte(`{"evidence":[]}`))
+		}),
+	}
+	runner := &localWorkflowRunner{newSession: func(context.Context) (localWorkflowSession, error) {
+		return localWorkflowSession{Host: host, ShutdownTimeout: time.Second}, nil
+	}}
+
+	response, err := runner.Execute(context.Background(), localWorkflowRequest{
+		Method: http.MethodGet,
+		Path:   "/v1/retrieve?query=test",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("Execute() status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	if host.startCalls != 0 {
+		t.Fatalf("Start() calls = %d, want 0 for a read-only request", host.startCalls)
+	}
+	if host.readCalls != 1 {
+		t.Fatalf("PrepareReadOnly() calls = %d, want 1", host.readCalls)
+	}
+	if host.stopCalls != 1 {
+		t.Fatalf("Stop() calls = %d, want 1", host.stopCalls)
 	}
 }

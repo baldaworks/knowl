@@ -127,7 +127,8 @@ func TestMirrorDigestCoversEveryIdentityAndSortsFiles(t *testing.T) {
 		t.Fatalf("NewRenderedFile(second) error = %v", err)
 	}
 	identity := MirrorIdentity{
-		SourceID: engineeringSource, DocumentID: pageDocumentID, Revision: textDigest("raw"),
+		FormatVersion: FormatVersion,
+		SourceID:      engineeringSource, DocumentID: pageDocumentID, Revision: textDigest("raw"),
 		RawSource: acceptedSource(), CatalogDigest: textDigest("catalog"), Files: []RenderedFile{first, second},
 	}
 	digest, err := MirrorDigest(identity)
@@ -144,6 +145,7 @@ func TestMirrorDigestCoversEveryIdentityAndSortsFiles(t *testing.T) {
 	}
 
 	changes := []func(*MirrorIdentity){
+		func(value *MirrorIdentity) { value.FormatVersion = OKFFormatVersion },
 		func(value *MirrorIdentity) { value.SourceID = "operations" },
 		func(value *MirrorIdentity) { value.DocumentID = "other.md" },
 		func(value *MirrorIdentity) { value.Revision = textDigest("other raw") },
@@ -177,7 +179,8 @@ func TestMirrorDigestRejectsIncompleteIdentity(t *testing.T) {
 		t.Fatalf("NewRenderedFile() error = %v", err)
 	}
 	identity := MirrorIdentity{
-		SourceID: engineeringSource, DocumentID: pageDocumentID, Revision: textDigest("raw"),
+		FormatVersion: FormatVersion,
+		SourceID:      engineeringSource, DocumentID: pageDocumentID, Revision: textDigest("raw"),
 		RawSource: acceptedSource(), CatalogDigest: textDigest("catalog"), Files: []RenderedFile{file},
 	}
 	identity.RawSource.ManifestRef = ""

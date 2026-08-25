@@ -21,6 +21,8 @@ const (
 	SourceFlavorMarkdown = "markdown"
 	// SourceFlavorObsidian enables Obsidian reference normalization.
 	SourceFlavorObsidian = "obsidian"
+	// SourceFlavorOKF preserves validated Open Knowledge Format semantics.
+	SourceFlavorOKF = "okf"
 )
 
 // SourceConfig is the typed configuration union for one source.
@@ -192,4 +194,12 @@ type SourceStatus struct {
 	LastAttemptAt       time.Time  `json:"last_attempt_at,omitempty"`
 	LastSuccessfulAt    time.Time  `json:"last_successful_at,omitempty"`
 	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+// SourceDiagnostic reports one bounded, non-fatal source compatibility
+// observation without exposing source content or host filesystem paths.
+type SourceDiagnostic struct {
+	Code            string `json:"code"`
+	Path            string `json:"path"`
+	ObservedVersion string `json:"observed_version,omitempty"`
 }

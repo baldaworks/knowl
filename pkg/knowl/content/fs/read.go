@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -30,6 +32,7 @@ func (workspace *Workspace) ReadPages(ctx context.Context, scope knowl.ScopeRef,
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
 	pages := make([]knowl.PageSnapshot, 0, len(ids))
+	now := workspace.now().UTC()
 	for _, id := range ids {
 		if limits.Pages > 0 && len(pages) >= limits.Pages {
 			break
@@ -56,7 +59,27 @@ func (workspace *Workspace) ReadPages(ctx context.Context, scope knowl.ScopeRef,
 		if infoErr != nil {
 			return nil, fmt.Errorf("stat page %q: %w", id, infoErr)
 		}
-		pages = append(pages, knowl.PageSnapshot{ID: id, Path: relative, Digest: digestBytes(content), Title: markdownTitle(content), Content: string(content), SourceRefs: markdownSourceRefs(content), SourceDocument: markdownSourceDocument(content), UpdatedAt: info.ModTime().UTC()})
+		bundleRelative := strings.TrimPrefix(relative, workspaceWikiDir+"/")
+		kind, classifyErr := okf.ClassifyPath(bundleRelative)
+		if classifyErr != nil {
+			return nil, classifyErr
+		}
+		if kind == okf.DocumentConcept {
+			document, parseErr := okf.ParseConcept(bundleRelative, content, okfLimits(len(content)))
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			page, snapshotErr := parsedPageSnapshot(id, relative, content, digestBytes(content), info.ModTime(), document, now)
+			if snapshotErr != nil {
+				return nil, snapshotErr
+			}
+			pages = append(pages, page)
+			continue
+		}
+		pages = append(pages, knowl.PageSnapshot{
+			ID: id, Path: relative, Digest: digestBytes(content), Title: markdownTitle(content),
+			Content: string(content), Body: string(content), UpdatedAt: info.ModTime().UTC(),
+		})
 	}
 	return pages, nil
 }
@@ -89,5 +112,5 @@ func (workspace *Workspace) readControlPage(ctx context.Context, id knowl.PageID
 	if err != nil {
 		return knowl.PageSnapshot{}, fmt.Errorf("stat control page %q: %w", id, err)
 	}
-	return knowl.PageSnapshot{ID: id, Path: relative, Digest: digestBytes(content), Title: markdownTitle(content), Content: string(content), SourceRefs: markdownSourceRefs(content), SourceDocument: markdownSourceDocument(content), UpdatedAt: info.ModTime().UTC()}, nil
+	return knowl.PageSnapshot{ID: id, Path: relative, Digest: digestBytes(content), Title: markdownTitle(content), Content: string(content), Body: string(content), UpdatedAt: info.ModTime().UTC()}, nil
 }

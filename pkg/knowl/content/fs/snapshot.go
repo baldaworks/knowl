@@ -9,15 +9,21 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 	"gopkg.in/yaml.v3"
 )
 
+const okfLinkRelation = "okf"
+
 // Snapshot captures canonical Markdown digests for projection rebuilds.
 func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) (knowl.WorkspaceSnapshot, error) {
+	return workspace.snapshot(ctx, scope, true)
+}
+
+func (workspace *Workspace) snapshot(ctx context.Context, scope knowl.ScopeRef, strict bool) (knowl.WorkspaceSnapshot, error) {
 	if err := contextErr(ctx); err != nil {
 		return knowl.WorkspaceSnapshot{}, err
 	}
@@ -33,6 +39,7 @@ func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) 
 	digests := make(map[string]string)
 	pages := make([]knowl.PageSnapshot, 0)
 	links := make([]knowl.LinkReference, 0)
+	capturedAt := workspace.now().UTC()
 	wikiRoot := filepath.Join(workspace.root, workspaceWikiDir)
 	err = filepath.WalkDir(wikiRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -55,25 +62,62 @@ func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) 
 		relative = filepath.ToSlash(relative)
 		digest := digestBytes(content)
 		digests[relative] = digest
-		if relative == filepath.ToSlash(filepath.Join(workspaceWikiDir, "index.md")) || relative == filepath.ToSlash(filepath.Join(workspaceWikiDir, "log.md")) {
+		bundleRelative := strings.TrimPrefix(relative, workspaceWikiDir+"/")
+		kind, classifyErr := okf.ClassifyPath(bundleRelative)
+		if classifyErr != nil {
+			return classifyErr
+		}
+		formatLimits := okfLimits(workspace.maxSourceBytes)
+		switch kind {
+		case okf.DocumentIndex:
+			if _, validateErr := okf.ValidateIndex(bundleRelative, content, formatLimits); validateErr != nil {
+				return validateErr
+			}
+			return nil
+		case okf.DocumentLog:
+			if _, validateErr := okf.ValidateLog(bundleRelative, content, formatLimits); validateErr != nil {
+				return validateErr
+			}
+			return nil
+		case okf.DocumentAsset:
 			return nil
 		}
-		pageID, _ := knowlwiki.PageIDFromPath(relative)
+		pageID, page := knowlwiki.PageIDFromPath(relative)
+		if !page {
+			return fmt.Errorf("classify canonical page %q: %w", relative, ErrWorkspaceInvalid)
+		}
+		document, parseErr := okf.ParseConcept(bundleRelative, content, formatLimits)
+		if parseErr != nil && strict {
+			return parseErr
+		}
+		if parseErr == nil && strict {
+			metadata, metadataErr := knowlwiki.FrontmatterFromMetadata(document.Metadata)
+			if metadataErr != nil || metadata.ID != string(pageID) || metadata.Type == "" || len(metadata.SourceRefs) == 0 {
+				return contentInvalidError(relative, "frontmatter.knowl_invalid")
+			}
+		}
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			return infoErr
 		}
-		pages = append(pages, knowl.PageSnapshot{
-			ID:             pageID,
-			Path:           relative,
-			Digest:         digest,
-			Title:          markdownTitle(content),
-			Content:        string(content),
-			SourceRefs:     markdownSourceRefs(content),
-			SourceDocument: markdownSourceDocument(content),
-			UpdatedAt:      info.ModTime().UTC(),
-		})
-		links = append(links, markdownLinks(pageID, content)...)
+		if parseErr == nil {
+			pageSnapshot, snapshotErr := parsedPageSnapshot(pageID, relative, content, digest, info.ModTime(), document, capturedAt)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
+			pages = append(pages, pageSnapshot)
+		} else {
+			pages = append(pages, knowl.PageSnapshot{
+				ID: pageID, Path: relative, Digest: digest, Title: markdownTitle(content), Content: string(content),
+				Body: knowlwiki.Body(string(content)), SourceRefs: markdownSourceRefs(content),
+				SourceDocument: markdownSourceDocument(content), UpdatedAt: info.ModTime().UTC(),
+			})
+		}
+		linkContent := content
+		if parseErr == nil {
+			linkContent = []byte(document.Body)
+		}
+		links = append(links, markdownLinks(pageID, linkContent)...)
 		return nil
 	})
 	if err != nil {
@@ -89,8 +133,22 @@ func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) 
 		}
 		return links[left].From < links[right].From
 	})
+	pageIDs := make(map[knowl.PageID]struct{}, len(pages))
+	for _, page := range pages {
+		pageIDs[page.ID] = struct{}{}
+	}
+	filtered := links[:0]
+	for _, link := range links {
+		if link.Relation == okfLinkRelation {
+			if _, exists := pageIDs[link.To]; !exists {
+				continue
+			}
+		}
+		filtered = append(filtered, link)
+	}
+	links = filtered
 	links = uniqueLinks(links)
-	return knowl.WorkspaceSnapshot{Scope: scope, SchemaDigest: schema.Digest, PageDigests: digests, Pages: pages, Links: links, CapturedAt: time.Now().UTC()}, nil
+	return knowl.WorkspaceSnapshot{Scope: scope, SchemaDigest: schema.Digest, PageDigests: digests, Pages: pages, Links: links, CapturedAt: capturedAt}, nil
 }
 
 // Inspect captures the bounded metadata required by deterministic workspace lint.
@@ -98,7 +156,7 @@ func (workspace *Workspace) Inspect(ctx context.Context, scope knowl.ScopeRef) (
 	if err := contextErr(ctx); err != nil {
 		return knowl.WorkspaceInspection{}, err
 	}
-	snapshot, err := workspace.Snapshot(ctx, scope)
+	snapshot, err := workspace.snapshot(ctx, scope, false)
 	if err != nil {
 		return knowl.WorkspaceInspection{}, err
 	}

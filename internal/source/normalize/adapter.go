@@ -61,5 +61,6 @@ func (adapter *Adapter) NormalizeSource(ctx context.Context, input app.SourceNor
 		CatalogDigest: result.CatalogDigest(),
 		MirrorDigest:  result.MirrorDigest(),
 		Mutations:     validated.Mutations,
+		Diagnostics:   result.Diagnostics(),
 	}, nil
 }

@@ -106,6 +106,15 @@ knowl:
         interval: 5m
         retry_initial: 1s
         retry_maximum: 1m
+    - id: catalog
+      type: filesystem
+      filesystem:
+        root: /sources/catalog
+        include: ["**/*"]
+        flavor: okf
+      sync:
+        on_start: true
+        interval: 5m
 ```
 
 Notes:
@@ -140,15 +149,27 @@ Local workspace bootstrap:
 ```bash
 go build -o knowl ./cmd/knowl
 ./knowl bootstrap wiki /path/to/wiki
+# or: ./knowl bootstrap obsidian /path/to/vault
+# or: ./knowl bootstrap okf /path/to/okf-bundle
 ```
 
 Bootstrap retains its fresh-workspace guard but now performs exactly one shared
-source sync using ID `bootstrap-wiki` or `bootstrap-obsidian`. A newly generated
-config is provider-free and retains that source for later operation. If an
+source sync using ID `bootstrap-wiki`, `bootstrap-obsidian`, or `bootstrap-okf`.
+The `okf` flavor validates and preserves OKF v0.2 metadata, reserved controls,
+Unicode paths, and standard concept links. A missing version is treated as v0.2;
+another declared version is consumed best-effort and reported in the sync
+result under `diagnostics`. A newly generated config is
+provider-free and retains that source for later operation. If an
 operator-owned config already exists, bootstrap does not rewrite it; add the
 source entry there before using ongoing source commands. Ordinary source sync
 accepts existing workspaces and preserves curated pages and `wiki/index.md`.
 Its only canonical target is `wiki/sources/<source_id>/**`.
+
+To convert a legacy canonical workspace, stop active writers, back it up, and
+run `./knowl migrate okf-v0.2`. Migration is explicit and idempotent; startup,
+`retrieve`, and `source status` never perform it. Validate and inspect retrieval
+afterward before retiring a backup. See [workspace semantics](workspace.md) for
+the recovery and archive contract.
 
 Empty workspace initialization:
 

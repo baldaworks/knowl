@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,7 +101,7 @@ func TestHostGoldenAcceptedOperationResumesAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(log): %v", err)
 	}
-	if count := bytes.Count(logContent, []byte(accepted.ID)); count != 1 {
+	if count := bytes.Count(logContent, []byte(strings.ReplaceAll(string(accepted.ID), "-", `\u002d`))); count != 1 {
 		t.Fatalf("restart operation log count = %d, want 1", count)
 	}
 }

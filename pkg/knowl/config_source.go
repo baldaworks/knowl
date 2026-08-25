@@ -89,7 +89,7 @@ func normalizeSources(workspace, baseDir string, sources []domain.Source) ([]dom
 		if filesystem.Flavor == "" {
 			filesystem.Flavor = domain.SourceFlavorMarkdown
 		}
-		if filesystem.Flavor != domain.SourceFlavorMarkdown && filesystem.Flavor != domain.SourceFlavorObsidian {
+		if filesystem.Flavor != domain.SourceFlavorMarkdown && filesystem.Flavor != domain.SourceFlavorObsidian && filesystem.Flavor != domain.SourceFlavorOKF {
 			return nil, fmt.Errorf("source %q has unsupported flavor %q", source.ID, filesystem.Flavor)
 		}
 		filesystem.URIBase, err = normalizeURIBase(filesystem.URIBase)

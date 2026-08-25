@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -263,6 +264,47 @@ func TestVerticalReconciliationSliceEndToEnd(t *testing.T) {
 	resumableAfterInterrupt, _ := env.state.ResumableSyncRuns(ctx, env.scope, 10)
 	if len(resumableAfterInterrupt) != 0 {
 		t.Fatalf("failed scans must not stay resumable: %#v", resumableAfterInterrupt)
+	}
+}
+
+func TestVerticalOKFFlavorPreservesControlsMetadataAndConceptLinks(t *testing.T) {
+	ctx := context.Background()
+	env := newVerticalEnv(t)
+	if err := os.RemoveAll(env.sourceRoot); err != nil {
+		t.Fatal(err)
+	}
+	writeVerticalFile(t, env.sourceRoot, "index.md", "---\nokf_version: \"0.9\"\n---\n# Catalog\n\n* [One](docs/one.md)\n")
+	writeVerticalFile(t, env.sourceRoot, "log.md", "# Catalog Log\n\n## 2026-08-26\n* Published catalog\n")
+	writeVerticalFile(t, env.sourceRoot, "docs/one.md", "---\ntype: Metric\ntitle: One metric\ndescription: Semantic description\nstatus: deprecated\nvendor: retained\n---\nMetricverticalbeacon [Two](two.md) [Broken](missing.md).\n")
+	writeVerticalFile(t, env.sourceRoot, "docs/two.md", "---\ntype: Reference\ntitle: Two\n---\nSecond concept.\n")
+
+	result, err := env.service.SyncSource(ctx, env.scope, env.source(testEngineeringSourceID, env.sourceRoot, knowl.SourceFlavorOKF))
+	requireSyncSuccess(t, result, err)
+	if want := []knowl.SourceDiagnostic{{Code: "okf.version.best_effort", Path: "index.md", ObservedVersion: "0.9"}}; !reflect.DeepEqual(result.Diagnostics, want) {
+		t.Fatalf("OKF sync diagnostics = %#v, want %#v", result.Diagnostics, want)
+	}
+	snapshot, err := env.workspace.Snapshot(ctx, env.scope)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Pages) != 2 || len(snapshot.Links) != 1 || snapshot.Links[0].Relation != "okf" || snapshot.Links[0].To != "sources/engineering/docs/two" {
+		t.Fatalf("OKF snapshot pages=%#v links=%#v", snapshot.Pages, snapshot.Links)
+	}
+	if snapshot.PageDigests["wiki/sources/engineering/index.md"] == "" || snapshot.PageDigests["wiki/sources/engineering/log.md"] == "" {
+		t.Fatalf("reserved controls missing from digest inventory: %#v", snapshot.PageDigests)
+	}
+	var metric *knowl.PageSnapshot
+	for index := range snapshot.Pages {
+		if snapshot.Pages[index].ID == "sources/engineering/docs/one" {
+			metric = &snapshot.Pages[index]
+		}
+	}
+	if metric == nil || metric.OKF == nil || metric.OKF.Type != "Metric" || metric.OKF.Status != "deprecated" || metric.OKF.Extensions["vendor"] == nil || metric.Body == "" {
+		t.Fatalf("OKF metric snapshot = %#v", metric)
+	}
+	references, err := env.search.Search(ctx, env.scope, "metricverticalbeacon", knowl.ReadLimits{Pages: 2, Characters: 64}, nil)
+	if err != nil || len(references) != 1 || references[0].OKF == nil || references[0].OKF.Type != "Metric" {
+		t.Fatalf("OKF projection = %#v, %v", references, err)
 	}
 }
 

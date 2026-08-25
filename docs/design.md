@@ -21,8 +21,8 @@ same host runtime in-process.
 
 Knowl supports these baseline use cases:
 
-1. Bootstrap an existing Markdown wiki or Obsidian vault into a Knowl-owned
-   workspace as the first production filesystem-source sync.
+1. Bootstrap an existing Markdown wiki, Obsidian vault, or OKF v0.2 bundle into
+   a Knowl-owned workspace as the first production filesystem-source sync.
 2. Ingest one text or URI source through one canonical pipeline.
 3. Retrieve bounded evidence and provenance for a host query.
 4. Read durable ingest-operation status.
@@ -64,11 +64,12 @@ convenience wrapper over the same operations, not a primary agent interface.
 The filesystem workspace is the canonical content owner:
 
 - `raw/` stores immutable accepted source versions;
-- `wiki/` stores the human-readable Markdown knowledge artifact;
+- `wiki/` stores the human-readable, directly portable OKF v0.2 bundle;
 - `wiki/sources/<source_id>/**` stores active read-only source mirrors and is
   writable only by the source reconciler;
 - `schema.md` is operator-owned policy;
-- `wiki/index.md` and `wiki/log.md` are maintained control files.
+- `wiki/index.md` declares the bundle version and, with every reserved
+  `index.md`/`log.md`, is control content rather than retrieval evidence.
 
 SQL and search state are operational and rebuildable, never canonical content.
 The detailed filesystem contract is in [workspace.md](workspace.md).
@@ -96,6 +97,10 @@ configuration and validates returned plans before canonical mutation. Without
 one, deterministic reads, lint, source synchronization, status, health, HTTP,
 and MCP reads remain available; ingest fails before accepting or reserving work.
 Provider code does not receive unrestricted filesystem authority.
+
+OKF Attested Computation declarations are data, not an execution interface.
+Knowl preserves and exposes their runtime, parameters, computation, executor,
+and attester fields without loading resources or running any declared program.
 
 ## Supported usage surfaces
 
@@ -155,6 +160,11 @@ filesystem source, and calls `Host.SyncSource` once. Ordinary sync has no
 freshness rule, never replaces `wiki/index.md`, and converges only the exact
 `wiki/sources/<source_id>/**` namespace. Sidecar and embedded callers use this
 same Host engine and durable recovery order.
+
+Canonical-format migration is similarly explicit: `knowl migrate okf-v0.2`
+preflights and journals the conversion, preserves the exact legacy log in an
+archive, commits a marker last, and rebuilds projections. Host startup and
+read-only commands reject legacy canonical state rather than changing it.
 
 When code becomes difficult to read, split files within its package first.
 Create a package only for a distinct usage surface, external technology

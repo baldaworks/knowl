@@ -41,10 +41,11 @@ type SourceObserver interface {
 
 // SourceSyncResult is the bounded, redacted result of one configured source attempt.
 type SourceSyncResult struct {
-	SourceID     domain.SourceID `json:"source_id"`
-	Run          domain.SyncRun  `json:"run"`
-	Changed      bool            `json:"changed"`
-	FailureClass string          `json:"failure_class,omitempty"`
+	SourceID     domain.SourceID           `json:"source_id"`
+	Run          domain.SyncRun            `json:"run"`
+	Changed      bool                      `json:"changed"`
+	FailureClass string                    `json:"failure_class,omitempty"`
+	Diagnostics  []domain.SourceDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // SourceSyncAllResult contains one deterministic result per enabled source.
@@ -167,7 +168,10 @@ func cloneSource(source domain.Source) domain.Source {
 }
 
 func publicSourceResult(result reconcile.Result) SourceSyncResult {
-	return SourceSyncResult{SourceID: result.SourceID, Run: result.Run, Changed: result.Changed, FailureClass: result.FailureClass}
+	return SourceSyncResult{
+		SourceID: result.SourceID, Run: result.Run, Changed: result.Changed, FailureClass: result.FailureClass,
+		Diagnostics: append([]domain.SourceDiagnostic(nil), result.Diagnostics...),
+	}
 }
 
 func nonNilHostContext(ctx context.Context) context.Context {

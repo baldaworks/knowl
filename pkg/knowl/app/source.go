@@ -75,6 +75,7 @@ type SourceNormalizationResult struct {
 	CatalogDigest string
 	MirrorDigest  string
 	Mutations     []knowl.SourceMutation
+	Diagnostics   []knowl.SourceDiagnostic
 }
 
 // SourceNormalizer renders raw source documents into canonical mirrors without

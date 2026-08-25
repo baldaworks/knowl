@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,7 +113,7 @@ func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read commit log: %v", err)
 	}
-	if !contains(string(logContent), string(planned.Operation.ID)) {
+	if !contains(string(logContent), strings.ReplaceAll(string(planned.Operation.ID), "-", `\u002d`)) {
 		t.Fatalf("commit log does not cite operation: %q", logContent)
 	}
 	results, err := store.Search(ctx, envelope.Scope, "One", knowl.ReadLimits{Pages: 5}, nil)
@@ -229,7 +230,7 @@ func TestIngestAcceptsAndCommitsNoOpPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read no-op commit log: %v", err)
 	}
-	if !contains(string(logContent), string(planned.Operation.ID)) {
+	if !contains(string(logContent), strings.ReplaceAll(string(planned.Operation.ID), "-", `\u002d`)) {
 		t.Fatalf("no-op commit log does not cite operation: %q", logContent)
 	}
 }
@@ -246,7 +247,7 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	maintainer.plan.Edits = []knowl.FileEdit{
 		{Path: testPagePath, Content: planPageContent},
 		{Path: testPageTwoPath, Content: planSupportingContent},
-		{Path: "wiki/index.md", ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n- entities/one\n")...)},
+		{Path: "wiki/index.md", ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n* [One](entities/one.md)\n")...)},
 	}
 	maintainer.mu.Unlock()
 	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
@@ -264,7 +265,7 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read updated index: %v", err)
 	}
-	if string(indexAfter) != string(append(indexBefore, []byte("\n- entities/one\n")...)) {
+	if string(indexAfter) != string(append(indexBefore, []byte("\n* [One](entities/one.md)\n")...)) {
 		t.Fatalf("updated index = %q", indexAfter)
 	}
 }

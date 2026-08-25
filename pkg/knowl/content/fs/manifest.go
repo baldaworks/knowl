@@ -53,11 +53,13 @@ type stageManifest struct {
 	Entries           []stageEntry `yaml:"entries"`
 	LogExpectedDigest string       `yaml:"log_expected_digest,omitempty"`
 	LogDigest         string       `yaml:"log_digest,omitempty"`
+	LogDate           string       `yaml:"log_date,omitempty"`
 }
 
 const (
 	stageWriterMaintainer = "maintainer"
 	stageWriterSource     = "source"
+	stageWriterMigration  = "migration"
 )
 
 func manifestWriter(manifest stageManifest) string {

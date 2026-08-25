@@ -105,7 +105,11 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 	if err := workspace.validateProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan)); err != nil {
 		return knowl.StagedChange{}, err
 	}
-	manifest := stageManifest{OperationID: plan.OperationID, Scope: string(plan.Scope), SchemaDigest: plan.SchemaDigest, SourceRefs: append([]string(nil), plan.SourceRefs...), Entries: entries}
+	manifest := stageManifest{
+		OperationID: plan.OperationID, Scope: string(plan.Scope), SchemaDigest: plan.SchemaDigest,
+		SourceRefs: append([]string(nil), plan.SourceRefs...), Entries: entries,
+		LogDate: time.Now().UTC().Format(time.DateOnly),
+	}
 	coreMetadata, err := yaml.Marshal(manifest)
 	if err != nil {
 		return knowl.StagedChange{}, fmt.Errorf("marshal staging manifest: %w", err)
@@ -217,6 +221,11 @@ func validMaintainerStageManifest(manifest stageManifest) bool {
 		len(manifest.SourceRefs) == 0 || len(manifest.SourceRefs) > limits.MaxSourceRefs || len(manifest.Entries) > limits.MaxFiles {
 		return false
 	}
+	if manifest.LogDate != "" {
+		if parsed, err := time.Parse(time.DateOnly, manifest.LogDate); err != nil || parsed.Format(time.DateOnly) != manifest.LogDate {
+			return false
+		}
+	}
 	seenRefs := make(map[string]struct{}, len(manifest.SourceRefs))
 	for _, ref := range manifest.SourceRefs {
 		trimmed := strings.TrimSpace(ref)
@@ -242,7 +251,7 @@ func validMaintainerStageManifest(manifest stageManifest) bool {
 }
 
 func validSourceStageManifest(manifest stageManifest) bool {
-	if app.ValidateSourceID(knowl.SourceID(manifest.SourceID)) != nil || app.ValidateSyncRunID(knowl.SyncRunID(manifest.OperationID)) != nil || strings.TrimSpace(manifest.Scope) == "" || manifest.SchemaDigest != "" || len(manifest.SourceRefs) != 0 || manifest.LogExpectedDigest != "" || manifest.LogDigest != "" || len(manifest.Entries) == 0 || len(manifest.Entries) > maxSourceStageEntries {
+	if app.ValidateSourceID(knowl.SourceID(manifest.SourceID)) != nil || app.ValidateSyncRunID(knowl.SyncRunID(manifest.OperationID)) != nil || strings.TrimSpace(manifest.Scope) == "" || manifest.SchemaDigest != "" || len(manifest.SourceRefs) != 0 || manifest.LogExpectedDigest != "" || manifest.LogDigest != "" || manifest.LogDate != "" || len(manifest.Entries) == 0 || len(manifest.Entries) > maxSourceStageEntries {
 		return false
 	}
 	seenTargets := make(map[string]struct{}, len(manifest.Entries))
@@ -332,7 +341,11 @@ func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
 }
 
 func stageGeneration(manifest stageManifest) string {
-	core := stageManifest{OperationID: manifest.OperationID, Writer: manifest.Writer, SourceID: manifest.SourceID, Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, SourceRefs: manifest.SourceRefs, Entries: manifest.Entries}
+	core := stageManifest{
+		OperationID: manifest.OperationID, Writer: manifest.Writer, SourceID: manifest.SourceID,
+		Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, SourceRefs: manifest.SourceRefs,
+		Entries: manifest.Entries, LogDate: manifest.LogDate,
+	}
 	metadata, err := yaml.Marshal(core)
 	if err != nil {
 		return ""

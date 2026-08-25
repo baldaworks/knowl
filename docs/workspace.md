@@ -1,7 +1,8 @@
 # Workspace semantics
 
-The workspace is the canonical Knowl artifact. It is portable Markdown plus
-immutable source files; the SQL adapter is an operational index and projection.
+The workspace is the canonical Knowl artifact. `wiki/` is directly portable as
+an Open Knowledge Format (OKF) v0.2 bundle, alongside immutable source files in
+`raw/`; the SQL adapter is only an operational index and projection.
 
 ## Ownership and layout
 
@@ -48,7 +49,8 @@ Ownership is intentionally split:
   content. The SQLite file is also rebuildable operational state.
 
 `knowl init` creates the required directories and starter `schema.md`,
-`wiki/index.md`, and `wiki/log.md` without replacing existing files.
+`wiki/index.md`, and `wiki/log.md` without replacing existing files. The root
+index declares `okf_version: "0.2"`.
 `knowl validate` checks the required workspace paths. Full migration,
 projection, and recovery checks happen during `start` or host construction.
 
@@ -56,16 +58,19 @@ projection, and recovery checks happen during `start` or host construction.
 
 The initial workspace groups pages under `entities`, `concepts`, and
 `syntheses`, but the application accepts safe Markdown paths under `wiki/` and
-the operator-owned schema defines the intended page types. A normal page uses
-bounded YAML frontmatter followed by Markdown:
+the operator-owned schema defines the intended page types. A normal page is an
+OKF concept with bounded YAML frontmatter followed by Markdown:
 
 ```markdown
 ---
-id: entities/example
 title: Example
 type: entity
-source_refs:
-  - fixture:source-1@1
+description: A portable example.
+tags: [example]
+knowl:
+  id: entities/example
+  source_refs:
+    - fixture:source-1@1
 ---
 # Example
 
@@ -76,21 +81,24 @@ See [[concepts/related]] or [[entities/other|display text]].
 
 The enforced and linted conventions are:
 
-- `id` is the safe page identifier and matches the path without `.md`.
-- `title` and `type` identify the page for projections and maintenance.
-- `source_refs` contains stable citations in the form
+- the safe bundle-relative path without `.md` is the concept identity;
+- `type` is required; `title`, `description`, `resource`, `tags`, `sources`,
+  lifecycle, generation, and verification fields follow OKF v0.2;
+- unknown producer fields round-trip as OKF extensions;
+- the `knowl` namespaced extension carries Knowl provenance. Its `source_refs`
+  contains stable citations in the form
   `adapter:source-id@version`; every maintained page must cite at least one
   accepted raw source.
-- Wiki links use `[[page/id]]`. A `|label` or `#fragment` may follow a link;
-  graph extraction records the page target. Broken and malformed links are
-  rejected before canonical mutation, and deterministic lint reports the same
-  classes against the committed workspace.
+- Curated Knowl pages use `[[page/id]]`; these links remain strict. Imported OKF
+  concepts use standard Markdown links such as `[Related](related.md)`. Local
+  concept targets are resolved deterministically; external URLs, assets, and
+  broken targets are tolerated and excluded from the concept graph.
 - Maintainer edit plans may target safe `wiki/**/*.md` except `wiki/log.md` and
   the complete `wiki/sources/**` ownership boundary. The plan must carry the
   current schema digest, cite the accepted source, use unique paths, and stay
   within the configured file/count limits.
 
-Source pages add a `source_document` block containing `source_id`,
+Source pages add Knowl-owned `source_document` metadata containing `source_id`,
 `document_id`, immutable `revision`, and canonical `uri`. A successful complete
 scan may remove a deleted document from the active mirror and projection, while
 its raw revisions and durable tombstone remain. An interrupted scan never
@@ -104,17 +112,36 @@ staged plan is committed.
 
 ## Control pages
 
-`wiki/index.md` is the human-facing catalog. It remains a control document
-without ordinary-page frontmatter, but its wiki links and simple `- page/id`
-entries are still validated against the prospective canonical page set before
-commit. Lint also reports missing or stale catalog entries and does not treat
-the SQL projection as the catalog.
+`wiki/index.md` is the OKF root catalog and declares version `0.2`. Nested
+`index.md` files are also reserved catalogs but cannot redeclare the bundle
+version. Catalog controls are validated and included in canonical digests, but
+never become retrieval evidence.
 
 `wiki/log.md` is maintained by the application. Each committed operation adds
 one structured JSON metadata line containing the operation ID, generation,
 schema digest, cited source references, and committed file paths. A maintainer
 cannot rewrite it as an arbitrary edit; its prior digest is part of staging and
 commit preconditions.
+
+Every `log.md` is a reserved, newest-first ISO-date-grouped OKF control. Imported
+OKF logs are preserved byte-for-byte in their source namespace and excluded
+from evidence. Attested Computation metadata is parsed, preserved, projected,
+and returned, but never executed or dereferenced.
+
+## Explicit OKF migration
+
+Startup and read-only commands never migrate content. To upgrade a legacy
+canonical workspace, stop writers, take a backup, and run:
+
+```bash
+knowl migrate okf-v0.2
+knowl validate
+```
+
+The command preflights the whole change, uses the normal recovery journal,
+archives the exact legacy log, writes its marker only after canonical commit,
+and rebuilds the configured projection. Re-running it is a no-op. If interrupted,
+the next invocation deterministically rolls back or completes from the journal.
 
 ## Recovery and Git
 

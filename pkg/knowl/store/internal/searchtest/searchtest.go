@@ -7,11 +7,14 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -22,6 +25,9 @@ const (
 	decisionBadgerID knowl.PageID   = "decision-badger"
 	engineeringID    knowl.SourceID = "engineering"
 	operationsID     knowl.SourceID = "operations"
+	headinglessTitle                = "Глоссарий-проекта"
+	referenceType                   = "Reference"
+	lifecycleTitle                  = "Lifecycle reference"
 )
 
 var capturedAt = time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
@@ -80,6 +86,8 @@ func Snapshot() knowl.WorkspaceSnapshot {
 		page("source-curated", "curated/shared.md", "Sourcefilterbeacon Curated", "sourcefilterbeacon curated evidence", "source:curated"),
 		sourcePage("source-engineering", "wiki/sources/engineering/shared.md", "Sourcefilterbeacon Engineering", engineeringID),
 		sourcePage("source-operations", "wiki/sources/operations/shared.md", "Sourcefilterbeacon Operations", operationsID),
+		headinglessSourcePage(),
+		metadataPage(),
 	)
 	digests := make(map[string]string, len(pages))
 	for _, fixturePage := range pages {
@@ -162,6 +170,36 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{engineeringID, engineeringID}), "source-engineering")
 		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{"ghost"}))
 	})
+	t.Run("out of vocabulary", func(t *testing.T) {
+		assertIDs(t, search(t, index, Scope, "xyzzy-valera-no-such-term-92841", 20, 64))
+	})
+	t.Run("headingless source content", func(t *testing.T) {
+		got := search(t, index, Scope, "пользовательскийглоссарий", 1, 96)
+		assertIDs(t, got, "headingless-source")
+		if got[0].Title != headinglessTitle {
+			t.Fatalf("headingless title = %q", got[0].Title)
+		}
+		for _, technical := range []string{"source_refs", "source_document", "metadataonlybeacon", "type: source"} {
+			if strings.Contains(got[0].Snippet, technical) {
+				t.Fatalf("snippet %q contains technical metadata %q", got[0].Snippet, technical)
+			}
+		}
+		assertIDs(t, search(t, index, Scope, "metadataonlybeacon", 10, 96))
+	})
+	t.Run("OKF metadata round trip and search boundaries", func(t *testing.T) {
+		got := search(t, index, Scope, "lifecyclebodybeacon", 1, 96)
+		assertIDs(t, got, "okf-lifecycle")
+		if got[0].OKF == nil || got[0].OKF.Type != referenceType || got[0].OKF.Status != okf.StatusDeprecated || !got[0].OKF.Stale || got[0].OKF.TrustTier != okf.TrustHumanReviewed {
+			t.Fatalf("OKF metadata = %#v", got[0].OKF)
+		}
+		got[0].OKF.Title = "mutated result"
+		again := search(t, index, Scope, "lifecyclebodybeacon", 1, 96)
+		if again[0].OKF == nil || again[0].OKF.Title != lifecycleTitle {
+			t.Fatalf("stored OKF metadata was aliased through a result: %#v", again[0].OKF)
+		}
+		assertIDs(t, search(t, index, Scope, "descriptionsearchbeacon", 1, 96), "okf-lifecycle")
+		assertIDs(t, search(t, index, Scope, "technicalextensionbeacon", 10, 96))
+	})
 	t.Run("invalid normalization", func(t *testing.T) {
 		_, err := index.Search(ctx, Scope, "what is why", knowl.ReadLimits{Pages: 5, Characters: 48}, nil)
 		if err == nil || invalid == nil || !invalid(err) {
@@ -206,6 +244,47 @@ func sourcePage(id knowl.PageID, path, title string, sourceID knowl.SourceID) kn
 		SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md",
 	}
 	return fixture
+}
+
+func headinglessSourcePage() knowl.PageSnapshot {
+	body := "\nПолезный пользовательскийглоссарий находится здесь без Markdown-заголовка.\n"
+	return knowl.PageSnapshot{
+		ID:     "headingless-source",
+		Path:   "wiki/sources/engineering/Глоссарий-проекта.md",
+		Digest: "digest-headingless-source",
+		Title:  headinglessTitle,
+		Content: "---\nid: sources/engineering/Глоссарий-проекта\ntitle: Глоссарий-проекта\ntype: source\n" +
+			"source_refs:\n  - raw:metadataonlybeacon@1\nsource_document:\n  source_id: engineering\n" +
+			"  document_id: Глоссарий-проекта.md\n  revision: revision-1\n  uri: file:///metadataonlybeacon/Глоссарий-проекта.md\n" +
+			"---\n" + body,
+		Body: body,
+		OKF: &okf.Metadata{Type: referenceType, Title: headinglessTitle, Extensions: map[string]any{
+			"knowl": map[string]any{"technical": "metadataonlybeacon"},
+		}},
+		SourceRefs: []string{"raw:metadataonlybeacon@1"},
+		SourceDocument: &knowl.SourceDocument{
+			SourceID: "engineering", DocumentID: "Глоссарий-проекта.md", Revision: "revision-1", URI: "file:///metadataonlybeacon/Глоссарий-проекта.md",
+		},
+		Untrusted: true,
+		UpdatedAt: capturedAt,
+	}
+}
+
+func metadataPage() knowl.PageSnapshot {
+	staleAfter := capturedAt.Add(-time.Hour)
+	body := "Lifecyclebodybeacon remains available for historical retrieval."
+	return knowl.PageSnapshot{
+		ID: "okf-lifecycle", Path: "wiki/okf-lifecycle.md", Digest: "digest-okf-lifecycle",
+		Title: lifecycleTitle, Content: body, Body: body,
+		SourceRefs: []string{"source:okf-lifecycle"}, Untrusted: true, UpdatedAt: capturedAt,
+		OKF: &okf.Metadata{
+			Type: referenceType, Title: lifecycleTitle, Description: "Descriptionsearchbeacon public summary",
+			Status: okf.StatusDeprecated, StaleAfter: &staleAfter, Stale: true,
+			TrustTier: okf.TrustHumanReviewed, ResolvedStatus: okf.StatusDeprecated,
+			Verified:   []okf.Verification{{By: "human:reviewer", At: capturedAt.Add(-2 * time.Hour)}},
+			Extensions: map[string]any{"private_note": "technicalextensionbeacon"},
+		},
+	}
 }
 
 func longText(term string) string {
@@ -307,5 +386,5 @@ func containsIDs(references []knowl.PageReference, want ...knowl.PageID) bool {
 func equalReference(left, right knowl.PageReference) bool {
 	return left.ID == right.ID && left.Path == right.Path && left.Title == right.Title &&
 		left.Snippet == right.Snippet && left.Untrusted == right.Untrusted &&
-		slices.Equal(left.SourceRefs, right.SourceRefs)
+		slices.Equal(left.SourceRefs, right.SourceRefs) && reflect.DeepEqual(left.OKF, right.OKF)
 }

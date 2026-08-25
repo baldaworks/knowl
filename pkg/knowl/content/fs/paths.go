@@ -15,7 +15,7 @@ func validateWikiPath(raw string) error {
 	if err := validateCanonicalWikiTarget(raw); err != nil {
 		return err
 	}
-	if raw == filepath.ToSlash(filepath.Join(workspaceWikiDir, "log.md")) || filepath.Ext(raw) != markdownExt {
+	if filepath.Base(raw) == okfLogFilename || filepath.Ext(raw) != markdownExt {
 		return fmt.Errorf("wiki path %q: %w", raw, ErrPathRejected)
 	}
 	return nil
@@ -78,6 +78,14 @@ func validateJournalTarget(journal recoveryJournal, target string) error {
 			return fmt.Errorf("source recovery target %q: %w", target, err)
 		}
 		return nil
+	case stageWriterMigration:
+		if target == migrationLegacyLogPath {
+			return nil
+		}
+		if err := validateCanonicalWikiTarget(target); err != nil || filepath.Ext(target) != markdownExt {
+			return fmt.Errorf("migration recovery target %q: %w", target, ErrPathRejected)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown recovery writer %q: %w", journal.Writer, ErrWorkspaceInvalid)
 	}
@@ -112,6 +120,9 @@ func pageRelativePath(raw string) (string, error) {
 	}
 	if err := validateWikiPath(clean); err != nil {
 		return "", err
+	}
+	if base := filepath.Base(clean); base == okfLogFilename || (base == okfIndexFilename && clean != filepath.ToSlash(filepath.Join(workspaceWikiDir, okfIndexFilename))) {
+		return "", fmt.Errorf("reserved OKF document %q: %w", clean, ErrPathRejected)
 	}
 	return clean, nil
 }

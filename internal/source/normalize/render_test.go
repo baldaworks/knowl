@@ -2,10 +2,13 @@ package normalize
 
 import (
 	"bytes"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
@@ -29,7 +32,7 @@ func TestRenderMarkdownPreservesExtrasAndReplacesReservedFrontmatter(t *testing.
 	if err != nil {
 		t.Fatalf("ParseFrontmatter() error = %v\n%s", err, content)
 	}
-	if metadata.ID != "sources/engineering/nested/Page" || metadata.Title != "Explicit title" || metadata.Type != sourcePageType {
+	if metadata.ID != "sources/engineering/nested/Page" || metadata.Title != "Explicit title" || metadata.Type != "old" || metadata.Legacy {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 	if len(metadata.SourceRefs) != 1 || metadata.SourceRefs[0] != app.SourceRefKey(input.RawSource) {
@@ -81,10 +84,93 @@ func TestRenderMarkdownTitleFallbacksAndMalformedFrontmatter(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseFrontmatter() error = %v", err)
 			}
-			if metadata.Title != test.title || !strings.Contains(content, test.body) {
+			if metadata.Title != test.title || metadata.Type != sourcePageType || metadata.Legacy || !strings.Contains(content, test.body) {
 				t.Fatalf("metadata/content = %#v\n%s", metadata, content)
 			}
 		})
+	}
+}
+
+func TestRenderMarkdownMergesUnownedKnowlExtensionsAndRejectsCollisions(t *testing.T) {
+	input := renderInput(t, engineeringSource, "page.md", "---\ntype: Reference\nknowl:\n  vendor: retained\n---\nBody\n", knowl.SourceFlavorMarkdown)
+	result, err := Render(input, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if content := string(result.Files()[0].Content()); !strings.Contains(content, "vendor: retained") || !strings.Contains(content, "id: sources/engineering/page") {
+		t.Fatalf("merged content = %s", content)
+	}
+
+	input = renderInput(t, engineeringSource, "page.md", "---\ntype: Reference\nknowl:\n  id: upstream\n---\nBody\n", knowl.SourceFlavorMarkdown)
+	if _, err := Render(input, DefaultLimits()); err == nil {
+		t.Fatal("Render() accepted a Knowl-owned extension collision")
+	}
+}
+
+func TestRenderOKFFlavorPreservesSemanticsAndReportsSafeViolations(t *testing.T) {
+	raw := "---\ntype: Metric\ntitle: Request rate\ndescription: Public metric\ntags: [sli]\nstatus: deprecated\nruntime: python\nexecutor:\n  resource: https://example.test/executor\nvendor:\n  retained: true\n---\nMetric body with [details](../details.md).\n"
+	input := renderInput(t, engineeringSource, "metrics/request-rate.md", raw, knowl.SourceFlavorOKF)
+	result, err := Render(input, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Render(OKF) error = %v", err)
+	}
+	if result.FormatVersion() != OKFFormatVersion {
+		t.Fatalf("OKF format version = %q", result.FormatVersion())
+	}
+	document, err := okf.ParseConcept("sources/engineering/metrics/request-rate.md", result.Files()[0].Content(), okf.DefaultLimits())
+	if err != nil {
+		t.Fatalf("ParseConcept(rendered OKF): %v", err)
+	}
+	if document.Metadata.Type != "Metric" || document.Metadata.Status != okf.StatusDeprecated || document.Metadata.Runtime != "python" || document.Metadata.Executor == nil || document.Metadata.Extensions["vendor"] == nil || !strings.Contains(document.Body, "[details](../details.md)") {
+		t.Fatalf("rendered OKF = %#v body=%q", document.Metadata, document.Body)
+	}
+
+	invalid := renderInput(t, engineeringSource, "bad.md", "---\ntype: [bad\n---\nbody\n", knowl.SourceFlavorOKF)
+	_, err = Render(invalid, DefaultLimits())
+	var violation *okf.Violation
+	if !errors.As(err, &violation) || violation.Path != "sources/engineering/bad.md" || violation.Rule != okf.RuleFrontmatterMalformed {
+		t.Fatalf("invalid OKF error = %v", err)
+	}
+
+	collision := renderInput(t, engineeringSource, "collision.md", "---\ntype: Reference\nid: upstream-owned\n---\nbody\n", knowl.SourceFlavorOKF)
+	if _, err := Render(collision, DefaultLimits()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("OKF owned extension collision = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRenderOKFFlavorPreservesReservedControlsOutsideEvidence(t *testing.T) {
+	index := renderInput(t, engineeringSource, "index.md", "---\nokf_version: \"0.2\"\n---\n# Upstream Index\n\n* [Metric](metrics/request-rate.md)\n", knowl.SourceFlavorOKF)
+	indexResult, err := Render(index, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Render(index) error = %v", err)
+	}
+	if indexResult.Files()[0].Path() != "wiki/sources/engineering/index.md" {
+		t.Fatalf("index target = %q", indexResult.Files()[0].Path())
+	}
+	parsedIndex, err := okf.ValidateIndex("sources/engineering/index.md", indexResult.Files()[0].Content(), okf.DefaultLimits())
+	if err != nil || parsedIndex.ObservedVersion != "" || !strings.Contains(parsedIndex.Body, "Upstream Index") {
+		t.Fatalf("nested index = %#v, %v", parsedIndex, err)
+	}
+
+	logInput := renderInput(t, engineeringSource, "log.md", "# Upstream Log\n\n## 2026-08-26\n* Published metric\n", knowl.SourceFlavorOKF)
+	logResult, err := Render(logInput, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Render(log) error = %v", err)
+	}
+	if _, err := okf.ValidateLog("sources/engineering/log.md", logResult.Files()[0].Content(), okf.DefaultLimits()); err != nil {
+		t.Fatalf("nested log: %v", err)
+	}
+}
+
+func TestRenderOKFReportsFutureRootVersionBestEffort(t *testing.T) {
+	input := renderInput(t, engineeringSource, "index.md", "---\nokf_version: \"0.9\"\n---\n# Future Catalog\n", knowl.SourceFlavorOKF)
+	result, err := Render(input, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Render(future index) error = %v", err)
+	}
+	want := []knowl.SourceDiagnostic{{Code: "okf.version.best_effort", Path: "index.md", ObservedVersion: "0.9"}}
+	if !reflect.DeepEqual(result.Diagnostics(), want) {
+		t.Fatalf("Diagnostics() = %#v, want %#v", result.Diagnostics(), want)
 	}
 }
 

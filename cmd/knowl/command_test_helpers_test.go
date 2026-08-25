@@ -38,12 +38,18 @@ type stubLocalWorkflowHost struct {
 	startErr   error
 	stopErr    error
 	startCalls int
+	readCalls  int
 	stopCalls  int
 }
 
 func (host *stubLocalWorkflowHost) Start(context.Context) error {
 	host.startCalls++
 	return host.startErr
+}
+
+func (host *stubLocalWorkflowHost) PrepareReadOnly() error {
+	host.readCalls++
+	return nil
 }
 
 func (host *stubLocalWorkflowHost) Stop(context.Context) error {
