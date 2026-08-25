@@ -3,8 +3,8 @@ module github.com/baldaworks/knowl
 go 1.26.6
 
 require (
-	github.com/jackc/pgx/v5 v5.10.0
 	github.com/gobwas/glob v0.2.3
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/metalagman/appkit v0.1.1-0.20260129033342-e19ea914eada
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/normahq/runtime/v2 v2.0.4

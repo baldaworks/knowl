@@ -31,8 +31,8 @@ components:
     in: internal/mcphttp
   httpapi:
     in: internal/httpapi/**
-  bootstrap:
-    in: internal/bootstrap
+  source:
+    in: internal/source/**
   testsupport:
     in: pkg/knowl/internal/**
   examples:
@@ -72,9 +72,10 @@ deps:
       - httpapi
       - app
       - types
-  bootstrap:
+  source:
     mayDependOn:
-      - content
+      - source
+      - app
       - types
   host:
     mayDependOn:
@@ -86,6 +87,7 @@ deps:
       - mcp
       - mcphttp
       - httpapi
+      - source
   fx:
     mayDependOn:
       - host
@@ -93,7 +95,8 @@ deps:
     mayDependOn:
       - host
       - fx
-      - bootstrap
+      - app
+      - source
       - content
       - provider
       - types
