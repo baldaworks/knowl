@@ -150,7 +150,7 @@ func writeLegacyCommandWorkspace(t *testing.T) string {
 	}
 	files := map[string]string{
 		"schema.md":               "# Schema\n",
-		"wiki/index.md":           "# Legacy Index\n\n* [Legacy](entities/legacy.md)\n",
+		"wiki/index.md":           "# Knowl index\n\nNo pages have been committed yet.\n",
 		"wiki/log.md":             "# Knowl Update Log\n- legacy record without date\n",
 		"wiki/entities/legacy.md": "---\nid: entities/legacy\ntitle: Legacy\ntype: entity\nsource_refs:\n  - raw:legacy@1\n---\n# Legacy\n\nmigrationcommandbeacon body\n",
 	}

@@ -19,6 +19,8 @@ const (
 	migrationOperationID   = "okf-v0.2"
 	migrationMarkerPath    = ".knowl/migrations/okf-v0.2.yaml"
 	migrationLegacyLogPath = ".knowl/migrations/okf-v0.2-legacy-log.md"
+	legacyStarterIndex     = "# Knowl index\n\nNo pages have been committed yet.\n"
+	migratedStarterIndex   = "# Knowl index\n"
 )
 
 // MigrationResult describes one explicit canonical workspace migration.
@@ -156,6 +158,9 @@ func migrateOKFDocument(relative string, content []byte, limits okf.Limits) ([]b
 	case okf.DocumentIndex:
 		index, err := okf.ValidateIndex(relative, content, limits)
 		if err != nil {
+			if relative == okfIndexFilename && string(content) == legacyStarterIndex {
+				return okf.RenderIndex(relative, okf.Index{ObservedVersion: okf.Version, Body: migratedStarterIndex}, limits)
+			}
 			return nil, err
 		}
 		if relative != okfIndexFilename || index.ObservedVersion == okf.Version {
