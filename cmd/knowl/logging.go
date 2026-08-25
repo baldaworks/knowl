@@ -39,7 +39,7 @@ func newConsoleLogger(output io.Writer) zerolog.Logger {
 		output = io.Discard
 	}
 	return zerolog.New(zerolog.ConsoleWriter{
-		Out:        output,
+		Out:        zerolog.SyncWriter(output),
 		TimeFormat: time.RFC3339,
 		NoColor:    true,
 	}).With().Timestamp().Logger()
