@@ -14,6 +14,7 @@ import (
 
 var (
 	ErrOperationNotApplyable = errors.New("operation is not ready to apply")
+	ErrMaintainerUnavailable = errors.New("knowl maintainer is unavailable")
 	ErrProjection            = errors.New("canonical content committed but projection failed")
 )
 
@@ -93,7 +94,7 @@ var _ interface {
 
 // NewIngestService constructs the application workflow with conservative defaults.
 func NewIngestService(content ContentStore, operations OperationStore, index SearchIndex, maintainer Maintainer, options IngestOptions) (*IngestService, error) {
-	if content == nil || operations == nil || index == nil || maintainer == nil {
+	if content == nil || operations == nil || index == nil {
 		return nil, fmt.Errorf("ingest dependencies are required")
 	}
 	if options.PlanLimits == (PlanLimits{}) {
@@ -128,6 +129,9 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 func (service *IngestService) Submit(ctx context.Context, envelope knowl.SourceEnvelope) (IngestSubmission, error) {
 	ctx = nonNilContext(ctx)
 	if err := contextErr(ctx); err != nil {
+		return IngestSubmission{}, err
+	}
+	if err := service.requireMaintainer(); err != nil {
 		return IngestSubmission{}, err
 	}
 	accepted, err := service.content.AcceptSource(ctx, envelope)
@@ -169,6 +173,9 @@ func (service *IngestService) Execute(ctx context.Context, submission IngestSubm
 func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.WorkClaim) (IngestResult, error) {
 	ctx = nonNilContext(ctx)
 	if err := contextErr(ctx); err != nil {
+		return IngestResult{}, err
+	}
+	if err := service.requireMaintainer(); err != nil {
 		return IngestResult{}, err
 	}
 	id := claim.Operation.ID
@@ -258,6 +265,9 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 	if err := contextErr(ctx); err != nil {
 		return IngestResult{}, err
 	}
+	if err := service.requireMaintainer(); err != nil {
+		return IngestResult{}, err
+	}
 	operation := submission.Operation
 	result := IngestResult{Operation: operation}
 	switch operation.Status {
@@ -309,6 +319,9 @@ type preparedStage struct {
 }
 
 func (service *IngestService) prepareStage(ctx context.Context, submission IngestSubmission, suppliedPlan *knowl.ModelEditPlan) (preparedStage, error) {
+	if err := service.requireMaintainer(); err != nil {
+		return preparedStage{}, err
+	}
 	readCtx, cancel := service.boundedContext(ctx)
 	sourceText, err := service.content.ReadSource(readCtx, submission.accepted, service.readLimits)
 	if err != nil {
@@ -375,6 +388,9 @@ func (service *IngestService) Apply(ctx context.Context, scope knowl.ScopeRef, i
 	if err := contextErr(ctx); err != nil {
 		return ApplyResult{}, err
 	}
+	if err := service.requireMaintainer(); err != nil {
+		return ApplyResult{}, err
+	}
 	operation, err := service.operations.Operation(ctx, scope, id)
 	if err != nil {
 		return ApplyResult{}, fmt.Errorf("read operation: %w", err)
@@ -399,6 +415,9 @@ func (service *IngestService) Recover(ctx context.Context) ([]knowl.RecoveryResu
 }
 
 func (service *IngestService) apply(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, staged knowl.StagedChange) (ApplyResult, error) {
+	if err := service.requireMaintainer(); err != nil {
+		return ApplyResult{}, err
+	}
 	operation, err := service.operations.Operation(ctx, scope, id)
 	if err != nil {
 		return ApplyResult{}, fmt.Errorf("read operation before apply: %w", err)
@@ -517,6 +536,13 @@ func (service *IngestService) boundedContext(ctx context.Context) (context.Conte
 		return context.WithCancel(ctx)
 	}
 	return context.WithTimeout(ctx, service.readLimits.Deadline)
+}
+
+func (service *IngestService) requireMaintainer() error {
+	if service == nil || service.maintainer == nil {
+		return ErrMaintainerUnavailable
+	}
+	return nil
 }
 
 func durableContext(ctx context.Context) context.Context {

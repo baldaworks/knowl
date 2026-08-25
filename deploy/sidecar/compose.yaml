@@ -8,6 +8,8 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - knowl-data:/var/lib/knowl
+      - ./sources/engineering:/sources/engineering:ro
+      - ./sources/operations:/sources/operations:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]
       interval: 10s

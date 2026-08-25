@@ -18,6 +18,7 @@ type projectionChecker interface {
 type operationalStore struct {
 	operations app.OperationStore
 	index      app.SearchIndex
+	sources    app.SourceStateStore
 	closer     io.Closer
 	checker    projectionChecker
 }
@@ -32,6 +33,7 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 		return operationalStore{
 			operations: store,
 			index:      store,
+			sources:    store,
 			closer:     store,
 			checker:    store,
 		}, nil
@@ -43,12 +45,27 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 		return operationalStore{
 			operations: store,
 			index:      store,
+			sources:    store,
 			closer:     store,
 			checker:    store,
 		}, nil
 	default:
 		return operationalStore{}, fmt.Errorf("unsupported store driver %q", config.StoreDriver)
 	}
+}
+
+// RebuildProjection replaces the configured rebuildable search projection from
+// one canonical workspace snapshot without starting a Host.
+func RebuildProjection(ctx context.Context, config Config, snapshot domain.WorkspaceSnapshot) error {
+	store, err := openStore(ctx, config)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.closer.Close() }()
+	if err := store.index.Rebuild(ctx, snapshot); err != nil {
+		return fmt.Errorf("rebuild search projection: %w", err)
+	}
+	return nil
 }
 
 func ensureProjection(ctx context.Context, index app.SearchIndex, checker projectionChecker, snapshot domain.WorkspaceSnapshot) error {

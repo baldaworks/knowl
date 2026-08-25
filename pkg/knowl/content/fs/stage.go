@@ -75,7 +75,7 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 	}
 	entries := make([]stageEntry, 0, len(plan.Edits))
 	for _, edit := range plan.Edits {
-		if err := validateWikiPath(edit.Path); err != nil {
+		if err := validateMaintainerWikiPath(edit.Path); err != nil {
 			return knowl.StagedChange{}, err
 		}
 		target := filepath.Join(workspace.root, filepath.FromSlash(edit.Path))
@@ -105,7 +105,11 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 	if err := workspace.validateProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan)); err != nil {
 		return knowl.StagedChange{}, err
 	}
-	manifest := stageManifest{OperationID: plan.OperationID, Scope: string(plan.Scope), SchemaDigest: plan.SchemaDigest, SourceRefs: append([]string(nil), plan.SourceRefs...), Entries: entries}
+	manifest := stageManifest{
+		OperationID: plan.OperationID, Scope: string(plan.Scope), SchemaDigest: plan.SchemaDigest,
+		SourceRefs: append([]string(nil), plan.SourceRefs...), Entries: entries,
+		LogDate: time.Now().UTC().Format(time.DateOnly),
+	}
 	coreMetadata, err := yaml.Marshal(manifest)
 	if err != nil {
 		return knowl.StagedChange{}, fmt.Errorf("marshal staging manifest: %w", err)
@@ -177,7 +181,7 @@ func (workspace *Workspace) LoadStage(ctx context.Context, scope knowl.ScopeRef,
 	if err != nil {
 		return knowl.StagedChange{}, fmt.Errorf("read staged artifact manifest: %w", ErrPlanConflict)
 	}
-	if manifest.OperationID != string(id) || manifestScope(manifest) != scope || !validStageManifest(manifest) {
+	if manifestWriter(manifest) != stageWriterMaintainer || manifest.OperationID != string(id) || manifestScope(manifest) != scope || !validStageManifest(manifest) {
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
 	if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
@@ -201,10 +205,26 @@ func (workspace *Workspace) LoadStage(ctx context.Context, scope knowl.ScopeRef,
 }
 
 func validStageManifest(manifest stageManifest) bool {
+	switch manifestWriter(manifest) {
+	case stageWriterMaintainer:
+		return validMaintainerStageManifest(manifest)
+	case stageWriterSource:
+		return validSourceStageManifest(manifest)
+	default:
+		return false
+	}
+}
+
+func validMaintainerStageManifest(manifest stageManifest) bool {
 	limits := app.DefaultPlanLimits()
-	if !validSHA256(manifest.SchemaDigest) || !validSHA256(manifest.LogExpectedDigest) || !validSHA256(manifest.LogDigest) ||
+	if manifest.SourceID != "" || !validSHA256(manifest.SchemaDigest) || !validSHA256(manifest.LogExpectedDigest) || !validSHA256(manifest.LogDigest) ||
 		len(manifest.SourceRefs) == 0 || len(manifest.SourceRefs) > limits.MaxSourceRefs || len(manifest.Entries) > limits.MaxFiles {
 		return false
+	}
+	if manifest.LogDate != "" {
+		if parsed, err := time.Parse(time.DateOnly, manifest.LogDate); err != nil || parsed.Format(time.DateOnly) != manifest.LogDate {
+			return false
+		}
 	}
 	seenRefs := make(map[string]struct{}, len(manifest.SourceRefs))
 	for _, ref := range manifest.SourceRefs {
@@ -219,7 +239,36 @@ func validStageManifest(manifest stageManifest) bool {
 	}
 	seenTargets := make(map[string]struct{}, len(manifest.Entries))
 	for _, entry := range manifest.Entries {
-		if validateCommitTarget(entry.Target) != nil || !validSHA256(entry.Digest) || (entry.ExpectedDigest != "" && !validSHA256(entry.ExpectedDigest)) {
+		if entryAction(entry) != knowl.SourceMutationWrite || validateCommitTarget(entry.Target) != nil || !validSHA256(entry.Digest) || (entry.ExpectedDigest != "" && !validSHA256(entry.ExpectedDigest)) {
+			return false
+		}
+		if _, exists := seenTargets[entry.Target]; exists {
+			return false
+		}
+		seenTargets[entry.Target] = struct{}{}
+	}
+	return stageGeneration(manifest) != ""
+}
+
+func validSourceStageManifest(manifest stageManifest) bool {
+	if app.ValidateSourceID(knowl.SourceID(manifest.SourceID)) != nil || app.ValidateSyncRunID(knowl.SyncRunID(manifest.OperationID)) != nil || strings.TrimSpace(manifest.Scope) == "" || manifest.SchemaDigest != "" || len(manifest.SourceRefs) != 0 || manifest.LogExpectedDigest != "" || manifest.LogDigest != "" || manifest.LogDate != "" || len(manifest.Entries) == 0 || len(manifest.Entries) > maxSourceStageEntries {
+		return false
+	}
+	seenTargets := make(map[string]struct{}, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		if validateSourceTarget(manifest.SourceID, entry.Target) != nil || (entry.ExpectedDigest != "" && !validSHA256(entry.ExpectedDigest)) {
+			return false
+		}
+		switch entryAction(entry) {
+		case knowl.SourceMutationWrite:
+			if !validSHA256(entry.Digest) {
+				return false
+			}
+		case knowl.SourceMutationDelete:
+			if entry.ExpectedDigest == "" || entry.Digest != "" {
+				return false
+			}
+		default:
 			return false
 		}
 		if _, exists := seenTargets[entry.Target]; exists {
@@ -240,7 +289,14 @@ func validSHA256(value string) bool {
 
 func validateStagedFileBounds(stageDir string, entries []stageEntry, maxBytes int) error {
 	for _, entry := range entries {
-		info, err := os.Stat(filepath.Join(stageDir, filepath.FromSlash(entry.Target)))
+		path := filepath.Join(stageDir, filepath.FromSlash(entry.Target))
+		if entryAction(entry) == knowl.SourceMutationDelete {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				return ErrPlanConflict
+			}
+			continue
+		}
+		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() > int64(maxBytes) {
 			return ErrPlanConflict
 		}
@@ -285,7 +341,11 @@ func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
 }
 
 func stageGeneration(manifest stageManifest) string {
-	core := stageManifest{OperationID: manifest.OperationID, Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, SourceRefs: manifest.SourceRefs, Entries: manifest.Entries}
+	core := stageManifest{
+		OperationID: manifest.OperationID, Writer: manifest.Writer, SourceID: manifest.SourceID,
+		Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, SourceRefs: manifest.SourceRefs,
+		Entries: manifest.Entries, LogDate: manifest.LogDate,
+	}
 	metadata, err := yaml.Marshal(core)
 	if err != nil {
 		return ""
@@ -309,6 +369,9 @@ func prospectiveEditsFromPlan(plan knowl.ValidatedEditPlan) []prospectiveEdit {
 func readStagedPlanEdits(stageDir string, entries []stageEntry) ([]prospectiveEdit, error) {
 	edits := make([]prospectiveEdit, 0, len(entries))
 	for _, entry := range entries {
+		if entryAction(entry) != knowl.SourceMutationWrite {
+			return nil, ErrPlanConflict
+		}
 		content, err := os.ReadFile(filepath.Join(stageDir, filepath.FromSlash(entry.Target)))
 		if err != nil {
 			return nil, fmt.Errorf("read staged file %q: %w", entry.Target, err)
@@ -331,7 +394,14 @@ func manifestScope(manifest stageManifest) knowl.ScopeRef {
 
 func stagedFilesMatch(stageDir string, entries []stageEntry) bool {
 	for _, entry := range entries {
-		content, err := os.ReadFile(filepath.Join(stageDir, filepath.FromSlash(entry.Target)))
+		path := filepath.Join(stageDir, filepath.FromSlash(entry.Target))
+		if entryAction(entry) == knowl.SourceMutationDelete {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				return false
+			}
+			continue
+		}
+		content, err := os.ReadFile(path)
 		if err != nil || digestBytes(content) != entry.Digest {
 			return false
 		}

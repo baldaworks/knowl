@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
@@ -33,6 +34,94 @@ func TestHostConfigIncludesOperatorToken(t *testing.T) {
 	}
 	if config.OperatorToken != "local-secret" {
 		t.Fatalf("hostConfig().OperatorToken = %q, want local-secret", config.OperatorToken)
+	}
+}
+
+func TestHostConfigDecodesTwoTypedSources(t *testing.T) {
+	ctx := loadTestConfig(t, testConfigOptions{knowl: `provider: codex
+workspace:
+  path: knowledge
+sources:
+  - id: engineering
+    type: filesystem
+    filesystem:
+      root: wiki-engineering
+      include: ["docs/*.md", "**/*.md"]
+      flavor: obsidian
+      uri_base: https://wiki.example.test/engineering
+    sync:
+      on_start: true
+      interval: 1m
+  - id: operations
+    type: filesystem
+    enabled: false
+    filesystem:
+      root: wiki-operations
+`})
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatalf("hostConfig() error: %v", err)
+	}
+	if len(config.Sources) != 2 {
+		t.Fatalf("sources = %d, want 2", len(config.Sources))
+	}
+	engineering, operations := config.Sources[0], config.Sources[1]
+	if !engineering.Enabled || engineering.Sync.Interval != time.Minute || engineering.Config.Filesystem.Flavor != domain.SourceFlavorObsidian {
+		t.Fatalf("engineering source = %#v", engineering)
+	}
+	if operations.Enabled {
+		t.Fatal("operations enabled = true, want explicit false")
+	}
+	if engineering.ConfigDigest == "" || operations.ConfigDigest == "" {
+		t.Fatal("source config digests must be populated")
+	}
+}
+
+func TestCheckedInTwoSourceFixtureLoadsThroughProductionConfig(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	fixture, err := os.ReadFile(filepath.Join(repoRoot, "cmd", "knowl", "testdata", "two-sources.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingDir := t.TempDir()
+	t.Chdir(workingDir)
+	clearKnowlEnv(t)
+	configDir := filepath.Join(workingDir, ".config", appName)
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := loadConfig(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("load checked-in two-source fixture: %v", err)
+	}
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatalf("normalize checked-in two-source fixture: %v", err)
+	}
+	if len(config.Sources) != 2 || !config.Sources[0].Enabled || !config.Sources[1].Enabled {
+		t.Fatalf("fixture sources = %#v", config.Sources)
+	}
+	if config.Sources[0].Sync.Interval != time.Minute || config.Sources[1].Sync.Interval != 5*time.Minute {
+		t.Fatalf("fixture sync policies = %#v, %#v", config.Sources[0].Sync, config.Sources[1].Sync)
+	}
+}
+
+func TestHostConfigRejectsSourceWorkspaceOverlap(t *testing.T) {
+	ctx := loadTestConfig(t, testConfigOptions{knowl: `provider: codex
+workspace:
+  path: knowledge
+sources:
+  - id: engineering
+    type: filesystem
+    filesystem:
+      root: knowledge/sources
+`})
+	_, err := hostConfig(ctx)
+	if err == nil || !strings.Contains(err.Error(), "overlaps workspace") {
+		t.Fatalf("hostConfig() error = %v, want overlap rejection", err)
 	}
 }
 

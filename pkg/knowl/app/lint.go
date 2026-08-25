@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
@@ -191,37 +192,60 @@ type logRecord struct {
 func lintLog(inspection knowl.WorkspaceInspection) []knowl.LintFinding {
 	findings := make([]knowl.LintFinding, 0)
 	seenOperations := make(map[string]struct{})
-	for _, line := range strings.Split(inspection.Log.Content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if !strings.HasPrefix(trimmed, "- ") {
-			findings = append(findings, knowl.LintFinding{Code: "log.malformed", Severity: lintError, Path: inspection.Log.Path, Message: "log contains a non-structured entry"})
-			continue
-		}
-		var record logRecord
-		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))), &record); err != nil || record.OperationID == "" || record.Generation == "" || len(record.Files) == 0 {
-			findings = append(findings, knowl.LintFinding{Code: "log.malformed", Severity: lintError, Path: inspection.Log.Path, Message: "log entry is not a complete structured commit record"})
-			continue
-		}
-		if _, exists := seenOperations[record.OperationID]; exists {
-			findings = append(findings, knowl.LintFinding{Code: "log.duplicate_operation", Severity: lintError, Path: inspection.Log.Path, Message: "log contains duplicate operation IDs"})
-		}
-		seenOperations[record.OperationID] = struct{}{}
-		if record.SchemaDigest != inspection.Snapshot.SchemaDigest {
-			findings = append(findings, knowl.LintFinding{Code: "log.schema_mismatch", Severity: lintError, Path: inspection.Log.Path, Message: "log entry schema digest differs from the current schema"})
-		}
-		if !sort.StringsAreSorted(record.Files) {
-			findings = append(findings, knowl.LintFinding{Code: "log.order", Severity: lintError, Path: inspection.Log.Path, Message: "log entry file list is not deterministic"})
-		}
-		for _, path := range record.Files {
-			if _, exists := inspection.Snapshot.PageDigests[path]; !exists {
-				findings = append(findings, knowl.LintFinding{Code: "log.missing_file", Severity: lintError, Path: path, Message: "log entry cites a file absent from canonical Markdown"})
+	limits := okf.DefaultLimits()
+	if len(inspection.Log.Content) > limits.MaxBytes && len(inspection.Log.Content) <= 64<<20 {
+		limits.MaxBytes = len(inspection.Log.Content)
+	}
+	logDocument, err := okf.ValidateLog("log.md", []byte(inspection.Log.Content), limits)
+	if err != nil {
+		return []knowl.LintFinding{{Code: "log.malformed", Severity: lintError, Path: inspection.Log.Path, Message: "log is not a valid OKF date-grouped update log"}}
+	}
+	for _, group := range logDocument.Groups {
+		for _, entry := range group.Entries {
+			record, valid := parseLogAudit(entry)
+			if !valid {
+				findings = append(findings, knowl.LintFinding{Code: "log.malformed", Severity: lintError, Path: inspection.Log.Path, Message: "log entry is not a complete structured commit record"})
+				continue
+			}
+			if _, exists := seenOperations[record.OperationID]; exists {
+				findings = append(findings, knowl.LintFinding{Code: "log.duplicate_operation", Severity: lintError, Path: inspection.Log.Path, Message: "log contains duplicate operation IDs"})
+			}
+			seenOperations[record.OperationID] = struct{}{}
+			if record.SchemaDigest != inspection.Snapshot.SchemaDigest {
+				findings = append(findings, knowl.LintFinding{Code: "log.schema_mismatch", Severity: lintError, Path: inspection.Log.Path, Message: "log entry schema digest differs from the current schema"})
+			}
+			if !sort.StringsAreSorted(record.Files) {
+				findings = append(findings, knowl.LintFinding{Code: "log.order", Severity: lintError, Path: inspection.Log.Path, Message: "log entry file list is not deterministic"})
+			}
+			for _, path := range record.Files {
+				if _, exists := inspection.Snapshot.PageDigests[path]; !exists {
+					findings = append(findings, knowl.LintFinding{Code: "log.missing_file", Severity: lintError, Path: path, Message: "log entry cites a file absent from canonical Markdown"})
+				}
 			}
 		}
 	}
 	return findings
+}
+
+func parseLogAudit(entry string) (logRecord, bool) {
+	const (
+		prefix   = "<!-- knowl:"
+		suffix   = "-->"
+		maxBytes = 128 << 10
+	)
+	start := strings.LastIndex(entry, prefix)
+	if start < 0 || !strings.HasSuffix(strings.TrimSpace(entry), suffix) {
+		return logRecord{}, false
+	}
+	raw := strings.TrimSpace(strings.TrimSuffix(entry[start+len(prefix):], suffix))
+	if raw == "" || len(raw) > maxBytes {
+		return logRecord{}, false
+	}
+	var record logRecord
+	if err := json.Unmarshal([]byte(raw), &record); err != nil || record.OperationID == "" || record.Generation == "" {
+		return logRecord{}, false
+	}
+	return record, true
 }
 
 func (service *LintService) suggestions(ctx context.Context, inspection knowl.WorkspaceInspection, existing []knowl.LintFinding) []knowl.LintFinding {

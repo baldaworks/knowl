@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -16,11 +17,16 @@ type RetrieveResult struct {
 
 // EvidenceItem is one bounded page-derived evidence record.
 type EvidenceItem struct {
-	PageID     knowl.PageID `json:"page_id"`
-	Title      string       `json:"title"`
-	Snippet    string       `json:"snippet"`
-	SourceRefs []string     `json:"source_refs,omitempty"`
-	Untrusted  bool         `json:"untrusted"`
+	PageID     knowl.PageID  `json:"page_id"`
+	Title      string        `json:"title"`
+	Snippet    string        `json:"snippet"`
+	SourceRefs []string      `json:"source_refs,omitempty"`
+	SourceID   string        `json:"source_id,omitempty"`
+	DocumentID string        `json:"document_id,omitempty"`
+	Revision   string        `json:"revision,omitempty"`
+	URI        string        `json:"uri,omitempty"`
+	OKF        *okf.Metadata `json:"okf,omitempty"`
+	Untrusted  bool          `json:"untrusted"`
 }
 
 // IngestResult is the simplified MCP-facing write response.

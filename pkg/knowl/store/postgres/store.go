@@ -43,8 +43,9 @@ type Store struct {
 }
 
 var (
-	_ app.OperationStore = (*Store)(nil)
-	_ app.SearchIndex    = (*Store)(nil)
+	_ app.OperationStore   = (*Store)(nil)
+	_ app.SearchIndex      = (*Store)(nil)
+	_ app.SourceStateStore = (*Store)(nil)
 )
 
 // Open opens a PostgreSQL operational store and runs its embedded migrations.

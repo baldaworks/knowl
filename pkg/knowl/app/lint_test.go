@@ -32,10 +32,7 @@ func TestLintPagesPreservesMetadataAndLinkFindings(t *testing.T) {
 	index := knowl.PageSnapshot{Path: "wiki/index.md", Content: "- entities/missing\n[[broken"}
 	findings := lintPages(snapshot, index, []knowl.RawSourceRecord{{Valid: true, Source: accepted}})
 	for _, code := range []string{
-		"frontmatter.id_mismatch",
-		"frontmatter.title_missing",
-		"frontmatter.type_missing",
-		"citation.unknown_source",
+		"frontmatter.malformed",
 		"link.malformed",
 		"index.malformed",
 		"index.broken_page",
@@ -59,6 +56,27 @@ func TestLintUsesSharedWikiSemantics(t *testing.T) {
 	}
 	if metadata.ID != lintPageOneID || len(targets) != 1 || targets[0] != lintPageTwoID {
 		t.Fatalf("shared wiki semantics mismatch: metadata=%#v targets=%#v", metadata, targets)
+	}
+}
+
+func TestLintLogReadsOKFAuditComments(t *testing.T) {
+	t.Parallel()
+
+	inspection := knowl.WorkspaceInspection{
+		Snapshot: knowl.WorkspaceSnapshot{
+			SchemaDigest: "schema",
+			PageDigests:  map[string]string{"wiki/entities/one.md": "digest"},
+		},
+		Log: knowl.PageSnapshot{Path: "wiki/log.md", Content: "# Knowl Update Log\n\n## 2026-08-25\n" +
+			"* **Update**: committed. <!-- knowl:{\"operation_id\":\"op\",\"generation\":\"generation\",\"schema_digest\":\"schema\",\"files\":[\"wiki/entities/one.md\"]} -->\n" +
+			"* **Update**: no-op. <!-- knowl:{\"operation_id\":\"noop\",\"generation\":\"generation\",\"schema_digest\":\"schema\",\"files\":[]} -->\n"},
+	}
+	if findings := lintLog(inspection); len(findings) != 0 {
+		t.Fatalf("lintLog(valid) = %#v", findings)
+	}
+	inspection.Log.Content += "* missing audit\n"
+	if findings := lintLog(inspection); !hasFinding(findings, "log.malformed") {
+		t.Fatalf("lintLog(malformed) = %#v", findings)
 	}
 }
 

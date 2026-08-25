@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,54 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
+
+func TestProviderFreeIngestFailsBeforeDurableMutation(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, _, _ := newWorkflow(t, false, nil)
+	service, err := app.NewIngestService(workspace, store, store, nil, app.IngestOptions{})
+	if err != nil {
+		t.Fatalf("new provider-free ingest service: %v", err)
+	}
+	envelope := sourceEnvelope([]byte("secret provider-free source"))
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "submit", call: func() error { _, callErr := service.Submit(ctx, envelope); return callErr }},
+		{name: "execute", call: func() error { _, callErr := service.Execute(ctx, app.IngestSubmission{}); return callErr }},
+		{name: "run to terminal", call: func() error { _, callErr := service.RunToTerminal(ctx, knowl.WorkClaim{}); return callErr }},
+		{name: "ingest", call: func() error { _, callErr := service.Ingest(ctx, envelope); return callErr }},
+		{name: "preview", call: func() error { _, callErr := service.Preview(ctx, envelope); return callErr }},
+		{name: "file plan", call: func() error { _, callErr := service.FilePlan(ctx, envelope, knowl.ModelEditPlan{}); return callErr }},
+		{name: "apply", call: func() error { _, callErr := service.Apply(ctx, envelope.Scope, "operation"); return callErr }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if callErr := test.call(); !errors.Is(callErr, app.ErrMaintainerUnavailable) {
+				t.Fatalf("error = %v, want maintainer unavailable", callErr)
+			}
+		})
+	}
+
+	inspection, err := workspace.Inspect(ctx, envelope.Scope)
+	if err != nil {
+		t.Fatalf("inspect provider-free workspace: %v", err)
+	}
+	if len(inspection.RawSources) != 0 {
+		t.Fatalf("provider-free ingest accepted raw sources: %#v", inspection.RawSources)
+	}
+	ready, err := store.ResumeReady(ctx, envelope.Scope, 10)
+	if err != nil {
+		t.Fatalf("read provider-free operations: %v", err)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("provider-free ingest reserved operations: %#v", ready)
+	}
+	if _, err := service.Recover(ctx); err != nil {
+		t.Fatalf("provider-free recovery: %v", err)
+	}
+}
 
 func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	ctx := context.Background()
@@ -64,10 +113,10 @@ func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read commit log: %v", err)
 	}
-	if !contains(string(logContent), string(planned.Operation.ID)) {
+	if !contains(string(logContent), strings.ReplaceAll(string(planned.Operation.ID), "-", `\u002d`)) {
 		t.Fatalf("commit log does not cite operation: %q", logContent)
 	}
-	results, err := store.Search(ctx, envelope.Scope, "One", knowl.ReadLimits{Pages: 5})
+	results, err := store.Search(ctx, envelope.Scope, "One", knowl.ReadLimits{Pages: 5}, nil)
 	if err != nil {
 		t.Fatalf("search projected page: %v", err)
 	}
@@ -181,7 +230,7 @@ func TestIngestAcceptsAndCommitsNoOpPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read no-op commit log: %v", err)
 	}
-	if !contains(string(logContent), string(planned.Operation.ID)) {
+	if !contains(string(logContent), strings.ReplaceAll(string(planned.Operation.ID), "-", `\u002d`)) {
 		t.Fatalf("no-op commit log does not cite operation: %q", logContent)
 	}
 }
@@ -198,7 +247,7 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	maintainer.plan.Edits = []knowl.FileEdit{
 		{Path: testPagePath, Content: planPageContent},
 		{Path: testPageTwoPath, Content: planSupportingContent},
-		{Path: "wiki/index.md", ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n- entities/one\n")...)},
+		{Path: "wiki/index.md", ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n* [One](entities/one.md)\n")...)},
 	}
 	maintainer.mu.Unlock()
 	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
@@ -216,7 +265,7 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read updated index: %v", err)
 	}
-	if string(indexAfter) != string(append(indexBefore, []byte("\n- entities/one\n")...)) {
+	if string(indexAfter) != string(append(indexBefore, []byte("\n* [One](entities/one.md)\n")...)) {
 		t.Fatalf("updated index = %q", indexAfter)
 	}
 }
@@ -772,7 +821,7 @@ func (index *recordingContextIndex) SelectContext(_ context.Context, _ knowl.Sco
 	index.summary = summary
 	return nil, nil
 }
-func (*recordingContextIndex) Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits) ([]knowl.PageReference, error) {
+func (*recordingContextIndex) Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits, []knowl.SourceID) ([]knowl.PageReference, error) {
 	return nil, nil
 }
 func (*recordingContextIndex) Links(context.Context, knowl.ScopeRef, knowl.PageID, knowl.ReadLimits) ([]knowl.LinkReference, error) {
@@ -786,7 +835,7 @@ func (*recordingContextIndex) Rebuild(context.Context, knowl.WorkspaceSnapshot) 
 func (failingIndex) SelectContext(context.Context, knowl.ScopeRef, knowl.SourceSummary, knowl.ReadLimits) ([]knowl.PageID, error) {
 	return nil, nil
 }
-func (failingIndex) Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits) ([]knowl.PageReference, error) {
+func (failingIndex) Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits, []knowl.SourceID) ([]knowl.PageReference, error) {
 	return nil, nil
 }
 func (failingIndex) Links(context.Context, knowl.ScopeRef, knowl.PageID, knowl.ReadLimits) ([]knowl.LinkReference, error) {
@@ -808,7 +857,7 @@ func (*failOnceProjectionIndex) SelectContext(context.Context, knowl.ScopeRef, k
 	return nil, nil
 }
 
-func (*failOnceProjectionIndex) Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits) ([]knowl.PageReference, error) {
+func (*failOnceProjectionIndex) Search(context.Context, knowl.ScopeRef, string, knowl.ReadLimits, []knowl.SourceID) ([]knowl.PageReference, error) {
 	return nil, nil
 }
 

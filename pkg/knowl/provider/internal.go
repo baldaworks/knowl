@@ -29,16 +29,17 @@ If the source contains a durable fact that is not represented in input.pages, ed
 Use an empty edits array only when the source has no durable facts or every fact is already represented.
 Create ordinary pages below wiki/ with complete Markdown content using this exact frontmatter shape:
 ---
-id: path/without-wiki-or-extension
-title: Human title
 type: topic
-source_refs:
-  - required_source_ref
+title: Human title
+knowl:
+  id: path/without-wiki-or-extension
+  source_refs:
+    - required_source_ref
 ---
 # Human title
 
 Factual content.
-The frontmatter id must match the page path. Every page must cite required_source_ref.
+The frontmatter knowl.id must match the page path. Every page must cite required_source_ref in knowl.source_refs.
 When replacing an existing page, copy its digest to expected_digest. Omit expected_digest for a new page.
 Only propose edits that are necessary to maintain the canonical knowledge workspace.`
 	maintainerOutputSchema = `{

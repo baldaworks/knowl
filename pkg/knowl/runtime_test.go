@@ -16,6 +16,7 @@ import (
 	"time"
 
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
@@ -43,6 +44,7 @@ const hostQueryKey = "query"
 const hostRetrieveToolName = "knowl_retrieve"
 const hostIngestToolName = "knowl_ingest"
 const hostOperationToolName = "knowl_operation"
+const hostProviderID = "provider"
 
 func TestHostOperatorTokenProtectsBusinessEndpoints(t *testing.T) {
 	workspace, err := contentfs.New(t.TempDir())
@@ -325,7 +327,7 @@ func TestHostRestartResumesAcceptedOperationThroughHTTPAndMCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read provenance log: %v", err)
 	}
-	if count := bytes.Count(logContent, []byte(accepted.OperationID)); count != 1 {
+	if count := bytes.Count(logContent, []byte(strings.ReplaceAll(string(accepted.OperationID), "-", `\u002d`))); count != 1 {
 		t.Fatalf("resumed operation log entries = %d, want one", count)
 	}
 }
@@ -668,18 +670,75 @@ func TestHostStopAllowsActiveOperationToFinishAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestNewRejectsNilMaintainerBeforeOpeningStore(t *testing.T) {
-	workspace := t.TempDir()
-	config := knowl.DefaultConfig()
-	config.Workspace = workspace
-	config.StorePath = filepath.Join(workspace, ".knowl", "state.db")
-
-	_, err := knowl.New(context.Background(), knowl.Options{Config: config})
-	if err == nil || !strings.Contains(err.Error(), "maintainer") {
-		t.Fatalf("New() error = %v, want required maintainer", err)
+func TestNewAllowsProviderFreeHost(t *testing.T) {
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
 	}
-	if _, statErr := os.Stat(config.StorePath); !os.IsNotExist(statErr) {
-		t.Fatalf("store stat error = %v, want store unopened", statErr)
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+
+	host, err := knowl.New(context.Background(), knowl.Options{Config: config})
+	if err != nil {
+		t.Fatalf("compose provider-free host: %v", err)
+	}
+	defer shutdownHost(t, host)
+	if err := host.Start(context.Background()); err != nil {
+		t.Fatalf("start provider-free host: %v", err)
+	}
+	if !host.Ready() {
+		t.Fatal("provider-free host is not ready")
+	}
+	if tools := host.MCP().Tools(); len(tools) != 3 || tools[0].Name != hostRetrieveToolName || tools[1].Name != hostIngestToolName || tools[2].Name != hostOperationToolName {
+		t.Fatalf("provider-free MCP tools = %#v", tools)
+	}
+	if _, err := host.MCP().Call(context.Background(), hostIngestToolName, map[string]any{
+		hostSourceContentKey: hostSourceContent, hostSourceOriginKey: hostSourceOrigin,
+		hostSourceIdempotencyKeyName: hostSourceIdempotencyKey,
+	}); !errors.Is(err, app.ErrMaintainerUnavailable) {
+		t.Fatalf("provider-free MCP ingest error = %v", err)
+	}
+	body := []byte(`{"content":"source text","origin":"source-1","idempotency_key":"1"}`)
+	responseBody, status, err := doHostRequest(t, host, http.MethodPost, "/v1/ingest", body)
+	if err != nil {
+		t.Fatalf("provider-free HTTP ingest: %v", err)
+	}
+	if status != http.StatusServiceUnavailable || !bytes.Contains(responseBody, []byte(`"error":"maintainer_unavailable"`)) {
+		t.Fatalf("provider-free HTTP ingest = status %d, body %s", status, responseBody)
+	}
+}
+
+func TestNewRejectsPartialRuntimeProviderConfiguration(t *testing.T) {
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+
+	tests := []struct {
+		name    string
+		options knowl.Options
+		want    string
+	}{
+		{name: "provider without factory", options: knowl.Options{Config: config, ProviderID: hostProviderID}, want: "runtime provider factory is required"},
+		{name: "factory without provider", options: knowl.Options{Config: config, RuntimeFactory: &validatingRuntimeFactory{}}, want: "knowl.provider is required"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, newErr := knowl.New(context.Background(), test.options); newErr == nil || !strings.Contains(newErr.Error(), test.want) {
+				t.Fatalf("New() error = %v, want %q", newErr, test.want)
+			}
+		})
 	}
 }
 
@@ -694,12 +753,12 @@ func TestNewBuildsRuntimeMaintainerLazily(t *testing.T) {
 	config := knowl.DefaultConfig()
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
-	factory := &validatingRuntimeFactory{providerID: "provider"}
+	factory := &validatingRuntimeFactory{providerID: hostProviderID}
 
 	host, err := knowl.New(context.Background(), knowl.Options{
 		Config:         config,
 		RuntimeFactory: factory,
-		ProviderID:     "provider",
+		ProviderID:     hostProviderID,
 	})
 	if err != nil {
 		t.Fatalf("compose host: %v", err)

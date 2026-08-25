@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strings"
 
@@ -20,6 +21,8 @@ var (
 	ErrOperationNotFound = errors.New("knowl operation not found")
 	ErrFilingInvalid     = errors.New("invalid explicit wiki filing")
 )
+
+const maxSourcesFilter = 16
 
 // QueryOptions configures bounded wiki-first reads.
 type QueryOptions struct {
@@ -79,6 +82,9 @@ func (service *QueryService) Page(ctx context.Context, scope knowl.ScopeRef, id 
 	if strings.TrimSpace(string(scope)) == "" || strings.TrimSpace(string(id)) == "" {
 		return knowl.PageSnapshot{}, ErrQueryInvalid
 	}
+	if reservedOKFPage(id) {
+		return knowl.PageSnapshot{}, fmt.Errorf("%s: %w", id, ErrPageNotFound)
+	}
 	readLimits, err := service.limitsFor(limits)
 	if err != nil {
 		return knowl.PageSnapshot{}, err
@@ -100,8 +106,13 @@ func (service *QueryService) Page(ctx context.Context, scope knowl.ScopeRef, id 
 	return page, nil
 }
 
+func reservedOKFPage(id knowl.PageID) bool {
+	base := path.Base(strings.TrimSuffix(string(id), ".md"))
+	return base == "index" || base == "log"
+}
+
 // Search returns bounded, untrusted page references from the projection.
-func (service *QueryService) Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits) ([]knowl.PageReference, error) {
+func (service *QueryService) Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
 	ctx = nonNilContext(ctx)
 	if strings.TrimSpace(string(scope)) == "" || strings.TrimSpace(query) == "" {
 		return nil, ErrQueryInvalid
@@ -110,9 +121,13 @@ func (service *QueryService) Search(ctx context.Context, scope knowl.ScopeRef, q
 	if err != nil {
 		return nil, err
 	}
+	normalizedSources, err := NormalizeSourcesFilter(sources)
+	if err != nil {
+		return nil, err
+	}
 	readCtx, cancel := boundedReadContext(ctx, readLimits)
 	defer cancel()
-	references, err := service.index.Search(readCtx, scope, strings.TrimSpace(query), readLimits)
+	references, err := service.index.Search(readCtx, scope, strings.TrimSpace(query), readLimits, normalizedSources)
 	if err != nil {
 		return nil, fmt.Errorf("search wiki: %w", err)
 	}
@@ -122,6 +137,10 @@ func (service *QueryService) Search(ctx context.Context, scope knowl.ScopeRef, q
 	for index := range references {
 		references[index].Untrusted = true
 		references[index].SourceRefs = append([]string(nil), references[index].SourceRefs...)
+		if references[index].SourceDocument != nil {
+			document := *references[index].SourceDocument
+			references[index].SourceDocument = &document
+		}
 	}
 	return references, nil
 }
@@ -163,7 +182,7 @@ func (service *QueryService) Operation(ctx context.Context, scope knowl.ScopeRef
 }
 
 // Query assembles page references, link context, and page/raw citations without mutating state.
-func (service *QueryService) Query(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits) (QueryResult, error) {
+func (service *QueryService) Query(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) (QueryResult, error) {
 	ctx = nonNilContext(ctx)
 	readLimits, err := service.limitsFor(limits)
 	if err != nil {
@@ -171,7 +190,7 @@ func (service *QueryService) Query(ctx context.Context, scope knowl.ScopeRef, qu
 	}
 	readCtx, cancel := boundedReadContext(ctx, readLimits)
 	defer cancel()
-	pages, err := service.Search(readCtx, scope, query, readLimits)
+	pages, err := service.Search(readCtx, scope, query, readLimits, sources)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -219,6 +238,33 @@ func (service *QueryService) Query(ctx context.Context, scope knowl.ScopeRef, qu
 		return result.Citations[left].Kind < result.Citations[right].Kind
 	})
 	return result, nil
+}
+
+// NormalizeSourcesFilter returns a canonical bounded source identity filter.
+// Empty input means unfiltered retrieval.
+func NormalizeSourcesFilter(sources []knowl.SourceID) ([]knowl.SourceID, error) {
+	normalized := make([]knowl.SourceID, 0, len(sources))
+	for _, source := range sources {
+		trimmed := knowl.SourceID(strings.TrimSpace(string(source)))
+		if trimmed == "" {
+			continue
+		}
+		if err := ValidateSourceID(trimmed); err != nil {
+			return nil, ErrSourceInvalid
+		}
+		normalized = append(normalized, trimmed)
+	}
+	sort.Slice(normalized, func(left, right int) bool { return normalized[left] < normalized[right] })
+	unique := normalized[:0]
+	for _, source := range normalized {
+		if len(unique) == 0 || unique[len(unique)-1] != source {
+			unique = append(unique, source)
+		}
+	}
+	if len(unique) > maxSourcesFilter {
+		return nil, ErrSourceInvalid
+	}
+	return unique, nil
 }
 
 // File explicitly files a query result through the standard immutable-source and plan/apply workflow.

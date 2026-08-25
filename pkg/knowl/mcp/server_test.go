@@ -22,6 +22,11 @@ const (
 	testIngestContent     = "source"
 	testIngestOrigin      = "source-1"
 	testIngestIdempotency = "1"
+	testRetrieveQuery     = "One"
+	testEngineeringSource = "engineering"
+	testTransportQuery    = "transportbeacon"
+	testQueryArgument     = "query"
+	testSourcesArgument   = "sources"
 )
 
 func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
@@ -72,6 +77,14 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if tools[0].ReadOnly != true || tools[1].ReadOnly != false || tools[2].ReadOnly != true {
 		t.Fatalf("read-only flags = %#v", tools)
 	}
+	properties, ok := tools[0].InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("retrieve properties = %#v", tools[0].InputSchema["properties"])
+	}
+	sourcesSchema, ok := properties["sources"].(map[string]any)
+	if !ok || sourcesSchema["type"] != "array" {
+		t.Fatalf("retrieve sources schema = %#v", properties["sources"])
+	}
 	ingested, err := server.Call(ctx, "knowl_ingest", map[string]any{
 		testContentKey:     testIngestContent,
 		testOriginKey:      testIngestOrigin,
@@ -109,7 +122,7 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if result, err := ingest.RunToTerminal(ctx, claim); err != nil || result.Operation.Status != knowl.StatusCommitted {
 		t.Fatalf("run submitted operation = %#v, err = %v", result, err)
 	}
-	value, err := server.Call(ctx, "knowl_retrieve", map[string]any{"query": "One"})
+	value, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testRetrieveQuery})
 	if err != nil {
 		t.Fatalf("knowl_retrieve: %v", err)
 	}
@@ -117,7 +130,28 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if !ok || len(retrieveResult.Evidence) != 1 || retrieveResult.Evidence[0].PageID != "entities/one" {
 		t.Fatalf("knowl_retrieve result = %#v", value)
 	}
-	if _, err := server.Call(ctx, "knowl_retrieve", map[string]any{"query": "One", "scope": "other"}); !errors.Is(err, mcp.ErrScopeOverride) {
+	if _, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testRetrieveQuery, testSourcesArgument: []any{testEngineeringSource, 1}}); !errors.Is(err, mcp.ErrInvalidArguments) {
+		t.Fatalf("structural sources error = %v, want invalid arguments", err)
+	}
+	if err := store.Rebuild(ctx, transportSearchSnapshot()); err != nil {
+		t.Fatalf("rebuild transport search fixture: %v", err)
+	}
+	filtered, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testTransportQuery, testSourcesArgument: []any{testEngineeringSource}})
+	if err != nil {
+		t.Fatalf("filtered knowl_retrieve: %v", err)
+	}
+	filteredResult, ok := filtered.(mcp.RetrieveResult)
+	if !ok || len(filteredResult.Evidence) != 1 || filteredResult.Evidence[0].SourceID != testEngineeringSource || filteredResult.Evidence[0].DocumentID != "shared.md" || filteredResult.Evidence[0].Revision != "revision-1" || filteredResult.Evidence[0].URI == "" || !filteredResult.Evidence[0].Untrusted {
+		t.Fatalf("filtered knowl_retrieve result = %#v", filtered)
+	}
+	unknown, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testTransportQuery, testSourcesArgument: []string{"ghost"}})
+	if err != nil {
+		t.Fatalf("unknown-source knowl_retrieve: %v", err)
+	}
+	if result := unknown.(mcp.RetrieveResult); len(result.Evidence) != 0 {
+		t.Fatalf("unknown-source evidence = %#v", result.Evidence)
+	}
+	if _, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testRetrieveQuery, "scope": "other"}); !errors.Is(err, mcp.ErrScopeOverride) {
 		t.Fatalf("scope override error = %v, want scope override", err)
 	}
 	polled, err := server.Call(ctx, "knowl_operation", map[string]any{"id": string(ingestResult.OperationID)})
@@ -142,6 +176,17 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if got := waker.IDs(); len(got) != 2 {
 		t.Fatalf("terminal replay emitted wake: %#v", got)
 	}
+}
+
+func transportSearchSnapshot() knowl.WorkspaceSnapshot {
+	document := func(sourceID knowl.SourceID) *knowl.SourceDocument {
+		return &knowl.SourceDocument{SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md"}
+	}
+	return knowl.WorkspaceSnapshot{Scope: "local", Pages: []knowl.PageSnapshot{
+		{ID: "curated", Path: "wiki/curated.md", Title: "Transportbeacon Curated", Content: testTransportQuery, Digest: "curated"},
+		{ID: testEngineeringSource, Path: "wiki/sources/engineering/shared.md", Title: "Transportbeacon Engineering", Content: testTransportQuery, Digest: testEngineeringSource, SourceDocument: document(testEngineeringSource)},
+		{ID: "operations", Path: "wiki/sources/operations/shared.md", Title: "Transportbeacon Operations", Content: testTransportQuery, Digest: "operations", SourceDocument: document("operations")},
+	}}
 }
 
 type recordingWaker struct {

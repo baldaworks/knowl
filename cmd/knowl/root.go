@@ -8,35 +8,43 @@ import (
 )
 
 const (
-	appName               = "knowl"
-	initCommandName       = "init"
-	validateCommandName   = "validate"
-	bootstrapCommandName  = "bootstrap"
-	bootstrapWikiName     = "wiki"
-	bootstrapObsidianName = "obsidian"
-	startCommandName      = "start"
-	ingestCommandName     = "ingest"
-	retrieveCommandName   = "retrieve"
-	searchCommandName     = "search"
-	lintCommandName       = "lint"
-	operationCommandName  = "operation"
-	pageCommandName       = "page"
-	postgresStore         = "postgres"
-	defaultStore          = "sqlite"
-	defaultWorkspace      = "."
-	workspaceWikiDir      = "wiki"
+	appName                 = "knowl"
+	initCommandName         = "init"
+	validateCommandName     = "validate"
+	migrateCommandName      = "migrate"
+	migrateOKFV02Name       = "okf-v0.2"
+	bootstrapCommandName    = "bootstrap"
+	bootstrapWikiName       = "wiki"
+	bootstrapObsidianName   = "obsidian"
+	bootstrapOKFName        = "okf"
+	startCommandName        = "start"
+	ingestCommandName       = "ingest"
+	retrieveCommandName     = "retrieve"
+	searchCommandName       = "search"
+	lintCommandName         = "lint"
+	operationCommandName    = "operation"
+	pageCommandName         = "page"
+	sourceCommandName       = "source"
+	sourceListCommandName   = "list"
+	sourceSyncCommandName   = "sync"
+	sourceStatusCommandName = "status"
+	postgresStore           = "postgres"
+	defaultStore            = "sqlite"
+	defaultWorkspace        = "."
+	workspaceWikiDir        = "wiki"
 )
 
 func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           appName,
-		Short:         "Bootstrap or run a local Knowl workspace, then use the KISS retrieve/ingest/operation workflow",
+		Short:         "Bootstrap or run a local Knowl workspace, then use retrieve, ingest, source, and operation workflows",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Long: `Supported local workflow:
 1. Bootstrap a fresh Knowl workspace from an existing wiki or Obsidian vault:
    - knowl bootstrap wiki <path>
    - knowl bootstrap obsidian <path>
+   - knowl bootstrap okf <path>
 2. Or initialize an empty workspace explicitly:
    - knowl init
    - knowl validate
@@ -44,7 +52,11 @@ func newRootCommand() *cobra.Command {
    - knowl retrieve <text>
    - knowl ingest --input request.json
    - knowl operation <operation-id>
-4. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
+4. Inspect or synchronize configured sources without a maintainer provider:
+   - knowl source list
+   - knowl source sync <source-id>
+   - knowl source status <source-id>
+5. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
 
 Bootstrap creates a Knowl-owned workspace. Local workflow commands execute
 in-process and print structured JSON results. The retained loopback HTTP API
@@ -73,11 +85,13 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 	for _, command := range []*cobra.Command{
 		newInitCommand(),
 		newValidateCommand(),
+		newMigrateCommand(),
 		newBootstrapCommand(),
 		newStartCommand(),
 		newIngestCommand(),
 		newRetrieveCommand(),
 		newOperationCommand(),
+		newSourceCommand(),
 	} {
 		root.AddCommand(command)
 	}

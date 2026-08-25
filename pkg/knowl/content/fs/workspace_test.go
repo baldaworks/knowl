@@ -5,12 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
 )
@@ -22,6 +26,210 @@ const (
 	testPageOnePath        = "wiki/entities/one.md"
 	testIndexPath          = "wiki/index.md"
 )
+
+func TestWorkspaceInitCreatesCanonicalOKFControls(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	indexContent, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := okf.ParseRootIndex(indexContent, okf.DefaultLimits())
+	if err != nil || index.ObservedVersion != okf.Version {
+		t.Fatalf("root index = %#v, %v", index, err)
+	}
+	logContent, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "log.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := okf.ValidateLog("log.md", logContent, okf.DefaultLimits()); err != nil {
+		t.Fatalf("root log is not OKF: %v", err)
+	}
+	if err := workspace.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestWorkspaceSnapshotExcludesNestedReservedDocuments(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(workspace.Root(), "wiki", "entities", "nested")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{
+		okfIndexFilename: []byte("# Nested\n\n* [One](one.md)\n"),
+		okfLogFilename:   []byte("# Nested Update Log\n"),
+		"one.md":         validWorkspacePage("entities/nested/one", "One", testWorkspaceSourceRef, ""),
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := workspace.Snapshot(context.Background(), testScope)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Pages) != 1 || snapshot.Pages[0].ID != "entities/nested/one" {
+		t.Fatalf("reserved documents entered pages: %#v", snapshot.Pages)
+	}
+	for _, relative := range []string{"wiki/entities/nested/index.md", "wiki/entities/nested/log.md"} {
+		if snapshot.PageDigests[relative] == "" {
+			t.Fatalf("reserved document digest missing for %q", relative)
+		}
+	}
+}
+
+func TestWorkspaceSnapshotResolvesOnlyExistingOKFConceptLinks(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(workspace.Root(), "wiki", "sources", "engineering", "docs")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	one := validWorkspacePage("sources/engineering/docs/one", "One", testWorkspaceSourceRef, "[Two](two.md) [Root](/root.md) [Broken](missing.md) [External](https://example.test/other.md) [Asset](diagram.png)")
+	two := validWorkspacePage("sources/engineering/docs/two", "Two", testWorkspaceSourceRef, "")
+	for name, content := range map[string][]byte{"one.md": one, "two.md": two} {
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootPage := validWorkspacePage("sources/engineering/root", "Root", testWorkspaceSourceRef, "")
+	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "sources", "engineering", "root.md"), rootPage, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := workspace.Snapshot(context.Background(), testScope)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	want := []knowl.LinkReference{
+		{From: "sources/engineering/docs/one", To: "sources/engineering/docs/two", Relation: okfLinkRelation},
+		{From: "sources/engineering/docs/one", To: "sources/engineering/root", Relation: okfLinkRelation},
+	}
+	if !slices.Equal(snapshot.Links, want) {
+		t.Fatalf("OKF links = %#v, want %#v", snapshot.Links, want)
+	}
+}
+
+func TestWorkspaceSnapshotAndReadExposeDerivedOKFMetadata(t *testing.T) {
+	boundary := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	now := boundary
+	workspace, err := New(t.TempDir(), WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(`---
+type: Metric
+description: Полезное описание.
+verified: {by: human:alexey, at: 2026-08-25T00:00:00Z}
+stale_after: 2026-09-23T00:00:00Z
+producer_extension:
+  nested: [one, {enabled: true}]
+knowl:
+  id: sources/engineering/Глоссарий-проекта
+  source_refs: [fixture:source-1@1]
+  source_document:
+    source_id: engineering
+    document_id: Глоссарий-проекта.md
+    revision: revision-1
+    uri: https://wiki.example.test/glossary
+---
+Полезный пользовательский текст.
+`)
+	directory := filepath.Join(workspace.Root(), "wiki", "sources", "engineering")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "Глоссарий-проекта.md"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := workspace.Snapshot(context.Background(), testScope)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	if len(snapshot.Pages) != 1 {
+		t.Fatalf("Snapshot() pages = %#v", snapshot.Pages)
+	}
+	assertDerivedOKFPage(t, snapshot.Pages[0], content)
+	if snapshot.CapturedAt != boundary {
+		t.Fatalf("CapturedAt = %v, want %v", snapshot.CapturedAt, boundary)
+	}
+	pages, err := workspace.ReadPages(context.Background(), testScope, []knowl.PageID{"sources/engineering/Глоссарий-проекта"}, knowl.ReadLimits{Pages: 1, Bytes: len(content)})
+	if err != nil {
+		t.Fatalf("ReadPages() error = %v", err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("ReadPages() pages = %#v", pages)
+	}
+	assertDerivedOKFPage(t, pages[0], content)
+
+	now = boundary.Add(-time.Nanosecond)
+	pages, err = workspace.ReadPages(context.Background(), testScope, []knowl.PageID{"sources/engineering/Глоссарий-проекта"}, knowl.ReadLimits{Pages: 1, Bytes: len(content)})
+	if err != nil {
+		t.Fatalf("ReadPages(before boundary) error = %v", err)
+	}
+	if pages[0].OKF == nil || pages[0].OKF.Stale {
+		t.Fatalf("page became stale before boundary: %#v", pages[0].OKF)
+	}
+}
+
+func assertDerivedOKFPage(t *testing.T, page knowl.PageSnapshot, content []byte) {
+	t.Helper()
+	if page.Title != "Глоссарий-проекта" || page.Body != "Полезный пользовательский текст.\n" || page.Content != string(content) {
+		t.Fatalf("title/body/content = %q / %q / %q", page.Title, page.Body, page.Content)
+	}
+	if page.OKF == nil || page.OKF.Type != "Metric" || page.OKF.TrustTier != okf.TrustHumanReviewed ||
+		page.OKF.ResolvedStatus != okf.StatusStable || !page.OKF.Stale || page.OKF.Extensions["producer_extension"] == nil {
+		t.Fatalf("OKF metadata = %#v", page.OKF)
+	}
+	if page.SourceDocument == nil || page.SourceDocument.SourceID != testSourceID || len(page.SourceRefs) != 1 {
+		t.Fatalf("provenance = %#v / %#v", page.SourceDocument, page.SourceRefs)
+	}
+}
+
+func TestAppendLogEntryProducesDeterministicOKFAudit(t *testing.T) {
+	manifest := stageManifest{
+		OperationID: "operation-->1", SchemaDigest: strings.Repeat("a", 64), SourceRefs: []string{"fixture:one@1"},
+		Entries: []stageEntry{{Target: "wiki/entities/one.md", Digest: strings.Repeat("b", 64)}}, LogDate: "2026-08-25",
+	}
+	first, err := appendLogEntry([]byte(rootLogContent), manifest, strings.Repeat("c", 64))
+	if err != nil {
+		t.Fatalf("appendLogEntry() error = %v", err)
+	}
+	second, err := appendLogEntry([]byte(rootLogContent), manifest, strings.Repeat("c", 64))
+	if err != nil || !slices.Equal(first, second) {
+		t.Fatalf("appendLogEntry() is not deterministic: %v", err)
+	}
+	logDocument, err := okf.ValidateLog("log.md", first, okf.DefaultLimits())
+	if err != nil {
+		t.Fatalf("rendered log is not OKF: %v\n%s", err, first)
+	}
+	if len(logDocument.Groups) != 1 || len(logDocument.Groups[0].Entries) != 1 ||
+		!strings.Contains(logDocument.Groups[0].Entries[0], "<!-- knowl:") ||
+		!strings.Contains(logDocument.Groups[0].Entries[0], `"operation_id":"operation\u002d\u002d\u003e1"`) ||
+		strings.Count(logDocument.Groups[0].Entries[0], "-->") != 1 {
+		t.Fatalf("audit entry = %#v", logDocument)
+	}
+}
 
 func TestWorkspaceInitAcceptsImmutableSourceAndReplaysIt(t *testing.T) {
 	workspace, err := New(t.TempDir())
@@ -57,6 +265,31 @@ func TestWorkspaceInitAcceptsImmutableSourceAndReplaysIt(t *testing.T) {
 	conflict.Version.Digest = hex.EncodeToString(conflictDigest[:])
 	if _, err := workspace.AcceptSource(context.Background(), conflict); !errors.Is(err, ErrSourceConflict) {
 		t.Fatalf("conflicting content error = %v, want source conflict", err)
+	}
+}
+
+func TestWorkspaceAcceptsEmptyImmutableSource(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	emptyDigest := sha256.Sum256(nil)
+	accepted, err := workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
+		Scope:     testScope,
+		Source:    knowl.SourceRef{Adapter: testFixtureAdapter, ID: "empty-navigation.md"},
+		Version:   knowl.SourceVersion{Version: hex.EncodeToString(emptyDigest[:]), Digest: hex.EncodeToString(emptyDigest[:])},
+		MediaType: "text/markdown",
+		Content:   []byte{},
+	})
+	if err != nil {
+		t.Fatalf("accept empty source: %v", err)
+	}
+	content, err := workspace.ReadSource(context.Background(), accepted, knowl.ReadLimits{})
+	if err != nil || len(content) != 0 {
+		t.Fatalf("read empty source = %q, %v", content, err)
 	}
 }
 
@@ -120,7 +353,7 @@ func TestWorkspaceSnapshotIncludesMarkdownDigests(t *testing.T) {
 		t.Fatalf("init workspace: %v", err)
 	}
 	pagePath := filepath.Join(workspace.Root(), "wiki", "entities", "one.md")
-	if err := os.WriteFile(pagePath, []byte("# One\n"), 0o600); err != nil {
+	if err := os.WriteFile(pagePath, validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, ""), 0o600); err != nil {
 		t.Fatalf("write page: %v", err)
 	}
 	snapshot, err := workspace.Snapshot(context.Background(), testScope)
@@ -132,6 +365,39 @@ func TestWorkspaceSnapshotIncludesMarkdownDigests(t *testing.T) {
 	}
 	if len(snapshot.Pages) != 1 || snapshot.Pages[0].ID != "entities/one" {
 		t.Fatalf("snapshot pages = %#v", snapshot.Pages)
+	}
+	if snapshot.Pages[0].OKF == nil || snapshot.Pages[0].OKF.Type != "entity" || snapshot.Pages[0].Body != "# One\n" {
+		t.Fatalf("curated OKF snapshot = %#v", snapshot.Pages[0])
+	}
+}
+
+func TestWorkspaceReadsAndSnapshotsSourceDocumentProvenance(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	relative := "wiki/sources/engineering/auth.md"
+	content := []byte("---\nid: sources/engineering/auth\ntitle: Auth\ntype: source\nsource_refs:\n  - raw:auth@1\nsource_document:\n  source_id: engineering\n  document_id: architecture/auth.md\n  revision: revision-1\n  uri: https://wiki.example.test/auth\n---\n# Auth\n")
+	target := filepath.Join(workspace.Root(), filepath.FromSlash(relative))
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := workspace.ReadPages(context.Background(), testScope, []knowl.PageID{"sources/engineering/auth"}, knowl.ReadLimits{Pages: 1, Bytes: len(content)})
+	if err != nil || len(pages) != 1 || pages[0].SourceDocument == nil || pages[0].SourceDocument.DocumentID != "architecture/auth.md" {
+		t.Fatalf("ReadPages() = %#v, %v", pages, err)
+	}
+	snapshot, err := workspace.Snapshot(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Pages) != 1 || snapshot.Pages[0].SourceDocument == nil || snapshot.Pages[0].SourceDocument.SourceID != testSourceID {
+		t.Fatalf("Snapshot() pages = %#v", snapshot.Pages)
 	}
 }
 
@@ -184,7 +450,7 @@ func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing
 		State:       recoveryPrepared,
 		Entries: []recoveryEntry{
 			{Target: "wiki/entities/recovered.md", HadOld: false},
-			{Target: "wiki/log.md", Backup: logBackup, HadOld: true},
+			{Target: canonicalLogPath, Backup: logBackup, HadOld: true},
 		},
 	}
 	journalPath := filepath.Join(workspace.Root(), knowlDir, "recovery", token(plan.OperationID)+".yaml")
@@ -195,7 +461,7 @@ func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
-	if len(results) != 1 || results[0].Action != "rolled_back" {
+	if len(results) != 1 || results[0].Action != recoveryRolledBack {
 		t.Fatalf("recovery results = %#v", results)
 	}
 	if _, err := os.Stat(pagePath); !errors.Is(err, os.ErrNotExist) {
@@ -236,7 +502,7 @@ func TestWorkspaceStagePlanRejectsInvalidProspectiveContentWithoutCanonicalMutat
 		{name: "unknown source ref", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", "fixture:missing@1", "")}}},
 		{name: "malformed link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[broken")}}},
 		{name: "missing link target", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/missing]]")}}},
-		{name: "broken index target", edits: []knowl.FileEdit{{Path: testIndexPath, Content: []byte("# Knowl index\n\n- entities/missing\n")}}},
+		{name: "broken index target", edits: []knowl.FileEdit{{Path: testIndexPath, Content: []byte(rootIndexContent + "\n* [Missing](entities/missing.md)\n")}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -347,7 +613,7 @@ func TestWorkspaceStagePlanAllowsIndexTargetsWithoutFrontmatter(t *testing.T) {
 		Edits: []knowl.FileEdit{{
 			Path:           testIndexPath,
 			ExpectedDigest: digestBytes(indexContent),
-			Content:        []byte("# Knowl index\n\n- entities/two\n"),
+			Content:        []byte(rootIndexContent + "\n* [Two](entities/two.md)\n"),
 		}},
 	}); err != nil {
 		t.Fatalf("stage index existing target: %v", err)
@@ -361,7 +627,7 @@ func TestWorkspaceStagePlanAllowsIndexTargetsWithoutFrontmatter(t *testing.T) {
 			{
 				Path:           testIndexPath,
 				ExpectedDigest: digestBytes(indexContent),
-				Content:        []byte("# Knowl index\n\n- entities/three\n"),
+				Content:        []byte(rootIndexContent + "\n* [Three](entities/three.md)\n"),
 			},
 			{
 				Path:    "wiki/entities/three.md",
@@ -434,6 +700,36 @@ func TestWorkspaceStagePlanRejectsInvalidExistingStageReplay(t *testing.T) {
 	_, err = workspace.StagePlan(context.Background(), plan)
 	if !errors.Is(err, ErrContentInvalid) {
 		t.Fatalf("StagePlan() replay error = %v, want content invalid", err)
+	}
+}
+
+func TestWorkspaceStagePlanRejectsProtectedSourceNamespace(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := workspace.Schema(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, target := range []string{
+		"wiki/sources/engineering/page.md",
+		"wiki/entities/../sources/engineering/page.md",
+		`wiki\sources\engineering\page.md`,
+	} {
+		plan := knowl.ValidatedEditPlan{
+			OperationID: fmt.Sprintf("protected-source-%d", index), Scope: testScope, SchemaDigest: schema.Digest,
+			SourceRefs: []string{"fixture:source@1"}, Edits: []knowl.FileEdit{{Path: target, Content: []byte("protected")}},
+		}
+		if _, err := workspace.StagePlan(context.Background(), plan); !errors.Is(err, ErrPathRejected) {
+			t.Fatalf("StagePlan(%q) error = %v, want ErrPathRejected", target, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace.Root(), "wiki", "sources", "engineering", "page.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("protected canonical target stat = %v", err)
 	}
 }
 
@@ -671,7 +967,7 @@ func captureCanonicalState(t *testing.T, workspace *Workspace, extraPaths ...str
 		content: make(map[string][]byte),
 		missing: make(map[string]struct{}),
 	}
-	for _, relative := range append([]string{testIndexPath, "wiki/log.md"}, extraPaths...) {
+	for _, relative := range append([]string{testIndexPath, canonicalLogPath}, extraPaths...) {
 		path := filepath.Join(workspace.Root(), filepath.FromSlash(relative))
 		content, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {

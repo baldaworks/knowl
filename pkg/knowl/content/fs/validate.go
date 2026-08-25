@@ -1,11 +1,14 @@
 package fs
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
@@ -27,7 +30,22 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 	}
 	indexPath := filepath.ToSlash(filepath.Join(workspaceWikiDir, "index.md"))
 	for _, edit := range edits {
-		if edit.Target == indexPath {
+		bundleRelative := strings.TrimPrefix(edit.Target, workspaceWikiDir+"/")
+		kind, classifyErr := okf.ClassifyPath(bundleRelative)
+		if classifyErr != nil {
+			return contentInvalidError(edit.Target, string(okf.RulePathInvalid))
+		}
+		if kind == okf.DocumentIndex {
+			index, validateErr := okf.ValidateIndex(bundleRelative, []byte(edit.Content), okfLimits(len(edit.Content)))
+			if validateErr != nil {
+				return okfContentInvalidError(edit.Target, validateErr)
+			}
+			if edit.Target == indexPath && index.ObservedVersion != okf.Version {
+				return contentInvalidError(edit.Target, string(okf.RuleIndexInvalid))
+			}
+			if edit.Target != indexPath {
+				continue
+			}
 			targets, malformed := knowlwiki.IndexTargets(edit.Content)
 			if malformed {
 				return contentInvalidError(edit.Target, "index.malformed")
@@ -38,6 +56,9 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 				}
 			}
 			continue
+		}
+		if kind == okf.DocumentLog {
+			return contentInvalidError(edit.Target, string(okf.RuleLogInvalid))
 		}
 		pageID, ok := knowlwiki.PageIDFromPath(edit.Target)
 		if !ok {
@@ -51,6 +72,10 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 }
 
 func validateOrdinaryPageEdit(target string, pageID knowl.PageID, content string, rawRefs map[string]struct{}, pageTargets map[knowl.PageID]struct{}) error {
+	bundleRelative := strings.TrimPrefix(target, workspaceWikiDir+"/")
+	if _, err := okf.ParseConcept(bundleRelative, []byte(content), okfLimits(len(content))); err != nil {
+		return okfContentInvalidError(target, err)
+	}
 	metadata, err := knowlwiki.ParseFrontmatter(content)
 	if err != nil {
 		return contentInvalidError(target, "frontmatter.malformed")
@@ -90,6 +115,14 @@ func validateOrdinaryPageEdit(target string, pageID knowl.PageID, content string
 		}
 	}
 	return nil
+}
+
+func okfContentInvalidError(target string, err error) error {
+	var invalid *okf.Violation
+	if errors.As(err, &invalid) {
+		return contentInvalidError(target, string(invalid.Rule))
+	}
+	return contentInvalidError(target, "okf.invalid")
 }
 
 func (workspace *Workspace) acceptedRawSourceKeysLocked(scope knowl.ScopeRef) (map[string]struct{}, error) {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,8 @@ This document defines the page, link, citation, ingest, query, and lint conventi
 
 Maintainer plans may read this document but may not modify it.
 `
+	defaultIndex = "---\nokf_version: \"0.2\"\n---\n# Knowl Index\n"
+	defaultLog   = "# Knowl Update Log\n"
 )
 
 func newInitCommand() *cobra.Command {
@@ -106,6 +109,7 @@ func initWorkspace(workspace string) error {
 		filepath.Join(workspace, workspaceWikiDir, "syntheses"),
 		filepath.Join(workspace, ".knowl", "staging"),
 		filepath.Join(workspace, ".knowl", "recovery"),
+		filepath.Join(workspace, ".knowl", "commits"),
 	} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return fmt.Errorf("create workspace directory %q: %w", path, err)
@@ -113,8 +117,8 @@ func initWorkspace(workspace string) error {
 	}
 	files := map[string]string{
 		schemaFile: defaultSchema,
-		indexFile:  "# Knowl index\n\nNo pages have been committed yet.\n",
-		logFile:    "# Knowl log\n\n",
+		indexFile:  defaultIndex,
+		logFile:    defaultLog,
 	}
 	for relative, contents := range files {
 		path := filepath.Join(workspace, filepath.FromSlash(relative))
@@ -139,6 +143,25 @@ func validateWorkspace(workspace string) error {
 		}
 		if info.IsDir() {
 			return fmt.Errorf("required workspace path %q is a directory", relative)
+		}
+		if relative == schemaFile {
+			continue
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return fmt.Errorf("read workspace file %q: %w", relative, readErr)
+		}
+		limits := okf.DefaultLimits()
+		limits.MaxBytes = 4 << 20
+		if relative == indexFile {
+			index, parseErr := okf.ParseRootIndex(content, limits)
+			if parseErr != nil || index.ObservedVersion != okf.Version {
+				return fmt.Errorf("workspace root index is not OKF v%s", okf.Version)
+			}
+			continue
+		}
+		if _, parseErr := okf.ValidateLog("log.md", content, limits); parseErr != nil {
+			return fmt.Errorf("workspace root log is not valid OKF")
 		}
 	}
 	for _, relative := range []string{"raw", workspaceWikiDir, ".knowl"} {

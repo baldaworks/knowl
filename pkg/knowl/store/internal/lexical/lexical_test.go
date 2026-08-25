@@ -142,6 +142,19 @@ func TestContainsTermRequiresCompleteToken(t *testing.T) {
 	}
 }
 
+func TestRelevantRequiresMultipleMatchesForLongQueries(t *testing.T) {
+	t.Parallel()
+	if Relevant("an unrelated document containing only term", []string{"xyzzy", "valera", "no", "such", "term", "92841"}) {
+		t.Fatal("Relevant() accepted one common match from a long OOV query")
+	}
+	if !Relevant("xyzzy valera useful evidence", []string{"xyzzy", "valera", "no", "such"}) {
+		t.Fatal("Relevant() rejected a half-term match")
+	}
+	if !Relevant("badger evidence", []string{"badger", "session"}) {
+		t.Fatal("Relevant() rejected relaxed two-term recall")
+	}
+}
+
 func TestExcerptPreservesMatchWithinEverySufficientBudget(t *testing.T) {
 	t.Parallel()
 	const term = testTerm

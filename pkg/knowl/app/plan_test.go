@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
@@ -62,7 +63,19 @@ func TestValidatePlanAcceptsNoOp(t *testing.T) {
 
 func TestValidatePlanRejectsSchemaAndRawTargets(t *testing.T) {
 	input := knowl.MaintenanceInput{Schema: knowl.SchemaDocument{Digest: fixtureSchema}, Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: fixtureSourceID}, Version: knowl.SourceVersion{Version: "1"}}}
-	for _, path := range []string{"schema.md", "raw/source", "wiki/../schema.md", "wiki/log.md"} {
+	for _, path := range []string{
+		"schema.md",
+		"raw/source",
+		"wiki/../schema.md",
+		"wiki/log.md",
+		"wiki/sources/engineering/page.md",
+		"wiki/entities/../sources/engineering/page.md",
+		`wiki\sources\engineering\page.md`,
+		" wiki/entities/page.md",
+		"wiki/entities//page.md",
+		"wiki/entities/page\n.md",
+		"wiki/entities/" + strings.Repeat("p", 2040) + ".md",
+	} {
 		_, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{SchemaDigest: fixtureSchema, SourceRefs: []string{"fixture:source@1"}, Edits: []knowl.FileEdit{{Path: path}}}, DefaultPlanLimits())
 		if !errors.Is(err, ErrForbiddenEdit) {
 			t.Errorf("path %q error = %v, want forbidden edit", path, err)

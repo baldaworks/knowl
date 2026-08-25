@@ -17,6 +17,8 @@ components:
     in: pkg/knowl/app
   types:
     in: pkg/knowl/types
+  okf:
+    in: pkg/knowl/okf
   wiki:
     in: pkg/knowl/wiki
   content:
@@ -31,8 +33,8 @@ components:
     in: internal/mcphttp
   httpapi:
     in: internal/httpapi/**
-  bootstrap:
-    in: internal/bootstrap
+  source:
+    in: internal/source/**
   testsupport:
     in: pkg/knowl/internal/**
   examples:
@@ -42,20 +44,28 @@ deps:
   wiki:
     mayDependOn:
       - types
+      - okf
+  types:
+    mayDependOn:
+      - okf
   app:
     mayDependOn:
       - types
       - wiki
+      - okf
   content:
     mayDependOn:
       - app
       - types
       - wiki
+      - okf
   store:
     mayDependOn:
       - store
       - app
       - types
+      - wiki
+      - okf
   provider:
     mayDependOn:
       - app
@@ -64,6 +74,7 @@ deps:
     mayDependOn:
       - app
       - types
+      - okf
   mcphttp:
     mayDependOn:
       - mcp
@@ -72,10 +83,13 @@ deps:
       - httpapi
       - app
       - types
-  bootstrap:
+      - okf
+  source:
     mayDependOn:
-      - content
+      - source
+      - app
       - types
+      - okf
   host:
     mayDependOn:
       - app
@@ -86,6 +100,7 @@ deps:
       - mcp
       - mcphttp
       - httpapi
+      - source
   fx:
     mayDependOn:
       - host
@@ -93,11 +108,13 @@ deps:
     mayDependOn:
       - host
       - fx
-      - bootstrap
+      - app
+      - source
       - content
       - provider
       - types
       - httpapi
+      - okf
   testsupport:
     mayDependOn:
       - app

@@ -24,7 +24,7 @@ additional config root and `--profile` selects a top-level profile.
 
 The config has two sections:
 
-- `runtime:` — shared provider registry in Balda-compatible typed shape
+- `runtime:` — optional shared provider registry in Balda-compatible typed shape
 - `knowl:` — Knowl application settings
 
 SQLite example:
@@ -76,9 +76,53 @@ knowl:
     listen_addr: 0.0.0.0:8080
 ```
 
+Provider-free two-source example:
+
+```yaml
+knowl:
+  provider: ""
+  workspace:
+    path: /var/lib/knowl/knowledge
+  sources:
+    - id: engineering
+      type: filesystem
+      filesystem:
+        root: /sources/engineering
+        include: ["**/*.md"]
+        flavor: obsidian
+      sync:
+        on_start: true
+        interval: 5m
+        retry_initial: 1s
+        retry_maximum: 1m
+    - id: operations
+      type: filesystem
+      filesystem:
+        root: /sources/operations
+        include: ["**/*.md"]
+        flavor: markdown
+      sync:
+        on_start: true
+        interval: 5m
+        retry_initial: 1s
+        retry_maximum: 1m
+    - id: catalog
+      type: filesystem
+      filesystem:
+        root: /sources/catalog
+        include: ["**/*"]
+        flavor: okf
+      sync:
+        on_start: true
+        interval: 5m
+```
+
 Notes:
 
-- `knowl.provider` selects one entry from `runtime.providers`.
+- `knowl.provider` optionally selects one entry from `runtime.providers`.
+  Without it, retrieval, lint, health, and configured source workflows remain
+  available; ingest returns HTTP 503 with `maintainer_unavailable` and performs
+  no source acceptance or durable operation reservation.
 - `knowl.storage.type` selects one optional typed storage block.
 - when storage is omitted, Knowl defaults to SQLite.
 - default local listen address is `127.0.0.1:8080`; service/sidecar deployments
@@ -105,7 +149,27 @@ Local workspace bootstrap:
 ```bash
 go build -o knowl ./cmd/knowl
 ./knowl bootstrap wiki /path/to/wiki
+# or: ./knowl bootstrap obsidian /path/to/vault
+# or: ./knowl bootstrap okf /path/to/okf-bundle
 ```
+
+Bootstrap retains its fresh-workspace guard but now performs exactly one shared
+source sync using ID `bootstrap-wiki`, `bootstrap-obsidian`, or `bootstrap-okf`.
+The `okf` flavor validates and preserves OKF v0.2 metadata, reserved controls,
+Unicode paths, and standard concept links. A missing version is treated as v0.2;
+another declared version is consumed best-effort and reported in the sync
+result under `diagnostics`. A newly generated config is
+provider-free and retains that source for later operation. If an
+operator-owned config already exists, bootstrap does not rewrite it; add the
+source entry there before using ongoing source commands. Ordinary source sync
+accepts existing workspaces and preserves curated pages and `wiki/index.md`.
+Its only canonical target is `wiki/sources/<source_id>/**`.
+
+To convert a legacy canonical workspace, stop active writers, back it up, and
+run `./knowl migrate okf-v0.2`. Migration is explicit and idempotent; startup,
+`retrieve`, and `source status` never perform it. Validate and inspect retrieval
+afterward before retiring a backup. See [workspace semantics](workspace.md) for
+the recovery and archive contract.
 
 Empty workspace initialization:
 
@@ -122,8 +186,25 @@ docker compose -f deploy/sidecar/compose.yaml up --build
 ```
 
 The CLI commands `retrieve`, `ingest`, and `operation` are one-shot operator
-wrappers over the same service semantics. They are not the primary agent
-integration surface.
+wrappers over the same service semantics. Source controls run directly against
+an in-process Host without starting HTTP or scheduled runners:
+
+```bash
+./knowl source list
+./knowl source sync engineering
+./knowl source sync --all
+./knowl source status engineering
+```
+
+These commands are operator conveniences, not the primary agent integration
+surface. Source management is not exposed as an MCP tool.
+
+`on_start` attempts are asynchronous. Each enabled source has independent
+interval and capped retry state; a source cannot overlap itself, while different
+sources can progress independently. A failed source leaves readiness and last
+successful retrieval snapshots available. Inspect `source status` for durable
+last-attempt/last-success state. After restart, recovery converges staged source
+work before readiness.
 
 ## HTTP contract
 

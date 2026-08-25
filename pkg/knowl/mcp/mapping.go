@@ -8,13 +8,21 @@ import (
 func retrieveResult(result app.QueryResult) RetrieveResult {
 	evidence := make([]EvidenceItem, 0, len(result.Pages))
 	for _, page := range result.Pages {
-		evidence = append(evidence, EvidenceItem{
+		item := EvidenceItem{
 			PageID:     page.ID,
 			Title:      page.Title,
 			Snippet:    page.Snippet,
 			SourceRefs: append([]string(nil), page.SourceRefs...),
+			OKF:        page.OKF,
 			Untrusted:  page.Untrusted,
-		})
+		}
+		if page.SourceDocument != nil {
+			item.SourceID = string(page.SourceDocument.SourceID)
+			item.DocumentID = string(page.SourceDocument.DocumentID)
+			item.Revision = page.SourceDocument.Revision
+			item.URI = page.SourceDocument.URI
+		}
+		evidence = append(evidence, item)
 	}
 	citations := make([]app.Citation, len(result.Citations))
 	copy(citations, result.Citations)

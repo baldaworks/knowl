@@ -37,31 +37,72 @@ func (manifest sourceManifest) accepted() knowl.AcceptedSource {
 }
 
 type stageEntry struct {
-	Target         string `yaml:"target"`
-	ExpectedDigest string `yaml:"expected_digest,omitempty"`
-	Digest         string `yaml:"digest"`
+	Action         knowl.SourceMutationAction `yaml:"action,omitempty"`
+	Target         string                     `yaml:"target"`
+	ExpectedDigest string                     `yaml:"expected_digest,omitempty"`
+	Digest         string                     `yaml:"digest"`
 }
 
 type stageManifest struct {
 	OperationID       string       `yaml:"operation_id"`
+	Writer            string       `yaml:"writer,omitempty"`
+	SourceID          string       `yaml:"source_id,omitempty"`
 	Scope             string       `yaml:"scope,omitempty"`
 	SchemaDigest      string       `yaml:"schema_digest"`
 	SourceRefs        []string     `yaml:"source_refs,omitempty"`
 	Entries           []stageEntry `yaml:"entries"`
 	LogExpectedDigest string       `yaml:"log_expected_digest,omitempty"`
 	LogDigest         string       `yaml:"log_digest,omitempty"`
+	LogDate           string       `yaml:"log_date,omitempty"`
+}
+
+const (
+	stageWriterMaintainer = "maintainer"
+	stageWriterSource     = "source"
+	stageWriterMigration  = "migration"
+)
+
+func manifestWriter(manifest stageManifest) string {
+	if manifest.Writer == "" {
+		return stageWriterMaintainer
+	}
+	return manifest.Writer
+}
+
+func entryAction(entry stageEntry) knowl.SourceMutationAction {
+	if entry.Action == "" {
+		return knowl.SourceMutationWrite
+	}
+	return entry.Action
 }
 
 type recoveryEntry struct {
-	Target string `yaml:"target"`
-	Backup string `yaml:"backup,omitempty"`
-	HadOld bool   `yaml:"had_old"`
+	Action knowl.SourceMutationAction `yaml:"action,omitempty"`
+	Target string                     `yaml:"target"`
+	Backup string                     `yaml:"backup,omitempty"`
+	HadOld bool                       `yaml:"had_old"`
+	Mode   uint32                     `yaml:"mode,omitempty"`
+	Digest string                     `yaml:"digest,omitempty"`
 }
 
 type recoveryJournal struct {
 	OperationID string          `yaml:"operation_id"`
+	Writer      string          `yaml:"writer,omitempty"`
+	SourceID    string          `yaml:"source_id,omitempty"`
+	Scope       string          `yaml:"scope,omitempty"`
 	State       string          `yaml:"state"`
 	Entries     []recoveryEntry `yaml:"entries"`
+	Generation  string          `yaml:"generation,omitempty"`
+	Files       []string        `yaml:"files,omitempty"`
+}
+
+type commitReceipt struct {
+	Writer      string   `yaml:"writer"`
+	SourceID    string   `yaml:"source_id"`
+	Scope       string   `yaml:"scope"`
+	OperationID string   `yaml:"operation_id"`
+	Generation  string   `yaml:"generation"`
+	Files       []string `yaml:"files"`
 }
 
 type logEntry struct {
@@ -109,6 +150,9 @@ func writeJournal(path string, journal recoveryJournal) error {
 	if err != nil {
 		return fmt.Errorf("marshal recovery journal: %w", err)
 	}
+	if len(content) > maxRecoveryJournalBytes {
+		return fmt.Errorf("recovery journal exceeds limit: %w", ErrWorkspaceInvalid)
+	}
 	if err := writeAtomic(path, content, 0o600); err != nil {
 		return fmt.Errorf("write recovery journal: %w", err)
 	}
@@ -116,13 +160,35 @@ func writeJournal(path string, journal recoveryJournal) error {
 }
 
 func readJournal(path string) (recoveryJournal, error) {
-	content, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return recoveryJournal{}, err
+	}
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(io.LimitReader(file, maxRecoveryJournalBytes+1))
+	if err != nil || len(content) > maxRecoveryJournalBytes {
+		return recoveryJournal{}, ErrWorkspaceInvalid
 	}
 	var journal recoveryJournal
 	if err := yaml.Unmarshal(content, &journal); err != nil {
 		return recoveryJournal{}, err
 	}
 	return journal, nil
+}
+
+func readCommitReceipt(path string) (commitReceipt, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return commitReceipt{}, err
+	}
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(io.LimitReader(file, maxStageManifestBytes+1))
+	if err != nil || len(content) > maxStageManifestBytes {
+		return commitReceipt{}, ErrPlanConflict
+	}
+	var receipt commitReceipt
+	if err := yaml.Unmarshal(content, &receipt); err != nil {
+		return commitReceipt{}, err
+	}
+	return receipt, nil
 }

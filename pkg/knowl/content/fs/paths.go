@@ -6,12 +6,51 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
+const maxCanonicalPathBytes = 2048
+
 func validateWikiPath(raw string) error {
-	clean := filepath.ToSlash(filepath.Clean(raw))
-	if clean == "." || !strings.HasPrefix(clean, workspaceWikiDir+"/") || clean == filepath.Join(workspaceWikiDir, "log.md") || filepath.Ext(clean) != markdownExt || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+	if err := validateCanonicalWikiTarget(raw); err != nil {
+		return err
+	}
+	if filepath.Base(raw) == okfLogFilename || filepath.Ext(raw) != markdownExt {
 		return fmt.Errorf("wiki path %q: %w", raw, ErrPathRejected)
+	}
+	return nil
+}
+
+func validateCanonicalWikiTarget(raw string) error {
+	clean := filepath.ToSlash(filepath.Clean(raw))
+	if raw == "" || len(raw) > maxCanonicalPathBytes || strings.TrimSpace(raw) != raw || !utf8.ValidString(raw) || strings.Contains(raw, "\\") || clean != raw || !strings.HasPrefix(raw, workspaceWikiDir+"/") {
+		return fmt.Errorf("wiki path %q: %w", raw, ErrPathRejected)
+	}
+	for _, character := range raw {
+		if character < ' ' || character == 0x7f {
+			return fmt.Errorf("wiki path %q: %w", raw, ErrPathRejected)
+		}
+	}
+	return nil
+}
+
+func validateSourceTarget(sourceID, raw string) error {
+	if err := validateCanonicalWikiTarget(raw); err != nil {
+		return err
+	}
+	prefix := "wiki/sources/" + sourceID + "/"
+	if !strings.HasPrefix(raw, prefix) || len(raw) <= len(prefix) {
+		return fmt.Errorf("source path %q: %w", raw, ErrPathRejected)
+	}
+	return nil
+}
+
+func validateMaintainerWikiPath(raw string) error {
+	if err := validateWikiPath(raw); err != nil {
+		return err
+	}
+	if raw == "wiki/sources" || strings.HasPrefix(raw, "wiki/sources/") {
+		return fmt.Errorf("maintainer path %q: %w", raw, ErrPathRejected)
 	}
 	return nil
 }
@@ -20,7 +59,7 @@ func validateCommitTarget(target string) error {
 	if target == filepath.ToSlash(filepath.Join(workspaceWikiDir, "log.md")) {
 		return nil
 	}
-	return validateWikiPath(target)
+	return validateMaintainerWikiPath(target)
 }
 
 func validateRecoveryTarget(target string) error {
@@ -28,6 +67,28 @@ func validateRecoveryTarget(target string) error {
 		return fmt.Errorf("recovery target %q: %w", target, err)
 	}
 	return nil
+}
+
+func validateJournalTarget(journal recoveryJournal, target string) error {
+	switch manifestWriter(stageManifest{Writer: journal.Writer}) {
+	case stageWriterMaintainer:
+		return validateRecoveryTarget(target)
+	case stageWriterSource:
+		if err := validateSourceTarget(journal.SourceID, target); err != nil {
+			return fmt.Errorf("source recovery target %q: %w", target, err)
+		}
+		return nil
+	case stageWriterMigration:
+		if target == migrationLegacyLogPath {
+			return nil
+		}
+		if err := validateCanonicalWikiTarget(target); err != nil || filepath.Ext(target) != markdownExt {
+			return fmt.Errorf("migration recovery target %q: %w", target, ErrPathRejected)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown recovery writer %q: %w", journal.Writer, ErrWorkspaceInvalid)
+	}
 }
 
 func validateRecoveryBackup(backup, recoveryRoot string) error {
@@ -60,6 +121,9 @@ func pageRelativePath(raw string) (string, error) {
 	if err := validateWikiPath(clean); err != nil {
 		return "", err
 	}
+	if base := filepath.Base(clean); base == okfLogFilename || (base == okfIndexFilename && clean != filepath.ToSlash(filepath.Join(workspaceWikiDir, okfIndexFilename))) {
+		return "", fmt.Errorf("reserved OKF document %q: %w", clean, ErrPathRejected)
+	}
 	return clean, nil
 }
 
@@ -90,7 +154,7 @@ func rejectSymlinkPath(root, target string) error {
 			return statErr
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlink %q: %w", current, ErrPathRejected)
+			return fmt.Errorf("symlinked workspace path: %w", ErrPathRejected)
 		}
 	}
 	return nil

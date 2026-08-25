@@ -15,9 +15,24 @@ import (
 
 var _ lifecycle.Lifecycle = (*Host)(nil)
 
+// PrepareReadOnly marks a composed, preflighted host ready for in-process read
+// handlers without binding a listener or starting operation and source jobs.
+func (host *Host) PrepareReadOnly() error {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	if host.closed {
+		return fmt.Errorf("host is closed")
+	}
+	host.ready.Store(true)
+	return nil
+}
+
 // Start binds the loopback HTTP listener and marks the host ready after preflight.
 // The context is used for the start operation; Stop owns the server lifetime.
-func (host *Host) Start(_ context.Context) error {
+func (host *Host) Start(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	host.mu.Lock()
 	defer host.mu.Unlock()
 	if host.closed {
@@ -41,6 +56,15 @@ func (host *Host) Start(_ context.Context) error {
 		host.server = nil
 		host.cancel = nil
 		return fmt.Errorf("start Knowl scheduler: %w", err)
+	}
+	if err := host.sourceJobs.start(serverCtx); err != nil {
+		_ = host.scheduler.stop(ctx)
+		cancel()
+		_ = listener.Close()
+		host.listener = nil
+		host.server = nil
+		host.cancel = nil
+		return fmt.Errorf("start Knowl source scheduler: %w", err)
 	}
 	host.started = true
 	host.ready.Store(true)
@@ -110,9 +134,10 @@ func (host *Host) Stop(ctx context.Context) error {
 		component string
 		err       error
 	}
-	results := make(chan shutdownResult, 2)
-	components := 1
+	results := make(chan shutdownResult, 3)
+	components := 2
 	go func() { results <- shutdownResult{component: "scheduler", err: host.scheduler.stop(ctx)} }()
+	go func() { results <- shutdownResult{component: "source scheduler", err: host.sourceJobs.stop(ctx)} }()
 	if server != nil {
 		components++
 		// MCP stream requests may intentionally remain open for the lifetime of a

@@ -20,12 +20,17 @@ import (
 )
 
 const (
-	knownProviderID      = "known"
-	commandHelpFlag      = "--help"
-	operatorTokenEnvName = "KNOWL_OPERATOR_TOKEN"
-	mcpRetrieveToolName  = "knowl_retrieve"
-	mcpIngestToolName    = "knowl_ingest"
-	mcpOperationToolName = "knowl_operation"
+	knownProviderID           = "known"
+	commandHelpFlag           = "--help"
+	commandOperationsSourceID = "operations"
+	sourceSyncAllFlag         = "--all"
+	retrieveSourceFlag        = "--source"
+	designDocRelativePath     = "docs/design.md"
+	sourceNamespacePattern    = "wiki/sources/<source_id>/**"
+	operatorTokenEnvName      = "KNOWL_OPERATOR_TOKEN"
+	mcpRetrieveToolName       = "knowl_retrieve"
+	mcpIngestToolName         = "knowl_ingest"
+	mcpOperationToolName      = "knowl_operation"
 )
 
 type stubLocalWorkflowHost struct {
@@ -33,12 +38,18 @@ type stubLocalWorkflowHost struct {
 	startErr   error
 	stopErr    error
 	startCalls int
+	readCalls  int
 	stopCalls  int
 }
 
 func (host *stubLocalWorkflowHost) Start(context.Context) error {
 	host.startCalls++
 	return host.startErr
+}
+
+func (host *stubLocalWorkflowHost) PrepareReadOnly() error {
+	host.readCalls++
+	return nil
 }
 
 func (host *stubLocalWorkflowHost) Stop(context.Context) error {

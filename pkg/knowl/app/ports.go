@@ -117,7 +117,7 @@ func validManifestRef(ref string) bool {
 // SearchIndex owns rebuildable context, text, and link projections.
 type SearchIndex interface {
 	SelectContext(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, error)
-	Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits) ([]knowl.PageReference, error)
+	Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error)
 	Links(ctx context.Context, scope knowl.ScopeRef, page knowl.PageID, limits knowl.ReadLimits) ([]knowl.LinkReference, error)
 	Project(ctx context.Context, commit knowl.ContentCommit) error
 	Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error

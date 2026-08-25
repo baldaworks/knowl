@@ -17,6 +17,7 @@ import (
 
 type localWorkflowHost interface {
 	Start(ctx context.Context) error
+	PrepareReadOnly() error
 	Stop(ctx context.Context) error
 	Handler() http.Handler
 }
@@ -35,9 +36,10 @@ type localWorkflowSessionFactory func(context.Context) (localWorkflowSession, er
 var newLocalWorkflowSession = newProductionLocalWorkflowSession
 
 type localWorkflowRequest struct {
-	Method string
-	Path   string
-	Body   []byte
+	Method    string
+	Path      string
+	Body      []byte
+	StartHost bool
 }
 
 type localWorkflowResponse struct {
@@ -64,11 +66,7 @@ func newProductionLocalWorkflowSession(ctx context.Context) (localWorkflowSessio
 		return localWorkflowSession{}, err
 	}
 	config.ListenAddr = loopbackListenAddr
-	host, err := knowl.New(ctx, knowl.Options{
-		Config:         config,
-		RuntimeFactory: runtimeFactory,
-		ProviderID:     providerID,
-	})
+	host, err := knowl.New(ctx, selectedHostOptions(config, runtimeFactory, providerID))
 	if err != nil {
 		return localWorkflowSession{}, err
 	}
@@ -101,12 +99,20 @@ func (runner *localWorkflowRunner) Execute(ctx context.Context, request localWor
 	if session.ShutdownTimeout <= 0 {
 		session.ShutdownTimeout = 10 * time.Second
 	}
-	if err := session.Host.Start(ctx); err != nil {
-		startErr := fmt.Errorf("start local workflow host: %w", err)
-		if closeErr := closeLocalWorkflowHost(session.Host); closeErr != nil {
-			return localWorkflowResponse{}, errors.Join(startErr, fmt.Errorf("close local workflow host after start failure: %w", closeErr))
+	if request.StartHost {
+		if err := session.Host.Start(ctx); err != nil {
+			startErr := fmt.Errorf("start local workflow host: %w", err)
+			if closeErr := closeLocalWorkflowHost(session.Host); closeErr != nil {
+				return localWorkflowResponse{}, errors.Join(startErr, fmt.Errorf("close local workflow host after start failure: %w", closeErr))
+			}
+			return localWorkflowResponse{}, startErr
 		}
-		return localWorkflowResponse{}, startErr
+	} else if err := session.Host.PrepareReadOnly(); err != nil {
+		prepareErr := fmt.Errorf("prepare local read-only workflow host: %w", err)
+		if closeErr := closeLocalWorkflowHost(session.Host); closeErr != nil {
+			return localWorkflowResponse{}, errors.Join(prepareErr, fmt.Errorf("close local workflow host after read-only preparation failure: %w", closeErr))
+		}
+		return localWorkflowResponse{}, prepareErr
 	}
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), session.ShutdownTimeout)

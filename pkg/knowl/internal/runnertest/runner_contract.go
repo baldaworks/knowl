@@ -107,7 +107,7 @@ func Run(t *testing.T, operations app.OperationStore, index app.SearchIndex, sco
 		t.Fatalf("post-stage replay invoked maintainer; calls = %d", maintainer.Calls())
 	}
 
-	results, err := index.Search(ctx, scope, "Runner", domain.ReadLimits{Pages: 5})
+	results, err := index.Search(ctx, scope, "Runner", domain.ReadLimits{Pages: 5}, nil)
 	if err != nil {
 		t.Fatalf("search runner projection: %v", err)
 	}

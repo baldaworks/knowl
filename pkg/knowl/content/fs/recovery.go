@@ -4,11 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+)
+
+const (
+	maxRecoveryJournalBytes = 8 << 20
+	maxRecoveryEntries      = maxSourceStageEntries + 1
+	maxRecoveryBackupBytes  = maxSourceStageFile
 )
 
 // Recover restores prepared journals and clears completed journals before readiness.
@@ -35,54 +44,72 @@ func (workspace *Workspace) Recover(ctx context.Context) ([]knowl.RecoveryResult
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
 			continue
 		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("symlink recovery journal %q: %w", entry.Name(), ErrPathRejected)
+		}
 		path := filepath.Join(recoveryRoot, entry.Name())
 		journal, err := readJournal(path)
 		if err != nil {
 			return nil, fmt.Errorf("read recovery journal %q: %w", entry.Name(), err)
 		}
+		recoveryKey, err := validateRecoveryJournal(entry.Name(), journal)
+		if err != nil {
+			return nil, err
+		}
+		journalDir := filepath.Join(recoveryRoot, token(recoveryKey))
 		switch journal.State {
 		case recoveryPrepared:
-			for _, recovery := range journal.Entries {
-				if err := validateRecoveryTarget(recovery.Target); err != nil {
-					return nil, err
-				}
+			preimages, err := workspace.preflightPreparedRecovery(journal, journalDir)
+			if err != nil {
+				return nil, err
+			}
+			for index, recovery := range journal.Entries {
 				target := filepath.Join(workspace.root, filepath.FromSlash(recovery.Target))
-				if err := rejectSymlinkPath(workspace.root, target); err != nil {
-					return nil, err
-				}
 				if recovery.HadOld {
-					if err := validateRecoveryBackup(recovery.Backup, recoveryRoot); err != nil {
-						return nil, err
+					mode := os.FileMode(recovery.Mode)
+					if mode == 0 {
+						mode = 0o600
 					}
-					old, readErr := os.ReadFile(recovery.Backup)
-					if readErr != nil {
-						return nil, fmt.Errorf("read preimage %q: %w", recovery.Target, readErr)
-					}
-					if err := writeAtomic(target, old, 0o600); err != nil {
+					if err := writeAtomic(target, preimages[index], mode); err != nil {
 						return nil, fmt.Errorf("restore preimage %q: %w", recovery.Target, err)
 					}
 				} else if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 					return nil, fmt.Errorf("remove partial file %q: %w", recovery.Target, err)
 				}
 			}
-			results = append(results, knowl.RecoveryResult{OperationID: journal.OperationID, Action: "rolled_back"})
+			if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterSource {
+				if err := os.Remove(workspace.sourceCommitReceiptPath(journal.Scope, journal.OperationID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return nil, fmt.Errorf("remove rolled-back source receipt: %w", err)
+				}
+			}
+			results = append(results, knowl.RecoveryResult{OperationID: journal.OperationID, Action: recoveryRolledBack})
 		case recoveryCommitted:
 			for _, recovery := range journal.Entries {
-				if err := validateRecoveryTarget(recovery.Target); err != nil {
-					return nil, err
-				}
 				if err := rejectSymlinkPath(workspace.root, filepath.Join(workspace.root, filepath.FromSlash(recovery.Target))); err != nil {
 					return nil, err
 				}
 			}
-			results = append(results, knowl.RecoveryResult{OperationID: journal.OperationID, Action: "completed"})
+			if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterSource {
+				if !recoveryEntriesMatch(workspace.root, journal.Entries) {
+					return nil, fmt.Errorf("committed source recovery diverged: %w", ErrWorkspaceInvalid)
+				}
+				if err := workspace.writeSourceCommitReceipt(commitReceipt{
+					Writer: stageWriterSource, SourceID: journal.SourceID, Scope: journal.Scope, OperationID: journal.OperationID,
+					Generation: journal.Generation, Files: append([]string(nil), journal.Files...),
+				}); err != nil {
+					return nil, err
+				}
+			} else if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterMigration && !recoveryEntriesMatch(workspace.root, journal.Entries) {
+				return nil, fmt.Errorf("committed migration recovery diverged: %w", ErrWorkspaceInvalid)
+			}
+			results = append(results, knowl.RecoveryResult{OperationID: journal.OperationID, Action: recoveryCompleted})
 		default:
 			return nil, fmt.Errorf("unknown recovery state %q: %w", journal.State, ErrWorkspaceInvalid)
 		}
 		if err := os.Remove(path); err != nil {
 			return nil, fmt.Errorf("remove recovery journal %q: %w", entry.Name(), err)
 		}
-		if err := os.RemoveAll(filepath.Join(recoveryRoot, token(journal.OperationID))); err != nil {
+		if err := os.RemoveAll(filepath.Join(recoveryRoot, token(recoveryKey))); err != nil {
 			return nil, fmt.Errorf("remove recovery backups %q: %w", entry.Name(), err)
 		}
 	}
@@ -127,4 +154,128 @@ func (workspace *Workspace) Recover(ctx context.Context) ([]knowl.RecoveryResult
 		}
 	}
 	return results, nil
+}
+
+func (workspace *Workspace) preflightPreparedRecovery(journal recoveryJournal, journalDir string) ([][]byte, error) {
+	preimages := make([][]byte, len(journal.Entries))
+	total := 0
+	for index, entry := range journal.Entries {
+		target := filepath.Join(workspace.root, filepath.FromSlash(entry.Target))
+		if err := rejectSymlinkPath(workspace.root, target); err != nil {
+			return nil, err
+		}
+		if !entry.HadOld {
+			continue
+		}
+		if err := validateRecoveryBackup(entry.Backup, journalDir); err != nil {
+			return nil, err
+		}
+		content, err := readRecoveryBackup(entry.Backup)
+		if err != nil {
+			return nil, fmt.Errorf("read preimage %q: %w", entry.Target, err)
+		}
+		if total > maxSourceStageBytes-len(content) {
+			return nil, fmt.Errorf("recovery preimages exceed limit: %w", ErrWorkspaceInvalid)
+		}
+		total += len(content)
+		preimages[index] = content
+	}
+	if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterSource {
+		if err := rejectSymlinkPath(workspace.root, workspace.sourceCommitReceiptPath(journal.Scope, journal.OperationID)); err != nil {
+			return nil, err
+		}
+	}
+	return preimages, nil
+}
+
+func validateRecoveryJournal(fileName string, journal recoveryJournal) (string, error) {
+	writer := manifestWriter(stageManifest{Writer: journal.Writer})
+	if (writer != stageWriterMaintainer && writer != stageWriterSource && writer != stageWriterMigration) ||
+		(journal.State != recoveryPrepared && journal.State != recoveryCommitted) || len(journal.Entries) == 0 || len(journal.Entries) > maxRecoveryEntries {
+		return "", fmt.Errorf("invalid recovery journal: %w", ErrWorkspaceInvalid)
+	}
+	recoveryKey := journal.OperationID
+	switch writer {
+	case stageWriterSource:
+		if app.ValidateSyncRunID(knowl.SyncRunID(journal.OperationID)) != nil || app.ValidateSourceID(knowl.SourceID(journal.SourceID)) != nil || strings.TrimSpace(journal.Scope) == "" || !validSHA256(journal.Generation) || len(journal.Files) == 0 {
+			return "", fmt.Errorf("invalid source recovery journal: %w", ErrWorkspaceInvalid)
+		}
+		recoveryKey = sourceRecoveryKey(journal.Scope, journal.OperationID)
+	case stageWriterMigration:
+		if journal.OperationID != migrationOperationID || journal.SourceID != "" || journal.Scope != "" {
+			return "", fmt.Errorf("invalid migration recovery identity: %w", ErrWorkspaceInvalid)
+		}
+	default:
+		if strings.TrimSpace(journal.OperationID) == "" || journal.SourceID != "" {
+			return "", fmt.Errorf("invalid maintainer recovery identity: %w", ErrWorkspaceInvalid)
+		}
+	}
+	if fileName != token(recoveryKey)+".yaml" {
+		return "", fmt.Errorf("recovery journal identity mismatch: %w", ErrWorkspaceInvalid)
+	}
+	seen := make(map[string]struct{}, len(journal.Entries))
+	targets := make([]string, 0, len(journal.Entries))
+	for _, entry := range journal.Entries {
+		if validateJournalTarget(journal, entry.Target) != nil || entry.Mode&^uint32(0o777) != 0 || (entry.HadOld && entry.Backup == "") || (!entry.HadOld && entry.Backup != "") {
+			return "", fmt.Errorf("invalid recovery entry: %w", ErrWorkspaceInvalid)
+		}
+		action := entry.Action
+		if action == "" {
+			action = knowl.SourceMutationWrite
+		}
+		if action != knowl.SourceMutationWrite && action != knowl.SourceMutationDelete {
+			return "", fmt.Errorf("invalid recovery action: %w", ErrWorkspaceInvalid)
+		}
+		if writer == stageWriterSource {
+			if action == knowl.SourceMutationWrite && !validSHA256(entry.Digest) {
+				return "", fmt.Errorf("invalid recovery digest: %w", ErrWorkspaceInvalid)
+			}
+			if action == knowl.SourceMutationDelete && entry.Digest != "" {
+				return "", fmt.Errorf("invalid delete recovery digest: %w", ErrWorkspaceInvalid)
+			}
+		}
+		if _, exists := seen[entry.Target]; exists {
+			return "", fmt.Errorf("duplicate recovery target: %w", ErrWorkspaceInvalid)
+		}
+		seen[entry.Target] = struct{}{}
+		targets = append(targets, entry.Target)
+	}
+	slices.Sort(targets)
+	if writer == stageWriterSource && !slices.Equal(targets, journal.Files) {
+		return "", fmt.Errorf("source recovery files mismatch: %w", ErrWorkspaceInvalid)
+	}
+	return recoveryKey, nil
+}
+
+func readRecoveryBackup(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(io.LimitReader(file, maxRecoveryBackupBytes+1))
+	if err != nil || len(content) > maxRecoveryBackupBytes {
+		return nil, ErrWorkspaceInvalid
+	}
+	return content, nil
+}
+
+func recoveryEntriesMatch(root string, entries []recoveryEntry) bool {
+	for _, entry := range entries {
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(entry.Target)))
+		action := entry.Action
+		if action == "" {
+			action = knowl.SourceMutationWrite
+		}
+		if action == knowl.SourceMutationDelete {
+			if !errors.Is(err, os.ErrNotExist) {
+				return false
+			}
+			continue
+		}
+		if err != nil || digestBytes(content) != entry.Digest {
+			return false
+		}
+	}
+	return true
 }

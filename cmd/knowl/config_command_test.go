@@ -111,7 +111,7 @@ func TestOperatorDocsDoNotExposeRemovedIngestPolicyConfig(t *testing.T) {
 			want: []string{"storage:", ".knowl/knowl.sqlite"},
 		},
 		{
-			name: "operations",
+			name: commandOperationsSourceID,
 			path: filepath.Join(repoRoot, "docs", "operations.md"),
 			want: []string{"KNOWL_STORAGE_TYPE", "KNOWL_SERVER_LISTEN_ADDR"},
 		},
@@ -296,7 +296,6 @@ func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testi
 		providerID string
 		wantError  string
 	}{
-		{name: "empty", wantError: "knowl.provider is required"},
 		{name: "unknown", providerID: "missing", wantError: "validate knowl.provider"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -311,6 +310,11 @@ func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testi
 			}
 		})
 	}
+	providerFree := context.WithValue(context.Background(), loadedConfigContextKey{}, loadedConfig{Document: knowlConfigDocument{}})
+	factory, providerID, err := selectedRuntimeProvider(providerFree)
+	if err != nil || factory != nil || providerID != "" {
+		t.Fatalf("provider-free selectedRuntimeProvider() = (%#v, %q, %v)", factory, providerID, err)
+	}
 
 	ctx := context.WithValue(context.Background(), loadedConfigContextKey{}, loadedConfig{
 		Document: knowlConfigDocument{
@@ -318,7 +322,7 @@ func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testi
 			Knowl:   AppConfig{Provider: knownProviderID},
 		},
 	})
-	factory, providerID, err := selectedRuntimeProvider(ctx)
+	factory, providerID, err = selectedRuntimeProvider(ctx)
 	if err != nil {
 		t.Fatalf("selectedRuntimeProvider() error: %v", err)
 	}
