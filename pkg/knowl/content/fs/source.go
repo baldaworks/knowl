@@ -111,6 +111,16 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 			(existing.SourceDocument != (knowl.SourceDocument{}) && existing.SourceDocument != envelope.SourceDocument) {
 			return knowl.AcceptedSource{}, ErrSourceConflict
 		}
+		if existing.SourceDocument == (knowl.SourceDocument{}) && envelope.SourceDocument != (knowl.SourceDocument{}) {
+			existing.SourceDocument = envelope.SourceDocument
+			manifestBytes, marshalErr := yaml.Marshal(existing)
+			if marshalErr != nil {
+				return knowl.AcceptedSource{}, fmt.Errorf("marshal enriched source manifest: %w", marshalErr)
+			}
+			if writeErr := writeAtomic(manifestPath, manifestBytes, 0o600); writeErr != nil {
+				return knowl.AcceptedSource{}, fmt.Errorf("enrich source manifest: %w", writeErr)
+			}
+		}
 		return existing.accepted(), nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return knowl.AcceptedSource{}, fmt.Errorf("read source manifest: %w", err)

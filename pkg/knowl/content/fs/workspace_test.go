@@ -25,6 +25,7 @@ const (
 	testMarkdownMediaType  = "text/markdown"
 	testWorkspaceSourceRef = "fixture:source-1@1"
 	testWikiSourceAdapter  = "wiki-filesystem"
+	testSourceRevision     = "revision-1"
 	testPageOnePath        = "wiki/entities/one.md"
 	testIndexPath          = "wiki/index.md"
 )
@@ -337,7 +338,7 @@ func TestWorkspacePersistsConfiguredSourceProvenance(t *testing.T) {
 	content := []byte("# Architecture\n")
 	digestValue := sha256.Sum256(content)
 	document := knowl.SourceDocument{
-		SourceID: testSourceID, DocumentID: "Архитектура.md", Revision: "revision-1",
+		SourceID: testSourceID, DocumentID: "Архитектура.md", Revision: testSourceRevision,
 		URI: "https://wiki.example.test/%D0%90%D1%80%D1%85%D0%B8%D1%82%D0%B5%D0%BA%D1%82%D1%83%D1%80%D0%B0.md",
 	}
 	envelope := knowl.SourceEnvelope{
@@ -364,6 +365,44 @@ func TestWorkspacePersistsConfiguredSourceProvenance(t *testing.T) {
 	}
 }
 
+func TestWorkspaceEnrichesLegacySourceProvenance(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("# Legacy architecture\n")
+	digestValue := sha256.Sum256(content)
+	envelope := knowl.SourceEnvelope{
+		Scope: testScope, Source: knowl.SourceRef{Adapter: testWikiSourceAdapter, ID: "engineering/architecture.md"},
+		Version:   knowl.SourceVersion{Version: testSourceRevision, Digest: hex.EncodeToString(digestValue[:])},
+		MediaType: testMarkdownMediaType, Content: content,
+	}
+	legacy, err := workspace.AcceptSource(context.Background(), envelope)
+	if err != nil || legacy.SourceDocument != (knowl.SourceDocument{}) {
+		t.Fatalf("legacy source = %#v, %v", legacy, err)
+	}
+	document := knowl.SourceDocument{
+		SourceID: testSourceID, DocumentID: "architecture.md", Revision: envelope.Version.Version,
+		URI: "https://wiki.example.test/architecture.md",
+	}
+	envelope.SourceDocument = document
+	enriched, err := workspace.AcceptSource(context.Background(), envelope)
+	if err != nil || enriched.SourceDocument != document || enriched.ManifestRef != legacy.ManifestRef {
+		t.Fatalf("enriched source = %#v, %v", enriched, err)
+	}
+	read, err := workspace.ReadSource(context.Background(), enriched, knowl.ReadLimits{})
+	if err != nil || !slices.Equal(read, content) {
+		t.Fatalf("enriched source content = %q, %v", read, err)
+	}
+	inspection, err := workspace.Inspect(context.Background(), testScope)
+	if err != nil || len(inspection.RawSources) != 1 || inspection.RawSources[0].Source.SourceDocument != document {
+		t.Fatalf("enriched raw inspection = %#v, %v", inspection.RawSources, err)
+	}
+}
+
 func TestWorkspaceRejectsInvalidConfiguredSourceProvenanceBeforeWrite(t *testing.T) {
 	workspace, err := New(t.TempDir())
 	if err != nil {
@@ -376,7 +415,7 @@ func TestWorkspaceRejectsInvalidConfiguredSourceProvenanceBeforeWrite(t *testing
 	digestValue := sha256.Sum256(content)
 	_, err = workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
 		Scope: testScope, Source: knowl.SourceRef{Adapter: testWikiSourceAdapter, ID: "engineering/page.md"},
-		Version: knowl.SourceVersion{Version: "revision-1", Digest: hex.EncodeToString(digestValue[:])},
+		Version: knowl.SourceVersion{Version: testSourceRevision, Digest: hex.EncodeToString(digestValue[:])},
 		SourceDocument: knowl.SourceDocument{
 			SourceID: "engineering", DocumentID: "page.md", Revision: "other-revision", URI: "https://wiki.example.test/page.md",
 		},
@@ -863,9 +902,9 @@ func TestWorkspaceStagePlanPreservesSourceLineage(t *testing.T) {
 			if err := workspace.Init(); err != nil {
 				t.Fatal(err)
 			}
-			oldRef := acceptStructuredWorkspaceSource(t, workspace, "engineering", "page.md", "revision-1")
+			oldRef := acceptStructuredWorkspaceSource(t, workspace, "engineering", "page.md", testSourceRevision)
 			currentRef := acceptStructuredWorkspaceSource(t, workspace, "engineering", "page.md", "revision-2")
-			unrelatedRef := acceptStructuredWorkspaceSource(t, workspace, "operations", "runbook.md", "revision-1")
+			unrelatedRef := acceptStructuredWorkspaceSource(t, workspace, "operations", "runbook.md", testSourceRevision)
 			writeRootCatalogTargets(t, workspace, "entities/shared.md")
 			existing := validWorkspacePageRefs("entities/shared", "Shared", []string{oldRef, unrelatedRef}, "Existing facts")
 			target := filepath.Join(workspace.Root(), "wiki", "entities", "shared.md")
@@ -906,8 +945,8 @@ func TestWorkspaceSnapshotResolvesSortedSourceDocuments(t *testing.T) {
 	if err := workspace.Init(); err != nil {
 		t.Fatal(err)
 	}
-	operationsRef := acceptStructuredWorkspaceSource(t, workspace, "operations", "runbook.md", "revision-1")
-	engineeringRef := acceptStructuredWorkspaceSource(t, workspace, "engineering", "architecture.md", "revision-1")
+	operationsRef := acceptStructuredWorkspaceSource(t, workspace, "operations", "runbook.md", testSourceRevision)
+	engineeringRef := acceptStructuredWorkspaceSource(t, workspace, "engineering", "architecture.md", testSourceRevision)
 	writeRootCatalogTargets(t, workspace, "entities/shared.md")
 	content := validWorkspacePageRefs("entities/shared", "Shared", []string{operationsRef, engineeringRef}, "Shared facts")
 	target := filepath.Join(workspace.Root(), "wiki", "entities", "shared.md")

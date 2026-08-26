@@ -222,10 +222,25 @@ func (service *Service) fetchAcceptCandidate(ctx context.Context, adapter app.So
 
 func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef, accepted knowl.AcceptedSource, previous *knowl.DocumentState) (app.PreparedDocumentState, bool, error) {
 	config := *source.Config.Filesystem
-	document, err := app.ResolveSourceDocument(source.ID, accepted, knowl.SourceDocument{
+	fallback := knowl.SourceDocument{
 		SourceID: source.ID, DocumentID: ref.ExternalID, Revision: ref.Revision,
 		URI: filesystem.DocumentURI(config, ref.Path),
-	})
+	}
+	if accepted.SourceDocument == (knowl.SourceDocument{}) {
+		content, readErr := service.content.ReadSource(ctx, accepted, knowl.ReadLimits{Bytes: service.options.MaxRawBytes})
+		if readErr != nil {
+			return app.PreparedDocumentState{}, false, failStage(classRaw, readErr)
+		}
+		enriched, acceptErr := service.content.AcceptSource(ctx, knowl.SourceEnvelope{
+			Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version, MediaType: accepted.MediaType,
+			SourceDocument: fallback, Content: content, ReceivedAt: service.options.Clock(),
+		})
+		if acceptErr != nil {
+			return app.PreparedDocumentState{}, false, failStage(classRaw, acceptErr)
+		}
+		accepted = enriched
+	}
+	document, err := app.ResolveSourceDocument(source.ID, accepted, fallback)
 	if err != nil {
 		return app.PreparedDocumentState{}, false, failStage(classRaw, err)
 	}
