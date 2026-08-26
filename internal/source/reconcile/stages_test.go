@@ -304,7 +304,7 @@ func TestStageRepeatSyncIsConvergentWithZeroFetchAndZeroMutations(t *testing.T) 
 func TestStageBackfillsMaintenanceFromRawWithoutFetch(t *testing.T) {
 	harness := newStageHarness(t, nil)
 	body := "# Existing\n"
-	harness.seedFinalized(t, []seededDoc{{path: "docs/existing.md", body: body, missingMaintenance: true}})
+	harness.seedFinalized(t, []seededDoc{{path: "docs/existing.md", body: body, missingMaintenance: true, legacyRaw: true}})
 	ref := harness.descriptor("docs/existing.md", body)
 	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
 
@@ -314,8 +314,13 @@ func TestStageBackfillsMaintenanceFromRawWithoutFetch(t *testing.T) {
 		t.Fatalf("backfill = fetches:%d requests:%d changed:%v", harness.adapter.fetches, len(harness.queue.requests), result.Changed)
 	}
 	head, err := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, ref.ExternalID)
-	if err != nil || head.MaintenanceRevision != ref.Revision || head.MaintenanceOperationID == "" {
+	if err != nil || head.MaintenanceRevision != ref.Revision || head.MaintenanceOperationID == "" ||
+		head.AcceptedSource.SourceDocument.SourceID != harness.sourceID || head.AcceptedSource.SourceDocument.DocumentID != ref.ExternalID {
 		t.Fatalf("backfilled head = %#v, %v", head, err)
+	}
+	inspection, err := harness.workspace.Inspect(context.Background(), harness.scope)
+	if err != nil || len(inspection.RawSources) != 1 || inspection.RawSources[0].Source.SourceDocument != head.AcceptedSource.SourceDocument {
+		t.Fatalf("backfilled raw manifest = %#v, %v", inspection.RawSources, err)
 	}
 	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
 	repeated, err := harness.sync(t)
@@ -611,6 +616,7 @@ type seededDoc struct {
 	body               string
 	deleted            bool
 	legacyMirror       bool
+	legacyRaw          bool
 	missingMaintenance bool
 }
 
@@ -640,17 +646,21 @@ func (harness *stageHarness) seedFinalized(t *testing.T, docs []seededDoc) {
 			Metadata: map[string]string{"kind": kindFor(doc.path)},
 		}
 		refs = append(refs, ref)
+		sourceDocument := knowl.SourceDocument{
+			SourceID: harness.sourceID, DocumentID: ref.ExternalID, Revision: revision,
+			URI: filesystem.DocumentURI(*source.Config.Filesystem, ref.Path),
+		}
+		if doc.legacyRaw {
+			sourceDocument = knowl.SourceDocument{}
+		}
 		accepted, err := harness.workspace.AcceptSource(ctx, knowl.SourceEnvelope{
-			Scope:     harness.scope,
-			Source:    knowl.SourceRef{Adapter: "wiki-filesystem", ID: string(harness.sourceID) + "/" + doc.path},
-			Version:   knowl.SourceVersion{Version: revision, Digest: revision},
-			MediaType: mediaTypeFor(doc.path),
-			SourceDocument: knowl.SourceDocument{
-				SourceID: harness.sourceID, DocumentID: ref.ExternalID, Revision: revision,
-				URI: filesystem.DocumentURI(*source.Config.Filesystem, ref.Path),
-			},
-			Content:    []byte(doc.body),
-			ReceivedAt: now,
+			Scope:          harness.scope,
+			Source:         knowl.SourceRef{Adapter: "wiki-filesystem", ID: string(harness.sourceID) + "/" + doc.path},
+			Version:        knowl.SourceVersion{Version: revision, Digest: revision},
+			MediaType:      mediaTypeFor(doc.path),
+			SourceDocument: sourceDocument,
+			Content:        []byte(doc.body),
+			ReceivedAt:     now,
 		})
 		if err != nil {
 			t.Fatalf("seed accept source: %v", err)

@@ -332,6 +332,7 @@ executes computations, executors, attesters, or referenced resources.
 ## Where to look next
 
 - sidecar/service runbook: [docs/sidecar.md](docs/sidecar.md)
+- v0.3.1 legacy-provenance patch and upgrade notes: [docs/releases/v0.3.1.md](docs/releases/v0.3.1.md)
 - v0.3.0 semantic-wiki release and upgrade notes: [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md)
 - v0.2.0 multi-source release and migration notes: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md)
 - v0.1.0 release and rollback notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md)
