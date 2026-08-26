@@ -333,6 +333,103 @@ func IndexTargets(content string) ([]string, bool) {
 	return targets, malformed
 }
 
+// IndexDestinations returns bounded raw internal-link candidates from an OKF
+// catalog. Resolution remains the caller's responsibility because nested
+// catalogs resolve relative paths from their own directory.
+func IndexDestinations(content string, limit int) ([]string, bool) {
+	if limit <= 0 {
+		return nil, true
+	}
+	destinations := markdownDestinations(content, limit+1)
+	malformed := len(destinations) > limit
+	if len(destinations) > limit {
+		destinations = destinations[:limit]
+	}
+	for offset := 0; offset < len(content) && len(destinations) < limit; {
+		start := strings.Index(content[offset:], "[[")
+		if start < 0 {
+			break
+		}
+		start += offset + 2
+		end := strings.Index(content[start:], "]]")
+		if end < 0 {
+			malformed = true
+			break
+		}
+		target := strings.TrimSpace(content[start : start+end])
+		if separator := strings.IndexAny(target, "|#"); separator >= 0 {
+			target = target[:separator]
+		}
+		if target != "" && !isNavigationDirective(target) {
+			destinations = append(destinations, target)
+		}
+		offset = start + end + 2
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if len(destinations) >= limit {
+			malformed = true
+			break
+		}
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "- ") && !strings.HasPrefix(trimmed, "* ") {
+			continue
+		}
+		item := strings.TrimSpace(trimmed[2:])
+		if item == "" || strings.HasPrefix(item, "[") {
+			continue
+		}
+		destinations = append(destinations, item)
+	}
+	sort.Strings(destinations)
+	return uniqueStrings(destinations), malformed
+}
+
+// ResolveIndexDestination resolves one catalog destination to a bundle-relative
+// Markdown path. External and anchor destinations are valid but do not
+// participate in the catalog graph.
+func ResolveIndexDestination(catalogPath, raw string) (target string, external bool, valid bool) {
+	destination := strings.TrimSpace(strings.Trim(raw, "<>"))
+	if destination == "" || strings.HasPrefix(destination, "#") {
+		return "", true, true
+	}
+	parsed, err := url.Parse(destination)
+	if err != nil {
+		return "", false, false
+	}
+	if parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(destination, "//") {
+		return "", true, true
+	}
+	decoded, err := url.PathUnescape(parsed.Path)
+	if err != nil || strings.ContainsAny(decoded, "\\\x00\r\n") {
+		return "", false, false
+	}
+	rootRelative := strings.HasPrefix(decoded, "/") || strings.HasPrefix(decoded, "wiki/")
+	decoded = strings.TrimPrefix(decoded, "/")
+	decoded = strings.TrimPrefix(decoded, "wiki/")
+	if strings.HasSuffix(decoded, "/") {
+		decoded += "index.md"
+	}
+	if pathpkg.Ext(decoded) == "" {
+		decoded += markdownExt
+	}
+	if pathpkg.Ext(decoded) != markdownExt {
+		return "", true, true
+	}
+	target = decoded
+	if !rootRelative {
+		target = pathpkg.Join(pathpkg.Dir(catalogPath), decoded)
+	}
+	target = pathpkg.Clean(target)
+	if target == "." || target == ".." || strings.HasPrefix(target, "../") || pathpkg.IsAbs(target) {
+		return "", false, false
+	}
+	kind, err := okf.ClassifyPath(target)
+	if err != nil || (kind != okf.DocumentIndex && kind != okf.DocumentConcept) {
+		return "", false, false
+	}
+	return target, false, true
+}
+
 // NormalizePageTarget converts a wiki reference into a canonical page ID.
 func NormalizePageTarget(target string) string {
 	target = strings.TrimSpace(strings.TrimPrefix(target, "wiki/"))

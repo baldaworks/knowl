@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -79,15 +80,19 @@ func Run(t *testing.T, operations app.OperationStore, index app.SearchIndex, sco
 	if err != nil {
 		t.Fatalf("submit adopted source: %v", err)
 	}
+	inspection, err := workspace.Inspect(ctx, scope)
+	if err != nil {
+		t.Fatalf("inspect adopted catalogs: %v", err)
+	}
 	staged, err := workspace.StagePlan(ctx, domain.ValidatedEditPlan{
 		OperationID:  string(adopted.Operation.ID),
 		Scope:        scope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{"fixture:adopted@1"},
-		Edits: []domain.FileEdit{{
-			Path:    "wiki/entities/adopted.md",
-			Content: contractPage("entities/adopted", "Adopted", "fixture:adopted@1"),
-		}},
+		Edits: []domain.FileEdit{
+			{Path: "wiki/entities/adopted.md", Content: contractPage("entities/adopted", "Adopted", "fixture:adopted@1")},
+			{Path: inspection.Index.Path, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [Adopted](entities/adopted.md)\n")},
+		},
 	})
 	if err != nil {
 		t.Fatalf("persist adopted stage: %v", err)
@@ -129,11 +134,26 @@ type contractMaintainer struct {
 	counter int
 }
 
-func (maintainer *contractMaintainer) Plan(context.Context, domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+func (maintainer *contractMaintainer) Plan(ctx context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.ModelEditPlan{}, err
+	}
 	maintainer.mu.Lock()
 	defer maintainer.mu.Unlock()
 	maintainer.counter++
-	return maintainer.plan, nil
+	plan := maintainer.plan
+	plan.Edits = append([]domain.FileEdit(nil), plan.Edits...)
+	for _, catalog := range input.Catalogs {
+		if catalog.Path != "wiki/index.md" {
+			continue
+		}
+		content := strings.TrimRight(catalog.Content, "\n") + "\n\n* [runner](entities/runner.md)\n"
+		plan.Edits = append(plan.Edits, domain.FileEdit{
+			Path: catalog.Path, ExpectedDigest: catalog.Digest, Content: []byte(content),
+		})
+		break
+	}
+	return plan, nil
 }
 
 func (maintainer *contractMaintainer) Calls() int {

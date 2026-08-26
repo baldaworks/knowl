@@ -89,12 +89,17 @@ func ValidatePlan(ctx context.Context, input knowl.MaintenanceInput, plan knowl.
 		edits[index] = edit
 	}
 	sort.Slice(edits, func(left, right int) bool { return edits[left].Path < edits[right].Path })
+	requiredSourceRef := wantedSource
+	if input.Source.Source.Adapter == "query" {
+		requiredSourceRef = ""
+	}
 	return knowl.ValidatedEditPlan{
-		OperationID:  planOperationID(input),
-		Scope:        input.Scope,
-		SchemaDigest: input.Schema.Digest,
-		SourceRefs:   sourceRefs,
-		Edits:        edits,
+		OperationID:       planOperationID(input),
+		Scope:             input.Scope,
+		SchemaDigest:      input.Schema.Digest,
+		RequiredSourceRef: requiredSourceRef,
+		SourceRefs:        sourceRefs,
+		Edits:             edits,
 	}, nil
 }
 

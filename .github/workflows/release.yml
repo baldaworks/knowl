@@ -175,8 +175,10 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
+          release_notes="docs/releases/${GITHUB_REF_NAME}.md"
+          test -f "$release_notes"
           notes="$(mktemp)"
-          cp docs/releases/v0.1.0.md "$notes"
+          cp "$release_notes" "$notes"
           printf '\n## Published artifact\n\n`%s@%s`\n' "$IMAGE_NAME" "$DIGEST" >> "$notes"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release edit "$GITHUB_REF_NAME" --title "Knowl $GITHUB_REF_NAME" --notes-file "$notes"

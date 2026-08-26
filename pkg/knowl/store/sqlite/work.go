@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,8 +25,8 @@ func (store *Store) Execution(ctx context.Context, scope knowl.ScopeRef, id know
 		return knowl.ExecutionDescriptor{}, err
 	}
 	descriptor, key, err := scanExecution(store.db.QueryRowContext(ctx, `
-		SELECT operation_id, scope, source_adapter, source_id, source_version, source_digest,
-		       accepted_media_type, source_manifest_ref, schema_digest, schema_version, schema_snapshot
+			SELECT operation_id, scope, source_adapter, source_id, source_version, source_digest,
+			       accepted_media_type, source_manifest_ref, accepted_source_document, schema_digest, schema_version, schema_snapshot
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.ExecutionDescriptor{}, ErrNotFound
@@ -112,8 +113,8 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	var id knowl.OperationID
 	rows, err := tx.QueryContext(ctx, `
-		SELECT operation_id, scope, source_adapter, source_id, source_version, source_digest,
-		       accepted_media_type, source_manifest_ref, schema_digest, schema_version, schema_snapshot
+			SELECT operation_id, scope, source_adapter, source_id, source_version, source_digest,
+			       accepted_media_type, source_manifest_ref, accepted_source_document, schema_digest, schema_version, schema_snapshot
 		FROM knowl_operations
 		WHERE scope = ?
 		  AND status NOT IN (?, ?)
@@ -286,12 +287,12 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 	var descriptor knowl.ExecutionDescriptor
 	var key knowl.OperationKey
 	var scope string
-	var schemaDigest, schemaVersion string
+	var sourceDocument, schemaDigest, schemaVersion string
 	var schemaSnapshot []byte
 	if err := scanner.Scan(
 		&descriptor.OperationID, &scope, &key.Source.Adapter, &key.Source.ID,
 		&key.Version.Version, &key.Version.Digest, &descriptor.Source.MediaType,
-		&descriptor.Source.ManifestRef, &schemaDigest, &schemaVersion, &schemaSnapshot,
+		&descriptor.Source.ManifestRef, &sourceDocument, &schemaDigest, &schemaVersion, &schemaSnapshot,
 	); err != nil {
 		return knowl.ExecutionDescriptor{}, knowl.OperationKey{}, err
 	}
@@ -299,6 +300,11 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 	descriptor.Source.Scope = key.Scope
 	descriptor.Source.Source = key.Source
 	descriptor.Source.Version = key.Version
+	if sourceDocument != "" {
+		if err := json.Unmarshal([]byte(sourceDocument), &descriptor.Source.SourceDocument); err != nil {
+			return knowl.ExecutionDescriptor{}, knowl.OperationKey{}, app.ErrExecutionDescriptorUnavailable
+		}
+	}
 	descriptor.Schema = knowl.SchemaDocument{
 		Scope: key.Scope, Digest: schemaDigest, Version: schemaVersion,
 		Content: append([]byte(nil), schemaSnapshot...),

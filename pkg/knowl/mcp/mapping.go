@@ -8,13 +8,18 @@ import (
 func retrieveResult(result app.QueryResult) RetrieveResult {
 	evidence := make([]EvidenceItem, 0, len(result.Pages))
 	for _, page := range result.Pages {
+		sourceDocuments := append([]knowl.SourceDocument(nil), page.SourceDocuments...)
+		if len(sourceDocuments) == 0 && page.SourceDocument != nil {
+			sourceDocuments = append(sourceDocuments, *page.SourceDocument)
+		}
 		item := EvidenceItem{
-			PageID:     page.ID,
-			Title:      page.Title,
-			Snippet:    page.Snippet,
-			SourceRefs: append([]string(nil), page.SourceRefs...),
-			OKF:        page.OKF,
-			Untrusted:  page.Untrusted,
+			PageID:          page.ID,
+			Title:           page.Title,
+			Snippet:         page.Snippet,
+			SourceRefs:      append([]string(nil), page.SourceRefs...),
+			SourceDocuments: sourceDocuments,
+			OKF:             page.OKF,
+			Untrusted:       page.Untrusted,
 		}
 		if page.SourceDocument != nil {
 			item.SourceID = string(page.SourceDocument.SourceID)

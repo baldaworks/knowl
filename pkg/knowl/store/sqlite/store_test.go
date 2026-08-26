@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -35,6 +36,7 @@ const (
 	testSharedPageID = "shared"
 	testSourceID     = "engineering"
 	testRevision     = "revision-1"
+	testMediaType    = "text/markdown"
 )
 
 func TestResumableWorkContract(t *testing.T) {
@@ -158,7 +160,7 @@ func sqliteSourceRun(id knowl.SyncRunID, at time.Time) knowl.SyncRun {
 func sqliteDocumentState(run knowl.SyncRun, deleted bool, deletedAt time.Time) knowl.DocumentState {
 	return knowl.DocumentState{
 		Scope: run.Scope, SourceID: run.SourceID, DocumentID: "docs/page.md", Revision: testRevision,
-		AcceptedSource: knowl.AcceptedSource{Scope: run.Scope, Source: knowl.SourceRef{Adapter: "wiki-filesystem", ID: "engineering/docs/page.md"}, Version: knowl.SourceVersion{Version: testRevision, Digest: strings.Repeat("d", 64)}, MediaType: "text/markdown", ManifestRef: "raw/manifest.json"},
+		AcceptedSource: knowl.AcceptedSource{Scope: run.Scope, Source: knowl.SourceRef{Adapter: "wiki-filesystem", ID: "engineering/docs/page.md"}, Version: knowl.SourceVersion{Version: testRevision, Digest: strings.Repeat("d", 64)}, MediaType: testMediaType, ManifestRef: "raw/manifest.json"},
 		MirrorPath:     "wiki/sources/engineering/docs/page.md", MirrorDigest: strings.Repeat("e", 64), LastSeenRunID: run.ID, Deleted: deleted, DeletedAt: deletedAt,
 	}
 }
@@ -233,13 +235,24 @@ func TestSourceMigrationPreservesVersionTwoOperation(t *testing.T) {
 	if err != nil || operation.ID != "legacy-operation" {
 		t.Fatalf("preserved operation = %#v, %v", operation, err)
 	}
-	var title, body, digest, sourceRefs, format, description string
+	var acceptedSourceDocument string
+	if err := store.db.QueryRowContext(ctx, `SELECT accepted_source_document FROM knowl_operations WHERE operation_id = ?`, operation.ID).Scan(&acceptedSourceDocument); err != nil {
+		t.Fatalf("read migrated operation provenance: %v", err)
+	}
+	if acceptedSourceDocument != "" {
+		t.Fatalf("legacy operation provenance = %q, want empty compatibility value", acceptedSourceDocument)
+	}
+	var title, body, digest, sourceRefs, sourceDocuments, format, description string
 	var sourceID, sourceDocument, metadata sql.NullString
-	if err := store.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document, format, description, okf_metadata FROM knowl_pages WHERE scope = ? AND page_id = ?`, "legacy", "legacy-page").Scan(&title, &body, &digest, &sourceRefs, &sourceID, &sourceDocument, &format, &description, &metadata); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document, source_documents, format, description, okf_metadata FROM knowl_pages WHERE scope = ? AND page_id = ?`, "legacy", "legacy-page").Scan(&title, &body, &digest, &sourceRefs, &sourceID, &sourceDocument, &sourceDocuments, &format, &description, &metadata); err != nil {
 		t.Fatalf("read preserved projection page: %v", err)
 	}
-	if title != "Legacy page" || body != "preserved projection body" || digest != "page-digest" || sourceRefs != `["raw/legacy.json"]` || sourceID.Valid || sourceDocument.Valid || format != "" || description != "" || metadata.Valid {
-		t.Fatalf("preserved projection page = %q %q %q %q %#v %#v %q %q %#v", title, body, digest, sourceRefs, sourceID, sourceDocument, format, description, metadata)
+	if title != "Legacy page" || body != "preserved projection body" || digest != "page-digest" || sourceRefs != `["raw/legacy.json"]` || sourceID.Valid || sourceDocument.Valid || sourceDocuments != "[]" || format != "" || description != "" || metadata.Valid {
+		t.Fatalf("preserved projection page = %q %q %q %q %#v %#v %q %q %q %#v", title, body, digest, sourceRefs, sourceID, sourceDocument, sourceDocuments, format, description, metadata)
+	}
+	var relationRows int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM knowl_page_sources WHERE scope = ?`, "legacy").Scan(&relationRows); err != nil || relationRows != 0 {
+		t.Fatalf("legacy page source relations = %d, %v", relationRows, err)
 	}
 	var snapshotDigest string
 	var pageCount, linkCount int
@@ -249,6 +262,60 @@ func TestSourceMigrationPreservesVersionTwoOperation(t *testing.T) {
 	var syncRows int
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM knowl_sync_runs`).Scan(&syncRows); err != nil || syncRows != 0 {
 		t.Fatalf("sync rows = %d, %v", syncRows, err)
+	}
+}
+
+func TestSourceMaintenanceMigrationPreservesLegacyDocumentState(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/source-maintenance-migration.sqlite"
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(70, 0).UTC().Format(time.RFC3339Nano)
+	accepted, err := json.Marshal(knowl.AcceptedSource{
+		Scope: "legacy", Source: knowl.SourceRef{Adapter: "wiki-filesystem", ID: "engineering/docs/page.md"},
+		Version:   knowl.SourceVersion{Version: "revision-1", Digest: strings.Repeat("d", 64)},
+		MediaType: testMediaType, ManifestRef: "raw/legacy/manifest.yaml",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_sources (scope, source_id, source_type, config_digest, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"legacy", "engineering", knowl.SourceTypeFilesystem, strings.Repeat("c", 64), now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_source_documents (scope, source_id, document_id, revision, accepted_source, mirror_path, mirror_digest, last_seen_run_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy", "engineering", "docs/page.md", "revision-1", accepted, "wiki/sources/engineering/docs/page.md", strings.Repeat("e", 64), "legacy-run", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	state, err := store.DocumentState(ctx, "legacy", "engineering", "docs/page.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.MaintenanceRevision != "" || state.MaintenanceOperationID != "" ||
+		state.MirrorPath != "wiki/sources/engineering/docs/page.md" || state.AcceptedSource.SourceDocument != (knowl.SourceDocument{}) {
+		t.Fatalf("migrated legacy state = %#v", state)
 	}
 }
 
@@ -633,7 +700,12 @@ func executionFixture(scope knowl.ScopeRef, id string, createdAt time.Time) (kno
 		Key: key,
 		AcceptedSource: knowl.AcceptedSource{
 			Scope: scope, Source: key.Source, Version: key.Version,
-			MediaType: "text/markdown", ManifestRef: "raw/source/version/manifest.yaml",
+			MediaType: testMediaType,
+			SourceDocument: knowl.SourceDocument{
+				SourceID: "configured-wiki", DocumentID: knowl.DocumentID(id + ".md"), Revision: "1",
+				URI: "file:///srv/wiki/" + id + ".md",
+			},
+			ManifestRef: "raw/source/version/manifest.yaml",
 		},
 		Schema:       knowl.SchemaDocument{Scope: scope, Digest: digest, Version: "1", Content: schema},
 		SchemaDigest: digest,
@@ -656,7 +728,7 @@ func TestStoreRebuildsAndSearchesCanonicalSnapshot(t *testing.T) {
 		Scope:      "local",
 		CapturedAt: time.Unix(1, 0).UTC(),
 		Pages: []knowl.PageSnapshot{
-			{ID: pageID, Path: "wiki/sources/engineering/docs/one.md", Title: "One", Content: "alpha knowledge", Digest: "digest", SourceRefs: []string{"fixture:one@1"}, SourceDocument: sourceDocument},
+			{ID: pageID, Path: "wiki/entities/one.md", Title: "One", Content: "alpha knowledge", Digest: "digest", SourceRefs: []string{"fixture:one@1"}, SourceDocument: sourceDocument},
 			{ID: "curated", Path: "wiki/curated.md", Title: "Curated", Content: "curated knowledge", Digest: "curated-digest"},
 		},
 		Links: []knowl.LinkReference{{From: pageID, To: "two", Relation: "related"}},
@@ -668,7 +740,7 @@ func TestStoreRebuildsAndSearchesCanonicalSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search projection: %v", err)
 	}
-	if len(results) != 1 || !results[0].Untrusted || results[0].ID != pageID || results[0].SourceDocument == nil || *results[0].SourceDocument != *sourceDocument {
+	if len(results) != 1 || !results[0].Untrusted || results[0].ID != pageID || results[0].SourceDocument == nil || *results[0].SourceDocument != *sourceDocument || len(results[0].SourceDocuments) != 1 || results[0].SourceDocuments[0] != *sourceDocument {
 		t.Fatalf("search results = %#v", results)
 	}
 	var curatedSourceID, curatedSourceDocument sql.NullString
@@ -770,5 +842,67 @@ func TestStoreProjectsEmptyCanonicalScope(t *testing.T) {
 	}
 	if _, err := store.ProjectionStatus(ctx, snapshot.Scope); err != nil {
 		t.Fatalf("empty scope readiness: %v", err)
+	}
+}
+
+func TestSourceMaintenanceStatusIsBoundedAndDeterministic(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, t.TempDir()+"/maintenance-status.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	const scope = "maintenance-status"
+	now := time.Unix(100, 0).UTC().Format(time.RFC3339Nano)
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_sources (scope, source_id, source_type, config_digest, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, scope, testSourceID, knowl.SourceTypeFilesystem, strings.Repeat("a", 64), now, now); err != nil {
+		t.Fatal(err)
+	}
+	wantCounts := knowl.MaintenanceCounts{}
+	for index := 17; index >= 0; index-- {
+		documentID := fmt.Sprintf("docs/%02d.md", index)
+		operationID := fmt.Sprintf("maintenance-%02d", index)
+		status := knowl.StatusReceived
+		failureClass := ""
+		switch index % 3 {
+		case 1:
+			status = knowl.StatusCommitted
+		case 2:
+			status = knowl.StatusFailed
+			failureClass = "provider"
+		}
+		switch status {
+		case knowl.StatusCommitted:
+			wantCounts.Committed++
+		case knowl.StatusFailed:
+			wantCounts.Failed++
+		default:
+			wantCounts.Queued++
+		}
+		attempt := 1
+		if index%4 == 0 {
+			attempt = 2
+			wantCounts.Replayed++
+		}
+		if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_operations (operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest, status, failure_class, work_attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, operationID, scope, testFixture, documentID, testRevision, strings.Repeat("b", 64), testSchemaDigest, status, failureClass, attempt, now, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_source_documents (scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id, last_seen_run_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, scope, testSourceID, documentID, testRevision, `{}`, testRevision, operationID, "run-1", now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.sourceMaintenanceStatus(ctx, scope, testSourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Counts != wantCounts || len(got.Samples) != maxMaintenanceSamples || !got.Truncated {
+		t.Fatalf("maintenance status = %#v, want counts %#v and %d bounded samples", got, wantCounts, maxMaintenanceSamples)
+	}
+	for index, sample := range got.Samples {
+		if sample.DocumentID != knowl.DocumentID(fmt.Sprintf("docs/%02d.md", index)) {
+			t.Fatalf("sample order = %#v", got.Samples)
+		}
+		if sample.Replayed != (index%4 == 0) {
+			t.Fatalf("sample replay = %#v", sample)
+		}
 	}
 }

@@ -78,6 +78,58 @@ func TestOKFProjectionMigrationIsPostgresNative(t *testing.T) {
 	}
 }
 
+func TestSourceMaintenanceMigrationIsAdditive(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00006_source_maintenance.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"ALTER TABLE knowl_sync_candidates ADD COLUMN maintenance_revision",
+		"ALTER TABLE knowl_sync_candidates ADD COLUMN maintenance_operation_id",
+		"ALTER TABLE knowl_source_documents ADD COLUMN maintenance_revision",
+		"ALTER TABLE knowl_source_documents ADD COLUMN maintenance_operation_id",
+	} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("source maintenance migration missing %q", required)
+		}
+	}
+	if strings.Contains(string(content), "DROP COLUMN mirror_") {
+		t.Fatal("source maintenance migration drops legacy mirror state")
+	}
+}
+
+func TestOperationSourceDocumentMigrationIsAdditive(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00007_operation_source_document.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "ALTER TABLE knowl_operations ADD COLUMN accepted_source_document TEXT NOT NULL DEFAULT ''") {
+		t.Fatal("operation source-document migration does not add a backward-compatible column")
+	}
+	for _, forbidden := range []string{"DROP COLUMN accepted_media_type", "DROP COLUMN source_manifest_ref", "DROP TABLE knowl_operations"} {
+		if strings.Contains(string(content), forbidden) {
+			t.Fatalf("operation source-document migration contains destructive change %q", forbidden)
+		}
+	}
+}
+
+func TestPageSourcesMigrationIsAdditiveAndNormalized(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00008_page_sources.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"ALTER TABLE knowl_pages ADD COLUMN source_documents JSONB NOT NULL DEFAULT '[]'::jsonb",
+		"CREATE TABLE knowl_page_sources",
+		"PRIMARY KEY(scope, page_id, source_id, document_id, revision)",
+		"ON knowl_page_sources(scope, source_id, page_id)",
+	} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("page sources migration missing %q", required)
+		}
+	}
+}
+
 func TestStoreContract(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("KNOWL_POSTGRES_DSN"))
 	if dsn == "" {
@@ -470,7 +522,12 @@ func postgresExecutionFixture(scope knowl.ScopeRef, id string, createdAt time.Ti
 		Key: key,
 		AcceptedSource: knowl.AcceptedSource{
 			Scope: scope, Source: key.Source, Version: key.Version,
-			MediaType: "text/markdown", ManifestRef: "raw/source/version/manifest.yaml",
+			MediaType: "text/markdown",
+			SourceDocument: knowl.SourceDocument{
+				SourceID: "configured-wiki", DocumentID: knowl.DocumentID(id + ".md"), Revision: "1",
+				URI: "file:///srv/wiki/" + id + ".md",
+			},
+			ManifestRef: "raw/source/version/manifest.yaml",
 		},
 		Schema:       knowl.SchemaDocument{Scope: scope, Digest: digest, Version: "1", Content: schema},
 		SchemaDigest: digest,

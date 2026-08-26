@@ -13,6 +13,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -100,7 +101,7 @@ func TestSourceCommandsValidateBeforeSessionAndEmitRedactedJSON(t *testing.T) {
 	if err := status.Execute(); err != nil {
 		t.Fatalf("source status: %v", err)
 	}
-	if host.statusID != commandEngineeringSourceID || !strings.Contains(output.String(), `"status":"succeeded"`) {
+	if host.statusID != commandEngineeringSourceID || !strings.Contains(output.String(), `"status":"succeeded"`) || !strings.Contains(output.String(), `"maintenance"`) || !strings.Contains(output.String(), `"operation_id":"maintenance-operation"`) {
 		t.Fatalf("source status = id %q, JSON %s", host.statusID, output.String())
 	}
 }
@@ -122,7 +123,7 @@ func TestSourceCommandPreservesOperationAndStopErrors(t *testing.T) {
 	}
 }
 
-func TestProviderFreeSourceCommandsUseRealHost(t *testing.T) {
+func TestSourceCommandsUseRealHostWithMaintainer(t *testing.T) {
 	original := newLocalSourceSession
 	t.Cleanup(func() { newLocalSourceSession = original })
 	workspace, err := contentfs.New(t.TempDir())
@@ -149,7 +150,7 @@ func TestProviderFreeSourceCommandsUseRealHost(t *testing.T) {
 		Sync:   domain.SourceSyncPolicy{OnStart: true},
 	}}
 	newLocalSourceSession = func(ctx context.Context) (localSourceSession, error) {
-		host, hostErr := knowl.New(ctx, knowl.Options{Config: config})
+		host, hostErr := knowl.New(ctx, knowl.Options{Config: config, Maintainer: provider.Fixture{}})
 		return localSourceSession{Host: host, ShutdownTimeout: time.Second}, hostErr
 	}
 
@@ -158,10 +159,10 @@ func TestProviderFreeSourceCommandsUseRealHost(t *testing.T) {
 	syncCommand.SetOut(&output)
 	syncCommand.SetArgs([]string{commandEngineeringSourceID})
 	if err := syncCommand.Execute(); err != nil {
-		t.Fatalf("provider-free source sync: %v", err)
+		t.Fatalf("source sync: %v", err)
 	}
 	if !strings.Contains(output.String(), `"changed":true`) {
-		t.Fatalf("provider-free sync JSON: %s", output.String())
+		t.Fatalf("sync JSON: %s", output.String())
 	}
 
 	output.Reset()
@@ -169,10 +170,10 @@ func TestProviderFreeSourceCommandsUseRealHost(t *testing.T) {
 	statusCommand.SetOut(&output)
 	statusCommand.SetArgs([]string{commandEngineeringSourceID})
 	if err := statusCommand.Execute(); err != nil {
-		t.Fatalf("provider-free source status: %v", err)
+		t.Fatalf("source status: %v", err)
 	}
 	if !strings.Contains(output.String(), `"status":"succeeded"`) {
-		t.Fatalf("provider-free status JSON: %s", output.String())
+		t.Fatalf("status JSON: %s", output.String())
 	}
 }
 
@@ -200,7 +201,13 @@ func (host *stubLocalSourceHost) SyncAll(context.Context) (knowl.SourceSyncAllRe
 
 func (host *stubLocalSourceHost) SourceStatus(_ context.Context, id domain.SourceID) (domain.SourceStatus, error) {
 	host.statusID = id
-	return domain.SourceStatus{SourceID: id, Status: domain.SyncStatusSucceeded}, nil
+	return domain.SourceStatus{
+		SourceID: id, Status: domain.SyncStatusSucceeded,
+		Maintenance: domain.SourceMaintenanceStatus{
+			Counts:  domain.MaintenanceCounts{Queued: 1},
+			Samples: []domain.MaintenanceSample{{DocumentID: "docs/page.md", Revision: "revision-1", OperationID: "maintenance-operation", Status: domain.StatusReceived}},
+		},
+	}, nil
 }
 
 func (host *stubLocalSourceHost) Stop(context.Context) error {

@@ -92,6 +92,10 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 	if strings.TrimSpace(string(envelope.Scope)) == "" || strings.TrimSpace(envelope.Source.Adapter) == "" || strings.TrimSpace(envelope.Source.ID) == "" || strings.TrimSpace(envelope.Version.Version) == "" || len(envelope.Content) > workspace.maxSourceBytes {
 		return knowl.AcceptedSource{}, ErrInvalidSource
 	}
+	if envelope.SourceDocument != (knowl.SourceDocument{}) &&
+		(app.ValidateSourceDocument(envelope.SourceDocument) != nil || envelope.SourceDocument.Revision != envelope.Version.Version) {
+		return knowl.AcceptedSource{}, ErrInvalidSource
+	}
 	digest := digestBytes(envelope.Content)
 	if strings.ToLower(strings.TrimSpace(envelope.Version.Digest)) != digest {
 		return knowl.AcceptedSource{}, ErrDigestMismatch
@@ -103,7 +107,8 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 	sourcePath := filepath.Join(keyDir, "source")
 	manifestPath := filepath.Join(keyDir, "manifest.yaml")
 	if existing, err := readManifest(manifestPath); err == nil {
-		if existing.Digest != digest {
+		if existing.Digest != digest ||
+			(existing.SourceDocument != (knowl.SourceDocument{}) && existing.SourceDocument != envelope.SourceDocument) {
 			return knowl.AcceptedSource{}, ErrSourceConflict
 		}
 		return existing.accepted(), nil
@@ -114,13 +119,14 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 		return knowl.AcceptedSource{}, fmt.Errorf("create source directory: %w", err)
 	}
 	manifest := sourceManifest{
-		Scope:      string(envelope.Scope),
-		Adapter:    envelope.Source.Adapter,
-		ID:         envelope.Source.ID,
-		Version:    envelope.Version.Version,
-		Digest:     digest,
-		MediaType:  envelope.MediaType,
-		ReceivedAt: envelope.ReceivedAt,
+		Scope:          string(envelope.Scope),
+		Adapter:        envelope.Source.Adapter,
+		ID:             envelope.Source.ID,
+		Version:        envelope.Version.Version,
+		Digest:         digest,
+		MediaType:      envelope.MediaType,
+		SourceDocument: envelope.SourceDocument,
+		ReceivedAt:     envelope.ReceivedAt,
 	}
 	if manifest.ReceivedAt.IsZero() {
 		manifest.ReceivedAt = time.Now().UTC()

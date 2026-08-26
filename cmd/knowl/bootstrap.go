@@ -14,6 +14,8 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/normahq/runtime/v2/agentconfig"
+	"github.com/normahq/runtime/v2/appconfig"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -69,7 +71,7 @@ func newBootstrapSourceCommand(flavor bootstrapFlavor) *cobra.Command {
 		Use:   flavor.Name + " <path>",
 		Short: "Bootstrap Knowl from an existing " + flavor.Name + " source tree",
 		Long: "Read one existing " + flavor.Name + " source tree from PATH and create a fresh Knowl workspace in the configured workspace directory.\n\n" +
-			"The configured workspace must be fresh and separate from the source path. Content is synchronized into wiki/sources/" + string(flavor.SourceID) + "/** through the same source engine used for ongoing synchronization.",
+			"The configured workspace must be fresh and separate from the source path. Exact source revisions are stored under raw/ and durable semantic-wiki maintenance is queued through the same source engine used for ongoing synchronization.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBootstrap(cmd, flavor, args[0])
@@ -110,6 +112,10 @@ func runBootstrap(cmd *cobra.Command, flavor bootstrapFlavor, sourceArg string) 
 			Root: sourceRoot, Include: []string{"**/*"}, Flavor: flavor.Flavor,
 		}},
 	}
+	runtimeFactory, providerID, err := selectedRuntimeProvider(cmd.Context())
+	if err != nil {
+		return err
+	}
 	if err := initWorkspace(workspaceRoot); err != nil {
 		return err
 	}
@@ -125,7 +131,7 @@ func runBootstrap(cmd *cobra.Command, flavor bootstrapFlavor, sourceArg string) 
 	runtimeConfig.Sources = []domain.Source{source}
 	counter := &bootstrapSourceAdapter{inner: sourcefilesystem.NewDefault()}
 	host, err := knowl.New(cmd.Context(), knowl.Options{
-		Config: runtimeConfig,
+		Config: runtimeConfig, RuntimeFactory: runtimeFactory, ProviderID: providerID,
 		SourceAdapters: map[domain.SourceType]app.SourceAdapter{
 			domain.SourceTypeFilesystem: counter,
 		},
@@ -197,7 +203,8 @@ func (adapter *bootstrapSourceAdapter) counts() (int, int) {
 }
 
 type bootstrapConfigDocument struct {
-	Knowl bootstrapKnowlConfig `yaml:"knowl"`
+	Runtime appconfig.RuntimeConfig `yaml:"runtime"`
+	Knowl   bootstrapKnowlConfig    `yaml:"knowl"`
 }
 
 type bootstrapKnowlConfig struct {
@@ -240,14 +247,23 @@ func writeBootstrapConfig(path, workspace string, source domain.Source) error {
 	if source.Config.Filesystem == nil {
 		return fmt.Errorf("bootstrap filesystem source is required")
 	}
-	document := bootstrapConfigDocument{Knowl: bootstrapKnowlConfig{
-		Provider: "", Workspace: bootstrapWorkspaceConfig{Path: workspace},
-		Sources: []bootstrapSourceConfig{{
-			ID: source.ID, Type: source.Type, Enabled: source.Enabled, Filesystem: *source.Config.Filesystem,
+	const providerID = "opencode"
+	document := bootstrapConfigDocument{
+		Runtime: appconfig.RuntimeConfig{Providers: map[string]agentconfig.Config{
+			providerID: {
+				Type:        "opencode_acp",
+				OpenCodeACP: &agentconfig.ACPConfig{Model: "opencode/big-pickle"},
+			},
 		}},
-		Storage: bootstrapStorageConfig{Type: knowl.StoreSQLite, SQLite: bootstrapSQLiteConfig{Path: ".knowl/knowl.sqlite"}},
-		Scope:   knowl.DefaultScope,
-	}}
+		Knowl: bootstrapKnowlConfig{
+			Provider: providerID, Workspace: bootstrapWorkspaceConfig{Path: workspace},
+			Sources: []bootstrapSourceConfig{{
+				ID: source.ID, Type: source.Type, Enabled: source.Enabled, Filesystem: *source.Config.Filesystem,
+			}},
+			Storage: bootstrapStorageConfig{Type: knowl.StoreSQLite, SQLite: bootstrapSQLiteConfig{Path: ".knowl/knowl.sqlite"}},
+			Scope:   knowl.DefaultScope,
+		},
+	}
 	contents, err := yaml.Marshal(document)
 	if err != nil {
 		return fmt.Errorf("marshal bootstrap config: %w", err)

@@ -266,13 +266,23 @@ func (scheduler *operationScheduler) cycle(ctx context.Context) {
 		}
 		claimed++
 		result, runErr := scheduler.runClaim(ctx, claim)
+		failureClass := ""
+		event := log.Info()
 		if runErr != nil {
-			failureClass := schedulerRunnerFailureClass
+			event = log.Error()
+			failureClass = schedulerRunnerFailureClass
 			if result.Operation.Failure != nil {
 				failureClass = result.Operation.Failure.Class
 			}
-			log.Error().Str("class", failureClass).Str("operation_id", string(claim.Operation.ID)).Msg("knowl operation runner stopped")
 		}
+		event.Str("class", failureClass).Str("operation_id", string(claim.Operation.ID)).
+			Str("maintenance_status", string(result.Operation.Status))
+		document := claim.Descriptor.Source.SourceDocument
+		if document != (domain.SourceDocument{}) {
+			event.Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
+				Str("revision", document.Revision)
+		}
+		event.Msg("knowl maintenance operation")
 	}
 	if claimed == scheduler.options.claimBatch && ctx.Err() == nil && !scheduler.isStopping() {
 		scheduler.Wake("")

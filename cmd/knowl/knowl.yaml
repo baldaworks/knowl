@@ -6,8 +6,8 @@ runtime:
         model: opencode/big-pickle
 
 knowl:
-  # Omit provider/runtime providers in an on-disk config for provider-free
-  # retrieval, lint, and source-only use.
+  # Every runnable host requires a configured maintainer provider. Bootstrap
+  # and on-start source synchronization remain independently optional.
   provider: opencode
   workspace:
     path: .

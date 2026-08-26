@@ -24,7 +24,7 @@ additional config root and `--profile` selects a top-level profile.
 
 The config has two sections:
 
-- `runtime:` — optional shared provider registry in Balda-compatible typed shape
+- `runtime:` — shared provider registry in Balda-compatible typed shape
 - `knowl:` — Knowl application settings
 
 SQLite example:
@@ -76,11 +76,18 @@ knowl:
     listen_addr: 0.0.0.0:8080
 ```
 
-Provider-free two-source example:
+Two-source example with optional automatic startup sync disabled:
 
 ```yaml
+runtime:
+  providers:
+    opencode:
+      type: opencode_acp
+      opencode_acp:
+        model: opencode/big-pickle
+
 knowl:
-  provider: ""
+  provider: opencode
   workspace:
     path: /var/lib/knowl/knowledge
   sources:
@@ -91,7 +98,7 @@ knowl:
         include: ["**/*.md"]
         flavor: obsidian
       sync:
-        on_start: true
+        on_start: false
         interval: 5m
         retry_initial: 1s
         retry_maximum: 1m
@@ -102,7 +109,7 @@ knowl:
         include: ["**/*.md"]
         flavor: markdown
       sync:
-        on_start: true
+        on_start: false
         interval: 5m
         retry_initial: 1s
         retry_maximum: 1m
@@ -113,16 +120,15 @@ knowl:
         include: ["**/*"]
         flavor: okf
       sync:
-        on_start: true
+        on_start: false
         interval: 5m
 ```
 
 Notes:
 
-- `knowl.provider` optionally selects one entry from `runtime.providers`.
-  Without it, retrieval, lint, health, and configured source workflows remain
-  available; ingest returns HTTP 503 with `maintainer_unavailable` and performs
-  no source acceptance or durable operation reservation.
+- `knowl.provider` selects one entry from `runtime.providers`. A runnable host
+  fails before readiness when no configured or explicitly injected maintainer
+  is available.
 - `knowl.storage.type` selects one optional typed storage block.
 - when storage is omitted, Knowl defaults to SQLite.
 - default local listen address is `127.0.0.1:8080`; service/sidecar deployments
@@ -158,12 +164,13 @@ source sync using ID `bootstrap-wiki`, `bootstrap-obsidian`, or `bootstrap-okf`.
 The `okf` flavor validates and preserves OKF v0.2 metadata, reserved controls,
 Unicode paths, and standard concept links. A missing version is treated as v0.2;
 another declared version is consumed best-effort and reported in the sync
-result under `diagnostics`. A newly generated config is
-provider-free and retains that source for later operation. If an
-operator-owned config already exists, bootstrap does not rewrite it; add the
-source entry there before using ongoing source commands. Ordinary source sync
-accepts existing workspaces and preserves curated pages and `wiki/index.md`.
-Its only canonical target is `wiki/sources/<source_id>/**`.
+result under `diagnostics`. A newly generated config includes a provider and
+retains that source for later operation. If an operator-owned config already
+exists, bootstrap does not rewrite it; add the source entry there before using
+ongoing source commands. Ordinary source sync accepts existing workspaces,
+stores source revisions only in `raw/`, and queues durable maintainer
+operations. It never copies source content into `wiki/`. Bootstrap is optional;
+an operator may initialize an empty workspace and sync configured sources later.
 
 To convert a legacy canonical workspace, stop active writers, back it up, and
 run `./knowl migrate okf-v0.2`. Migration is explicit and idempotent; startup,
@@ -205,6 +212,19 @@ sources can progress independently. A failed source leaves readiness and last
 successful retrieval snapshots available. Inspect `source status` for durable
 last-attempt/last-success state. After restart, recovery converges staged source
 work before readiness.
+
+A successful sync reports raw acceptance and maintenance reservation, not LLM
+completion. `source status` reports bounded maintenance counts and samples for
+queued, replayed, committed, and failed operations. Each sample correlates the
+source document/revision with its operation ID and stable failure class without
+including source bodies, prompts, or credentials.
+
+The maintainer builds one root-reachable semantic OKF wiki. Related evidence
+from different sources may support the same page; retrieve returns all resolved
+`source_documents`, and a source filter matches when any supporting document
+belongs to that configured source. Legacy derived
+`wiki/sources/<source_id>/**` trees are removed on that source's next successful
+reconciliation without deleting raw history or curated pages.
 
 ## HTTP contract
 

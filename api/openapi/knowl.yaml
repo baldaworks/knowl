@@ -343,6 +343,10 @@ components:
           type: array
           items:
             type: string
+        source_documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceDocument'
         source_id:
           type: string
         document_id:
@@ -355,6 +359,18 @@ components:
           $ref: '#/components/schemas/OKFMetadata'
         untrusted:
           type: boolean
+    SourceDocument:
+      type: object
+      required: [source_id, document_id, revision, uri]
+      properties:
+        source_id:
+          type: string
+        document_id:
+          type: string
+        revision:
+          type: string
+        uri:
+          type: string
     OKFMetadata:
       type: object
       required: [type]

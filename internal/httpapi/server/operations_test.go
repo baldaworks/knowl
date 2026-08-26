@@ -16,6 +16,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
+	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -130,22 +131,16 @@ func TestHTTPRetrieveBindsRepeatableSourceFilterAndMapsEvidence(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Evidence) != 2 {
+	if len(result.Evidence) != 1 {
 		t.Fatalf("filtered HTTP evidence = %#v", result.Evidence)
 	}
-	bySource := make(map[string]knowlapi.EvidenceItem, len(result.Evidence))
-	for _, evidence := range result.Evidence {
-		if evidence.SourceId != nil {
-			bySource[*evidence.SourceId] = evidence
-		}
-	}
-	engineering := bySource[httpTestEngineering]
-	if len(bySource) != 2 || bySource[httpTestOperations].SourceId == nil || engineering.DocumentId == nil || *engineering.DocumentId != "shared.md" || engineering.Revision == nil || *engineering.Revision != "revision-1" || engineering.Uri == nil || *engineering.Uri == "" {
+	shared := result.Evidence[0]
+	if shared.SourceDocuments == nil || len(*shared.SourceDocuments) != 2 || (*shared.SourceDocuments)[0].SourceId != httpTestEngineering || (*shared.SourceDocuments)[1].SourceId != httpTestOperations {
 		t.Fatalf("filtered HTTP evidence = %#v", result.Evidence)
 	}
-	metadata := engineering.Okf
-	if metadata == nil || metadata.Type != "Reference" || metadata.Executor == nil || metadata.Attester == nil || metadata.Extensions == nil || (*metadata.Extensions)["unknown_nested"] == nil || !engineering.Untrusted {
-		t.Fatalf("HTTP OKF evidence = %#v", engineering)
+	metadata := shared.Okf
+	if metadata == nil || metadata.Type != "Reference" || metadata.Executor == nil || metadata.Attester == nil || metadata.Extensions == nil || (*metadata.Extensions)["unknown_nested"] == nil || !shared.Untrusted {
+		t.Fatalf("HTTP OKF evidence = %#v", shared)
 	}
 
 	invalid := httptest.NewRequest(http.MethodGet, "/v1/retrieve?query=transportbeacon&source=Engineering", nil)
@@ -157,8 +152,8 @@ func TestHTTPRetrieveBindsRepeatableSourceFilterAndMapsEvidence(t *testing.T) {
 }
 
 func httpTransportSearchSnapshot() domain.WorkspaceSnapshot {
-	document := func(sourceID domain.SourceID) *domain.SourceDocument {
-		return &domain.SourceDocument{SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md"}
+	document := func(sourceID domain.SourceID) domain.SourceDocument {
+		return domain.SourceDocument{SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md"}
 	}
 	body := httpTransportQuery + " user body"
 	metadata := &okf.Metadata{
@@ -170,8 +165,7 @@ func httpTransportSearchSnapshot() domain.WorkspaceSnapshot {
 	}
 	return domain.WorkspaceSnapshot{Scope: httpTestScope, Pages: []domain.PageSnapshot{
 		{ID: "curated", Path: "wiki/curated.md", Title: "Transportbeacon Curated", Content: httpTransportQuery, Digest: "curated"},
-		{ID: httpTestEngineering, Path: "wiki/sources/engineering/shared.md", Title: "Transportbeacon Engineering", Content: body, Body: body, OKF: metadata, Digest: httpTestEngineering, SourceDocument: document(httpTestEngineering)},
-		{ID: httpTestOperations, Path: "wiki/sources/operations/shared.md", Title: "Transportbeacon Operations", Content: httpTransportQuery, Digest: httpTestOperations, SourceDocument: document(httpTestOperations)},
+		{ID: "shared", Path: "wiki/entities/shared.md", Title: "Transportbeacon Shared", Content: body, Body: body, OKF: metadata, Digest: "shared", SourceRefs: []string{"raw:engineering@1", "raw:operations@1"}, SourceDocuments: []domain.SourceDocument{document(httpTestEngineering), document(httpTestOperations)}},
 	}}
 }
 
@@ -214,11 +208,11 @@ type httpCountingMaintainer struct {
 	counter int
 }
 
-func (maintainer *httpCountingMaintainer) Plan(context.Context, domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+func (maintainer *httpCountingMaintainer) Plan(ctx context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
 	maintainer.mu.Lock()
 	defer maintainer.mu.Unlock()
 	maintainer.counter++
-	return maintainer.plan, nil
+	return (provider.Fixture{Result: maintainer.plan}).Plan(ctx, input)
 }
 
 func (maintainer *httpCountingMaintainer) Calls() int {

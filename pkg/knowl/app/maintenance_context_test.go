@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,11 +24,19 @@ func TestSourceAwareContextUpdatesExistingPageWithoutDuplicate(t *testing.T) {
 	ctx := context.Background()
 	workspace, store, _, unusedMaintainer := newWorkflow(t, false, nil)
 	_ = unusedMaintainer
+	legacyContent := []byte("legacy decision evidence")
+	if _, err := workspace.AcceptSource(ctx, knowl.SourceEnvelope{
+		Scope: testSourceScope, Source: knowl.SourceRef{Adapter: "fixture", ID: "legacy"},
+		Version: knowl.SourceVersion{Version: "1", Digest: digest(legacyContent)}, MediaType: "text/plain", Content: legacyContent,
+	}); err != nil {
+		t.Fatalf("accept legacy source: %v", err)
+	}
 
 	decisionBefore := []byte("---\nid: decisions/badger\ntitle: Badger Session Decision\ntype: decision\nsource_refs:\n  - fixture:legacy@1\n---\n# Badger Session Decision\n\nBadger stores durable session state.\n")
 	unrelated := []byte("---\nid: releases/current\ntitle: Current Release\ntype: note\nsource_refs:\n  - fixture:release@1\n---\n# Current Release\n\nUnrelated packaging status.\n")
 	writeFixturePage(t, workspace.Root(), decisionPagePath, decisionBefore, time.Unix(10, 0).UTC())
 	writeFixturePage(t, workspace.Root(), "wiki/releases/current.md", unrelated, time.Unix(20, 0).UTC())
+	writeFixturePage(t, workspace.Root(), "wiki/decisions/index.md", []byte("# Decisions\n"), time.Unix(30, 0).UTC())
 	snapshot, err := workspace.Snapshot(ctx, "local")
 	if err != nil {
 		t.Fatalf("Snapshot(): %v", err)
@@ -51,6 +61,9 @@ func TestSourceAwareContextUpdatesExistingPageWithoutDuplicate(t *testing.T) {
 	if len(maintainer.pages) == 0 || maintainer.pages[0].ID != decisionPageID {
 		t.Fatalf("maintainer pages = %#v, want old relevant page first", maintainer.pages)
 	}
+	if len(maintainer.catalogs) != 2 || maintainer.catalogs[0].Path != testRootCatalogPath || maintainer.catalogs[1].Path != "wiki/decisions/index.md" {
+		t.Fatalf("maintainer catalogs = %#v", maintainer.catalogs)
+	}
 
 	after, err := workspace.Snapshot(ctx, "local")
 	if err != nil {
@@ -74,24 +87,40 @@ func TestSourceAwareContextUpdatesExistingPageWithoutDuplicate(t *testing.T) {
 }
 
 type updateExistingMaintainer struct {
-	pages []knowl.PageSnapshot
+	pages    []knowl.PageSnapshot
+	catalogs []knowl.PageSnapshot
 }
 
 func (maintainer *updateExistingMaintainer) Plan(_ context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
 	maintainer.pages = append([]knowl.PageSnapshot(nil), input.Pages...)
+	maintainer.catalogs = append([]knowl.PageSnapshot(nil), input.Catalogs...)
 	if len(input.Pages) == 0 || input.Pages[0].ID != decisionPageID {
 		return knowl.ModelEditPlan{}, errors.New("expected relevant decision page first")
 	}
 	sourceRef := app.SourceRefKey(input.Source)
-	content := []byte(fmt.Sprintf("---\nid: decisions/badger\ntitle: Badger Session Decision\ntype: decision\nsource_refs:\n  - %s\n---\n# Badger Session Decision\n\nBadger session memory now uses crash-safe recovery.\n", sourceRef))
-	return knowl.ModelEditPlan{
+	refs := append([]string(nil), input.Pages[0].SourceRefs...)
+	refs = append(refs, sourceRef)
+	sort.Strings(refs)
+	refs = uniqueTestRefs(refs)
+	content := []byte(fmt.Sprintf("---\nid: decisions/badger\ntitle: Badger Session Decision\ntype: decision\nsource_refs:\n  - %s\n---\n# Badger Session Decision\n\nBadger session memory now uses crash-safe recovery.\n", strings.Join(refs, "\n  - ")))
+	return withRootCatalog(input, knowl.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest,
-		SourceRefs:   []string{sourceRef},
+		SourceRefs:   refs,
 		Edits: []knowl.FileEdit{{
 			Path: decisionPagePath, ExpectedDigest: input.Pages[0].Digest, Content: content,
 		}},
 		Rationale: "update the existing relevant decision",
-	}, nil
+	}), nil
+}
+
+func uniqueTestRefs(refs []string) []string {
+	result := refs[:0]
+	for _, ref := range refs {
+		if len(result) == 0 || result[len(result)-1] != ref {
+			result = append(result, ref)
+		}
+	}
+	return result
 }
 
 func writeFixturePage(t *testing.T, root, path string, content []byte, updatedAt time.Time) {

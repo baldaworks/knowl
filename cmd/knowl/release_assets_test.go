@@ -33,6 +33,8 @@ func TestReleaseWorkflowIsPinnedAndGated(t *testing.T) {
 		"provenance: mode=max",
 		"push-to-registry: true",
 		"gh release create",
+		`release_notes="docs/releases/${GITHUB_REF_NAME}.md"`,
+		`test -f "$release_notes"`,
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("release workflow missing %q", required)
@@ -47,6 +49,29 @@ func TestReleaseWorkflowIsPinnedAndGated(t *testing.T) {
 	for _, match := range uses {
 		if !shaPattern.MatchString(match[1]) {
 			t.Errorf("release action ref %q is not an immutable commit SHA", match[1])
+		}
+	}
+}
+
+func TestV030ReleaseNotesDescribeSemanticWikiContract(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "releases", "v0.3.0.md"))
+	if err != nil {
+		t.Fatalf("read v0.3.0 release notes: %v", err)
+	}
+	notes := strings.Join(strings.Fields(string(content)), " ")
+	for _, required := range []string{
+		"Semantic Source Maintenance",
+		"maintainer provider is now required",
+		"Bootstrap remains optional",
+		"`raw/`",
+		"semantic OKF",
+		"source_documents",
+		"wiki/sources/<source_id>/**",
+		"ghcr.io/baldaworks/knowl:v0.3.0",
+	} {
+		if !strings.Contains(notes, required) {
+			t.Errorf("v0.3.0 release notes missing %q", required)
 		}
 	}
 }
@@ -102,19 +127,62 @@ func TestV020ReleaseNotesDescribeMultiSourceCompatibility(t *testing.T) {
 
 func TestMultiSourceDocumentationSurfacesStayAligned(t *testing.T) {
 	repoRoot := testRepoRoot(t)
-	for _, relative := range []string{"README.md", designDocRelativePath, "docs/workspace.md", "docs/operations.md", "docs/sidecar.md"} {
+	for _, relative := range []string{readmeRelativePath, designDocRelativePath, workspaceDocRelativePath, operationsDocRelativePath, sidecarDocRelativePath} {
 		content, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(relative)))
 		if err != nil {
 			t.Fatalf("read %s: %v", relative, err)
 		}
 		text := string(content)
-		for _, required := range []string{sourceNamespacePattern, "provider"} {
+		for _, required := range []string{"raw/", "semantic", "provider"} {
 			if !strings.Contains(text, required) {
 				t.Errorf("%s missing %q", relative, required)
 			}
 		}
+		for _, stale := range []string{"provider-free", "active materialized mirror", "writes mirrors below"} {
+			if strings.Contains(text, stale) {
+				t.Errorf("%s still contains stale contract %q", relative, stale)
+			}
+		}
 		if relative == designDocRelativePath && strings.Contains(text, "internal/bootstrap") {
 			t.Errorf("%s still describes a standalone bootstrap package", relative)
+		}
+	}
+}
+
+func TestActiveDocumentationDescribesSemanticWikiMaintenance(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	wants := map[string][]string{
+		readmeRelativePath: {
+			"Source documents are never copied into `wiki/`",
+			"Initial bootstrap and automatic `on_start` synchronization are both optional",
+		},
+		designDocRelativePath: {
+			"Bootstrap remains optional",
+			"never copies source content into `wiki/`",
+		},
+		workspaceDocRelativePath: {
+			"contains no configured-source copies",
+			"source_documents",
+		},
+		operationsDocRelativePath: {
+			"Bootstrap is optional",
+			"successful sync reports raw acceptance and maintenance reservation, not LLM completion",
+		},
+		sidecarDocRelativePath: {
+			"Initial bootstrap is optional",
+			"reserves durable maintenance work",
+		},
+	}
+	for relative, required := range wants {
+		content, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(relative)))
+		if err != nil {
+			t.Fatalf("read %s: %v", relative, err)
+		}
+		normalized := strings.Join(strings.Fields(string(content)), " ")
+		for _, phrase := range required {
+			if !strings.Contains(normalized, phrase) {
+				t.Errorf("%s missing active contract %q", relative, phrase)
+			}
 		}
 	}
 }

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -31,6 +32,10 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 			return app.OperationReservation{}, descriptorErr
 		}
 	}
+	encodedSourceDocument, err := encodeAcceptedSourceDocument(descriptor.Source.SourceDocument)
+	if err != nil {
+		return app.OperationReservation{}, err
+	}
 
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -46,12 +51,12 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		INSERT INTO knowl_operations (
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
 			schema_digest, status, created_at, updated_at, accepted_media_type,
-			source_manifest_ref, schema_version, schema_snapshot, work_ready_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $9)
+			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $9)
 		ON CONFLICT (scope, source_adapter, source_id, source_version) DO NOTHING`,
 		operationIDValue, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version,
 		key.Version.Digest, meta.SchemaDigest, knowl.StatusReceived, now,
-		descriptor.Source.MediaType, descriptor.Source.ManifestRef, descriptor.Schema.Version,
+		descriptor.Source.MediaType, descriptor.Source.ManifestRef, encodedSourceDocument, descriptor.Schema.Version,
 		nullBytes(descriptor.Schema.Content))
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
@@ -61,14 +66,14 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		return app.OperationReservation{}, fmt.Errorf("inspect operation reservation: %w", err)
 	}
 
-	var existingID, existingDigest string
+	var existingID, existingDigest, existingSourceDocument string
 	err = tx.QueryRowContext(ctx, `
-		SELECT operation_id, source_digest
+		SELECT operation_id, source_digest, accepted_source_document
 		FROM knowl_operations
 		WHERE scope = $1 AND source_adapter = $2 AND source_id = $3 AND source_version = $4
 		FOR UPDATE`,
 		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version).
-		Scan(&existingID, &existingDigest)
+		Scan(&existingID, &existingDigest, &existingSourceDocument)
 	if errors.Is(err, sql.ErrNoRows) {
 		return app.OperationReservation{}, fmt.Errorf("reserved operation disappeared: %w", ErrNotFound)
 	}
@@ -77,6 +82,11 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 	}
 	if existingDigest != key.Version.Digest {
 		return app.OperationReservation{}, ErrConflict
+	}
+	if encodedSourceDocument != "" && existingSourceDocument == "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE knowl_operations SET accepted_source_document = $1 WHERE operation_id = $2 AND accepted_source_document = ''`, encodedSourceDocument, existingID); err != nil {
+			return app.OperationReservation{}, fmt.Errorf("enrich operation source document: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return app.OperationReservation{}, fmt.Errorf("commit operation reservation: %w", err)
@@ -92,6 +102,17 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		}
 	}
 	return app.OperationReservation{Operation: operation, Descriptor: descriptor, New: created == 1}, nil
+}
+
+func encodeAcceptedSourceDocument(document knowl.SourceDocument) (string, error) {
+	if document == (knowl.SourceDocument{}) {
+		return "", nil
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("encode accepted source document: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func nullBytes(value []byte) any {

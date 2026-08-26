@@ -15,6 +15,7 @@ const fixtureOperationID = "operation-1"
 const fixtureScope = "local"
 const fixtureSchema = "schema"
 const fixtureSourceID = "source"
+const fixtureSourceRef = "fixture:source-1@1"
 const fixtureSchemaDigest = "schema-digest"
 
 func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
@@ -25,7 +26,7 @@ func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 	}
 	plan, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{
 		SchemaDigest: fixtureSchemaDigest,
-		SourceRefs:   []string{"fixture:source-1@1"},
+		SourceRefs:   []string{fixtureSourceRef},
 		Edits: []knowl.FileEdit{
 			{Path: "wiki/entities/z.md", Content: []byte("z")},
 			{Path: "wiki/entities/a.md", Content: []byte("a")},
@@ -40,6 +41,9 @@ func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 	if plan.OperationID != "local:fixture:source-1@1" {
 		t.Fatalf("operation id = %q", plan.OperationID)
 	}
+	if plan.RequiredSourceRef != fixtureSourceRef {
+		t.Fatalf("required source ref = %q", plan.RequiredSourceRef)
+	}
 }
 
 func TestValidatePlanAcceptsNoOp(t *testing.T) {
@@ -50,7 +54,7 @@ func TestValidatePlanAcceptsNoOp(t *testing.T) {
 	}
 	plan, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{
 		SchemaDigest: fixtureSchemaDigest,
-		SourceRefs:   []string{"fixture:source-1@1"},
+		SourceRefs:   []string{fixtureSourceRef},
 		Edits:        []knowl.FileEdit{},
 	}, DefaultPlanLimits())
 	if err != nil {

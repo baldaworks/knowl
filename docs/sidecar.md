@@ -30,8 +30,9 @@ The container owns:
 Mount a persistent volume at `/var/lib/knowl`. Do not mount the agent directly
 into Knowl's workspace and do not let the agent mutate `wiki/**` itself.
 Mount authoritative wiki roots separately and read-only. The checked-in Compose
-example mounts `/sources/engineering` and `/sources/operations`; the source
-reconciler alone materializes them below `wiki/sources/<source_id>/**`.
+example mounts `/sources/engineering` and `/sources/operations`. The source
+reconciler stores their exact accepted revisions under `raw/`; the maintainer
+builds the separate semantic OKF artifact under `wiki/`.
 
 ## Build and run
 
@@ -74,15 +75,20 @@ The multi-source rollout is documented in the
 its non-destructive rollback guidance remain in the
 [v0.1.0 release notes](releases/v0.1.0.md).
 
-The baseline v0.2 config is provider-free. Retrieval, lint, health, source sync,
-and status work without a provider; ingest remains registered but returns
-`maintainer_unavailable`. Configure `runtime.providers` plus `knowl.provider`
-only when provider-backed ingest/curation is required.
+The active baseline config includes `runtime.providers` plus `knowl.provider`.
+A runnable sidecar requires a maintainer and fails before readiness when the
+selection is absent or invalid. Initial bootstrap is optional. Each source's
+`sync.on_start` flag is also explicit configuration rather than an implicit
+bootstrap requirement.
 
 Each source syncs on start and periodically with bounded retry. A failed source
 does not make the service unready or discard the last successful snapshots.
 Persist the whole `/var/lib/knowl` volume so source status, tombstones, raw
 history, recovery journals, and SQLite state survive restart.
+
+Sync accepts raw revisions and reserves durable maintenance work; model-backed
+wiki changes complete asynchronously. Inspect bounded maintenance counts and
+operation-correlated samples with `knowl source status <source-id>`.
 
 ## Health checks
 

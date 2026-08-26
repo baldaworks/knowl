@@ -48,7 +48,7 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		if stagedErr != nil {
 			return knowl.StagedChange{}, stagedErr
 		}
-		if err := workspace.validateProspectivePlanLocked(plan.Scope, stagedEdits); err != nil {
+		if err := workspace.validateProspectivePlanLocked(plan.Scope, stagedEdits, plan.RequiredSourceRef, plan.SourceRefs); err != nil {
 			return knowl.StagedChange{}, err
 		}
 		return stagedChangeFromManifest(stageDir, manifest)
@@ -102,12 +102,12 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		}
 		entries = append(entries, stageEntry{Target: edit.Path, ExpectedDigest: edit.ExpectedDigest, Digest: digestBytes(edit.Content)})
 	}
-	if err := workspace.validateProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan)); err != nil {
+	if err := workspace.validateProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan), plan.RequiredSourceRef, plan.SourceRefs); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	manifest := stageManifest{
 		OperationID: plan.OperationID, Scope: string(plan.Scope), SchemaDigest: plan.SchemaDigest,
-		SourceRefs: append([]string(nil), plan.SourceRefs...), Entries: entries,
+		RequiredSourceRef: plan.RequiredSourceRef, SourceRefs: append([]string(nil), plan.SourceRefs...), Entries: entries,
 		LogDate: time.Now().UTC().Format(time.DateOnly),
 	}
 	coreMetadata, err := yaml.Marshal(manifest)
@@ -237,6 +237,11 @@ func validMaintainerStageManifest(manifest stageManifest) bool {
 		}
 		seenRefs[trimmed] = struct{}{}
 	}
+	if manifest.RequiredSourceRef != "" {
+		if _, exists := seenRefs[manifest.RequiredSourceRef]; !exists {
+			return false
+		}
+	}
 	seenTargets := make(map[string]struct{}, len(manifest.Entries))
 	for _, entry := range manifest.Entries {
 		if entryAction(entry) != knowl.SourceMutationWrite || validateCommitTarget(entry.Target) != nil || !validSHA256(entry.Digest) || (entry.ExpectedDigest != "" && !validSHA256(entry.ExpectedDigest)) {
@@ -251,7 +256,7 @@ func validMaintainerStageManifest(manifest stageManifest) bool {
 }
 
 func validSourceStageManifest(manifest stageManifest) bool {
-	if app.ValidateSourceID(knowl.SourceID(manifest.SourceID)) != nil || app.ValidateSyncRunID(knowl.SyncRunID(manifest.OperationID)) != nil || strings.TrimSpace(manifest.Scope) == "" || manifest.SchemaDigest != "" || len(manifest.SourceRefs) != 0 || manifest.LogExpectedDigest != "" || manifest.LogDigest != "" || manifest.LogDate != "" || len(manifest.Entries) == 0 || len(manifest.Entries) > maxSourceStageEntries {
+	if app.ValidateSourceID(knowl.SourceID(manifest.SourceID)) != nil || app.ValidateSyncRunID(knowl.SyncRunID(manifest.OperationID)) != nil || strings.TrimSpace(manifest.Scope) == "" || manifest.SchemaDigest != "" || manifest.RequiredSourceRef != "" || len(manifest.SourceRefs) != 0 || manifest.LogExpectedDigest != "" || manifest.LogDigest != "" || manifest.LogDate != "" || len(manifest.Entries) == 0 || len(manifest.Entries) > maxSourceStageEntries {
 		return false
 	}
 	seenTargets := make(map[string]struct{}, len(manifest.Entries))
@@ -320,7 +325,7 @@ func stagedChangeFromManifest(stageDir string, manifest stageManifest) (knowl.St
 }
 
 func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
-	if manifest.OperationID != plan.OperationID || manifest.SchemaDigest != plan.SchemaDigest || len(manifest.SourceRefs) != len(plan.SourceRefs) || len(manifest.Entries) != len(plan.Edits) {
+	if manifest.OperationID != plan.OperationID || manifest.SchemaDigest != plan.SchemaDigest || manifest.RequiredSourceRef != plan.RequiredSourceRef || len(manifest.SourceRefs) != len(plan.SourceRefs) || len(manifest.Entries) != len(plan.Edits) {
 		return false
 	}
 	if scope := manifestScope(manifest); scope != "" && scope != plan.Scope {
@@ -343,7 +348,7 @@ func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
 func stageGeneration(manifest stageManifest) string {
 	core := stageManifest{
 		OperationID: manifest.OperationID, Writer: manifest.Writer, SourceID: manifest.SourceID,
-		Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, SourceRefs: manifest.SourceRefs,
+		Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, RequiredSourceRef: manifest.RequiredSourceRef, SourceRefs: manifest.SourceRefs,
 		Entries: manifest.Entries, LogDate: manifest.LogDate,
 	}
 	metadata, err := yaml.Marshal(core)

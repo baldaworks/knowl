@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
@@ -13,22 +14,45 @@ import (
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
-func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, edits []prospectiveEdit) error {
-	pageTargets, err := workspace.currentPageTargetsLocked()
+func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, edits []prospectiveEdit, requiredSourceRef string, planSourceRefs []string) error {
+	existingDocuments, err := workspace.currentWikiDocumentsLocked()
 	if err != nil {
 		return err
 	}
+	documents := make(map[string]string, len(existingDocuments)+len(edits))
+	for target, content := range existingDocuments {
+		documents[target] = content
+	}
 	for _, edit := range edits {
-		pageID, ok := knowlwiki.PageIDFromPath(edit.Target)
-		if ok {
+		documents[edit.Target] = edit.Content
+	}
+	pageTargets := make(map[knowl.PageID]struct{})
+	for target := range documents {
+		if pageID, ok := knowlwiki.PageIDFromPath(target); ok {
 			pageTargets[pageID] = struct{}{}
 		}
 	}
-	rawRefs, err := workspace.acceptedRawSourceKeysLocked(scope)
+	rawSources, err := workspace.acceptedRawSourcesLocked(scope)
 	if err != nil {
 		return err
 	}
-	indexPath := filepath.ToSlash(filepath.Join(workspaceWikiDir, "index.md"))
+	rawRefs := make(map[string]struct{}, len(rawSources))
+	for sourceRef := range rawSources {
+		rawRefs[sourceRef] = struct{}{}
+	}
+	planRefs := make(map[string]struct{}, len(planSourceRefs))
+	for _, sourceRef := range planSourceRefs {
+		planRefs[sourceRef] = struct{}{}
+	}
+	if requiredSourceRef == "" && len(planSourceRefs) == 1 {
+		requiredSourceRef = planSourceRefs[0]
+	}
+	if requiredSourceRef != "" {
+		if _, exists := rawSources[requiredSourceRef]; !exists {
+			return contentInvalidError("<plan>", "citation.current_unknown")
+		}
+	}
+	editedPages := make(map[string]struct{})
 	for _, edit := range edits {
 		bundleRelative := strings.TrimPrefix(edit.Target, workspaceWikiDir+"/")
 		kind, classifyErr := okf.ClassifyPath(bundleRelative)
@@ -40,20 +64,8 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 			if validateErr != nil {
 				return okfContentInvalidError(edit.Target, validateErr)
 			}
-			if edit.Target == indexPath && index.ObservedVersion != okf.Version {
+			if bundleRelative == okfIndexFilename && index.ObservedVersion != okf.Version {
 				return contentInvalidError(edit.Target, string(okf.RuleIndexInvalid))
-			}
-			if edit.Target != indexPath {
-				continue
-			}
-			targets, malformed := knowlwiki.IndexTargets(edit.Content)
-			if malformed {
-				return contentInvalidError(edit.Target, "index.malformed")
-			}
-			for _, target := range targets {
-				if _, exists := pageTargets[knowl.PageID(target)]; !exists {
-					return contentInvalidError(edit.Target, "index.broken_page")
-				}
 			}
 			continue
 		}
@@ -64,8 +76,166 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 		if !ok {
 			continue
 		}
+		editedPages[bundleRelative] = struct{}{}
 		if err := validateOrdinaryPageEdit(edit.Target, pageID, edit.Content, rawRefs, pageTargets); err != nil {
 			return err
+		}
+		if err := validatePageProvenance(
+			edit.Target, edit.Content, existingDocuments[edit.Target], requiredSourceRef, planRefs, rawSources,
+		); err != nil {
+			return err
+		}
+	}
+	return validateCatalogGraph(documents, editedPages, workspace.maxSourceBytes)
+}
+
+func validatePageProvenance(target, content, existing, requiredSourceRef string, planRefs map[string]struct{}, rawSources map[string]knowl.AcceptedSource) error {
+	metadata, err := knowlwiki.ParseFrontmatter(content)
+	if err != nil {
+		return contentInvalidError(target, "frontmatter.malformed")
+	}
+	currentRefs := make(map[string]struct{}, len(metadata.SourceRefs))
+	for _, sourceRef := range metadata.SourceRefs {
+		if sourceRef == "" {
+			continue
+		}
+		currentRefs[sourceRef] = struct{}{}
+		if _, covered := planRefs[sourceRef]; !covered {
+			return contentInvalidError(target, "citation.plan_missing")
+		}
+	}
+	if requiredSourceRef != "" {
+		if _, cited := currentRefs[requiredSourceRef]; !cited {
+			return contentInvalidError(target, "citation.current_missing")
+		}
+	}
+	if existing == "" {
+		return nil
+	}
+	previous, err := knowlwiki.ParseFrontmatter(existing)
+	if err != nil {
+		return contentInvalidError(target, "frontmatter.existing_malformed")
+	}
+	currentDocument := rawSources[requiredSourceRef].SourceDocument
+	for _, sourceRef := range previous.SourceRefs {
+		if _, retained := currentRefs[sourceRef]; retained {
+			continue
+		}
+		previousDocument := rawSources[sourceRef].SourceDocument
+		if currentDocument == (knowl.SourceDocument{}) || previousDocument == (knowl.SourceDocument{}) ||
+			currentDocument.SourceID != previousDocument.SourceID || currentDocument.DocumentID != previousDocument.DocumentID ||
+			currentDocument.Revision == previousDocument.Revision {
+			return contentInvalidError(target, "citation.lineage_removed")
+		}
+	}
+	return nil
+}
+
+const maxCatalogLinks = 4096
+
+func validateCatalogGraph(documents map[string]string, editedPages map[string]struct{}, maxBytes int) error {
+	bundleDocuments := make(map[string]string, len(documents))
+	kinds := make(map[string]okf.DocumentKind, len(documents))
+	documentPaths := make([]string, 0, len(documents))
+	for target := range documents {
+		documentPaths = append(documentPaths, target)
+	}
+	sort.Strings(documentPaths)
+	for _, target := range documentPaths {
+		content := documents[target]
+		bundleRelative := strings.TrimPrefix(target, workspaceWikiDir+"/")
+		kind, err := okf.ClassifyPath(bundleRelative)
+		if err != nil {
+			return contentInvalidError(target, string(okf.RulePathInvalid))
+		}
+		bundleDocuments[bundleRelative] = content
+		kinds[bundleRelative] = kind
+	}
+	if kinds[okfIndexFilename] != okf.DocumentIndex {
+		return contentInvalidError(canonicalIndexPath, "catalog.root_missing")
+	}
+
+	edges := make(map[string][]string)
+	catalogPaths := make([]string, 0)
+	for catalogPath, kind := range kinds {
+		if kind != okf.DocumentIndex {
+			continue
+		}
+		catalogPaths = append(catalogPaths, catalogPath)
+	}
+	sort.Strings(catalogPaths)
+	for _, catalogPath := range catalogPaths {
+		content := bundleDocuments[catalogPath]
+		if _, err := okf.ValidateIndex(catalogPath, []byte(content), okfLimits(maxBytes)); err != nil {
+			return okfContentInvalidError(workspaceWikiDir+"/"+catalogPath, err)
+		}
+		destinations, malformed := knowlwiki.IndexDestinations(content, maxCatalogLinks)
+		if malformed {
+			return contentInvalidError(workspaceWikiDir+"/"+catalogPath, "catalog.links_invalid")
+		}
+		for _, destination := range destinations {
+			target, external, valid := knowlwiki.ResolveIndexDestination(catalogPath, destination)
+			if !valid {
+				return contentInvalidError(workspaceWikiDir+"/"+catalogPath, "catalog.target_escape")
+			}
+			if external {
+				continue
+			}
+			targetKind, exists := kinds[target]
+			if !exists || (targetKind != okf.DocumentIndex && targetKind != okf.DocumentConcept) {
+				return contentInvalidError(workspaceWikiDir+"/"+catalogPath, "catalog.broken_target")
+			}
+			edges[catalogPath] = append(edges[catalogPath], target)
+		}
+		sort.Strings(edges[catalogPath])
+	}
+	state := make(map[string]uint8, len(catalogPaths))
+	var visit func(string) error
+	visit = func(catalog string) error {
+		state[catalog] = 1
+		for _, target := range edges[catalog] {
+			if kinds[target] != okf.DocumentIndex {
+				continue
+			}
+			switch state[target] {
+			case 1:
+				return contentInvalidError(workspaceWikiDir+"/"+catalog, "catalog.cycle")
+			case 0:
+				if err := visit(target); err != nil {
+					return err
+				}
+			}
+		}
+		state[catalog] = 2
+		return nil
+	}
+	for _, catalog := range catalogPaths {
+		if state[catalog] == 0 {
+			if err := visit(catalog); err != nil {
+				return err
+			}
+		}
+	}
+
+	reachable := make(map[string]struct{})
+	queue := []string{okfIndexFilename}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if _, seen := reachable[current]; seen {
+			continue
+		}
+		reachable[current] = struct{}{}
+		queue = append(queue, edges[current]...)
+	}
+	editedPaths := make([]string, 0, len(editedPages))
+	for page := range editedPages {
+		editedPaths = append(editedPaths, page)
+	}
+	sort.Strings(editedPaths)
+	for _, page := range editedPaths {
+		if _, exists := reachable[page]; !exists {
+			return contentInvalidError(workspaceWikiDir+"/"+page, "catalog.unreachable")
 		}
 	}
 	return nil
@@ -126,25 +296,37 @@ func okfContentInvalidError(target string, err error) error {
 }
 
 func (workspace *Workspace) acceptedRawSourceKeysLocked(scope knowl.ScopeRef) (map[string]struct{}, error) {
-	records, err := workspace.inspectRawSourcesLocked(scope)
+	sources, err := workspace.acceptedRawSourcesLocked(scope)
 	if err != nil {
 		return nil, err
 	}
-	keys := make(map[string]struct{}, len(records))
-	for _, record := range records {
-		if record.Valid {
-			keys[sourceRefKey(record.Source)] = struct{}{}
-		}
+	keys := make(map[string]struct{}, len(sources))
+	for sourceRef := range sources {
+		keys[sourceRef] = struct{}{}
 	}
 	return keys, nil
 }
 
-func (workspace *Workspace) currentPageTargetsLocked() (map[knowl.PageID]struct{}, error) {
+func (workspace *Workspace) acceptedRawSourcesLocked(scope knowl.ScopeRef) (map[string]knowl.AcceptedSource, error) {
+	records, err := workspace.inspectRawSourcesLocked(scope)
+	if err != nil {
+		return nil, err
+	}
+	sources := make(map[string]knowl.AcceptedSource, len(records))
+	for _, record := range records {
+		if record.Valid {
+			sources[sourceRefKey(record.Source)] = record.Source
+		}
+	}
+	return sources, nil
+}
+
+func (workspace *Workspace) currentWikiDocumentsLocked() (map[string]string, error) {
 	wikiRoot := filepath.Join(workspace.root, workspaceWikiDir)
 	if err := rejectSymlinkPath(workspace.root, wikiRoot); err != nil {
 		return nil, err
 	}
-	targets := make(map[knowl.PageID]struct{})
+	documents := make(map[string]string)
 	err := filepath.WalkDir(wikiRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -159,14 +341,33 @@ func (workspace *Workspace) currentPageTargetsLocked() (map[knowl.PageID]struct{
 		if relErr != nil {
 			return relErr
 		}
-		pageID, ok := knowlwiki.PageIDFromPath(filepath.ToSlash(relative))
-		if ok {
-			targets[pageID] = struct{}{}
+		relative = filepath.ToSlash(relative)
+		if relative == canonicalLogPath {
+			return nil
 		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		documents[relative] = string(content)
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("enumerate canonical pages: %w", err)
+	}
+	return documents, nil
+}
+
+func (workspace *Workspace) currentPageTargetsLocked() (map[knowl.PageID]struct{}, error) {
+	documents, err := workspace.currentWikiDocumentsLocked()
+	if err != nil {
+		return nil, err
+	}
+	targets := make(map[knowl.PageID]struct{}, len(documents))
+	for target := range documents {
+		if pageID, ok := knowlwiki.PageIDFromPath(target); ok {
+			targets[pageID] = struct{}{}
+		}
 	}
 	return targets, nil
 }

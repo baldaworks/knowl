@@ -71,7 +71,7 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	if err != nil {
 		return knowl.ContentCommit{}, err
 	}
-	if err := workspace.validateProspectivePlanLocked(manifestScope(manifest), stagedEdits); err != nil {
+	if err := workspace.validateProspectivePlanLocked(manifestScope(manifest), stagedEdits, manifest.RequiredSourceRef, manifest.SourceRefs); err != nil {
 		return knowl.ContentCommit{}, err
 	}
 	logPath := filepath.Join(workspace.root, workspaceWikiDir, "log.md")

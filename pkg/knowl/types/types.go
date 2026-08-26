@@ -23,22 +23,24 @@ type SourceVersion struct {
 
 // SourceEnvelope is the bounded input accepted from a source adapter.
 type SourceEnvelope struct {
-	Scope      ScopeRef       `json:"scope"`
-	Source     SourceRef      `json:"source"`
-	Version    SourceVersion  `json:"version"`
-	MediaType  string         `json:"media_type"`
-	Content    []byte         `json:"content"`
-	Provenance map[string]any `json:"provenance,omitempty"`
-	ReceivedAt time.Time      `json:"received_at"`
+	Scope          ScopeRef       `json:"scope"`
+	Source         SourceRef      `json:"source"`
+	Version        SourceVersion  `json:"version"`
+	MediaType      string         `json:"media_type"`
+	SourceDocument SourceDocument `json:"source_document,omitzero"`
+	Content        []byte         `json:"content"`
+	Provenance     map[string]any `json:"provenance,omitempty"`
+	ReceivedAt     time.Time      `json:"received_at"`
 }
 
 // AcceptedSource describes an immutable source version stored in the workspace.
 type AcceptedSource struct {
-	Scope       ScopeRef      `json:"scope"`
-	Source      SourceRef     `json:"source"`
-	Version     SourceVersion `json:"version"`
-	MediaType   string        `json:"media_type"`
-	ManifestRef string        `json:"manifest_ref"`
+	Scope          ScopeRef       `json:"scope"`
+	Source         SourceRef      `json:"source"`
+	Version        SourceVersion  `json:"version"`
+	MediaType      string         `json:"media_type"`
+	SourceDocument SourceDocument `json:"source_document,omitzero"`
+	ManifestRef    string         `json:"manifest_ref"`
 }
 
 // SchemaDocument is the operator-owned workspace policy document.
@@ -55,17 +57,18 @@ type PageID string
 
 // PageSnapshot is a bounded read of a canonical Markdown page.
 type PageSnapshot struct {
-	ID             PageID          `json:"id"`
-	Path           string          `json:"path"`
-	Digest         string          `json:"digest"`
-	Title          string          `json:"title"`
-	Content        string          `json:"content"`
-	Body           string          `json:"body"`
-	OKF            *okf.Metadata   `json:"okf,omitempty"`
-	SourceRefs     []string        `json:"source_refs,omitempty"`
-	SourceDocument *SourceDocument `json:"source_document,omitempty"`
-	Untrusted      bool            `json:"untrusted"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID              PageID           `json:"id"`
+	Path            string           `json:"path"`
+	Digest          string           `json:"digest"`
+	Title           string           `json:"title"`
+	Content         string           `json:"content"`
+	Body            string           `json:"body"`
+	OKF             *okf.Metadata    `json:"okf,omitempty"`
+	SourceRefs      []string         `json:"source_refs,omitempty"`
+	SourceDocument  *SourceDocument  `json:"source_document,omitempty"`
+	SourceDocuments []SourceDocument `json:"source_documents,omitempty"`
+	Untrusted       bool             `json:"untrusted"`
+	UpdatedAt       time.Time        `json:"updated_at"`
 }
 
 // ReadLimits bounds context and retrieval operations.
@@ -86,11 +89,12 @@ type FileEdit struct {
 
 // ValidatedEditPlan is an application-validated model plan ready to stage.
 type ValidatedEditPlan struct {
-	OperationID  string     `json:"operation_id"`
-	Scope        ScopeRef   `json:"scope"`
-	SchemaDigest string     `json:"schema_digest"`
-	SourceRefs   []string   `json:"source_refs"`
-	Edits        []FileEdit `json:"edits"`
+	OperationID       string     `json:"operation_id"`
+	Scope             ScopeRef   `json:"scope"`
+	SchemaDigest      string     `json:"schema_digest"`
+	RequiredSourceRef string     `json:"required_source_ref,omitempty"`
+	SourceRefs        []string   `json:"source_refs"`
+	Edits             []FileEdit `json:"edits"`
 }
 
 // StagedChange identifies a plan staged for review or apply.
@@ -210,14 +214,15 @@ type SourceSummary struct {
 
 // PageReference is an untrusted bounded search result.
 type PageReference struct {
-	ID             PageID          `json:"id"`
-	Path           string          `json:"path"`
-	Title          string          `json:"title"`
-	Snippet        string          `json:"snippet"`
-	SourceRefs     []string        `json:"source_refs"`
-	SourceDocument *SourceDocument `json:"source_document,omitempty"`
-	OKF            *okf.Metadata   `json:"okf,omitempty"`
-	Untrusted      bool            `json:"untrusted"`
+	ID              PageID           `json:"id"`
+	Path            string           `json:"path"`
+	Title           string           `json:"title"`
+	Snippet         string           `json:"snippet"`
+	SourceRefs      []string         `json:"source_refs"`
+	SourceDocument  *SourceDocument  `json:"source_document,omitempty"`
+	SourceDocuments []SourceDocument `json:"source_documents,omitempty"`
+	OKF             *okf.Metadata    `json:"okf,omitempty"`
+	Untrusted       bool             `json:"untrusted"`
 }
 
 // LinkReference is an untrusted bounded graph result.
@@ -252,6 +257,7 @@ type WorkspaceInspection struct {
 	Scope      ScopeRef          `json:"scope"`
 	Snapshot   WorkspaceSnapshot `json:"snapshot"`
 	Index      PageSnapshot      `json:"index"`
+	Catalogs   []PageSnapshot    `json:"catalogs,omitempty"`
 	Log        PageSnapshot      `json:"log"`
 	RawSources []RawSourceRecord `json:"raw_sources"`
 }
@@ -291,6 +297,7 @@ type MaintenanceInput struct {
 	Source     AcceptedSource `json:"source"`
 	SourceText string         `json:"source_text"`
 	Pages      []PageSnapshot `json:"pages"`
+	Catalogs   []PageSnapshot `json:"catalogs,omitempty"`
 	Limits     ReadLimits     `json:"limits"`
 }
 

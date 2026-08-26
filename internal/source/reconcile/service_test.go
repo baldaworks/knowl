@@ -45,11 +45,11 @@ func newTestService(t *testing.T, mutate func(*Dependencies, *Options)) *Service
 func validDependencies() Dependencies {
 	return Dependencies{
 		Adapters:      map[knowl.SourceType]app.SourceAdapter{knowl.SourceTypeFilesystem: stubAdapter{}},
-		Normalizer:    stubNormalizer{},
 		State:         &stubState{},
 		Content:       &stubContent{},
 		SourceContent: &stubSourceContent{},
 		Search:        &stubSearch{},
+		Maintenance:   stubMaintenanceQueue{},
 	}
 }
 
@@ -66,8 +66,8 @@ func TestNewServiceValidatesDependenciesAndOptions(t *testing.T) {
 		"empty adapters":    {Adapters: map[knowl.SourceType]app.SourceAdapter{}},
 		"nil adapter value": {Adapters: map[knowl.SourceType]app.SourceAdapter{knowl.SourceTypeFilesystem: nil}},
 		"missing filesystem": {
-			Adapters: map[knowl.SourceType]app.SourceAdapter{"git": stubAdapter{}}, Normalizer: stubNormalizer{},
-			State: &stubState{}, Content: &stubContent{}, SourceContent: &stubSourceContent{}, Search: &stubSearch{},
+			Adapters: map[knowl.SourceType]app.SourceAdapter{"git": stubAdapter{}},
+			State:    &stubState{}, Content: &stubContent{}, SourceContent: &stubSourceContent{}, Search: &stubSearch{}, Maintenance: stubMaintenanceQueue{},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -77,11 +77,11 @@ func TestNewServiceValidatesDependenciesAndOptions(t *testing.T) {
 		})
 	}
 	for name, mutate := range map[string]func(*Dependencies){
-		"nil normalizer":     func(d *Dependencies) { d.Normalizer = nil },
 		"nil state store":    func(d *Dependencies) { d.State = nil },
 		"nil content":        func(d *Dependencies) { d.Content = nil },
 		"nil source content": func(d *Dependencies) { d.SourceContent = nil },
 		"nil search":         func(d *Dependencies) { d.Search = nil },
+		"nil maintenance":    func(d *Dependencies) { d.Maintenance = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			dependencies := validDependencies()
@@ -424,10 +424,10 @@ func (stubAdapter) Fetch(context.Context, knowl.Source, knowl.DocumentRef) (know
 	return knowl.Document{}, nil
 }
 
-type stubNormalizer struct{}
+type stubMaintenanceQueue struct{}
 
-func (stubNormalizer) NormalizeSource(context.Context, app.SourceNormalizationInput) (app.SourceNormalizationResult, error) {
-	return app.SourceNormalizationResult{}, nil
+func (stubMaintenanceQueue) ReserveAccepted(_ context.Context, request app.AcceptedMaintenanceRequest) (app.MaintenanceReservation, error) {
+	return app.MaintenanceReservation{OperationID: knowl.OperationID(app.SourceRefKey(request.Source))}, nil
 }
 
 type stubState struct {

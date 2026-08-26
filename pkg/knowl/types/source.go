@@ -79,7 +79,7 @@ type Document struct {
 	Content   []byte `json:"content"`
 }
 
-// SourceDocument is the canonical provenance of one mirrored source page.
+// SourceDocument is the canonical provenance of one configured-source revision.
 type SourceDocument struct {
 	SourceID   SourceID   `json:"source_id" yaml:"source_id"`
 	DocumentID DocumentID `json:"document_id" yaml:"document_id"`
@@ -165,35 +165,66 @@ type SyncRun struct {
 
 // DocumentState is the durable head or tombstone for one logical document.
 type DocumentState struct {
-	Scope          ScopeRef       `json:"scope"`
-	SourceID       SourceID       `json:"source_id"`
-	DocumentID     DocumentID     `json:"document_id"`
-	Revision       string         `json:"revision"`
-	AcceptedSource AcceptedSource `json:"accepted_source,omitempty"`
-	MirrorPath     string         `json:"mirror_path,omitempty"`
-	MirrorDigest   string         `json:"mirror_digest,omitempty"`
-	LastSeenRunID  SyncRunID      `json:"last_seen_run_id"`
-	Deleted        bool           `json:"deleted"`
-	DeletedAt      time.Time      `json:"deleted_at,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	Scope                  ScopeRef       `json:"scope"`
+	SourceID               SourceID       `json:"source_id"`
+	DocumentID             DocumentID     `json:"document_id"`
+	Revision               string         `json:"revision"`
+	AcceptedSource         AcceptedSource `json:"accepted_source,omitempty"`
+	MaintenanceRevision    string         `json:"maintenance_revision,omitempty"`
+	MaintenanceOperationID OperationID    `json:"maintenance_operation_id,omitempty"`
+	MirrorPath             string         `json:"mirror_path,omitempty"`
+	MirrorDigest           string         `json:"mirror_digest,omitempty"`
+	LastSeenRunID          SyncRunID      `json:"last_seen_run_id"`
+	Deleted                bool           `json:"deleted"`
+	DeletedAt              time.Time      `json:"deleted_at,omitempty"`
+	CreatedAt              time.Time      `json:"created_at"`
+	UpdatedAt              time.Time      `json:"updated_at"`
 }
 
 // SourceStatus is a bounded, redacted status for one configured source.
 type SourceStatus struct {
-	Scope               ScopeRef   `json:"scope"`
-	SourceID            SourceID   `json:"source_id"`
-	Type                SourceType `json:"type"`
-	ConfigDigest        string     `json:"config_digest"`
-	Checkpoint          string     `json:"checkpoint,omitempty"`
-	LastAttemptRunID    SyncRunID  `json:"last_attempt_run_id,omitempty"`
-	LastSuccessfulRunID SyncRunID  `json:"last_successful_run_id,omitempty"`
-	Status              SyncStatus `json:"status,omitempty"`
-	Counts              SyncCounts `json:"counts"`
-	CreatedAt           time.Time  `json:"created_at"`
-	LastAttemptAt       time.Time  `json:"last_attempt_at,omitempty"`
-	LastSuccessfulAt    time.Time  `json:"last_successful_at,omitempty"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	Scope               ScopeRef                `json:"scope"`
+	SourceID            SourceID                `json:"source_id"`
+	Type                SourceType              `json:"type"`
+	ConfigDigest        string                  `json:"config_digest"`
+	Checkpoint          string                  `json:"checkpoint,omitempty"`
+	LastAttemptRunID    SyncRunID               `json:"last_attempt_run_id,omitempty"`
+	LastSuccessfulRunID SyncRunID               `json:"last_successful_run_id,omitempty"`
+	Status              SyncStatus              `json:"status,omitempty"`
+	Counts              SyncCounts              `json:"counts"`
+	Maintenance         SourceMaintenanceStatus `json:"maintenance"`
+	CreatedAt           time.Time               `json:"created_at"`
+	LastAttemptAt       time.Time               `json:"last_attempt_at,omitempty"`
+	LastSuccessfulAt    time.Time               `json:"last_successful_at,omitempty"`
+	UpdatedAt           time.Time               `json:"updated_at"`
+}
+
+// MaintenanceCounts summarizes the asynchronous operations reserved by the
+// active documents of one configured source. Replayed counts operations with
+// more than one durable worker attempt and may overlap another outcome.
+type MaintenanceCounts struct {
+	Queued    int64 `json:"queued"`
+	Replayed  int64 `json:"replayed"`
+	Committed int64 `json:"committed"`
+	Failed    int64 `json:"failed"`
+}
+
+// MaintenanceSample is one bounded, redacted source-to-operation correlation.
+type MaintenanceSample struct {
+	DocumentID   DocumentID      `json:"document_id"`
+	Revision     string          `json:"revision"`
+	OperationID  OperationID     `json:"operation_id"`
+	Status       OperationStatus `json:"status"`
+	Replayed     bool            `json:"replayed"`
+	FailureClass string          `json:"failure_class,omitempty"`
+}
+
+// SourceMaintenanceStatus separates raw sync reservation success from the
+// asynchronous maintenance operation outcomes visible at read time.
+type SourceMaintenanceStatus struct {
+	Counts    MaintenanceCounts   `json:"counts"`
+	Samples   []MaintenanceSample `json:"samples"`
+	Truncated bool                `json:"truncated"`
 }
 
 // SourceDiagnostic reports one bounded, non-fatal source compatibility

@@ -33,7 +33,7 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	}
 	rollback := func() { _ = tx.Rollback() }
 	defer rollback()
-	for _, statement := range []string{"DELETE FROM knowl_pages_fts WHERE scope = ?", "DELETE FROM knowl_links WHERE scope = ?", "DELETE FROM knowl_pages WHERE scope = ?", "DELETE FROM knowl_projection_state WHERE scope = ?"} {
+	for _, statement := range []string{"DELETE FROM knowl_pages_fts WHERE scope = ?", "DELETE FROM knowl_links WHERE scope = ?", "DELETE FROM knowl_page_sources WHERE scope = ?", "DELETE FROM knowl_pages WHERE scope = ?", "DELETE FROM knowl_projection_state WHERE scope = ?"} {
 		var execErr error
 		_, execErr = tx.ExecContext(ctx, statement, snapshot.Scope)
 		if execErr != nil {
@@ -44,7 +44,16 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	semanticPages := make([]knowl.PageSnapshot, 0, len(snapshot.Pages))
+	excludedPageIDs := make(map[knowl.PageID]struct{})
 	for _, page := range snapshot.Pages {
+		if !projectionmeta.SemanticPage(page) {
+			excludedPageIDs[page.ID] = struct{}{}
+			continue
+		}
+		semanticPages = append(semanticPages, page)
+	}
+	for _, page := range semanticPages {
 		format, description, body, metadata, valuesErr := projectionmeta.PageValues(page)
 		if valuesErr != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, valuesErr)
@@ -57,35 +66,57 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		if marshalErr != nil {
 			return fmt.Errorf("encode page source refs: %w", marshalErr)
 		}
+		documents := projectionmeta.SourceDocuments(page)
+		encodedDocuments, encodeErr := json.Marshal(documents)
+		if encodeErr != nil {
+			return fmt.Errorf("encode page source documents: %w", encodeErr)
+		}
 		var sourceID any
 		var sourceDocument any
-		if page.SourceDocument != nil {
-			sourceID = string(page.SourceDocument.SourceID)
-			encodedDocument, encodeErr := json.Marshal(page.SourceDocument)
+		legacyDocument := page.SourceDocument
+		if legacyDocument == nil && len(documents) > 0 {
+			legacyDocument = &documents[0]
+		}
+		if legacyDocument != nil {
+			sourceID = string(legacyDocument.SourceID)
+			encodedDocument, encodeErr := json.Marshal(legacyDocument)
 			if encodeErr != nil {
 				return fmt.Errorf("encode page source document: %w", encodeErr)
 			}
 			sourceDocument = string(encodedDocument)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO knowl_pages (page_id, scope, path, title, description, body, digest, source_refs, source_id, source_document, format, okf_metadata, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, description=excluded.description, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, format=excluded.format, okf_metadata=excluded.okf_metadata, updated_at=excluded.updated_at`,
-			page.ID, snapshot.Scope, page.Path, page.Title, description, body, page.Digest, sourceRefs, sourceID, sourceDocument, format, nullableJSON(metadata), updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			INSERT INTO knowl_pages (page_id, scope, path, title, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, description=excluded.description, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, source_documents=excluded.source_documents, format=excluded.format, okf_metadata=excluded.okf_metadata, updated_at=excluded.updated_at`,
+			page.ID, snapshot.Scope, page.Path, page.Title, description, body, page.Digest, sourceRefs, sourceID, sourceDocument, encodedDocuments, format, nullableJSON(metadata), updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
+		}
+		for _, document := range documents {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_page_sources (scope, page_id, source_id, document_id, revision, uri) VALUES (?, ?, ?, ?, ?, ?)`, snapshot.Scope, page.ID, document.SourceID, document.DocumentID, document.Revision, document.URI); err != nil {
+				return fmt.Errorf("project page source %q: %w", page.Path, err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, description, body, source_refs) VALUES (?, ?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, page.Title, description, body, sourceRefs); err != nil {
 			return fmt.Errorf("project page search %q: %w", page.Path, err)
 		}
 	}
+	projectedLinks := 0
 	for _, link := range snapshot.Links {
+		if _, excluded := excludedPageIDs[link.From]; excluded {
+			continue
+		}
+		if _, excluded := excludedPageIDs[link.To]; excluded {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_links (scope, from_page, to_page, relation) VALUES (?, ?, ?, ?)`, snapshot.Scope, link.From, link.To, link.Relation); err != nil {
 			return fmt.Errorf("project link: %w", err)
 		}
+		projectedLinks++
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO knowl_projection_state (scope, schema_digest, snapshot_digest, page_count, link_count, ready_at)
-		VALUES (?, ?, ?, ?, ?, ?)`, snapshot.Scope, snapshot.SchemaDigest, snapshotDigest(snapshot), len(snapshot.Pages), len(snapshot.Links), now.Format(time.RFC3339Nano)); err != nil {
+		VALUES (?, ?, ?, ?, ?, ?)`, snapshot.Scope, snapshot.SchemaDigest, snapshotDigest(snapshot), len(semanticPages), projectedLinks, now.Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("record projection readiness: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -144,17 +175,18 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 
 func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	type digestPage struct {
-		ID             knowl.PageID
-		Path           string
-		Digest         string
-		Title          string
-		Format         string
-		Description    string
-		Body           string
-		OKF            json.RawMessage
-		SourceRefs     []string
-		SourceDocument *knowl.SourceDocument
-		UpdatedAt      time.Time
+		ID              knowl.PageID
+		Path            string
+		Digest          string
+		Title           string
+		Format          string
+		Description     string
+		Body            string
+		OKF             json.RawMessage
+		SourceRefs      []string
+		SourceDocument  *knowl.SourceDocument
+		SourceDocuments []knowl.SourceDocument
+		UpdatedAt       time.Time
 	}
 	type digestLink struct {
 		From     knowl.PageID
@@ -173,7 +205,8 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
 			Format: format, Description: description, Body: body, OKF: metadata,
 			SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
-			UpdatedAt: page.UpdatedAt.UTC(),
+			SourceDocuments: projectionmeta.SourceDocuments(page),
+			UpdatedAt:       page.UpdatedAt.UTC(),
 		})
 	}
 	sort.Slice(pages, func(left, right int) bool {

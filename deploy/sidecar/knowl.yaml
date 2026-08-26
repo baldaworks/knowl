@@ -1,5 +1,12 @@
+runtime:
+  providers:
+    opencode:
+      type: opencode_acp
+      opencode_acp:
+        model: opencode/big-pickle
+
 knowl:
-  provider: ""
+  provider: opencode
   workspace:
     path: /var/lib/knowl/knowledge
   sources:

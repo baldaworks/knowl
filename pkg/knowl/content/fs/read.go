@@ -31,6 +31,10 @@ func (workspace *Workspace) ReadPages(ctx context.Context, scope knowl.ScopeRef,
 	}
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
+	rawSources, err := workspace.acceptedRawSourcesLocked(scope)
+	if err != nil {
+		return nil, err
+	}
 	pages := make([]knowl.PageSnapshot, 0, len(ids))
 	now := workspace.now().UTC()
 	for _, id := range ids {
@@ -73,6 +77,7 @@ func (workspace *Workspace) ReadPages(ctx context.Context, scope knowl.ScopeRef,
 			if snapshotErr != nil {
 				return nil, snapshotErr
 			}
+			resolvePageProvenance(&page, rawSources)
 			pages = append(pages, page)
 			continue
 		}

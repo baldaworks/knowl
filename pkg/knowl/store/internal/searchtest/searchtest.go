@@ -20,14 +20,17 @@ import (
 )
 
 const (
-	Scope            knowl.ScopeRef = "search-contract"
-	ForeignScope     knowl.ScopeRef = "search-contract-foreign"
-	decisionBadgerID knowl.PageID   = "decision-badger"
-	engineeringID    knowl.SourceID = "engineering"
-	operationsID     knowl.SourceID = "operations"
-	headinglessTitle                = "Глоссарий-проекта"
-	referenceType                   = "Reference"
-	lifecycleTitle                  = "Lifecycle reference"
+	Scope              knowl.ScopeRef = "search-contract"
+	ForeignScope       knowl.ScopeRef = "search-contract-foreign"
+	decisionBadgerID   knowl.PageID   = "decision-badger"
+	engineeringID      knowl.SourceID = "engineering"
+	operationsID       knowl.SourceID = "operations"
+	sharedSemanticID   knowl.PageID   = "shared-semantic"
+	headinglessTitle                  = "Глоссарий-проекта"
+	referenceType                     = "Reference"
+	lifecycleTitle                    = "Lifecycle reference"
+	testSourceRevision                = "revision-1"
+	testSharedDocument                = "shared.md"
 )
 
 var capturedAt = time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
@@ -84,6 +87,9 @@ func Snapshot() knowl.WorkspaceSnapshot {
 	}
 	pages = append(pages,
 		page("source-curated", "curated/shared.md", "Sourcefilterbeacon Curated", "sourcefilterbeacon curated evidence", "source:curated"),
+		sharedSemanticPage(),
+		page("root-catalog", "wiki/index.md", "Sourcefilterbeacon Catalog", "sourcefilterbeacon catalog navigation", "source:catalog"),
+		page("nested-catalog", "wiki/entities/index.md", "Sourcefilterbeacon Nested Catalog", "sourcefilterbeacon nested navigation", "source:catalog"),
 		sourcePage("source-engineering", "wiki/sources/engineering/shared.md", "Sourcefilterbeacon Engineering", engineeringID),
 		sourcePage("source-operations", "wiki/sources/operations/shared.md", "Sourcefilterbeacon Operations", operationsID),
 		headinglessSourcePage(),
@@ -164,10 +170,14 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 		}
 	})
 	t.Run("source filter", func(t *testing.T) {
-		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", nil), "source-curated", "source-engineering", "source-operations")
-		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{engineeringID}), "source-engineering")
-		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{operationsID, engineeringID}), "source-engineering", "source-operations")
-		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{engineeringID, engineeringID}), "source-engineering")
+		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", nil), "source-curated", sharedSemanticID)
+		for _, sources := range [][]knowl.SourceID{{engineeringID}, {operationsID}, {operationsID, engineeringID}, {engineeringID, engineeringID}} {
+			got := searchSources(t, index, "sourcefilterbeacon", sources)
+			assertIDs(t, got, sharedSemanticID)
+			if len(got[0].SourceDocuments) != 2 || got[0].SourceDocuments[0].SourceID != engineeringID || got[0].SourceDocuments[1].SourceID != operationsID {
+				t.Fatalf("shared semantic provenance = %#v", got[0].SourceDocuments)
+			}
+		}
 		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{"ghost"}))
 	})
 	t.Run("out of vocabulary", func(t *testing.T) {
@@ -241,7 +251,17 @@ func page(id knowl.PageID, path, title, content, sourceRef string) knowl.PageSna
 func sourcePage(id knowl.PageID, path, title string, sourceID knowl.SourceID) knowl.PageSnapshot {
 	fixture := page(id, path, title, "sourcefilterbeacon sourced evidence", "source:"+string(sourceID))
 	fixture.SourceDocument = &knowl.SourceDocument{
-		SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md",
+		SourceID: sourceID, DocumentID: testSharedDocument, Revision: testSourceRevision, URI: "file:///" + string(sourceID) + "/shared.md",
+	}
+	return fixture
+}
+
+func sharedSemanticPage() knowl.PageSnapshot {
+	fixture := page(sharedSemanticID, "entities/shared.md", "Sourcefilterbeacon Shared", "sourcefilterbeacon shared semantic evidence", "raw:engineering@1")
+	fixture.SourceRefs = append(fixture.SourceRefs, "raw:operations@1")
+	fixture.SourceDocuments = []knowl.SourceDocument{
+		{SourceID: engineeringID, DocumentID: testSharedDocument, Revision: testSourceRevision, URI: "file:///engineering/shared.md"},
+		{SourceID: operationsID, DocumentID: testSharedDocument, Revision: testSourceRevision, URI: "file:///operations/shared.md"},
 	}
 	return fixture
 }
@@ -250,7 +270,7 @@ func headinglessSourcePage() knowl.PageSnapshot {
 	body := "\nПолезный пользовательскийглоссарий находится здесь без Markdown-заголовка.\n"
 	return knowl.PageSnapshot{
 		ID:     "headingless-source",
-		Path:   "wiki/sources/engineering/Глоссарий-проекта.md",
+		Path:   "wiki/concepts/Глоссарий-проекта.md",
 		Digest: "digest-headingless-source",
 		Title:  headinglessTitle,
 		Content: "---\nid: sources/engineering/Глоссарий-проекта\ntitle: Глоссарий-проекта\ntype: source\n" +
@@ -263,7 +283,7 @@ func headinglessSourcePage() knowl.PageSnapshot {
 		}},
 		SourceRefs: []string{"raw:metadataonlybeacon@1"},
 		SourceDocument: &knowl.SourceDocument{
-			SourceID: "engineering", DocumentID: "Глоссарий-проекта.md", Revision: "revision-1", URI: "file:///metadataonlybeacon/Глоссарий-проекта.md",
+			SourceID: engineeringID, DocumentID: "Глоссарий-проекта.md", Revision: testSourceRevision, URI: "file:///metadataonlybeacon/Глоссарий-проекта.md",
 		},
 		Untrusted: true,
 		UpdatedAt: capturedAt,
@@ -328,7 +348,7 @@ func assertEvidence(t *testing.T, references []knowl.PageReference, terms []stri
 		if !reference.Untrusted {
 			t.Fatalf("reference %q is not marked untrusted", reference.ID)
 		}
-		if len(reference.SourceRefs) != 1 || reference.SourceRefs[0] == "" {
+		if len(reference.SourceRefs) == 0 || reference.SourceRefs[0] == "" {
 			t.Fatalf("reference %q lost provenance: %#v", reference.ID, reference.SourceRefs)
 		}
 		if !utf8.ValidString(reference.Snippet) || utf8.RuneCountInString(reference.Snippet) > characters {
@@ -386,5 +406,6 @@ func containsIDs(references []knowl.PageReference, want ...knowl.PageID) bool {
 func equalReference(left, right knowl.PageReference) bool {
 	return left.ID == right.ID && left.Path == right.Path && left.Title == right.Title &&
 		left.Snippet == right.Snippet && left.Untrusted == right.Untrusted &&
-		slices.Equal(left.SourceRefs, right.SourceRefs) && reflect.DeepEqual(left.OKF, right.OKF)
+		slices.Equal(left.SourceRefs, right.SourceRefs) && reflect.DeepEqual(left.SourceDocument, right.SourceDocument) &&
+		slices.Equal(left.SourceDocuments, right.SourceDocuments) && reflect.DeepEqual(left.OKF, right.OKF)
 }

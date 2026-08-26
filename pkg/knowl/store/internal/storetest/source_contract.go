@@ -36,6 +36,7 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 		document   = knowl.DocumentID("architecture/auth.md")
 		generation = "workspace-generation-1"
 		checkpoint = "checkpoint-1"
+		changed    = "changed"
 	)
 	base := time.Unix(100, 0).UTC()
 	if harness.OpenPeer != nil {
@@ -126,7 +127,11 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 		return contractPreparedState(t, run.ID, scope, sourceID, checkpoint, knowl.SyncCounts{Added: 1},
 			[]app.PreparedDocumentState{{Action: app.SyncDocumentActive, State: func() knowl.DocumentState {
 				altered := state
-				altered.Revision = "changed"
+				altered.Revision = changed
+				altered.AcceptedSource.Version.Version = changed
+				altered.AcceptedSource.SourceDocument.Revision = changed
+				altered.MaintenanceRevision = changed
+				altered.MaintenanceOperationID = "operation-changed"
 				return altered
 			}()}}, base.Add(2*time.Second))
 	}()); !errors.Is(err, app.ErrSyncConflict) && (harness.IsConflict == nil || !harness.IsConflict(err)) {
@@ -149,7 +154,8 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 		t.Fatalf("FinalizeSync() replay = %#v, %v", replayed, err)
 	}
 	active, err := harness.Store.DocumentState(ctx, scope, sourceID, document)
-	if err != nil || active.Deleted || active.Revision != "revision-1" || active.AcceptedSource.ManifestRef != "raw/manifest-1.json" {
+	if err != nil || active.Deleted || active.Revision != "revision-1" || active.AcceptedSource.ManifestRef != "raw/manifest-1.json" ||
+		active.MaintenanceRevision != active.Revision || active.MaintenanceOperationID == "" {
 		t.Fatalf("DocumentState() = %#v, %v", active, err)
 	}
 	status, err := harness.Store.SourceStatus(ctx, scope, sourceID)
@@ -187,7 +193,7 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 		reopened := harness.OpenPeer(t)
 		reopenedState, stateErr := reopened.DocumentState(ctx, scope, sourceID, document)
 		reopenedStatus, statusErr := reopened.SourceStatus(ctx, scope, sourceID)
-		if stateErr != nil || statusErr != nil || !reopenedState.Deleted || reopenedState.AcceptedSource.ManifestRef != active.AcceptedSource.ManifestRef || reopenedStatus.LastSuccessfulRunID != deleteRun.ID || reopenedStatus.Counts != (knowl.SyncCounts{Deleted: 1}) || !reopenedStatus.CreatedAt.Equal(base) || !reopenedStatus.LastAttemptAt.Equal(base.Add(23*time.Second)) || !reopenedStatus.LastSuccessfulAt.Equal(base.Add(23*time.Second)) {
+		if stateErr != nil || statusErr != nil || !reopenedState.Deleted || reopenedState.AcceptedSource.ManifestRef != active.AcceptedSource.ManifestRef || reopenedState.MaintenanceOperationID != active.MaintenanceOperationID || reopenedStatus.LastSuccessfulRunID != deleteRun.ID || reopenedStatus.Counts != (knowl.SyncCounts{Deleted: 1}) || !reopenedStatus.CreatedAt.Equal(base) || !reopenedStatus.LastAttemptAt.Equal(base.Add(23*time.Second)) || !reopenedStatus.LastSuccessfulAt.Equal(base.Add(23*time.Second)) {
 			t.Fatalf("reopened source state = %#v/%#v, errors = %v/%v", reopenedState, reopenedStatus, stateErr, statusErr)
 		}
 		runConcurrentGenerationContract(t, ctx, harness, scope, sourceID, base.Add(25*time.Second))
@@ -365,8 +371,9 @@ func newContractRun(scope knowl.ScopeRef, sourceID knowl.SourceID, id knowl.Sync
 
 func contractDocumentState(scope knowl.ScopeRef, sourceID knowl.SourceID, documentID knowl.DocumentID, runID knowl.SyncRunID, revision string, at time.Time) knowl.DocumentState {
 	return knowl.DocumentState{Scope: scope, SourceID: sourceID, DocumentID: documentID, Revision: revision,
-		AcceptedSource: knowl.AcceptedSource{Scope: scope, Source: knowl.SourceRef{Adapter: "wiki-filesystem", ID: string(sourceID) + "/" + string(documentID)}, Version: knowl.SourceVersion{Version: revision, Digest: strings.Repeat("d", 64)}, MediaType: "text/markdown", ManifestRef: "raw/manifest-1.json"},
-		MirrorPath:     "wiki/sources/" + string(sourceID) + "/" + string(documentID), MirrorDigest: strings.Repeat("e", 64), LastSeenRunID: runID, CreatedAt: at, UpdatedAt: at}
+		AcceptedSource:      knowl.AcceptedSource{Scope: scope, Source: knowl.SourceRef{Adapter: "wiki-filesystem", ID: string(sourceID) + "/" + string(documentID)}, Version: knowl.SourceVersion{Version: revision, Digest: strings.Repeat("d", 64)}, MediaType: "text/markdown", SourceDocument: knowl.SourceDocument{SourceID: sourceID, DocumentID: documentID, Revision: revision, URI: "https://wiki.example.test/" + string(documentID)}, ManifestRef: "raw/manifest-1.json"},
+		MaintenanceRevision: revision, MaintenanceOperationID: knowl.OperationID("operation-" + string(sourceID) + "-" + revision),
+		MirrorPath: "wiki/sources/" + string(sourceID) + "/" + string(documentID), MirrorDigest: strings.Repeat("e", 64), LastSeenRunID: runID, CreatedAt: at, UpdatedAt: at}
 }
 
 func finishContractRun(t *testing.T, ctx context.Context, store app.SourceStateStore, run knowl.SyncRun, state knowl.DocumentState, generation string, at time.Time) {
@@ -518,7 +525,8 @@ func assertPreparedRead(t *testing.T, store app.SourceStateStore, prepared app.P
 		state := restored.State
 		source := document.State
 		if restored.Action != document.Action || state.DocumentID != source.DocumentID || state.Revision != source.Revision ||
-			state.AcceptedSource != source.AcceptedSource || state.MirrorPath != source.MirrorPath ||
+			state.AcceptedSource != source.AcceptedSource || state.MaintenanceRevision != source.MaintenanceRevision ||
+			state.MaintenanceOperationID != source.MaintenanceOperationID || state.MirrorPath != source.MirrorPath ||
 			state.MirrorDigest != source.MirrorDigest || state.LastSeenRunID != source.LastSeenRunID ||
 			state.Deleted != source.Deleted || !state.DeletedAt.Equal(source.DeletedAt) {
 			t.Fatalf("PreparedSync() document %d = %#v, want %#v", index, restored, document)

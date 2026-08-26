@@ -94,16 +94,17 @@ type ErrorResponse struct {
 
 // EvidenceItem defines model for EvidenceItem.
 type EvidenceItem struct {
-	DocumentId *string      `json:"document_id,omitempty"`
-	Okf        *OKFMetadata `json:"okf,omitempty"`
-	PageId     string       `json:"page_id"`
-	Revision   *string      `json:"revision,omitempty"`
-	Snippet    string       `json:"snippet"`
-	SourceId   *string      `json:"source_id,omitempty"`
-	SourceRefs *[]string    `json:"source_refs,omitempty"`
-	Title      string       `json:"title"`
-	Untrusted  bool         `json:"untrusted"`
-	Uri        *string      `json:"uri,omitempty"`
+	DocumentId      *string           `json:"document_id,omitempty"`
+	Okf             *OKFMetadata      `json:"okf,omitempty"`
+	PageId          string            `json:"page_id"`
+	Revision        *string           `json:"revision,omitempty"`
+	Snippet         string            `json:"snippet"`
+	SourceDocuments *[]SourceDocument `json:"source_documents,omitempty"`
+	SourceId        *string           `json:"source_id,omitempty"`
+	SourceRefs      *[]string         `json:"source_refs,omitempty"`
+	Title           string            `json:"title"`
+	Untrusted       bool              `json:"untrusted"`
+	Uri             *string           `json:"uri,omitempty"`
 }
 
 // Failure defines model for Failure.
@@ -259,6 +260,14 @@ type RetrieveResult struct {
 	Citations *[]Citation    `json:"citations,omitempty"`
 	Evidence  []EvidenceItem `json:"evidence"`
 	Query     string         `json:"query"`
+}
+
+// SourceDocument defines model for SourceDocument.
+type SourceDocument struct {
+	DocumentId string `json:"document_id"`
+	Revision   string `json:"revision"`
+	SourceId   string `json:"source_id"`
+	Uri        string `json:"uri"`
 }
 
 // OperationID defines model for OperationID.

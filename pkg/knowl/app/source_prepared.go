@@ -91,14 +91,16 @@ func PreparedSyncDigest(prepared PreparedSyncState) (string, error) {
 			deletedAtMicros = state.DeletedAt.UTC().Truncate(time.Microsecond).UnixMicro()
 		}
 		payload.Documents[index] = preparedDigestDocument{
-			Action:          document.Action,
-			DocumentID:      state.DocumentID,
-			Revision:        state.Revision,
-			AcceptedSource:  state.AcceptedSource,
-			MirrorPath:      state.MirrorPath,
-			MirrorDigest:    state.MirrorDigest,
-			LastSeenRunID:   state.LastSeenRunID,
-			DeletedAtMicros: deletedAtMicros,
+			Action:                 document.Action,
+			DocumentID:             state.DocumentID,
+			Revision:               state.Revision,
+			AcceptedSource:         state.AcceptedSource,
+			MaintenanceRevision:    state.MaintenanceRevision,
+			MaintenanceOperationID: state.MaintenanceOperationID,
+			MirrorPath:             state.MirrorPath,
+			MirrorDigest:           state.MirrorDigest,
+			LastSeenRunID:          state.LastSeenRunID,
+			DeletedAtMicros:        deletedAtMicros,
 		}
 	}
 	encoded, err := json.Marshal(payload)
@@ -119,14 +121,16 @@ type preparedDigestPayload struct {
 }
 
 type preparedDigestDocument struct {
-	Action          SyncDocumentAction   `json:"action"`
-	DocumentID      knowl.DocumentID     `json:"document_id"`
-	Revision        string               `json:"revision"`
-	AcceptedSource  knowl.AcceptedSource `json:"accepted_source"`
-	MirrorPath      string               `json:"mirror_path,omitempty"`
-	MirrorDigest    string               `json:"mirror_digest,omitempty"`
-	LastSeenRunID   knowl.SyncRunID      `json:"last_seen_run_id"`
-	DeletedAtMicros int64                `json:"deleted_at_unix_micros,omitempty"`
+	Action                 SyncDocumentAction   `json:"action"`
+	DocumentID             knowl.DocumentID     `json:"document_id"`
+	Revision               string               `json:"revision"`
+	AcceptedSource         knowl.AcceptedSource `json:"accepted_source"`
+	MaintenanceRevision    string               `json:"maintenance_revision,omitempty"`
+	MaintenanceOperationID knowl.OperationID    `json:"maintenance_operation_id,omitempty"`
+	MirrorPath             string               `json:"mirror_path,omitempty"`
+	MirrorDigest           string               `json:"mirror_digest,omitempty"`
+	LastSeenRunID          knowl.SyncRunID      `json:"last_seen_run_id"`
+	DeletedAtMicros        int64                `json:"deleted_at_unix_micros,omitempty"`
 }
 
 func validPreparedCandidate(document PreparedDocumentState, scope knowl.ScopeRef, sourceID knowl.SourceID, runID knowl.SyncRunID) bool {
@@ -143,6 +147,20 @@ func validPreparedCandidate(document PreparedDocumentState, scope knowl.ScopeRef
 		!validStoredText(state.AcceptedSource.Version.Version, maxRevisionBytes, false) ||
 		!validStoredText(state.AcceptedSource.Version.Digest, maxRevisionBytes, false) ||
 		!validStoredText(state.AcceptedSource.ManifestRef, maxRevisionBytes, false) {
+		return false
+	}
+	if document := state.AcceptedSource.SourceDocument; document != (knowl.SourceDocument{}) {
+		if ValidateOwnedSourceDocument(sourceID, document) != nil || document.DocumentID != state.DocumentID ||
+			document.Revision != state.Revision || document.Revision != state.AcceptedSource.Version.Version {
+			return false
+		}
+	}
+	maintenanceRevision := state.MaintenanceRevision
+	maintenanceOperationID := string(state.MaintenanceOperationID)
+	if (maintenanceRevision == "") != (maintenanceOperationID == "") ||
+		(maintenanceRevision != "" && (maintenanceRevision != state.Revision ||
+			!validStoredText(maintenanceRevision, maxRevisionBytes, false) ||
+			!validStoredText(maintenanceOperationID, 4096, false))) {
 		return false
 	}
 	if state.MirrorPath != "" && ValidateDocumentID(knowl.DocumentID(state.MirrorPath)) != nil {

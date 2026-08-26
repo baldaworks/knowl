@@ -46,8 +46,8 @@ func TestSidecarConfigLoadsThroughProductionTypes(t *testing.T) {
 	if config.StorePath != "/var/lib/knowl/knowledge/.knowl/knowl.sqlite" {
 		t.Fatalf("store path = %q, want /var/lib/knowl/knowledge/.knowl/knowl.sqlite", config.StorePath)
 	}
-	if loaded, err := configFromContext(ctx); err != nil || loaded.Document.Knowl.Provider != "" {
-		t.Fatalf("sidecar provider = %q, %v; want provider-free", loaded.Document.Knowl.Provider, err)
+	if loaded, err := configFromContext(ctx); err != nil || loaded.Document.Knowl.Provider != "opencode" {
+		t.Fatalf("sidecar provider = %q, %v; want opencode", loaded.Document.Knowl.Provider, err)
 	}
 	if len(config.Sources) != 2 || config.Sources[0].ID != commandEngineeringSourceID || config.Sources[1].ID != commandOperationsSourceID {
 		t.Fatalf("sidecar sources = %#v", config.Sources)
@@ -59,7 +59,7 @@ func TestSidecarConfigLoadsThroughProductionTypes(t *testing.T) {
 	}
 }
 
-func TestProviderFreeSidecarConfigRunsSourceCLIAndRetrieval(t *testing.T) {
+func TestMaintainerConfiguredSidecarRunsSourceCLIAndRetrieval(t *testing.T) {
 	repoRoot := testRepoRoot(t)
 	content, err := os.ReadFile(filepath.Join(repoRoot, "deploy", "sidecar", "knowl.yaml"))
 	if err != nil {
@@ -104,10 +104,26 @@ func TestProviderFreeSidecarConfigRunsSourceCLIAndRetrieval(t *testing.T) {
 	}
 	stdout, stderr, err = executeCLICommand(newRootCommand(), []string{"--config-dir", configRoot, retrieveCommandName, retrieveSourceFlag, commandEngineeringSourceID, "Sidecarengineeringbeacon"}, nil)
 	if err != nil {
-		t.Fatalf("sidecar provider-free retrieval: %v, stderr=%s", err, stderr)
+		t.Fatalf("sidecar retrieval: %v, stderr=%s", err, stderr)
 	}
-	if !strings.Contains(stdout, `"source_id":"`+commandEngineeringSourceID+`"`) || strings.Contains(stdout, `"source_id":"`+commandOperationsSourceID+`"`) {
+	if !strings.Contains(stdout, `"evidence":[]`) || strings.Contains(stdout, `"source_id":"`+commandOperationsSourceID+`"`) {
 		t.Fatalf("sidecar filtered retrieval = %s", stdout)
+	}
+	inspection, err := workspace.Inspect(context.Background(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundEngineering, foundOperations := false, false
+	for _, record := range inspection.RawSources {
+		switch record.Source.SourceDocument.SourceID {
+		case commandEngineeringSourceID:
+			foundEngineering = true
+		case commandOperationsSourceID:
+			foundOperations = true
+		}
+	}
+	if !foundEngineering || !foundOperations || len(inspection.Snapshot.Pages) != 0 {
+		t.Fatalf("sidecar raw-only sync = engineering:%v operations:%v pages:%d", foundEngineering, foundOperations, len(inspection.Snapshot.Pages))
 	}
 }
 
@@ -166,8 +182,10 @@ func TestSidecarAssetsMentionCanonicalRuntimePaths(t *testing.T) {
 				"/v1/retrieve",
 				publicIngestPath,
 				"/v1/operations/{operation_id}",
-				"maintainer_unavailable",
-				sourceNamespacePattern,
+				"runtime.providers",
+				"`raw/`",
+				"`wiki/`",
+				"Initial bootstrap is optional",
 			},
 		},
 	}

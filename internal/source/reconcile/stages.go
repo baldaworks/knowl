@@ -13,12 +13,13 @@ import (
 
 // Stable scan and saga failure classes extending the shared vocabulary.
 const (
-	classAdapter    = "adapter"
-	classScan       = "scan_invalid"
-	classFetch      = "fetch"
-	classRaw        = "raw"
-	classNormalize  = "normalize"
-	classProjection = "projection"
+	classAdapter     = "adapter"
+	classScan        = "scan_invalid"
+	classFetch       = "fetch"
+	classRaw         = "raw"
+	classMaintenance = "maintenance_reservation"
+	classNormalize   = "normalize"
+	classProjection  = "projection"
 
 	// pageDocumentCeiling mirrors the bounded descriptor page contract.
 	pageDocumentCeiling = 1000
@@ -69,9 +70,11 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 		return Result{}, err
 	}
 	if resumed.prepared != nil {
-		return service.finalizeSaga(ctx, scope, source.ID, sagaInput{
-			run: resumed.run, prepared: *resumed.prepared,
-		})
+		input, reconstructErr := service.reconstructPrepared(ctx, scope, source, resumed.run)
+		if reconstructErr != nil {
+			return Result{Run: resumed.run}, reconstructErr
+		}
+		return service.finalizeSaga(ctx, scope, source.ID, input)
 	}
 	catalog, err := service.listCatalog(ctx, scope, adapter, source, resumed.run, resumed.refs)
 	if err != nil {

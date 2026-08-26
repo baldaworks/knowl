@@ -19,6 +19,23 @@ import (
 
 const wantMaintainerError = "maintainer"
 
+func TestMaintainerInstructionRequiresSemanticSynthesisAndProvenance(t *testing.T) {
+	for _, required := range []string{
+		"entities/",
+		"concepts/",
+		"syntheses/",
+		"Never mirror configured source paths",
+		"Merge overlapping evidence",
+		"include every source ref used by any edited page",
+		"preserve every unrelated existing source ref",
+		"same source/document lineage",
+	} {
+		if !strings.Contains(maintainerInstruction, required) {
+			t.Errorf("maintainer instruction missing %q", required)
+		}
+	}
+}
+
 func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	plan := maintainerPlanOutput{
 		SchemaDigest: "schema-digest",

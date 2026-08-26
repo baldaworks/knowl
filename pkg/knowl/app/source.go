@@ -278,6 +278,19 @@ func ValidateOwnedSourceDocument(sourceID knowl.SourceID, document knowl.SourceD
 	return nil
 }
 
+// ResolveSourceDocument returns persisted configured-source provenance, or a
+// validated deterministic fallback for a legacy accepted manifest.
+func ResolveSourceDocument(sourceID knowl.SourceID, accepted knowl.AcceptedSource, fallback knowl.SourceDocument) (knowl.SourceDocument, error) {
+	document := accepted.SourceDocument
+	if document == (knowl.SourceDocument{}) {
+		document = fallback
+	}
+	if ValidateOwnedSourceDocument(sourceID, document) != nil || document.Revision != accepted.Version.Version {
+		return knowl.SourceDocument{}, ErrSourceInvalid
+	}
+	return document, nil
+}
+
 // NormalizeSourceMutationPlan validates, copies, and deterministically orders a
 // source-owned canonical plan before it reaches a content store.
 func NormalizeSourceMutationPlan(plan knowl.SourceMutationPlan) (knowl.SourceMutationPlan, error) {

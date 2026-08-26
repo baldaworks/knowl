@@ -2,10 +2,10 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +15,6 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 
 	filesystem "github.com/baldaworks/knowl/internal/source/filesystem"
-	"github.com/baldaworks/knowl/internal/source/normalize"
 	"github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	sqlitestore "github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 )
@@ -71,6 +70,7 @@ type verticalEnv struct {
 	runSequence int
 	clockStep   int64
 	mutex       sync.Mutex
+	queue       *recordingMaintenanceQueue
 }
 
 func newVerticalEnv(t *testing.T) *verticalEnv {
@@ -97,6 +97,7 @@ func newVerticalEnv(t *testing.T) *verticalEnv {
 	}
 	env.workspace = workspace
 	env.adapter = newCountingAdapter(filesystem.NewDefault())
+	env.queue = newRecordingMaintenanceQueue()
 
 	var runMutex sync.Mutex
 	options := Options{}
@@ -114,11 +115,11 @@ func newVerticalEnv(t *testing.T) *verticalEnv {
 	}
 	dependencies := Dependencies{
 		Adapters:      map[knowl.SourceType]app.SourceAdapter{knowl.SourceTypeFilesystem: env.adapter},
-		Normalizer:    normalize.NewDefaultAdapter(),
 		State:         store,
 		Content:       workspace,
 		SourceContent: workspace,
 		Search:        store,
+		Maintenance:   env.queue,
 	}
 	service, err := NewService(dependencies, options)
 	if err != nil {
@@ -167,27 +168,31 @@ func TestVerticalReconciliationSliceEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	env := newVerticalEnv(t)
 
-	// Initial synchronization adds every descriptor and publishes projection.
+	// Initial synchronization accepts immutable raw revisions and reserves text.
 	result, err := env.service.SyncSource(ctx, env.scope, env.primary())
 	requireSyncSuccess(t, result, err)
 	if result.Changed != true || env.adapter.totalFetches() != 3 {
 		t.Fatalf("initial = changed:%v fetches:%d; want three selective fetches", result.Changed, env.adapter.totalFetches())
 	}
 	headOne, headErr := env.state.DocumentState(ctx, env.scope, testEngineeringSourceID, "docs/one.md")
-	if headErr != nil || headOne.Deleted || headOne.MirrorPath == "" {
+	if headErr != nil || headOne.Deleted || headOne.MirrorPath != "" || headOne.MirrorDigest != "" ||
+		headOne.MaintenanceRevision != headOne.Revision || headOne.MaintenanceOperationID == "" {
 		t.Fatalf("initial head = %#v, %v", headOne, headErr)
 	}
+	if document := headOne.AcceptedSource.SourceDocument; app.ValidateOwnedSourceDocument(testEngineeringSourceID, document) != nil ||
+		document.DocumentID != "docs/one.md" || document.Revision != headOne.Revision {
+		t.Fatalf("raw source provenance = %#v", document)
+	}
 	pages, searchErr := env.search.Search(ctx, env.scope, "one", knowl.ReadLimits{Pages: 5}, nil)
-	if searchErr != nil || len(pages) == 0 || pages[0].Untrusted != true {
-		t.Fatalf("projection search = %#v, %v", pages, searchErr)
+	if searchErr != nil || len(pages) != 0 {
+		t.Fatalf("raw source leaked into semantic search = %#v, %v", pages, searchErr)
 	}
 	inventory, invErr := env.service.sourceContent.SourceDigests(ctx, env.scope, testEngineeringSourceID, 16)
-	if invErr != nil || len(inventory) != 3 {
-		t.Fatalf("canonical inventory = %#v, %v", inventory, invErr)
+	if invErr != nil || len(inventory) != 0 {
+		t.Fatalf("canonical source inventory = %#v, %v; want no mirrors", inventory, invErr)
 	}
-	digestsAfterInitial := map[string]string{}
-	for _, entry := range inventory {
-		digestsAfterInitial[entry.Path] = entry.Digest
+	if len(env.queue.requests) != 2 {
+		t.Fatalf("maintenance reservations = %d, want two Markdown documents", len(env.queue.requests))
 	}
 
 	// Unchanged synchronization performs zero fetches and zero canonical writes.
@@ -197,11 +202,8 @@ func TestVerticalReconciliationSliceEndToEnd(t *testing.T) {
 	if env.adapter.totalFetches() != beforeCalls || unchanged.Changed {
 		t.Fatalf("unchanged = fetches:%d changed:%v; want full convergence", env.adapter.totalFetches(), unchanged.Changed)
 	}
-	inventoryAgain, _ := env.service.sourceContent.SourceDigests(ctx, env.scope, testEngineeringSourceID, 16)
-	for _, entry := range inventoryAgain {
-		if digestsAfterInitial[entry.Path] != entry.Digest {
-			t.Fatalf("unchanged run rewrote %q", entry.Path)
-		}
+	if len(env.queue.requests) != 2 {
+		t.Fatalf("unchanged run reserved again: %d requests", len(env.queue.requests))
 	}
 
 	// Update one file selectively while another is deleted safely.
@@ -232,17 +234,12 @@ func TestVerticalReconciliationSliceEndToEnd(t *testing.T) {
 		}
 	}
 	inventoryAfterUpdate, _ := env.service.sourceContent.SourceDigests(ctx, env.scope, testEngineeringSourceID, 16)
-	if len(inventoryAfterUpdate) != 2 {
+	if len(inventoryAfterUpdate) != 0 {
 		t.Fatalf("post-deletion inventory = %#v", inventoryAfterUpdate)
 	}
-	for _, entry := range inventoryAfterUpdate {
-		if entry.Path == headOne.MirrorPath && entry.Digest == digestsAfterInitial[headOne.MirrorPath] {
-			t.Fatal("updated mirror kept stale canonical bytes")
-		}
-	}
 	updatedPages, searchErr := env.search.Search(ctx, env.scope, "updated", knowl.ReadLimits{Pages: 5}, nil)
-	if searchErr != nil || len(updatedPages) == 0 {
-		t.Fatalf("projection after update = %#v, %v", updatedPages, searchErr)
+	if searchErr != nil || len(updatedPages) != 0 {
+		t.Fatalf("updated raw source leaked into semantic search = %#v, %v", updatedPages, searchErr)
 	}
 
 	// Interrupted scan fails safely and leaves prior heads active.
@@ -280,31 +277,23 @@ func TestVerticalOKFFlavorPreservesControlsMetadataAndConceptLinks(t *testing.T)
 
 	result, err := env.service.SyncSource(ctx, env.scope, env.source(testEngineeringSourceID, env.sourceRoot, knowl.SourceFlavorOKF))
 	requireSyncSuccess(t, result, err)
-	if want := []knowl.SourceDiagnostic{{Code: "okf.version.best_effort", Path: "index.md", ObservedVersion: "0.9"}}; !reflect.DeepEqual(result.Diagnostics, want) {
-		t.Fatalf("OKF sync diagnostics = %#v, want %#v", result.Diagnostics, want)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("raw-only sync emitted normalization diagnostics: %#v", result.Diagnostics)
 	}
-	snapshot, err := env.workspace.Snapshot(ctx, env.scope)
-	if err != nil {
-		t.Fatalf("Snapshot() error = %v", err)
+	inventory, err := env.workspace.SourceDigests(ctx, env.scope, testEngineeringSourceID, 16)
+	if err != nil || len(inventory) != 0 {
+		t.Fatalf("OKF source mirrors = %#v, %v", inventory, err)
 	}
-	if len(snapshot.Pages) != 2 || len(snapshot.Links) != 1 || snapshot.Links[0].Relation != "okf" || snapshot.Links[0].To != "sources/engineering/docs/two" {
-		t.Fatalf("OKF snapshot pages=%#v links=%#v", snapshot.Pages, snapshot.Links)
+	state, err := env.state.DocumentState(ctx, env.scope, testEngineeringSourceID, "docs/one.md")
+	if err != nil || state.MaintenanceRevision != state.Revision || state.MaintenanceOperationID == "" {
+		t.Fatalf("OKF raw state = %#v, %v", state, err)
 	}
-	if snapshot.PageDigests["wiki/sources/engineering/index.md"] == "" || snapshot.PageDigests["wiki/sources/engineering/log.md"] == "" {
-		t.Fatalf("reserved controls missing from digest inventory: %#v", snapshot.PageDigests)
+	raw, err := env.workspace.ReadSource(ctx, state.AcceptedSource, knowl.ReadLimits{})
+	if err != nil || !strings.Contains(string(raw), "vendor: retained") || !strings.Contains(string(raw), "Metricverticalbeacon") {
+		t.Fatalf("OKF raw bytes = %q, %v", raw, err)
 	}
-	var metric *knowl.PageSnapshot
-	for index := range snapshot.Pages {
-		if snapshot.Pages[index].ID == "sources/engineering/docs/one" {
-			metric = &snapshot.Pages[index]
-		}
-	}
-	if metric == nil || metric.OKF == nil || metric.OKF.Type != "Metric" || metric.OKF.Status != "deprecated" || metric.OKF.Extensions["vendor"] == nil || metric.Body == "" {
-		t.Fatalf("OKF metric snapshot = %#v", metric)
-	}
-	references, err := env.search.Search(ctx, env.scope, "metricverticalbeacon", knowl.ReadLimits{Pages: 2, Characters: 64}, nil)
-	if err != nil || len(references) != 1 || references[0].OKF == nil || references[0].OKF.Type != "Metric" {
-		t.Fatalf("OKF projection = %#v, %v", references, err)
+	if len(env.queue.requests) != 4 {
+		t.Fatalf("OKF maintenance reservations = %d, want all four textual documents", len(env.queue.requests))
 	}
 }
 
@@ -319,29 +308,18 @@ func TestVerticalCatalogOnlyRerenderAndEqualPaths(t *testing.T) {
 
 	first, firstErr := env.service.SyncSource(ctx, env.scope, obsidian)
 	requireSyncSuccess(t, first, firstErr)
-	firstPrepared, preparedErr := env.state.PreparedSync(ctx, env.scope, first.Run.ID)
-	if preparedErr != nil {
-		t.Fatal(preparedErr)
-	}
-	mainDigestBefore := ""
-	for _, document := range firstPrepared.Documents {
-		if document.State.DocumentID == "notes/main.md" {
-			mainDigestBefore = document.State.MirrorDigest
-		}
-	}
-	if mainDigestBefore == "" {
-		t.Fatalf("main candidate missing: %#v", firstPrepared.Documents)
+	if len(env.queue.requests) != 2 {
+		t.Fatalf("initial reservations = %d", len(env.queue.requests))
 	}
 
-	// Adding an unrelated descriptor shifts the catalog identity, so stored
-	// raw documents rerender without any Fetch even though their revisions
-	// and bodies stay byte-identical.
+	// Adding an unrelated descriptor accepts and reserves only that document;
+	// unchanged raw documents are neither fetched nor re-reserved.
 	writeVerticalFile(t, noteRoot, "third.md", "# Third\n")
 	before := env.adapter.fetchesFor("notes/main.md")
 	second, secondErr := env.service.SyncSource(ctx, env.scope, obsidian)
 	requireSyncSuccess(t, second, secondErr)
 	if delta := env.adapter.fetchesFor("notes/main.md"); delta != before {
-		t.Fatalf("catalog-only rerender fetched main %d extra times", delta)
+		t.Fatalf("catalog addition fetched unchanged main %d extra times", delta)
 	}
 	secondPrepared, preparedErr := env.state.PreparedSync(ctx, env.scope, second.Run.ID)
 	if preparedErr != nil {
@@ -350,14 +328,8 @@ func TestVerticalCatalogOnlyRerenderAndEqualPaths(t *testing.T) {
 	if secondPrepared.Counts != (knowl.SyncCounts{Added: 1, Unchanged: 2}) {
 		t.Fatalf("rerender counts = %#v", secondPrepared.Counts)
 	}
-	mainDigestAfter := ""
-	for _, document := range secondPrepared.Documents {
-		if document.State.DocumentID == "notes/main.md" {
-			mainDigestAfter = document.State.MirrorDigest
-		}
-	}
-	if mainDigestAfter == "" || mainDigestAfter == mainDigestBefore {
-		t.Fatalf("catalog-only change did not alter mirror identity: %q", mainDigestAfter)
+	if len(env.queue.requests) != 3 {
+		t.Fatalf("catalog addition reservations = %d, want one new request", len(env.queue.requests))
 	}
 
 	// Equal paths under two sources stay isolated end to end.
@@ -374,28 +346,15 @@ func TestVerticalCatalogOnlyRerenderAndEqualPaths(t *testing.T) {
 	if leftErr != nil || rightErr2 != nil {
 		t.Fatalf("inventories = %#v / %#v, %v / %v", leftInventory, rightInventory, leftErr, rightErr2)
 	}
-	for _, entry := range leftInventory {
-		if entry.Path == "wiki/sources/mirror/shared/page.md" || !strings.HasPrefix(entry.Path, "wiki/sources/engineering/") {
-			t.Fatalf("cross-source path leaked: %q", entry.Path)
-		}
+	if len(leftInventory) != 0 || len(rightInventory) != 0 {
+		t.Fatalf("source mirrors remain: %#v / %#v", leftInventory, rightInventory)
 	}
-	found := false
-	for _, entry := range rightInventory {
-		if entry.Path != "wiki/sources/mirror/shared/page.md" {
-			continue
-		}
-		found = true
-		if entry.Digest == digestOf("# Equalpathbeacon primary\n") {
-			t.Fatal("mirror source reused primary bytes")
-		}
+	leftState, leftErr := env.state.DocumentState(ctx, env.scope, testEngineeringSourceID, "shared/page.md")
+	rightState, rightErr := env.state.DocumentState(ctx, env.scope, "mirror", "shared/page.md")
+	if leftErr != nil || rightErr != nil || leftState.AcceptedSource.SourceDocument.SourceID != testEngineeringSourceID ||
+		rightState.AcceptedSource.SourceDocument.SourceID != "mirror" || leftState.AcceptedSource.ManifestRef == rightState.AcceptedSource.ManifestRef {
+		t.Fatalf("equal-path raw lineage = %#v / %#v, %v / %v", leftState, rightState, leftErr, rightErr)
 	}
-	if !found {
-		t.Fatalf("mirror inventory missing shared page: %#v", rightInventory)
-	}
-	assertVerticalSourceIDs(t, env, nil, testEngineeringSourceID, "mirror")
-	assertVerticalSourceIDs(t, env, []knowl.SourceID{testEngineeringSourceID}, testEngineeringSourceID)
-	assertVerticalSourceIDs(t, env, []knowl.SourceID{"mirror", testEngineeringSourceID}, testEngineeringSourceID, "mirror")
-	assertVerticalSourceIDs(t, env, []knowl.SourceID{"ghost"})
 }
 
 func TestVerticalAzureWikiEmptyNavigationAndUnicodePaths(t *testing.T) {
@@ -419,51 +378,45 @@ func TestVerticalAzureWikiEmptyNavigationAndUnicodePaths(t *testing.T) {
 	if err != nil || len(raw) != 0 {
 		t.Fatalf("empty navigation raw source = %q, %v", raw, err)
 	}
-	mirror, err := os.ReadFile(filepath.Join(env.workspace.Root(), "wiki", "sources", string(source.ID), "Архитектура", "Обзор.md"))
-	if err != nil {
-		t.Fatalf("read Unicode mirror: %v", err)
+	overview, err := env.state.DocumentState(ctx, env.scope, source.ID, "Архитектура/Обзор.md")
+	if err != nil || overview.AcceptedSource.SourceDocument.DocumentID != "Архитектура/Обзор.md" {
+		t.Fatalf("Unicode raw state = %#v, %v", overview, err)
 	}
-	if !strings.Contains(string(mirror), "[[sources/azure-wiki/Архитектура]]") {
-		t.Fatalf("Azure navigation link was not resolved: %s", mirror)
+	overviewRaw, err := env.workspace.ReadSource(ctx, overview.AcceptedSource, knowl.ReadLimits{})
+	if err != nil || !strings.Contains(string(overviewRaw), "[[_TOC_]]") || !strings.Contains(string(overviewRaw), "[[_TOSP_]]") ||
+		!strings.Contains(string(overviewRaw), "[[Архитектура]]") {
+		t.Fatalf("Azure raw directives = %q, %v", overviewRaw, err)
 	}
-	if !strings.Contains(string(mirror), "[[_TOC_]]") || !strings.Contains(string(mirror), "[[_TOSP_]]") {
-		t.Fatalf("Azure navigation directives were not preserved: %s", mirror)
+	inventory, err := env.workspace.SourceDigests(ctx, env.scope, source.ID, 16)
+	if err != nil || len(inventory) != 0 {
+		t.Fatalf("Azure source mirrors = %#v, %v", inventory, err)
 	}
 }
 
-func TestVerticalStagingFailureReportsSafePathAndRule(t *testing.T) {
+func TestVerticalLegacyMirrorCleanupPreservesSemanticWiki(t *testing.T) {
 	env := newVerticalEnv(t)
 	root := t.TempDir()
 	writeVerticalFile(t, root, "Раздел/Страница.md", "# Страница\n\n[[Отсутствует]]\n")
 	source := env.source("azure-wiki", root, knowl.SourceFlavorMarkdown)
-
-	_, err := env.service.SyncSource(context.Background(), env.scope, source)
-	if err == nil || !strings.Contains(err.Error(), "source sync failed: staging: content validation failed for \"wiki/sources/azure-wiki/Раздел/Страница.md\" (link.broken)") {
-		t.Fatalf("staging error = %v, want safe target and validation rule", err)
+	legacy := filepath.Join(env.workspace.Root(), "wiki", "sources", "azure-wiki", "Раздел", "Страница.md")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(err.Error(), root) {
-		t.Fatalf("staging error disclosed absolute source root: %v", err)
+	if err := os.WriteFile(legacy, []byte("legacy mirror"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func assertVerticalSourceIDs(t *testing.T, env *verticalEnv, sources []knowl.SourceID, want ...knowl.SourceID) {
-	t.Helper()
-	pages, err := env.search.Search(context.Background(), env.scope, "equalpathbeacon", knowl.ReadLimits{Pages: 10}, sources)
+	semantic := filepath.Join(env.workspace.Root(), "wiki", "index.md")
+	before, err := os.ReadFile(semantic)
 	if err != nil {
-		t.Fatalf("filtered vertical search %v: %v", sources, err)
+		t.Fatal(err)
 	}
-	got := make([]knowl.SourceID, 0, len(pages))
-	for _, page := range pages {
-		if page.SourceDocument == nil {
-			t.Fatalf("filtered vertical search returned source-less page: %#v", page)
-		}
-		got = append(got, page.SourceDocument.SourceID)
+	result, err := env.service.SyncSource(context.Background(), env.scope, source)
+	requireSyncSuccess(t, result, err)
+	if _, statErr := os.Stat(legacy); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("legacy mirror remains: %v", statErr)
 	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("filtered vertical sources %v = %v, want %v", sources, got, want)
+	curated, err := os.ReadFile(semantic)
+	if err != nil || string(curated) != string(before) {
+		t.Fatalf("semantic page changed = %q, %v", curated, err)
 	}
-}
-
-func digestOf(body string) string {
-	return sha256Hex(body)
 }

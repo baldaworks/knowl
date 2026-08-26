@@ -1,15 +1,57 @@
 package knowl
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
+
+func TestSchedulerLogsSafeMaintenanceCorrelation(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(&output)
+	t.Cleanup(func() { log.Logger = previous })
+
+	claim := schedulerClaim("logged")
+	claim.Descriptor.Source.SourceDocument = domain.SourceDocument{
+		SourceID: "engineering", DocumentID: "architecture.md", Revision: "revision-1",
+		URI: "https://credential:secret@example.test/architecture.md",
+	}
+	claim.Descriptor.Schema.Content = []byte("prompt-secret-body")
+	store := &schedulerStore{claims: []domain.WorkClaim{claim}}
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		claim.Operation.Status = domain.StatusFailed
+		claim.Operation.Failure = &domain.Failure{Class: "provider", OperationID: string(claim.Operation.ID)}
+		return app.IngestResult{Operation: claim.Operation}, errors.New("provider-secret-detail")
+	}), schedulerOptions{claimBatch: 1})
+	scheduler.cycle(context.Background())
+
+	encoded := output.String()
+	for _, required := range []string{"engineering", "architecture.md", "revision-1", string(claim.Operation.ID), "provider"} {
+		if !strings.Contains(encoded, required) {
+			t.Errorf("maintenance log missing %q: %s", required, encoded)
+		}
+	}
+	for _, secret := range []string{"credential", "secret", "prompt-secret-body", "provider-secret-detail"} {
+		if strings.Contains(encoded, secret) {
+			t.Errorf("maintenance log leaked %q: %s", secret, encoded)
+		}
+	}
+}
 
 func TestSchedulerWakeIsNonBlockingAndCoalesced(t *testing.T) {
 	scheduler := newTestScheduler(t, &schedulerStore{}, runnerFunc(func(context.Context, domain.WorkClaim) (app.IngestResult, error) {
@@ -100,6 +142,88 @@ func TestSchedulerPeriodicScanRecoversLostWake(t *testing.T) {
 		t.Fatal("periodic scan did not recover lost wake")
 	}
 	stopScheduler(t, scheduler)
+}
+
+func TestSchedulerRestartProcessesAcceptedSourceReservation(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	storePath := filepath.Join(workspace.Root(), "state.db")
+	firstStore, err := sqlite.Open(ctx, storePath)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	maintainer := schedulerAcceptedMaintainer{}
+	firstService, err := app.NewIngestService(workspace, firstStore, firstStore, maintainer, app.IngestOptions{AutoApply: true})
+	if err != nil {
+		t.Fatalf("new first ingest service: %v", err)
+	}
+	content := []byte("accepted source survives scheduler restart")
+	sum := sha256.Sum256(content)
+	envelope := domain.SourceEnvelope{
+		Scope: "local", Source: domain.SourceRef{Adapter: "wiki-filesystem", ID: "configured/docs/page.md"},
+		Version: domain.SourceVersion{Version: "rev-1", Digest: hex.EncodeToString(sum[:])}, MediaType: "text/markdown",
+		SourceDocument: domain.SourceDocument{SourceID: "configured", DocumentID: "docs/page.md", Revision: "rev-1", URI: "file:///srv/wiki/docs/page.md"},
+		Content:        content,
+	}
+	accepted, err := workspace.AcceptSource(ctx, envelope)
+	if err != nil {
+		t.Fatalf("accept source: %v", err)
+	}
+	reservation, err := firstService.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{
+		Source: accepted, SourceDocument: envelope.SourceDocument, ContentType: envelope.MediaType,
+	})
+	if err != nil {
+		t.Fatalf("reserve accepted source: %v", err)
+	}
+	if err := firstStore.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+
+	restartedStore, err := sqlite.Open(ctx, storePath)
+	if err != nil {
+		t.Fatalf("reopen durable store: %v", err)
+	}
+	t.Cleanup(func() { _ = restartedStore.Close() })
+	restartedService, err := app.NewIngestService(workspace, restartedStore, restartedStore, maintainer, app.IngestOptions{AutoApply: true})
+	if err != nil {
+		t.Fatalf("new restarted ingest service: %v", err)
+	}
+	scheduler, err := newOperationScheduler(restartedStore, restartedService, envelope.Scope, schedulerOptions{})
+	if err != nil {
+		t.Fatalf("new restarted scheduler: %v", err)
+	}
+	if err := scheduler.start(ctx); err != nil {
+		t.Fatalf("start restarted scheduler: %v", err)
+	}
+	defer stopScheduler(t, scheduler)
+
+	deadline := time.After(3 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		operation, readErr := restartedStore.Operation(ctx, envelope.Scope, reservation.OperationID)
+		if readErr == nil && operation.Status == domain.StatusCommitted {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("restarted scheduler operation = %#v, err = %v", operation, readErr)
+		case <-ticker.C:
+		}
+	}
+	descriptor, err := restartedStore.Execution(ctx, envelope.Scope, reservation.OperationID)
+	if err != nil {
+		t.Fatalf("read restarted descriptor: %v", err)
+	}
+	if descriptor.Source.SourceDocument != envelope.SourceDocument {
+		t.Fatalf("restarted source document = %#v, want %#v", descriptor.Source.SourceDocument, envelope.SourceDocument)
+	}
 }
 
 func TestSchedulerBoundsCyclesAndRetriggersReadyWork(t *testing.T) {
@@ -302,6 +426,16 @@ func TestSchedulerShutdownDeadlineCancelsActiveExecution(t *testing.T) {
 }
 
 type runnerFunc func(context.Context, domain.WorkClaim) (app.IngestResult, error)
+
+type schedulerAcceptedMaintainer struct{}
+
+func (schedulerAcceptedMaintainer) Plan(_ context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+	return domain.ModelEditPlan{
+		SchemaDigest: input.Schema.Digest,
+		SourceRefs:   []string{app.SourceRefKey(input.Source)},
+		Rationale:    "record accepted source maintenance",
+	}, nil
+}
 
 func (run runnerFunc) RunToTerminal(ctx context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
 	return run(ctx, claim)

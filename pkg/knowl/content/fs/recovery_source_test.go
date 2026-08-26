@@ -204,6 +204,7 @@ func TestWorkspaceRecoveryRejectsUnsafeOrUnboundedJournals(t *testing.T) {
 
 func TestWorkspaceRecoveryPreservesLegacyUnboundedMaintainerOperationID(t *testing.T) {
 	workspace := newSourceStageWorkspace(t)
+	writeRootCatalogTargets(t, workspace, "entities/one.md")
 	schema, err := workspace.Schema(context.Background(), testScope)
 	if err != nil {
 		t.Fatal(err)
