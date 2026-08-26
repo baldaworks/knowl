@@ -33,6 +33,8 @@ func TestReleaseWorkflowIsPinnedAndGated(t *testing.T) {
 		"provenance: mode=max",
 		"push-to-registry: true",
 		"gh release create",
+		`release_notes="docs/releases/${GITHUB_REF_NAME}.md"`,
+		`test -f "$release_notes"`,
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("release workflow missing %q", required)
@@ -47,6 +49,29 @@ func TestReleaseWorkflowIsPinnedAndGated(t *testing.T) {
 	for _, match := range uses {
 		if !shaPattern.MatchString(match[1]) {
 			t.Errorf("release action ref %q is not an immutable commit SHA", match[1])
+		}
+	}
+}
+
+func TestV030ReleaseNotesDescribeSemanticWikiContract(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "releases", "v0.3.0.md"))
+	if err != nil {
+		t.Fatalf("read v0.3.0 release notes: %v", err)
+	}
+	notes := strings.Join(strings.Fields(string(content)), " ")
+	for _, required := range []string{
+		"Semantic Source Maintenance",
+		"maintainer provider is now required",
+		"Bootstrap remains optional",
+		"`raw/`",
+		"semantic OKF",
+		"source_documents",
+		"wiki/sources/<source_id>/**",
+		"ghcr.io/baldaworks/knowl:v0.3.0",
+	} {
+		if !strings.Contains(notes, required) {
+			t.Errorf("v0.3.0 release notes missing %q", required)
 		}
 	}
 }
