@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
-	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -135,10 +135,25 @@ type contractMaintainer struct {
 }
 
 func (maintainer *contractMaintainer) Plan(ctx context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.ModelEditPlan{}, err
+	}
 	maintainer.mu.Lock()
 	defer maintainer.mu.Unlock()
 	maintainer.counter++
-	return (provider.Fixture{Result: maintainer.plan}).Plan(ctx, input)
+	plan := maintainer.plan
+	plan.Edits = append([]domain.FileEdit(nil), plan.Edits...)
+	for _, catalog := range input.Catalogs {
+		if catalog.Path != "wiki/index.md" {
+			continue
+		}
+		content := strings.TrimRight(catalog.Content, "\n") + "\n\n* [runner](entities/runner.md)\n"
+		plan.Edits = append(plan.Edits, domain.FileEdit{
+			Path: catalog.Path, ExpectedDigest: catalog.Digest, Content: []byte(content),
+		})
+		break
+	}
+	return plan, nil
 }
 
 func (maintainer *contractMaintainer) Calls() int {
