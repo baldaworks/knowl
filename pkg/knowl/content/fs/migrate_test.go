@@ -23,7 +23,7 @@ func TestWorkspaceMigrateOKFV02PreservesLegacyContentAndIsIdempotent(t *testing.
 	if err != nil {
 		t.Fatalf("MigrateOKFV02() error = %v", err)
 	}
-	if !result.Changed || result.Version != okf.Version || !slices.Contains(result.Files, "wiki/index.md") || !slices.Contains(result.Files, "wiki/entities/legacy.md") || !slices.Contains(result.Files, migrationLegacyLogPath) {
+	if !result.Changed || result.Version != okf.Version || !slices.Contains(result.Files, testIndexPath) || !slices.Contains(result.Files, "wiki/entities/legacy.md") || !slices.Contains(result.Files, migrationLegacyLogPath) {
 		t.Fatalf("MigrateOKFV02() = %#v", result)
 	}
 	if err := workspace.Validate(); err != nil {
@@ -150,7 +150,7 @@ func legacyMigrationWorkspace(t *testing.T) *Workspace {
 	}
 	files := map[string]string{
 		"schema.md":               "# Schema\n",
-		"wiki/index.md":           legacyStarterIndex,
+		testIndexPath:             legacyStarterIndex,
 		"wiki/log.md":             legacyMigrationLog,
 		"wiki/entities/legacy.md": "---\nid: entities/legacy\ntitle: Legacy\ntype: entity\nsource_refs:\n  - raw:legacy@1\nsource_document:\n  source_id: engineering\n  document_id: legacy.md\n  revision: revision-1\n  uri: file:///legacy.md\ncustom: retained\n---\n# Legacy page\n\nExact body and provenance.\n",
 	}

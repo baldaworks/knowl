@@ -106,9 +106,19 @@ func createRunbook(input knowl.MaintenanceInput, sourceRef string) (knowl.ModelE
 }
 
 func plan(input knowl.MaintenanceInput, refs []string, edit knowl.FileEdit) knowl.ModelEditPlan {
+	edits := []knowl.FileEdit{edit}
+	for _, catalog := range input.Catalogs {
+		if catalog.Path != "wiki/index.md" {
+			continue
+		}
+		target := strings.TrimPrefix(edit.Path, "wiki/")
+		content := strings.TrimRight(catalog.Content, "\n") + "\n\n* [Knowledge](" + target + ")\n"
+		edits = append(edits, knowl.FileEdit{Path: catalog.Path, ExpectedDigest: catalog.Digest, Content: []byte(content)})
+		break
+	}
 	return knowl.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest, SourceRefs: append([]string(nil), refs...),
-		Edits: []knowl.FileEdit{edit}, Rationale: "maintain golden project knowledge",
+		Edits: edits, Rationale: "maintain golden project knowledge",
 	}
 }
 

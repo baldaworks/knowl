@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,12 +11,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-const migrationCatalogSourceID = "catalog"
+const (
+	migrationCatalogSourceID = "catalog"
+	migrationRevenueDocument = "metrics/revenue.md"
+)
 
 func TestMigrateOKFV02CommandMigratesAndRebuildsProjection(t *testing.T) {
 	workspaceRoot := writeLegacyCommandWorkspace(t)
@@ -58,10 +63,10 @@ func TestOKFV02EndToEndMigratesSyncsRestartsAndRetrieves(t *testing.T) {
 	workspaceRoot := writeLegacyCommandWorkspace(t)
 	sourceRoot := t.TempDir()
 	for relative, content := range map[string]string{
-		"index.md":           "---\nokf_version: \"0.2\"\n---\n# Catalog\n\n* [Metric](metrics/revenue.md)\n",
-		"log.md":             "# Catalog Log\n\n## 2026-08-26\n* Published fixture\n",
-		"metrics/revenue.md": "---\ntype: Metric\ntitle: Revenue\ndescription: Recognized revenue\nverified: {by: human:reviewer, at: 2026-08-26T09:00:00+06:00}\nproducer: fixture\n---\n# Revenue\n\nOkfendtoendbeacon [Details](details.md).\n",
-		"metrics/details.md": "---\ntype: Reference\ntitle: Revenue details\n---\n# Details\n",
+		"index.md":               "---\nokf_version: \"0.2\"\n---\n# Catalog\n\n* [Metric](metrics/revenue.md)\n",
+		"log.md":                 "# Catalog Log\n\n## 2026-08-26\n* Published fixture\n",
+		migrationRevenueDocument: "---\ntype: Metric\ntitle: Revenue\ndescription: Recognized revenue\nverified: {by: human:reviewer, at: 2026-08-26T09:00:00+06:00}\nproducer: fixture\n---\n# Revenue\n\nOkfendtoendbeacon [Details](details.md).\n",
+		"metrics/details.md":     "---\ntype: Reference\ntitle: Revenue details\n---\n# Details\n",
 	} {
 		path := filepath.Join(sourceRoot, filepath.FromSlash(relative))
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -92,20 +97,95 @@ sources:
 	if stdout, stderr, err := executeCLICommand(newRootCommand(), []string{sourceCommandName, sourceSyncCommandName, migrationCatalogSourceID}, nil); err != nil || !strings.Contains(stdout, `"changed":true`) {
 		t.Fatalf("sync: %v, stdout=%s, stderr=%s", err, stdout, stderr)
 	}
+	workspace, err := contentfs.New(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeInspection, err := workspace.Inspect(context.Background(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revenueSource knowl.AcceptedSource
+	for _, record := range beforeInspection.RawSources {
+		if record.Source.SourceDocument.SourceID == migrationCatalogSourceID && record.Source.SourceDocument.DocumentID == migrationRevenueDocument {
+			revenueSource = record.Source
+			break
+		}
+	}
+	if revenueSource.Source.ID == "" {
+		t.Fatal("catalog revenue raw evidence missing after initial sync")
+	}
+	rawBefore, err := workspace.ReadSource(context.Background(), revenueSource, knowl.ReadLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	curatedPath := filepath.Join(workspaceRoot, "wiki", "entities", "legacy.md")
+	curatedBefore, err := os.ReadFile(curatedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyMirror := filepath.Join(workspaceRoot, "wiki", "sources", migrationCatalogSourceID, "metrics", "revenue.md")
+	if err := os.MkdirAll(filepath.Dir(legacyMirror), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacyMirrorContent := fmt.Sprintf(`---
+id: sources/catalog/metrics/revenue
+title: Revenue
+type: source
+source_refs:
+  - %s
+source_document:
+  source_id: %s
+  document_id: %s
+  revision: %s
+  uri: %s
+---
+# Revenue
+
+Legacy derived mirror.
+`, app.SourceRefKey(revenueSource), revenueSource.SourceDocument.SourceID,
+		revenueSource.SourceDocument.DocumentID, revenueSource.SourceDocument.Revision,
+		strconvQuote(revenueSource.SourceDocument.URI))
+	if err := os.WriteFile(legacyMirror, []byte(legacyMirrorContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	futureIndex := "---\nokf_version: \"0.9\"\n---\n# Future Catalog\n\n* [Metric](metrics/revenue.md)\n"
 	if err := os.WriteFile(filepath.Join(sourceRoot, "index.md"), []byte(futureIndex), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stdout, stderr, err := executeCLICommand(newRootCommand(), []string{sourceCommandName, sourceSyncCommandName, migrationCatalogSourceID}, nil)
-	if err != nil || !strings.Contains(stdout, `"code":"okf.version.best_effort"`) || !strings.Contains(stdout, `"observed_version":"0.9"`) {
-		t.Fatalf("best-effort version report: %v, stdout=%s, stderr=%s", err, stdout, stderr)
+	if err != nil || !strings.Contains(stdout, `"changed":true`) || strings.Contains(stdout, `"okf.version.best_effort"`) {
+		t.Fatalf("raw-only follow-up sync: %v, stdout=%s, stderr=%s", err, stdout, stderr)
 	}
-	// A new root command constructs a new Host, exercising persisted projection
-	// and canonical workspace recovery rather than reusing the sync process.
+	if _, statErr := os.Stat(legacyMirror); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("legacy source mirror remains after reconciliation: %v", statErr)
+	}
+	curatedAfter, err := os.ReadFile(curatedPath)
+	if err != nil || !bytes.Equal(curatedAfter, curatedBefore) {
+		t.Fatalf("legacy cleanup changed curated page: %v", err)
+	}
+	rawAfter, err := workspace.ReadSource(context.Background(), revenueSource, knowl.ReadLimits{})
+	if err != nil || !bytes.Equal(rawAfter, rawBefore) {
+		t.Fatalf("legacy cleanup changed accepted raw revision: %v", err)
+	}
+	// A new root command constructs a new Host. Source bytes remain raw evidence
+	// until a maintainer commits semantic edits, so retrieval stays empty.
 	stdout, stderr, err = executeCLICommand(newRootCommand(), []string{retrieveCommandName, retrieveSourceFlag, migrationCatalogSourceID, "Okfendtoendbeacon"}, nil)
-	if err != nil || !strings.Contains(stdout, `"type":"Metric"`) ||
-		!strings.Contains(stdout, `"trust_tier":"human-reviewed"`) || !strings.Contains(stdout, `"producer":"fixture"`) {
+	if err != nil || !strings.Contains(stdout, `"evidence":[]`) {
 		t.Fatalf("retrieve after restart: %v, stdout=%s, stderr=%s", err, stdout, stderr)
+	}
+	inspection, err := workspace.Inspect(context.Background(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, record := range inspection.RawSources {
+		if record.Source.SourceDocument.SourceID == migrationCatalogSourceID && record.Source.SourceDocument.DocumentID == migrationRevenueDocument {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("catalog revenue raw evidence missing after restart")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
 )
@@ -18,22 +19,27 @@ func validSourceManifest(manifest sourceManifest) bool {
 	if strings.TrimSpace(manifest.Scope) == "" || strings.TrimSpace(manifest.Adapter) == "" || strings.TrimSpace(manifest.ID) == "" || strings.TrimSpace(manifest.Version) == "" || len(manifest.Digest) != sha256.Size*2 {
 		return false
 	}
+	if manifest.SourceDocument != (knowl.SourceDocument{}) &&
+		(app.ValidateSourceDocument(manifest.SourceDocument) != nil || manifest.SourceDocument.Revision != manifest.Version) {
+		return false
+	}
 	_, err := hex.DecodeString(manifest.Digest)
 	return err == nil
 }
 
 type sourceManifest struct {
-	Scope      string    `yaml:"scope"`
-	Adapter    string    `yaml:"adapter"`
-	ID         string    `yaml:"id"`
-	Version    string    `yaml:"version"`
-	Digest     string    `yaml:"digest"`
-	MediaType  string    `yaml:"media_type"`
-	ReceivedAt time.Time `yaml:"received_at"`
+	Scope          string               `yaml:"scope"`
+	Adapter        string               `yaml:"adapter"`
+	ID             string               `yaml:"id"`
+	Version        string               `yaml:"version"`
+	Digest         string               `yaml:"digest"`
+	MediaType      string               `yaml:"media_type"`
+	SourceDocument knowl.SourceDocument `yaml:"source_document,omitempty"`
+	ReceivedAt     time.Time            `yaml:"received_at"`
 }
 
 func (manifest sourceManifest) accepted() knowl.AcceptedSource {
-	return knowl.AcceptedSource{Scope: knowl.ScopeRef(manifest.Scope), Source: knowl.SourceRef{Adapter: manifest.Adapter, ID: manifest.ID}, Version: knowl.SourceVersion{Version: manifest.Version, Digest: manifest.Digest}, MediaType: manifest.MediaType, ManifestRef: filepath.ToSlash(filepath.Join(workspaceRawDir, token(manifest.Scope+"\x00"+manifest.Adapter+"\x00"+manifest.ID), token(manifest.Version), "manifest.yaml"))}
+	return knowl.AcceptedSource{Scope: knowl.ScopeRef(manifest.Scope), Source: knowl.SourceRef{Adapter: manifest.Adapter, ID: manifest.ID}, Version: knowl.SourceVersion{Version: manifest.Version, Digest: manifest.Digest}, MediaType: manifest.MediaType, SourceDocument: manifest.SourceDocument, ManifestRef: filepath.ToSlash(filepath.Join(workspaceRawDir, token(manifest.Scope+"\x00"+manifest.Adapter+"\x00"+manifest.ID), token(manifest.Version), "manifest.yaml"))}
 }
 
 type stageEntry struct {
@@ -49,6 +55,7 @@ type stageManifest struct {
 	SourceID          string       `yaml:"source_id,omitempty"`
 	Scope             string       `yaml:"scope,omitempty"`
 	SchemaDigest      string       `yaml:"schema_digest"`
+	RequiredSourceRef string       `yaml:"required_source_ref,omitempty"`
 	SourceRefs        []string     `yaml:"source_refs,omitempty"`
 	Entries           []stageEntry `yaml:"entries"`
 	LogExpectedDigest string       `yaml:"log_expected_digest,omitempty"`

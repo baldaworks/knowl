@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,15 +31,24 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 			return app.OperationReservation{}, err
 		}
 	}
-	var existingID, existingDigest string
-	err := store.db.QueryRowContext(ctx, `
-		SELECT operation_id, source_digest
+	encodedSourceDocument, err := encodeAcceptedSourceDocument(descriptor.Source.SourceDocument)
+	if err != nil {
+		return app.OperationReservation{}, err
+	}
+	var existingID, existingDigest, existingSourceDocument string
+	err = store.db.QueryRowContext(ctx, `
+		SELECT operation_id, source_digest, accepted_source_document
 		FROM knowl_operations
 		WHERE scope = ? AND source_adapter = ? AND source_id = ? AND source_version = ?`,
-		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version).Scan(&existingID, &existingDigest)
+		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version).Scan(&existingID, &existingDigest, &existingSourceDocument)
 	if err == nil {
 		if existingDigest != key.Version.Digest {
 			return app.OperationReservation{}, ErrConflict
+		}
+		if encodedSourceDocument != "" && existingSourceDocument == "" {
+			if _, updateErr := store.db.ExecContext(ctx, `UPDATE knowl_operations SET accepted_source_document = ? WHERE operation_id = ? AND accepted_source_document = ''`, encodedSourceDocument, existingID); updateErr != nil {
+				return app.OperationReservation{}, fmt.Errorf("enrich operation source document: %w", updateErr)
+			}
 		}
 		operation, readErr := store.Operation(ctx, key.Scope, knowl.OperationID(existingID))
 		if readErr != nil {
@@ -63,17 +73,28 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		INSERT INTO knowl_operations (
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
 			schema_digest, status, created_at, updated_at, accepted_media_type,
-			source_manifest_ref, schema_version, schema_snapshot, work_ready_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.Version.Digest,
 		meta.SchemaDigest, knowl.StatusReceived, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
-		descriptor.Source.MediaType, descriptor.Source.ManifestRef, descriptor.Schema.Version,
+		descriptor.Source.MediaType, descriptor.Source.ManifestRef, encodedSourceDocument, descriptor.Schema.Version,
 		nullBytes(descriptor.Schema.Content), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
 	}
 	operation, readErr := store.Operation(ctx, key.Scope, operationID)
 	return app.OperationReservation{Operation: operation, Descriptor: descriptor, New: true}, readErr
+}
+
+func encodeAcceptedSourceDocument(document knowl.SourceDocument) (string, error) {
+	if document == (knowl.SourceDocument{}) {
+		return "", nil
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("encode accepted source document: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func nullBytes(value []byte) any {

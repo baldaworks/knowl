@@ -64,9 +64,8 @@ convenience wrapper over the same operations, not a primary agent interface.
 The filesystem workspace is the canonical content owner:
 
 - `raw/` stores immutable accepted source versions;
-- `wiki/` stores the human-readable, directly portable OKF v0.2 bundle;
-- `wiki/sources/<source_id>/**` stores active read-only source mirrors and is
-  writable only by the source reconciler;
+- `wiki/` stores only the human-readable, directly portable semantic OKF v0.2
+  bundle maintained by Knowl;
 - `schema.md` is operator-owned policy;
 - `wiki/index.md` declares the bundle version and, with every reserved
   `index.md`/`log.md`, is control content rather than retrieval evidence.
@@ -91,12 +90,12 @@ runbook has become durable and submits that immutable revision. Knowl does not
 own Slack, Telegram, Jira, GitHub, or their workflows, and it does not answer
 the user itself.
 
-An optional configured provider is an implementation detail. When present,
-Knowl resolves `knowl.provider` through the shared `runtime.providers`
-configuration and validates returned plans before canonical mutation. Without
-one, deterministic reads, lint, source synchronization, status, health, HTTP,
-and MCP reads remain available; ingest fails before accepting or reserving work.
-Provider code does not receive unrestricted filesystem authority.
+A configured provider is a required runtime implementation detail. Knowl
+resolves `knowl.provider` through the shared `runtime.providers` configuration
+and validates returned plans before canonical mutation; embedded tests may
+inject an explicit maintainer instead. Host construction fails before readiness
+when neither is present. Provider code receives bounded untrusted context and
+structured-output constraints, never unrestricted filesystem authority.
 
 OKF Attested Computation declarations are data, not an execution interface.
 Knowl preserves and exposes their runtime, parameters, computation, executor,
@@ -156,10 +155,21 @@ CLI must not become second composition roots with separate business rules.
 
 Bootstrap is deliberately only a CLI preflight: it checks freshness and path
 separation, initializes the local workspace/config, constructs one deterministic
-filesystem source, and calls `Host.SyncSource` once. Ordinary sync has no
-freshness rule, never replaces `wiki/index.md`, and converges only the exact
-`wiki/sources/<source_id>/**` namespace. Sidecar and embedded callers use this
-same Host engine and durable recovery order.
+filesystem source, and calls `Host.SyncSource` once. Bootstrap remains optional.
+Ordinary sync has no freshness rule: it persists immutable raw evidence,
+reserves idempotent maintenance work for changed text, and never copies source
+content into `wiki/`. The sequential operation scheduler asks the maintainer to
+create or update root-reachable semantic entities, concepts, and syntheses.
+Sidecar and embedded callers use this same Host engine and durable recovery
+order.
+
+Every curated factual page cites accepted raw refs. A page may combine refs from
+multiple configured sources; projection resolves them into a sorted
+`source_documents` collection, and filtering matches any contributing source.
+Deleting an upstream document tombstones active source state but does not
+implicitly erase accumulated knowledge. The next successful sync also removes
+that source's legacy derived `wiki/sources/<source_id>/**` subtree using staged
+recovery while preserving raw revisions and curated pages.
 
 Canonical-format migration is similarly explicit: `knowl migrate okf-v0.2`
 preflights and journals the conversion, preserves the exact legacy log in an

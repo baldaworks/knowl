@@ -23,6 +23,7 @@ const (
 
 	preparedDigestMediaType    = "text/markdown"
 	preparedDigestBaseRevision = "revision-1"
+	preparedDigestOperationID  = "operation-1"
 )
 
 func TestSourceIdentityValidation(t *testing.T) {
@@ -172,7 +173,7 @@ func TestFetchedDocumentAndPageBounds(t *testing.T) {
 	t.Parallel()
 	document := knowl.Document{
 		DocumentRef: knowl.DocumentRef{ExternalID: testPageDocument, Revision: "1", Path: string(testPageDocument)},
-		Title:       "Page", URI: "https://wiki.example.test/docs/page", MediaType: "text/markdown", Content: []byte("# Page\n"),
+		Title:       "Page", URI: "https://wiki.example.test/docs/page", MediaType: preparedDigestMediaType, Content: []byte("# Page\n"),
 	}
 	if err := app.ValidateDocument(document, len(document.Content)); err != nil {
 		t.Fatalf("ValidateDocument() error: %v", err)
@@ -312,7 +313,7 @@ func TestSourceMutationValidationRejectsInvalidAndBoundedInputs(t *testing.T) {
 
 func TestSourceDocumentValidation(t *testing.T) {
 	t.Parallel()
-	valid := knowl.SourceDocument{SourceID: testSourceID, DocumentID: testDocumentID, Revision: "revision-1", URI: "https://wiki.example.test/auth"}
+	valid := knowl.SourceDocument{SourceID: testSourceID, DocumentID: testDocumentID, Revision: preparedDigestBaseRevision, URI: "https://wiki.example.test/auth"}
 	if err := app.ValidateSourceDocument(valid); err != nil {
 		t.Fatal(err)
 	}
@@ -338,6 +339,33 @@ func TestSourceDocumentValidation(t *testing.T) {
 	}
 	if err := app.ValidateOwnedSourceDocument("operations", valid); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("owner mismatch error = %v", err)
+	}
+}
+
+func TestResolveSourceDocumentSupportsLegacyFallback(t *testing.T) {
+	t.Parallel()
+	document := knowl.SourceDocument{
+		SourceID: testSourceID, DocumentID: testDocumentID, Revision: preparedDigestBaseRevision, URI: "https://wiki.example.test/auth",
+	}
+	accepted := knowl.AcceptedSource{Version: knowl.SourceVersion{Version: document.Revision}, SourceDocument: document}
+	resolved, err := app.ResolveSourceDocument(testSourceID, accepted, knowl.SourceDocument{})
+	if err != nil || resolved != document {
+		t.Fatalf("persisted resolution = %#v, %v", resolved, err)
+	}
+
+	legacy := accepted
+	legacy.SourceDocument = knowl.SourceDocument{}
+	resolved, err = app.ResolveSourceDocument(testSourceID, legacy, document)
+	if err != nil || resolved != document {
+		t.Fatalf("legacy resolution = %#v, %v", resolved, err)
+	}
+	if _, err := app.ResolveSourceDocument(testSourceID, legacy, knowl.SourceDocument{}); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("missing lineage error = %v", err)
+	}
+	mismatch := document
+	mismatch.Revision = "other"
+	if _, err := app.ResolveSourceDocument(testSourceID, legacy, mismatch); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("mismatched lineage error = %v", err)
 	}
 }
 
@@ -528,12 +556,19 @@ func TestPreparedSyncDigestIsCanonicalAndDeterministic(t *testing.T) {
 			in.Documents[0].State.Revision = "revision-2"
 			return in
 		},
+		"maintenance operation": func(in app.PreparedSyncState) app.PreparedSyncState {
+			in.Documents[0].State.MaintenanceRevision = in.Documents[0].State.Revision
+			in.Documents[0].State.MaintenanceOperationID = preparedDigestOperationID
+			return in
+		},
 		"deleted time": func(in app.PreparedSyncState) app.PreparedSyncState {
 			in.Documents[2].State.DeletedAt = time.Unix(91, 0).UTC()
 			return in
 		},
 	} {
-		changed := mutate(base)
+		changed := base
+		changed.Documents = append([]app.PreparedDocumentState(nil), base.Documents...)
+		changed = mutate(changed)
 		digest, err := app.PreparedSyncDigest(changed)
 		if err != nil {
 			t.Fatalf("%s digest error = %v", name, err)
@@ -575,6 +610,27 @@ func TestPreparedSyncDigestRejectsInvalidPayloads(t *testing.T) {
 		}},
 		{"foreign accepted scope", func(in app.PreparedSyncState) app.PreparedSyncState {
 			in.Documents[0].State.AcceptedSource.Scope = "other"
+			return in
+		}},
+		{"foreign accepted provenance", func(in app.PreparedSyncState) app.PreparedSyncState {
+			in.Documents[0].State.AcceptedSource.SourceDocument = knowl.SourceDocument{
+				SourceID: "operations", DocumentID: "docs/a.md", Revision: "revision-1", URI: "https://wiki.example.test/docs/a.md",
+			}
+			return in
+		}},
+		{"mismatched accepted provenance document", func(in app.PreparedSyncState) app.PreparedSyncState {
+			in.Documents[0].State.AcceptedSource.SourceDocument = knowl.SourceDocument{
+				SourceID: testSourceID, DocumentID: "docs/other.md", Revision: in.Documents[0].State.Revision, URI: "https://wiki.example.test/docs/other.md",
+			}
+			return in
+		}},
+		{"maintenance operation without revision", func(in app.PreparedSyncState) app.PreparedSyncState {
+			in.Documents[0].State.MaintenanceOperationID = preparedDigestOperationID
+			return in
+		}},
+		{"maintenance revision mismatch", func(in app.PreparedSyncState) app.PreparedSyncState {
+			in.Documents[0].State.MaintenanceRevision = "other-revision"
+			in.Documents[0].State.MaintenanceOperationID = preparedDigestOperationID
 			return in
 		}},
 		{"wrong last seen run", func(in app.PreparedSyncState) app.PreparedSyncState {

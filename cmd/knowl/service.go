@@ -116,7 +116,7 @@ func selectedRuntimeProvider(ctx context.Context) (*agentfactory.Factory, string
 	}
 	providerID := strings.TrimSpace(loaded.Document.Knowl.Provider)
 	if providerID == "" {
-		return nil, "", nil
+		return nil, "", fmt.Errorf("knowl.provider is required")
 	}
 	factory := agentfactory.New(
 		loaded.Document.Runtime.Providers,

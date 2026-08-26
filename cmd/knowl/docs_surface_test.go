@@ -11,7 +11,7 @@ import (
 func TestPublicDocumentationSurface(t *testing.T) {
 	repoRoot := testRepoRoot(t)
 	canonicalFiles := []string{
-		"README.md",
+		readmeRelativePath,
 		filepath.Join("docs", "design.md"),
 		filepath.Join("docs", "operations.md"),
 		filepath.Join("docs", "workspace.md"),
@@ -32,16 +32,16 @@ func TestPublicDocumentationSurface(t *testing.T) {
 		}
 	}
 
-	readme, err := os.ReadFile(filepath.Join(repoRoot, "README.md"))
+	readme, err := os.ReadFile(filepath.Join(repoRoot, readmeRelativePath))
 	if err != nil {
 		t.Fatalf("read README: %v", err)
 	}
 	readmeText := strings.Join(strings.Fields(string(readme)), " ")
 	for _, link := range []string{
 		designDocRelativePath,
-		"docs/operations.md",
-		"docs/workspace.md",
-		"docs/sidecar.md",
+		operationsDocRelativePath,
+		workspaceDocRelativePath,
+		sidecarDocRelativePath,
 		"api/openapi/knowl.yaml",
 		"examples/project-decisions/README.md",
 	} {

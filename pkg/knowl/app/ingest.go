@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"mime"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -23,6 +26,7 @@ const (
 	defaultReadBytes      = 4 << 20
 	defaultReadCharacters = 32 << 10
 	defaultReadDepth      = 8
+	rootCatalogPath       = "wiki/index.md"
 	defaultLeaseDuration  = 5 * time.Minute
 )
 
@@ -65,6 +69,27 @@ type IngestSubmission struct {
 // NeedsExecution reports whether this submission created work for the host queue.
 func (submission IngestSubmission) NeedsExecution() bool { return submission.new }
 
+// AcceptedMaintenanceRequest identifies one configured textual source revision
+// that has already been accepted into immutable raw storage.
+type AcceptedMaintenanceRequest struct {
+	Source         knowl.AcceptedSource `json:"source"`
+	SourceDocument knowl.SourceDocument `json:"source_document"`
+	ContentType    string               `json:"content_type"`
+}
+
+// MaintenanceReservation is the bounded durable handoff returned to source
+// reconciliation. Replayed reports that the operation already existed.
+type MaintenanceReservation struct {
+	OperationID knowl.OperationID `json:"operation_id"`
+	Replayed    bool              `json:"replayed"`
+}
+
+// SourceMaintenanceQueue reserves already accepted source revisions for the
+// existing host-owned operation scheduler.
+type SourceMaintenanceQueue interface {
+	ReserveAccepted(ctx context.Context, request AcceptedMaintenanceRequest) (MaintenanceReservation, error)
+}
+
 // ApplyResult contains the durable operation and the canonical commit, when one occurred.
 type ApplyResult struct {
 	Operation knowl.Operation
@@ -85,6 +110,7 @@ type IngestService struct {
 
 var _ interface {
 	Submit(ctx context.Context, envelope knowl.SourceEnvelope) (IngestSubmission, error)
+	SourceMaintenanceQueue
 	Execute(ctx context.Context, submission IngestSubmission) (IngestResult, error)
 	RunToTerminal(ctx context.Context, claim knowl.WorkClaim) (IngestResult, error)
 	Ingest(ctx context.Context, envelope knowl.SourceEnvelope) (IngestResult, error)
@@ -138,6 +164,34 @@ func (service *IngestService) Submit(ctx context.Context, envelope knowl.SourceE
 	if err != nil {
 		return IngestSubmission{}, fmt.Errorf("accept source: %w", err)
 	}
+	return service.submitAccepted(ctx, accepted)
+}
+
+// ReserveAccepted reserves maintenance for one structured textual revision
+// without accepting or reading the raw bytes again.
+func (service *IngestService) ReserveAccepted(ctx context.Context, request AcceptedMaintenanceRequest) (MaintenanceReservation, error) {
+	ctx = nonNilContext(ctx)
+	if err := contextErr(ctx); err != nil {
+		return MaintenanceReservation{}, err
+	}
+	if err := service.requireMaintainer(); err != nil {
+		return MaintenanceReservation{}, err
+	}
+	accepted, err := normalizeAcceptedMaintenanceRequest(request)
+	if err != nil {
+		return MaintenanceReservation{}, err
+	}
+	submission, err := service.submitAccepted(ctx, accepted)
+	if err != nil {
+		return MaintenanceReservation{}, err
+	}
+	if submission.accepted.SourceDocument != accepted.SourceDocument {
+		return MaintenanceReservation{}, ErrSourceInvalid
+	}
+	return MaintenanceReservation{OperationID: submission.Operation.ID, Replayed: !submission.NeedsExecution()}, nil
+}
+
+func (service *IngestService) submitAccepted(ctx context.Context, accepted knowl.AcceptedSource) (IngestSubmission, error) {
 	readCtx, cancel := service.boundedContext(ctx)
 	defer cancel()
 	schema, err := service.content.Schema(readCtx, accepted.Scope)
@@ -161,6 +215,24 @@ func (service *IngestService) Submit(ctx context.Context, envelope knowl.SourceE
 		schema:    reservation.Descriptor.Schema,
 		new:       reservation.New,
 	}, nil
+}
+
+func normalizeAcceptedMaintenanceRequest(request AcceptedMaintenanceRequest) (knowl.AcceptedSource, error) {
+	accepted := request.Source
+	contentType, _, err := mime.ParseMediaType(request.ContentType)
+	if err != nil || !strings.HasPrefix(strings.ToLower(contentType), "text/") || request.ContentType != accepted.MediaType ||
+		request.SourceDocument == (knowl.SourceDocument{}) {
+		return knowl.AcceptedSource{}, ErrSourceInvalid
+	}
+	document, err := ResolveSourceDocument(request.SourceDocument.SourceID, accepted, request.SourceDocument)
+	if err != nil {
+		return knowl.AcceptedSource{}, err
+	}
+	if request.SourceDocument != document {
+		return knowl.AcceptedSource{}, ErrSourceInvalid
+	}
+	accepted.SourceDocument = document
+	return accepted, nil
 }
 
 // Execute runs host-owned maintenance for a previously accepted source revision.
@@ -336,34 +408,33 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		return preparedStage{}, fmt.Errorf("context: %w", err)
 	}
 	pages, err := service.content.ReadPages(readCtx, submission.accepted.Scope, pageIDs, service.readLimits)
+	if err != nil {
+		cancel()
+		return preparedStage{}, fmt.Errorf("content: %w", err)
+	}
+	inspection, err := service.content.Inspect(readCtx, submission.accepted.Scope)
 	cancel()
 	if err != nil {
-		return preparedStage{}, fmt.Errorf("content: %w", err)
+		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
+	}
+	catalogs, err := boundedCatalogs(inspection.Catalogs, service.readLimits)
+	if err != nil {
+		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
+	}
+	input := knowl.MaintenanceInput{
+		Scope: submission.accepted.Scope, Schema: submission.schema, Source: submission.accepted,
+		SourceText: string(sourceText), Pages: pages, Catalogs: catalogs, Limits: service.readLimits,
 	}
 	var modelPlan knowl.ModelEditPlan
 	if suppliedPlan != nil {
 		modelPlan = *suppliedPlan
 	} else {
-		modelPlan, err = service.maintainer.Plan(ctx, knowl.MaintenanceInput{
-			Scope:      submission.accepted.Scope,
-			Schema:     submission.schema,
-			Source:     submission.accepted,
-			SourceText: string(sourceText),
-			Pages:      pages,
-			Limits:     service.readLimits,
-		})
+		modelPlan, err = service.maintainer.Plan(ctx, input)
 		if err != nil {
 			return preparedStage{}, fmt.Errorf("provider: %w", err)
 		}
 	}
-	validated, err := ValidatePlan(ctx, knowl.MaintenanceInput{
-		Scope:      submission.accepted.Scope,
-		Schema:     submission.schema,
-		Source:     submission.accepted,
-		SourceText: string(sourceText),
-		Pages:      pages,
-		Limits:     service.readLimits,
-	}, modelPlan, service.planLimits)
+	validated, err := ValidatePlan(ctx, input, modelPlan, service.planLimits)
 	if err != nil {
 		return preparedStage{}, fmt.Errorf("plan_validation: %w", err)
 	}
@@ -373,6 +444,33 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		return preparedStage{}, fmt.Errorf("staging: %w", err)
 	}
 	return preparedStage{Plan: validated, Staged: staged}, nil
+}
+
+func boundedCatalogs(catalogs []knowl.PageSnapshot, limits knowl.ReadLimits) ([]knowl.PageSnapshot, error) {
+	if len(catalogs) == 0 || len(catalogs) > limits.Pages {
+		return nil, ErrPlanLimitExceeded
+	}
+	result := append([]knowl.PageSnapshot(nil), catalogs...)
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].Path == rootCatalogPath {
+			return result[right].Path != rootCatalogPath
+		}
+		if result[right].Path == rootCatalogPath {
+			return false
+		}
+		return result[left].Path < result[right].Path
+	})
+	bytes, characters := 0, 0
+	for index := range result {
+		result[index].Content = strings.Clone(result[index].Content)
+		result[index].Body = strings.Clone(result[index].Body)
+		bytes += len(result[index].Content)
+		characters += utf8.RuneCountInString(result[index].Content)
+	}
+	if bytes > limits.Bytes || characters > limits.Characters {
+		return nil, ErrPlanLimitExceeded
+	}
+	return result, nil
 }
 
 func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {

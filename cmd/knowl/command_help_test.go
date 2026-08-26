@@ -143,7 +143,8 @@ func TestImplementedWorkflowHelpDescribesCLIInputs(t *testing.T) {
 			wantParts: []string{
 				"<path>",
 				"fresh Knowl workspace",
-				"wiki/sources/bootstrap-wiki/**",
+				"stored under raw/",
+				"semantic-wiki maintenance",
 			},
 		},
 		{

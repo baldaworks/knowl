@@ -164,8 +164,20 @@ func updateProjectDecision(input domain.MaintenanceInput, ref string, stage int)
 }
 
 func projectPlan(input domain.MaintenanceInput, refs []string, edit domain.FileEdit) domain.ModelEditPlan {
+	edits := []domain.FileEdit{edit}
+	for _, catalog := range input.Catalogs {
+		if catalog.Path != "wiki/index.md" {
+			continue
+		}
+		target := strings.TrimPrefix(edit.Path, "wiki/")
+		edits = append(edits, domain.FileEdit{
+			Path: catalog.Path, ExpectedDigest: catalog.Digest,
+			Content: []byte(strings.TrimRight(catalog.Content, "\n") + "\n\n* [Knowledge](" + target + ")\n"),
+		})
+		break
+	}
 	return domain.ModelEditPlan{
-		SchemaDigest: input.Schema.Digest, SourceRefs: append([]string(nil), refs...), Edits: []domain.FileEdit{edit},
+		SchemaDigest: input.Schema.Digest, SourceRefs: append([]string(nil), refs...), Edits: edits,
 		Rationale: "maintain the project-decisions example",
 	}
 }

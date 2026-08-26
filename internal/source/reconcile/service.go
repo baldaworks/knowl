@@ -125,11 +125,11 @@ func defaultRunID() knowl.SyncRunID {
 // Dependencies binds the validated application ports consumed by the service.
 type Dependencies struct {
 	Adapters      map[knowl.SourceType]app.SourceAdapter
-	Normalizer    app.SourceNormalizer
 	State         app.SourceStateStore
 	Content       app.ContentStore
 	SourceContent app.SourceContentStore
 	Search        app.SearchIndex
+	Maintenance   app.SourceMaintenanceQueue
 }
 
 // Result is the redacted observable outcome of one source synchronization attempt.
@@ -149,11 +149,11 @@ type AllResult struct {
 // Service coordinates bounded idempotent source reconciliation.
 type Service struct {
 	adapters      map[knowl.SourceType]app.SourceAdapter
-	normalizer    app.SourceNormalizer
 	state         app.SourceStateStore
 	content       app.ContentStore
 	sourceContent app.SourceContentStore
 	search        app.SearchIndex
+	maintenance   app.SourceMaintenanceQueue
 
 	options Options
 
@@ -181,9 +181,6 @@ func NewService(dependencies Dependencies, options Options) (*Service, error) {
 	if _, exists := dependencies.Adapters[knowl.SourceTypeFilesystem]; !exists {
 		return nil, fmt.Errorf("filesystem adapter dependency: %w", app.ErrSourceInvalid)
 	}
-	if dependencies.Normalizer == nil {
-		return nil, fmt.Errorf("normalizer dependency: %w", app.ErrSourceInvalid)
-	}
 	if dependencies.State == nil {
 		return nil, fmt.Errorf("state store dependency: %w", app.ErrSourceInvalid)
 	}
@@ -196,17 +193,20 @@ func NewService(dependencies Dependencies, options Options) (*Service, error) {
 	if dependencies.Search == nil {
 		return nil, fmt.Errorf("search index dependency: %w", app.ErrSourceInvalid)
 	}
+	if dependencies.Maintenance == nil {
+		return nil, fmt.Errorf("maintenance queue dependency: %w", app.ErrSourceInvalid)
+	}
 	normalized, err := options.normalize()
 	if err != nil {
 		return nil, err
 	}
 	service := &Service{
 		adapters:      make(map[knowl.SourceType]app.SourceAdapter, len(dependencies.Adapters)),
-		normalizer:    dependencies.Normalizer,
 		state:         dependencies.State,
 		content:       dependencies.Content,
 		sourceContent: dependencies.SourceContent,
 		search:        dependencies.Search,
+		maintenance:   dependencies.Maintenance,
 		options:       normalized,
 		leases:        make(map[leaseKey]struct{}),
 	}

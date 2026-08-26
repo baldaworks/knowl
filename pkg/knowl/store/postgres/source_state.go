@@ -210,8 +210,8 @@ func (store *Store) PrepareSync(ctx context.Context, prepared app.PreparedSyncSt
 		if encodeErr != nil {
 			return knowl.SyncRun{}, fmt.Errorf("encode candidate source: %w", encodeErr)
 		}
-		_, err = sourceExec(ctx, tx, `INSERT INTO knowl_sync_candidates (run_id, document_id, action, revision, accepted_source, mirror_path, mirror_digest, last_seen_run_id, deleted_at, candidate_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			prepared.RunID, document.State.DocumentID, document.Action, document.State.Revision, accepted, document.State.MirrorPath, document.State.MirrorDigest, document.State.LastSeenRunID, optionalTime(document.State.DeletedAt), prepared.CandidateDigest)
+		_, err = sourceExec(ctx, tx, `INSERT INTO knowl_sync_candidates (run_id, document_id, action, revision, accepted_source, maintenance_revision, maintenance_operation_id, mirror_path, mirror_digest, last_seen_run_id, deleted_at, candidate_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			prepared.RunID, document.State.DocumentID, document.Action, document.State.Revision, accepted, document.State.MaintenanceRevision, document.State.MaintenanceOperationID, document.State.MirrorPath, document.State.MirrorDigest, document.State.LastSeenRunID, optionalTime(document.State.DeletedAt), prepared.CandidateDigest)
 		if err != nil {
 			return knowl.SyncRun{}, fmt.Errorf("insert sync candidate: %w", err)
 		}
@@ -258,20 +258,20 @@ func (store *Store) PreparedSync(ctx context.Context, scope knowl.ScopeRef, id k
 }
 
 func loadPreparedCandidateRows(ctx context.Context, queryer sourceQueryer, run knowl.SyncRun) ([]app.PreparedDocumentState, error) {
-	rows, err := sourceQuery(ctx, queryer, `SELECT document_id, action, revision, accepted_source, mirror_path, mirror_digest, last_seen_run_id, deleted_at FROM knowl_sync_candidates WHERE run_id = ? ORDER BY document_id`, run.ID)
+	rows, err := sourceQuery(ctx, queryer, `SELECT document_id, action, revision, accepted_source, maintenance_revision, maintenance_operation_id, mirror_path, mirror_digest, last_seen_run_id, deleted_at FROM knowl_sync_candidates WHERE run_id = ? ORDER BY document_id`, run.ID)
 	if err != nil {
 		return nil, fmt.Errorf("read prepared candidates: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	documents := make([]app.PreparedDocumentState, 0)
 	for rows.Next() {
-		var documentID, action, revision, mirrorPath, mirrorDigest, lastSeen string
+		var documentID, action, revision, maintenanceRevision, maintenanceOperationID, mirrorPath, mirrorDigest, lastSeen string
 		var accepted []byte
 		var deletedAt sql.NullTime
-		if err := rows.Scan(&documentID, &action, &revision, &accepted, &mirrorPath, &mirrorDigest, &lastSeen, &deletedAt); err != nil {
+		if err := rows.Scan(&documentID, &action, &revision, &accepted, &maintenanceRevision, &maintenanceOperationID, &mirrorPath, &mirrorDigest, &lastSeen, &deletedAt); err != nil {
 			return nil, fmt.Errorf("scan prepared candidate: %w", err)
 		}
-		state := knowl.DocumentState{Scope: run.Scope, SourceID: run.SourceID, DocumentID: knowl.DocumentID(documentID), Revision: revision, MirrorPath: mirrorPath, MirrorDigest: mirrorDigest, LastSeenRunID: knowl.SyncRunID(lastSeen), Deleted: action == string(app.SyncDocumentTombstone)}
+		state := knowl.DocumentState{Scope: run.Scope, SourceID: run.SourceID, DocumentID: knowl.DocumentID(documentID), Revision: revision, MaintenanceRevision: maintenanceRevision, MaintenanceOperationID: knowl.OperationID(maintenanceOperationID), MirrorPath: mirrorPath, MirrorDigest: mirrorDigest, LastSeenRunID: knowl.SyncRunID(lastSeen), Deleted: action == string(app.SyncDocumentTombstone)}
 		if json.Unmarshal(accepted, &state.AcceptedSource) != nil {
 			return nil, app.ErrSyncConflict
 		}
@@ -375,18 +375,19 @@ func (store *Store) FinalizeSync(ctx context.Context, finalization app.SyncFinal
 	if run.Status != knowl.SyncStatusProjected {
 		return knowl.SyncRun{}, app.ErrSyncStateTransition
 	}
-	rows, err := sourceQuery(ctx, tx, `SELECT document_id, action, revision, accepted_source, mirror_path, mirror_digest, last_seen_run_id, deleted_at FROM knowl_sync_candidates WHERE run_id = ? ORDER BY document_id`, finalization.RunID)
+	rows, err := sourceQuery(ctx, tx, `SELECT document_id, action, revision, accepted_source, maintenance_revision, maintenance_operation_id, mirror_path, mirror_digest, last_seen_run_id, deleted_at FROM knowl_sync_candidates WHERE run_id = ? ORDER BY document_id`, finalization.RunID)
 	if err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("read sync candidates: %w", err)
 	}
 	type candidate struct {
-		documentID, action, revision, accepted, mirrorPath, mirrorDigest, lastSeen string
-		deletedAt                                                                  sql.NullTime
+		documentID, action, revision, accepted, maintenanceRevision, maintenanceOperationID string
+		mirrorPath, mirrorDigest, lastSeen                                                  string
+		deletedAt                                                                           sql.NullTime
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var item candidate
-		if err := rows.Scan(&item.documentID, &item.action, &item.revision, &item.accepted, &item.mirrorPath, &item.mirrorDigest, &item.lastSeen, &item.deletedAt); err != nil {
+		if err := rows.Scan(&item.documentID, &item.action, &item.revision, &item.accepted, &item.maintenanceRevision, &item.maintenanceOperationID, &item.mirrorPath, &item.mirrorDigest, &item.lastSeen, &item.deletedAt); err != nil {
 			_ = rows.Close()
 			return knowl.SyncRun{}, fmt.Errorf("scan sync candidate: %w", err)
 		}
@@ -398,9 +399,9 @@ func (store *Store) FinalizeSync(ctx context.Context, finalization app.SyncFinal
 	now := finalization.FinalizedAt.UTC()
 	for _, item := range candidates {
 		deleted := item.action == string(app.SyncDocumentTombstone)
-		_, err = sourceExec(ctx, tx, `INSERT INTO knowl_source_documents (scope, source_id, document_id, revision, accepted_source, mirror_path, mirror_digest, last_seen_run_id, deleted, deleted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(scope, source_id, document_id) DO UPDATE SET revision = excluded.revision, accepted_source = excluded.accepted_source, mirror_path = excluded.mirror_path, mirror_digest = excluded.mirror_digest, last_seen_run_id = excluded.last_seen_run_id, deleted = excluded.deleted, deleted_at = excluded.deleted_at, updated_at = excluded.updated_at`,
-			finalization.Scope, finalization.SourceID, item.documentID, item.revision, item.accepted, item.mirrorPath, item.mirrorDigest, item.lastSeen, deleted, nullableTime(item.deletedAt), formatTime(now), formatTime(now))
+		_, err = sourceExec(ctx, tx, `INSERT INTO knowl_source_documents (scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id, mirror_path, mirror_digest, last_seen_run_id, deleted, deleted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope, source_id, document_id) DO UPDATE SET revision = excluded.revision, accepted_source = excluded.accepted_source, maintenance_revision = excluded.maintenance_revision, maintenance_operation_id = excluded.maintenance_operation_id, mirror_path = excluded.mirror_path, mirror_digest = excluded.mirror_digest, last_seen_run_id = excluded.last_seen_run_id, deleted = excluded.deleted, deleted_at = excluded.deleted_at, updated_at = excluded.updated_at`,
+			finalization.Scope, finalization.SourceID, item.documentID, item.revision, item.accepted, item.maintenanceRevision, item.maintenanceOperationID, item.mirrorPath, item.mirrorDigest, item.lastSeen, deleted, nullableTime(item.deletedAt), formatTime(now), formatTime(now))
 		if err != nil {
 			return knowl.SyncRun{}, fmt.Errorf("apply sync candidate: %w", err)
 		}
@@ -462,7 +463,7 @@ func (store *Store) DocumentState(ctx context.Context, scope knowl.ScopeRef, sou
 	if app.ValidateSourceID(sourceID) != nil || app.ValidateDocumentID(documentID) != nil {
 		return knowl.DocumentState{}, app.ErrSourceInvalid
 	}
-	row := sourceQueryRow(ctx, store.db, `SELECT revision, accepted_source, mirror_path, mirror_digest, last_seen_run_id, deleted, deleted_at, created_at, updated_at FROM knowl_source_documents WHERE scope = ? AND source_id = ? AND document_id = ?`, scope, sourceID, documentID)
+	row := sourceQueryRow(ctx, store.db, `SELECT revision, accepted_source, maintenance_revision, maintenance_operation_id, mirror_path, mirror_digest, last_seen_run_id, deleted, deleted_at, created_at, updated_at FROM knowl_source_documents WHERE scope = ? AND source_id = ? AND document_id = ?`, scope, sourceID, documentID)
 	return scanDocumentState(row, scope, sourceID, documentID)
 }
 
@@ -474,7 +475,7 @@ func (store *Store) DocumentStates(ctx context.Context, scope knowl.ScopeRef, so
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT document_id, revision, accepted_source, mirror_path, mirror_digest, last_seen_run_id, deleted, deleted_at, created_at, updated_at FROM knowl_source_documents WHERE scope = ? AND source_id = ?`
+	query := `SELECT document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id, mirror_path, mirror_digest, last_seen_run_id, deleted, deleted_at, created_at, updated_at FROM knowl_source_documents WHERE scope = ? AND source_id = ?`
 	args := []any{scope, sourceID}
 	if !options.IncludeDeleted {
 		query += ` AND deleted = FALSE`
@@ -489,14 +490,14 @@ func (store *Store) DocumentStates(ctx context.Context, scope knowl.ScopeRef, so
 	states := make([]knowl.DocumentState, 0)
 	for rows.Next() {
 		var documentID knowl.DocumentID
-		var revision, accepted, mirrorPath, mirrorDigest, lastSeen string
+		var revision, accepted, maintenanceRevision, maintenanceOperationID, mirrorPath, mirrorDigest, lastSeen string
 		var deletedAt sql.NullTime
 		var createdAt, updatedAt time.Time
 		var deleted bool
-		if err := rows.Scan(&documentID, &revision, &accepted, &mirrorPath, &mirrorDigest, &lastSeen, &deleted, &deletedAt, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&documentID, &revision, &accepted, &maintenanceRevision, &maintenanceOperationID, &mirrorPath, &mirrorDigest, &lastSeen, &deleted, &deletedAt, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan source document: %w", err)
 		}
-		state, err := decodeDocumentState(scope, sourceID, documentID, revision, accepted, mirrorPath, mirrorDigest, lastSeen, deleted, deletedAt, createdAt, updatedAt)
+		state, err := decodeDocumentState(scope, sourceID, documentID, revision, accepted, maintenanceRevision, maintenanceOperationID, mirrorPath, mirrorDigest, lastSeen, deleted, deletedAt, createdAt, updatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -541,7 +542,70 @@ func (store *Store) SourceStatus(ctx context.Context, scope knowl.ScopeRef, sour
 		status.LastSuccessfulAt = lastSuccessfulAt.Time.UTC()
 	}
 	status.UpdatedAt = updatedAt.UTC()
+	status.Maintenance, err = store.sourceMaintenanceStatus(ctx, scope, sourceID)
+	if err != nil {
+		return knowl.SourceStatus{}, err
+	}
 	return status, nil
+}
+
+const maxMaintenanceSamples = 16
+
+func (store *Store) sourceMaintenanceStatus(ctx context.Context, scope knowl.ScopeRef, sourceID knowl.SourceID) (knowl.SourceMaintenanceStatus, error) {
+	var result knowl.SourceMaintenanceStatus
+	err := sourceQueryRow(ctx, store.db, `
+		SELECT
+			COALESCE(SUM(CASE WHEN operation.status NOT IN ('committed', 'failed') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN operation.work_attempt > 1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN operation.status = 'committed' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN operation.status = 'failed' THEN 1 ELSE 0 END), 0)
+		FROM knowl_source_documents AS document
+		JOIN knowl_operations AS operation
+		  ON operation.scope = document.scope
+		 AND operation.operation_id = document.maintenance_operation_id
+		WHERE document.scope = ? AND document.source_id = ? AND document.deleted = FALSE
+		  AND document.maintenance_operation_id <> ''
+		  AND document.maintenance_revision = document.revision`, scope, sourceID).Scan(
+		&result.Counts.Queued, &result.Counts.Replayed, &result.Counts.Committed, &result.Counts.Failed,
+	)
+	if err != nil {
+		return knowl.SourceMaintenanceStatus{}, fmt.Errorf("read source maintenance counts: %w", err)
+	}
+	rows, err := sourceQuery(ctx, store.db, `
+		SELECT document.document_id, document.revision, operation.operation_id, operation.status, operation.work_attempt, operation.failure_class
+		FROM knowl_source_documents AS document
+		JOIN knowl_operations AS operation
+		  ON operation.scope = document.scope
+		 AND operation.operation_id = document.maintenance_operation_id
+		WHERE document.scope = ? AND document.source_id = ? AND document.deleted = FALSE
+		  AND document.maintenance_operation_id <> ''
+		  AND document.maintenance_revision = document.revision
+		ORDER BY document.document_id, document.revision, operation.operation_id
+		LIMIT ?`, scope, sourceID, maxMaintenanceSamples+1)
+	if err != nil {
+		return knowl.SourceMaintenanceStatus{}, fmt.Errorf("read source maintenance samples: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var sample knowl.MaintenanceSample
+		var attempts int
+		if err := rows.Scan(&sample.DocumentID, &sample.Revision, &sample.OperationID, &sample.Status, &attempts, &sample.FailureClass); err != nil {
+			return knowl.SourceMaintenanceStatus{}, fmt.Errorf("scan source maintenance sample: %w", err)
+		}
+		sample.Replayed = attempts > 1
+		if len(result.Samples) == maxMaintenanceSamples {
+			result.Truncated = true
+			continue
+		}
+		result.Samples = append(result.Samples, sample)
+	}
+	if err := rows.Err(); err != nil {
+		return knowl.SourceMaintenanceStatus{}, fmt.Errorf("iterate source maintenance samples: %w", err)
+	}
+	if result.Samples == nil {
+		result.Samples = make([]knowl.MaintenanceSample, 0)
+	}
+	return result, nil
 }
 
 func (store *Store) ResumableSyncRuns(ctx context.Context, scope knowl.ScopeRef, limit int) ([]knowl.SyncRun, error) {
@@ -606,21 +670,21 @@ func scanSyncRun(row scanner) (knowl.SyncRun, error) {
 }
 
 func scanDocumentState(row scanner, scope knowl.ScopeRef, sourceID knowl.SourceID, documentID knowl.DocumentID) (knowl.DocumentState, error) {
-	var revision, accepted, mirrorPath, mirrorDigest, lastSeen string
+	var revision, accepted, maintenanceRevision, maintenanceOperationID, mirrorPath, mirrorDigest, lastSeen string
 	var deletedAt sql.NullTime
 	var createdAt, updatedAt time.Time
 	var deleted bool
-	err := row.Scan(&revision, &accepted, &mirrorPath, &mirrorDigest, &lastSeen, &deleted, &deletedAt, &createdAt, &updatedAt)
+	err := row.Scan(&revision, &accepted, &maintenanceRevision, &maintenanceOperationID, &mirrorPath, &mirrorDigest, &lastSeen, &deleted, &deletedAt, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.DocumentState{}, app.ErrSourceNotFound
 	}
 	if err != nil {
 		return knowl.DocumentState{}, fmt.Errorf("read source document: %w", err)
 	}
-	return decodeDocumentState(scope, sourceID, documentID, revision, accepted, mirrorPath, mirrorDigest, lastSeen, deleted, deletedAt, createdAt, updatedAt)
+	return decodeDocumentState(scope, sourceID, documentID, revision, accepted, maintenanceRevision, maintenanceOperationID, mirrorPath, mirrorDigest, lastSeen, deleted, deletedAt, createdAt, updatedAt)
 }
-func decodeDocumentState(scope knowl.ScopeRef, sourceID knowl.SourceID, documentID knowl.DocumentID, revision, accepted, mirrorPath, mirrorDigest, lastSeen string, deleted bool, deletedAt sql.NullTime, createdAt, updatedAt time.Time) (knowl.DocumentState, error) {
-	state := knowl.DocumentState{Scope: scope, SourceID: sourceID, DocumentID: documentID, Revision: revision, MirrorPath: mirrorPath, MirrorDigest: mirrorDigest, LastSeenRunID: knowl.SyncRunID(lastSeen), Deleted: deleted}
+func decodeDocumentState(scope knowl.ScopeRef, sourceID knowl.SourceID, documentID knowl.DocumentID, revision, accepted, maintenanceRevision, maintenanceOperationID, mirrorPath, mirrorDigest, lastSeen string, deleted bool, deletedAt sql.NullTime, createdAt, updatedAt time.Time) (knowl.DocumentState, error) {
+	state := knowl.DocumentState{Scope: scope, SourceID: sourceID, DocumentID: documentID, Revision: revision, MaintenanceRevision: maintenanceRevision, MaintenanceOperationID: knowl.OperationID(maintenanceOperationID), MirrorPath: mirrorPath, MirrorDigest: mirrorDigest, LastSeenRunID: knowl.SyncRunID(lastSeen), Deleted: deleted}
 	if err := json.Unmarshal([]byte(accepted), &state.AcceptedSource); err != nil {
 		return knowl.DocumentState{}, fmt.Errorf("decode accepted source: %w", err)
 	}
@@ -637,7 +701,7 @@ func syncCandidateDigestTx(ctx context.Context, tx *sql.Tx, id knowl.SyncRunID) 
 }
 
 func preparedDocumentsMatchTx(ctx context.Context, tx *sql.Tx, runID knowl.SyncRunID, documents []app.PreparedDocumentState, digest string) (bool, error) {
-	rows, err := sourceQuery(ctx, tx, `SELECT document_id, action, revision, accepted_source, mirror_path, mirror_digest, last_seen_run_id, deleted_at, candidate_digest FROM knowl_sync_candidates WHERE run_id = ? ORDER BY document_id`, runID)
+	rows, err := sourceQuery(ctx, tx, `SELECT document_id, action, revision, accepted_source, maintenance_revision, maintenance_operation_id, mirror_path, mirror_digest, last_seen_run_id, deleted_at, candidate_digest FROM knowl_sync_candidates WHERE run_id = ? ORDER BY document_id`, runID)
 	if err != nil {
 		return false, fmt.Errorf("read prepared candidates: %w", err)
 	}
@@ -647,9 +711,9 @@ func preparedDocumentsMatchTx(ctx context.Context, tx *sql.Tx, runID knowl.SyncR
 		if index >= len(documents) {
 			return false, nil
 		}
-		var documentID, action, revision, accepted, mirrorPath, mirrorDigest, lastSeen, storedDigest string
+		var documentID, action, revision, accepted, maintenanceRevision, maintenanceOperationID, mirrorPath, mirrorDigest, lastSeen, storedDigest string
 		var deletedAt sql.NullTime
-		if err := rows.Scan(&documentID, &action, &revision, &accepted, &mirrorPath, &mirrorDigest, &lastSeen, &deletedAt, &storedDigest); err != nil {
+		if err := rows.Scan(&documentID, &action, &revision, &accepted, &maintenanceRevision, &maintenanceOperationID, &mirrorPath, &mirrorDigest, &lastSeen, &deletedAt, &storedDigest); err != nil {
 			return false, fmt.Errorf("scan prepared candidate: %w", err)
 		}
 		document := documents[index]
@@ -657,7 +721,7 @@ func preparedDocumentsMatchTx(ctx context.Context, tx *sql.Tx, runID knowl.SyncR
 		if err != nil {
 			return false, fmt.Errorf("encode prepared candidate: %w", err)
 		}
-		if documentID != string(document.State.DocumentID) || action != string(document.Action) || revision != document.State.Revision || accepted != string(encoded) || mirrorPath != document.State.MirrorPath || mirrorDigest != document.State.MirrorDigest || lastSeen != string(document.State.LastSeenRunID) || !sameOptionalTime(deletedAt, document.State.DeletedAt) || storedDigest != digest {
+		if documentID != string(document.State.DocumentID) || action != string(document.Action) || revision != document.State.Revision || accepted != string(encoded) || maintenanceRevision != document.State.MaintenanceRevision || maintenanceOperationID != string(document.State.MaintenanceOperationID) || mirrorPath != document.State.MirrorPath || mirrorDigest != document.State.MirrorDigest || lastSeen != string(document.State.LastSeenRunID) || !sameOptionalTime(deletedAt, document.State.DeletedAt) || storedDigest != digest {
 			return false, nil
 		}
 		index++

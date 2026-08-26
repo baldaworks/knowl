@@ -13,7 +13,6 @@ import (
 	httpserver "github.com/baldaworks/knowl/internal/httpapi/server"
 	"github.com/baldaworks/knowl/internal/mcphttp"
 	sourcefilesystem "github.com/baldaworks/knowl/internal/source/filesystem"
-	sourcenormalize "github.com/baldaworks/knowl/internal/source/normalize"
 	"github.com/baldaworks/knowl/internal/source/reconcile"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
@@ -113,19 +112,20 @@ func composeRuntime(ctx context.Context, config Config, maintainer app.Maintaine
 		return composedRuntime{}, err
 	}
 	runtime.sources = cloneSources(config.Sources)
+	runtime.scheduler, err = newOperationScheduler(runtime.operations, runtime.service, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize})
+	if err != nil {
+		return composedRuntime{}, fmt.Errorf("compose operation scheduler: %w", err)
+	}
 	runtime.sourceSync, err = reconcile.NewService(reconcile.Dependencies{
-		Adapters: adapters, Normalizer: sourcenormalize.NewDefaultAdapter(), State: runtime.sourceState,
-		Content: runtime.workspace, SourceContent: runtime.workspace, Search: runtime.index,
+		Adapters: adapters, State: runtime.sourceState, Content: runtime.workspace,
+		SourceContent: runtime.workspace, Search: runtime.index,
+		Maintenance: sourceMaintenanceQueue{service: runtime.service, waker: runtime.scheduler},
 	}, reconcile.Options{})
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose source reconciliation: %w", err)
 	}
 	if _, err = runtime.sourceSync.Recover(ctx, config.Scope, runtime.sources); err != nil && !errors.Is(err, reconcile.ErrSyncPartial) {
 		return composedRuntime{}, fmt.Errorf("recover Knowl sources: %w", err)
-	}
-	runtime.scheduler, err = newOperationScheduler(runtime.operations, runtime.service, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize})
-	if err != nil {
-		return composedRuntime{}, fmt.Errorf("compose operation scheduler: %w", err)
 	}
 	runtime.mcp, err = mcp.NewServer(runtime.query, runtime.service, runtime.scheduler, config.Scope, config.ReadLimits)
 	if err != nil {
@@ -139,6 +139,20 @@ func composeRuntime(ctx context.Context, config Config, maintainer app.Maintaine
 		Ready:  func() bool { return false },
 	})
 	return runtime, nil
+}
+
+type sourceMaintenanceQueue struct {
+	service app.SourceMaintenanceQueue
+	waker   interface{ Wake(id domain.OperationID) }
+}
+
+func (queue sourceMaintenanceQueue) ReserveAccepted(ctx context.Context, request app.AcceptedMaintenanceRequest) (app.MaintenanceReservation, error) {
+	reservation, err := queue.service.ReserveAccepted(ctx, request)
+	if err != nil {
+		return app.MaintenanceReservation{}, err
+	}
+	queue.waker.Wake(reservation.OperationID)
+	return reservation, nil
 }
 
 func openWorkspace(path string) (*contentfs.Workspace, error) {
@@ -262,13 +276,13 @@ func nilSourceAdapter(adapter app.SourceAdapter) bool {
 }
 
 func (options Options) maintainer(config Config) (app.Maintainer, io.Closer, error) {
-	if options.Maintainer != nil {
+	if !nilMaintainer(options.Maintainer) {
 		closer, _ := options.Maintainer.(io.Closer)
 		return options.Maintainer, closer, nil
 	}
 	providerID := strings.TrimSpace(options.ProviderID)
 	if options.RuntimeFactory == nil && providerID == "" {
-		return nil, nil, nil
+		return nil, nil, fmt.Errorf("knowl.provider is required when no maintainer is provided")
 	}
 	if providerID == "" {
 		return nil, nil, fmt.Errorf("knowl.provider is required")
@@ -286,4 +300,17 @@ func (options Options) maintainer(config Config) (app.Maintainer, io.Closer, err
 		return nil, nil, err
 	}
 	return maintainer, maintainer, nil
+}
+
+func nilMaintainer(maintainer app.Maintainer) bool {
+	if maintainer == nil {
+		return true
+	}
+	value := reflect.ValueOf(maintainer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

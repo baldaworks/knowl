@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -45,7 +47,7 @@ func TestPrepareReadOnlyDoesNotRunOnStartSourceSync(t *testing.T) {
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.Sources = []domain.Source{source}
 	host, err := knowl.New(ctx, knowl.Options{
-		Config: config,
+		Config: config, Maintainer: provider.Fixture{},
 		SourceAdapters: map[domain.SourceType]app.SourceAdapter{
 			domain.SourceTypeFilesystem: adapter,
 		},
@@ -70,7 +72,7 @@ func TestPrepareReadOnlyDoesNotRunOnStartSourceSync(t *testing.T) {
 	}
 }
 
-func TestProviderFreeSourceRuntimeVerticalAndFailureIsolation(t *testing.T) {
+func TestSourceRuntimeVerticalAndFailureIsolation(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
@@ -98,14 +100,14 @@ func TestProviderFreeSourceRuntimeVerticalAndFailureIsolation(t *testing.T) {
 		good: sourcefilesystem.NewDefault(), failingSource: "operations", failure: errors.New(secretFailure),
 	}
 	host, err := knowl.New(ctx, knowl.Options{
-		Config: config, SourceObserver: observer,
+		Config: config, Maintainer: provider.Fixture{}, SourceObserver: observer,
 		SourceAdapters: map[domain.SourceType]app.SourceAdapter{domain.SourceTypeFilesystem: adapter},
 	})
 	if err != nil {
-		t.Fatalf("compose provider-free vertical Host: %v", err)
+		t.Fatalf("compose vertical Host: %v", err)
 	}
 	if err := host.Start(ctx); err != nil {
-		t.Fatalf("start provider-free vertical Host: %v", err)
+		t.Fatalf("start vertical Host: %v", err)
 	}
 	defer shutdownHost(t, host)
 	seen := map[domain.SourceID]knowl.SourceAttempt{}
@@ -133,18 +135,24 @@ func TestProviderFreeSourceRuntimeVerticalAndFailureIsolation(t *testing.T) {
 		t.Fatalf("ready status = %d", status)
 	}
 	httpBody, status, err := doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=Verticalbeacon&source=engineering", nil)
-	if err != nil || status != http.StatusOK || !strings.Contains(string(httpBody), `"source_id":"engineering"`) {
-		t.Fatalf("provider-free HTTP retrieve = %d, %v, %s", status, err, httpBody)
+	if err != nil || status != http.StatusOK || !strings.Contains(string(httpBody), `"evidence":[]`) {
+		t.Fatalf("HTTP retrieve = %d, %v, %s", status, err, httpBody)
 	}
 	mcpValue, err := host.MCP().Call(ctx, hostRetrieveToolName, map[string]any{
 		hostQueryKey: "Verticalbeacon", "sources": []any{"engineering"},
 	})
 	mcpJSON, marshalErr := json.Marshal(mcpValue)
-	if err != nil || marshalErr != nil || !strings.Contains(strings.ToLower(string(mcpJSON)), "verticalbeacon") {
-		t.Fatalf("provider-free MCP retrieve = %#v, %v", mcpValue, err)
+	if err != nil || marshalErr != nil || !strings.Contains(string(mcpJSON), `"evidence":[]`) {
+		t.Fatalf("MCP retrieve = %#v, %v", mcpValue, err)
+	}
+	if raw, ok := runtimeRawDocumentContent(t, host, config.Scope, "engineering", "docs/Shared.md"); !ok || !strings.Contains(string(raw), "Verticalbeacon") {
+		t.Fatalf("engineering raw source = %q, present=%v", raw, ok)
+	}
+	if inventory := runtimeSourceInventory(t, host, config.Scope, "engineering"); len(inventory) != 0 {
+		t.Fatalf("configured source leaked into LLM wiki: %#v", inventory)
 	}
 	if report, err := host.Lint().Lint(ctx, config.Scope); err != nil || report.Scope != config.Scope {
-		t.Fatalf("provider-free lint = %#v, %v", report, err)
+		t.Fatalf("lint = %#v, %v", report, err)
 	}
 	goodStatus, err := host.SourceStatus(ctx, "engineering")
 	if err != nil || goodStatus.Status != domain.SyncStatusSucceeded {
@@ -164,10 +172,10 @@ func TestProviderFreeSourceRuntimeVerticalAndFailureIsolation(t *testing.T) {
 	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := host.Stop(stopCtx); err != nil {
-		t.Fatalf("provider-free vertical shutdown: %v", err)
+		t.Fatalf("vertical shutdown: %v", err)
 	}
 	if host.Ready() {
-		t.Fatal("provider-free Host remained ready after shutdown")
+		t.Fatal("Host remained ready after shutdown")
 	}
 }
 
@@ -191,7 +199,7 @@ func TestHostSourceRegistryAndProductionSync(t *testing.T) {
 		runtimeFilesystemSource(runtimeAlphaSourceID, disabledRoot, false),
 	}
 
-	host, err := knowl.New(ctx, knowl.Options{Config: config})
+	host, err := knowl.New(ctx, knowl.Options{Config: config, Maintainer: provider.Fixture{}})
 	if err != nil {
 		t.Fatalf("compose source Host: %v", err)
 	}
@@ -222,8 +230,14 @@ func TestHostSourceRegistryAndProductionSync(t *testing.T) {
 		t.Fatalf("SourceStatus = %#v, %v", status, err)
 	}
 	query, err := host.Query().Query(ctx, config.Scope, "Productionbeacon", domain.ReadLimits{}, []domain.SourceID{runtimeZetaSourceID})
-	if err != nil || len(query.Pages) != 1 || query.Pages[0].SourceDocument == nil || query.Pages[0].SourceDocument.SourceID != runtimeZetaSourceID {
+	if err != nil || len(query.Pages) != 0 {
 		t.Fatalf("source query = %#v, %v", query, err)
+	}
+	if raw, ok := runtimeRawDocumentContent(t, host, config.Scope, runtimeZetaSourceID, "docs/Page.md"); !ok || !strings.Contains(string(raw), "Productionbeacon") {
+		t.Fatalf("production raw source = %q, present=%v", raw, ok)
+	}
+	if inventory := runtimeSourceInventory(t, host, config.Scope, runtimeZetaSourceID); len(inventory) != 0 {
+		t.Fatalf("production source mirrors = %#v", inventory)
 	}
 	all, err := host.SyncAll(ctx)
 	if err != nil || len(all.Results) != 1 || all.Results[0].SourceID != runtimeZetaSourceID {
@@ -280,7 +294,7 @@ func TestProductionHostMultiSourceLifecycleAcceptance(t *testing.T) {
 	newHost := func() *knowl.Host {
 		t.Helper()
 		host, newErr := knowl.New(ctx, knowl.Options{
-			Config: config,
+			Config: config, Maintainer: provider.Fixture{},
 			SourceAdapters: map[domain.SourceType]app.SourceAdapter{
 				domain.SourceTypeFilesystem: adapter,
 			},
@@ -302,15 +316,19 @@ func TestProductionHostMultiSourceLifecycleAcceptance(t *testing.T) {
 	alphaShared := queryRuntimeSource(t, host, config.Scope, "Sharedacceptance", []domain.SourceID{runtimeAlphaSourceID})
 	betaShared := queryRuntimeSource(t, host, config.Scope, "Sharedacceptance", []domain.SourceID{runtimeBetaSourceID})
 	unfiltered := queryRuntimeSource(t, host, config.Scope, "Sharedacceptance", nil)
-	if len(alphaShared) != 1 || len(betaShared) != 1 || len(unfiltered) != 2 ||
-		alphaShared[0].SourceDocument == nil || betaShared[0].SourceDocument == nil ||
-		alphaShared[0].ID == betaShared[0].ID || alphaShared[0].SourceDocument.SourceID != runtimeAlphaSourceID ||
-		betaShared[0].SourceDocument.SourceID != runtimeBetaSourceID || alphaShared[0].SourceDocument.DocumentID != "shared/page.md" ||
-		betaShared[0].SourceDocument.DocumentID != "shared/page.md" {
+	if len(alphaShared) != 0 || len(betaShared) != 0 || len(unfiltered) != 0 {
 		t.Fatalf("equal-path retrieval = alpha:%#v beta:%#v all:%#v", alphaShared, betaShared, unfiltered)
+	}
+	alphaRaw, alphaOK := runtimeRawDocumentContent(t, host, config.Scope, runtimeAlphaSourceID, "shared/page.md")
+	betaRaw, betaOK := runtimeRawDocumentContent(t, host, config.Scope, runtimeBetaSourceID, "shared/page.md")
+	if !alphaOK || !betaOK || !strings.Contains(string(alphaRaw), "alphabeacon") || !strings.Contains(string(betaRaw), "betabeacon") {
+		t.Fatalf("equal-path raw lineage = alpha:%q/%v beta:%q/%v", alphaRaw, alphaOK, betaRaw, betaOK)
 	}
 	alphaInventory := runtimeSourceInventory(t, host, config.Scope, runtimeAlphaSourceID)
 	betaInventory := runtimeSourceInventory(t, host, config.Scope, runtimeBetaSourceID)
+	if len(alphaInventory) != 0 || len(betaInventory) != 0 {
+		t.Fatalf("initial source mirrors = %#v / %#v", alphaInventory, betaInventory)
+	}
 	indexContent, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "index.md"))
 	if err != nil || string(indexContent) != curatedIndex {
 		t.Fatalf("initial sync changed curated index = %q, %v", indexContent, err)
@@ -332,8 +350,8 @@ func TestProductionHostMultiSourceLifecycleAcceptance(t *testing.T) {
 	if err != nil || !updated.Changed || updated.Run.Counts.Updated != 1 || adapter.fetchCount(runtimeAlphaSourceID) != 1 {
 		t.Fatalf("selective update = %#v, %v, fetches=%d", updated, err, adapter.fetchCount(runtimeAlphaSourceID))
 	}
-	if len(queryRuntimeSource(t, host, config.Scope, "alphaupdatedbeacon", []domain.SourceID{runtimeAlphaSourceID})) != 1 {
-		t.Fatal("updated alpha content is not retrievable")
+	if raw, ok := runtimeRawDocumentContent(t, host, config.Scope, runtimeAlphaSourceID, "shared/page.md"); !ok || !strings.Contains(string(raw), "alphaupdatedbeacon") {
+		t.Fatalf("updated alpha raw = %q, present=%v", raw, ok)
 	}
 
 	if err := os.Remove(filepath.Join(betaRoot, "shared", "page.md")); err != nil {
@@ -372,8 +390,8 @@ func TestProductionHostMultiSourceLifecycleAcceptance(t *testing.T) {
 	if err == nil || interrupted.FailureClass != "adapter" || strings.Contains(err.Error(), secretFailure) {
 		t.Fatalf("interrupted alpha = %#v, %v", interrupted, err)
 	}
-	if len(queryRuntimeSource(t, host, config.Scope, "Keepalphabeacon", []domain.SourceID{runtimeAlphaSourceID})) != 1 {
-		t.Fatal("incomplete scan false-deleted prior alpha snapshot")
+	if raw, ok := runtimeRawDocumentContent(t, host, config.Scope, runtimeAlphaSourceID, "keep/alpha.md"); !ok || !strings.Contains(string(raw), "Keepalphabeacon") {
+		t.Fatal("incomplete scan lost prior alpha raw evidence")
 	}
 	failedStatus, err := host.SourceStatus(ctx, runtimeAlphaSourceID)
 	if err != nil || failedStatus.Status != domain.SyncStatusFailed {
@@ -390,11 +408,11 @@ func TestProductionHostMultiSourceLifecycleAcceptance(t *testing.T) {
 	if err != nil || restartedStatus.Status != domain.SyncStatusFailed || restartedStatus.LastSuccessfulRunID == "" {
 		t.Fatalf("restarted alpha status = %#v, %v", restartedStatus, err)
 	}
-	if len(queryRuntimeSource(t, restarted, config.Scope, "Keepalphabeacon", []domain.SourceID{runtimeAlphaSourceID})) != 1 {
-		t.Fatal("restart lost prior successful retrieval snapshot")
+	if raw, ok := runtimeRawDocumentContent(t, restarted, config.Scope, runtimeAlphaSourceID, "keep/alpha.md"); !ok || !strings.Contains(string(raw), "Keepalphabeacon") {
+		t.Fatal("restart lost prior raw evidence")
 	}
 	converged, err := restarted.SyncSource(ctx, runtimeAlphaSourceID)
-	if err != nil || converged.Run.Counts.Deleted != 1 || len(queryRuntimeSource(t, restarted, config.Scope, "Keepalphabeacon", []domain.SourceID{runtimeAlphaSourceID})) != 0 {
+	if err != nil || converged.Run.Counts.Deleted != 1 {
 		t.Fatalf("post-restart convergence = %#v, %v", converged, err)
 	}
 
@@ -410,13 +428,150 @@ func TestProductionHostMultiSourceLifecycleAcceptance(t *testing.T) {
 	if err != nil || healthy.Run.Status != domain.SyncStatusSucceeded || !restarted.Ready() {
 		t.Fatalf("healthy beta after alpha failure = %#v, %v, ready=%v", healthy, err, restarted.Ready())
 	}
-	if len(queryRuntimeSource(t, restarted, config.Scope, "alphaupdatedbeacon", []domain.SourceID{runtimeAlphaSourceID})) != 1 {
-		t.Fatal("isolated source failure removed prior alpha retrieval")
+	if raw, ok := runtimeRawDocumentContent(t, restarted, config.Scope, runtimeAlphaSourceID, "shared/page.md"); !ok || !strings.Contains(string(raw), "alphaupdatedbeacon") {
+		t.Fatal("isolated source failure removed prior alpha raw evidence")
 	}
 	indexContent, err = os.ReadFile(filepath.Join(workspace.Root(), "wiki", "index.md"))
 	if err != nil || string(indexContent) != curatedIndex {
 		t.Fatalf("source lifecycle changed curated index = %q, %v", indexContent, err)
 	}
+}
+
+func TestProductionHostBuildsSharedSemanticWikiFromConfiguredSources(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	alphaRoot := t.TempDir()
+	betaRoot := t.TempDir()
+	writeRuntimeSourceFile(t, alphaRoot, "architecture.md", "# Atlas\n\nAtlasintegrationbeacon uses PostgreSQL for durable state.\n")
+	writeRuntimeSourceFile(t, betaRoot, "recovery.md", "# Atlas recovery\n\nAtlasintegrationbeacon recovery rebuilds projections.\n")
+
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "semantic-sources.db")
+	config.ListenAddr = hostListenAddr
+	config.Sources = []domain.Source{
+		runtimeFilesystemSource(runtimeBetaSourceID, betaRoot, true),
+		runtimeFilesystemSource(runtimeAlphaSourceID, alphaRoot, true),
+	}
+	host, err := knowl.New(ctx, knowl.Options{Config: config, Maintainer: runtimeSharedAtlasMaintainer{}})
+	if err != nil {
+		t.Fatalf("compose semantic source Host: %v", err)
+	}
+	if err := host.Start(ctx); err != nil {
+		t.Fatalf("start semantic source Host: %v", err)
+	}
+	defer shutdownHost(t, host)
+
+	result, err := host.SyncAll(ctx)
+	if err != nil || len(result.Results) != 2 || result.Results[0].SourceID != runtimeAlphaSourceID || result.Results[1].SourceID != runtimeBetaSourceID {
+		t.Fatalf("SyncAll() = %#v, %v", result, err)
+	}
+	waitForRuntimeMaintenance(t, host, runtimeAlphaSourceID)
+	waitForRuntimeMaintenance(t, host, runtimeBetaSourceID)
+
+	alpha := queryRuntimeSource(t, host, config.Scope, "Atlasintegrationbeacon", []domain.SourceID{runtimeAlphaSourceID})
+	beta := queryRuntimeSource(t, host, config.Scope, "Atlasintegrationbeacon", []domain.SourceID{runtimeBetaSourceID})
+	all := queryRuntimeSource(t, host, config.Scope, "Atlasintegrationbeacon", nil)
+	if len(alpha) != 1 || len(beta) != 1 || len(all) != 1 || alpha[0].ID != runtimeSharedAtlasPageID || beta[0].ID != runtimeSharedAtlasPageID {
+		t.Fatalf("semantic retrieval = alpha:%#v beta:%#v all:%#v", alpha, beta, all)
+	}
+	documents := all[0].SourceDocuments
+	if len(documents) != 2 || documents[0].SourceID != runtimeAlphaSourceID || documents[1].SourceID != runtimeBetaSourceID {
+		t.Fatalf("semantic source documents = %#v", documents)
+	}
+	if inventory := runtimeSourceInventory(t, host, config.Scope, runtimeAlphaSourceID); len(inventory) != 0 {
+		t.Fatalf("alpha source copied into semantic wiki: %#v", inventory)
+	}
+	if inventory := runtimeSourceInventory(t, host, config.Scope, runtimeBetaSourceID); len(inventory) != 0 {
+		t.Fatalf("beta source copied into semantic wiki: %#v", inventory)
+	}
+	if raw, ok := runtimeRawDocumentContent(t, host, config.Scope, runtimeAlphaSourceID, "architecture.md"); !ok || !strings.Contains(string(raw), "durable state") {
+		t.Fatalf("alpha raw evidence = %q, present=%v", raw, ok)
+	}
+	if raw, ok := runtimeRawDocumentContent(t, host, config.Scope, runtimeBetaSourceID, "recovery.md"); !ok || !strings.Contains(string(raw), "rebuilds projections") {
+		t.Fatalf("beta raw evidence = %q, present=%v", raw, ok)
+	}
+}
+
+const (
+	runtimeSharedAtlasPageID   = domain.PageID("entities/atlas-integration")
+	runtimeSharedAtlasPagePath = "wiki/entities/atlas-integration.md"
+)
+
+type runtimeSharedAtlasMaintainer struct{}
+
+func (runtimeSharedAtlasMaintainer) Plan(_ context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+	currentRef := app.SourceRefKey(input.Source)
+	refs := []string{currentRef}
+	expectedDigest := ""
+	for _, page := range input.Pages {
+		if page.ID != runtimeSharedAtlasPageID {
+			continue
+		}
+		refs = append(refs, page.SourceRefs...)
+		expectedDigest = page.Digest
+	}
+	sort.Strings(refs)
+	refs = uniqueRuntimeRefs(refs)
+	content := "---\nid: " + string(runtimeSharedAtlasPageID) + "\ntitle: Project Atlas\ntype: entity\nsource_refs:\n  - " +
+		strings.Join(refs, "\n  - ") + "\n---\n# Project Atlas\n\nAtlasintegrationbeacon uses PostgreSQL for durable state; recovery rebuilds projections.\n"
+	plan := domain.ModelEditPlan{
+		SchemaDigest: input.Schema.Digest,
+		SourceRefs:   refs,
+		Edits: []domain.FileEdit{{
+			Path: runtimeSharedAtlasPagePath, ExpectedDigest: expectedDigest, Content: []byte(content),
+		}},
+		Rationale: "merge related Atlas evidence into one semantic page",
+	}
+	if expectedDigest != "" {
+		return plan, nil
+	}
+	for _, catalog := range input.Catalogs {
+		if catalog.Path != "wiki/index.md" {
+			continue
+		}
+		root := strings.TrimRight(catalog.Content, "\n") + "\n\n* [Project Atlas](entities/atlas-integration.md)\n"
+		plan.Edits = append(plan.Edits, domain.FileEdit{
+			Path: catalog.Path, ExpectedDigest: catalog.Digest, Content: []byte(root),
+		})
+		break
+	}
+	return plan, nil
+}
+
+func uniqueRuntimeRefs(refs []string) []string {
+	unique := refs[:0]
+	for _, ref := range refs {
+		if len(unique) == 0 || unique[len(unique)-1] != ref {
+			unique = append(unique, ref)
+		}
+	}
+	return unique
+}
+
+func waitForRuntimeMaintenance(t *testing.T, host *knowl.Host, sourceID domain.SourceID) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err := host.SourceStatus(context.Background(), sourceID)
+		if err != nil {
+			t.Fatalf("SourceStatus(%s): %v", sourceID, err)
+		}
+		if status.Maintenance.Counts.Failed > 0 {
+			t.Fatalf("SourceStatus(%s) maintenance failed: %#v", sourceID, status.Maintenance)
+		}
+		if status.Maintenance.Counts.Committed == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("maintenance for %s did not commit", sourceID)
 }
 
 func TestHostProgrammaticFilesystemAdapterOverridesBuiltIn(t *testing.T) {
@@ -434,7 +589,7 @@ func TestHostProgrammaticFilesystemAdapterOverridesBuiltIn(t *testing.T) {
 	config.Sources = []domain.Source{runtimeFilesystemSource("custom", t.TempDir(), true)}
 	adapter := &runtimeSourceAdapter{}
 	host, err := knowl.New(ctx, knowl.Options{
-		Config: config,
+		Config: config, Maintainer: provider.Fixture{},
 		SourceAdapters: map[domain.SourceType]app.SourceAdapter{
 			domain.SourceTypeFilesystem: adapter,
 		},
@@ -451,8 +606,11 @@ func TestHostProgrammaticFilesystemAdapterOverridesBuiltIn(t *testing.T) {
 		t.Fatalf("adapter calls = list:%d fetch:%d", lists, fetches)
 	}
 	query, err := host.Query().Query(ctx, config.Scope, "Overridebeacon", domain.ReadLimits{}, []domain.SourceID{"custom"})
-	if err != nil || len(query.Pages) != 1 {
+	if err != nil || len(query.Pages) != 0 {
 		t.Fatalf("override query = %#v, %v", query, err)
+	}
+	if raw, ok := runtimeRawDocumentContent(t, host, config.Scope, "custom", "custom.md"); !ok || !strings.Contains(string(raw), "Overridebeacon") {
+		t.Fatalf("override raw source = %q, present=%v", raw, ok)
 	}
 }
 
@@ -472,7 +630,7 @@ func TestHostOnStartSourceDoesNotBlockReadinessAndStopsCleanly(t *testing.T) {
 	config.Sources = []domain.Source{source}
 	adapter := &blockingRuntimeSourceAdapter{started: make(chan struct{})}
 	host, err := knowl.New(context.Background(), knowl.Options{
-		Config: config,
+		Config: config, Maintainer: provider.Fixture{},
 		SourceAdapters: map[domain.SourceType]app.SourceAdapter{
 			domain.SourceTypeFilesystem: adapter,
 		},
@@ -518,7 +676,7 @@ func TestHostRejectsInvalidSourceAdapterRegistrationBeforeOpeningStore(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, newErr := knowl.New(context.Background(), knowl.Options{
-				Config: config, SourceAdapters: map[domain.SourceType]app.SourceAdapter{domain.SourceTypeFilesystem: test.adapter},
+				Config: config, Maintainer: provider.Fixture{}, SourceAdapters: map[domain.SourceType]app.SourceAdapter{domain.SourceTypeFilesystem: test.adapter},
 			})
 			if !errors.Is(newErr, app.ErrSourceInvalid) {
 				t.Fatalf("invalid adapter error = %v", newErr)
@@ -665,6 +823,30 @@ func runtimeSourceInventory(t *testing.T, host *knowl.Host, scope domain.ScopeRe
 		inventory[entry.Path] = entry.Digest
 	}
 	return inventory
+}
+
+func runtimeRawDocumentContent(t *testing.T, host *knowl.Host, scope domain.ScopeRef, sourceID domain.SourceID, documentID domain.DocumentID) ([]byte, bool) {
+	t.Helper()
+	inspection, err := host.Workspace().Inspect(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("inspect raw sources: %v", err)
+	}
+	var contents []byte
+	found := false
+	for _, raw := range inspection.RawSources {
+		document := raw.Source.SourceDocument
+		if document.SourceID != sourceID || document.DocumentID != documentID {
+			continue
+		}
+		content, readErr := host.Workspace().ReadSource(context.Background(), raw.Source, domain.ReadLimits{})
+		if readErr != nil {
+			t.Fatalf("read raw source %s/%s: %v", sourceID, documentID, readErr)
+		}
+		contents = append(contents, content...)
+		contents = append(contents, '\n')
+		found = true
+	}
+	return contents, found
 }
 
 func (adapter *isolatingRuntimeSourceAdapter) List(ctx context.Context, source domain.Source, token string) (domain.DocumentPage, error) {

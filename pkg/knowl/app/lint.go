@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	lintError   = "error"
-	lintWarning = "warning"
-	lintInfo    = "info"
+	lintError             = "error"
+	lintWarning           = "warning"
+	lintInfo              = "info"
+	rootCatalogBundlePath = "index.md"
 )
 
 // LintOptions configures deterministic lint and optional suggestion-only model lint.
@@ -65,7 +66,7 @@ func (service *LintService) Lint(ctx context.Context, scope knowl.ScopeRef) (kno
 	}
 	findings := make([]knowl.LintFinding, 0)
 	findings = append(findings, lintRawSources(inspection.RawSources)...)
-	findings = append(findings, lintPages(inspection.Snapshot, inspection.Index, inspection.RawSources)...)
+	findings = append(findings, lintPages(inspection.Snapshot, inspection.Index, inspection.Catalogs, inspection.RawSources)...)
 	findings = append(findings, lintLog(inspection)...)
 	if checker, ok := service.index.(projectionChecker); ok {
 		if err := checker.CheckProjection(readCtx, inspection.Snapshot); err != nil {
@@ -102,9 +103,10 @@ func lintRawSources(records []knowl.RawSourceRecord) []knowl.LintFinding {
 	return findings
 }
 
-func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, records []knowl.RawSourceRecord) []knowl.LintFinding {
+func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, catalogs []knowl.PageSnapshot, records []knowl.RawSourceRecord) []knowl.LintFinding {
 	findings := make([]knowl.LintFinding, 0)
 	pageIDs := make(map[knowl.PageID]struct{}, len(snapshot.Pages))
+	pagePaths := make(map[string]knowl.PageID, len(snapshot.Pages))
 	incoming := make(map[knowl.PageID]struct{})
 	rawKeys := make(map[string]struct{})
 	for _, record := range records {
@@ -117,6 +119,7 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 			findings = append(findings, knowl.LintFinding{Code: "page.duplicate_id", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "multiple canonical pages use the same page ID"})
 		}
 		pageIDs[page.ID] = struct{}{}
+		pagePaths[strings.TrimPrefix(page.Path, "wiki/")] = page.ID
 		metadata, err := knowlwiki.ParseFrontmatter(page.Content)
 		if err != nil {
 			findings = append(findings, knowl.LintFinding{Code: "frontmatter.malformed", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "page frontmatter is missing or malformed"})
@@ -151,24 +154,92 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, recor
 			}
 		}
 	}
-	indexTargets, malformed := knowlwiki.IndexTargets(index.Content)
-	if malformed {
-		findings = append(findings, knowl.LintFinding{Code: "index.malformed", Severity: lintError, Path: index.Path, Message: "index contains an unterminated wiki link"})
+	if len(catalogs) == 0 {
+		catalogs = []knowl.PageSnapshot{index}
 	}
-	indexSet := make(map[knowl.PageID]struct{}, len(indexTargets))
-	for _, target := range indexTargets {
-		pageID := knowl.PageID(target)
-		indexSet[pageID] = struct{}{}
-		if _, exists := pageIDs[pageID]; !exists {
-			findings = append(findings, knowl.LintFinding{Code: "index.broken_page", Severity: lintError, Path: index.Path, PageID: pageID, Message: "index points to a page that does not exist"})
+	catalogByPath := make(map[string]knowl.PageSnapshot, len(catalogs))
+	for _, catalog := range catalogs {
+		catalogByPath[strings.TrimPrefix(catalog.Path, "wiki/")] = catalog
+	}
+	edges := make(map[string][]string, len(catalogs))
+	for catalogPath, catalog := range catalogByPath {
+		destinations, malformed := knowlwiki.IndexDestinations(catalog.Content, 4096)
+		if malformed {
+			code := "catalog.malformed"
+			if catalogPath == rootCatalogBundlePath {
+				code = "index.malformed"
+			}
+			findings = append(findings, knowl.LintFinding{Code: code, Severity: lintError, Path: catalog.Path, Message: "catalog contains malformed or excessive links"})
+		}
+		for _, destination := range destinations {
+			target, external, valid := knowlwiki.ResolveIndexDestination(catalogPath, destination)
+			if !valid {
+				findings = append(findings, knowl.LintFinding{Code: "catalog.target_escape", Severity: lintError, Path: catalog.Path, Message: "catalog target escapes or is invalid"})
+				continue
+			}
+			if external {
+				continue
+			}
+			if _, catalogExists := catalogByPath[target]; !catalogExists {
+				if _, pageExists := pagePaths[target]; !pageExists {
+					code := "catalog.broken_target"
+					if catalogPath == rootCatalogBundlePath {
+						code = "index.broken_page"
+					}
+					findings = append(findings, knowl.LintFinding{Code: code, Severity: lintError, Path: catalog.Path, Message: "catalog target does not exist"})
+					continue
+				}
+			}
+			edges[catalogPath] = append(edges[catalogPath], target)
+		}
+		sort.Strings(edges[catalogPath])
+	}
+	state := make(map[string]uint8, len(catalogs))
+	var visit func(string)
+	visit = func(catalogPath string) {
+		state[catalogPath] = 1
+		for _, target := range edges[catalogPath] {
+			if _, catalog := catalogByPath[target]; !catalog {
+				continue
+			}
+			if state[target] == 1 {
+				findings = append(findings, knowl.LintFinding{Code: "catalog.cycle", Severity: lintError, Path: catalogByPath[catalogPath].Path, Message: "catalog hierarchy contains a cycle"})
+				continue
+			}
+			if state[target] == 0 {
+				visit(target)
+			}
+		}
+		state[catalogPath] = 2
+	}
+	catalogPaths := make([]string, 0, len(catalogByPath))
+	for catalogPath := range catalogByPath {
+		catalogPaths = append(catalogPaths, catalogPath)
+	}
+	sort.Strings(catalogPaths)
+	for _, catalogPath := range catalogPaths {
+		if state[catalogPath] == 0 {
+			visit(catalogPath)
 		}
 	}
+	reachable := make(map[string]struct{})
+	queue := []string{rootCatalogBundlePath}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if _, seen := reachable[current]; seen {
+			continue
+		}
+		reachable[current] = struct{}{}
+		queue = append(queue, edges[current]...)
+	}
 	for _, page := range snapshot.Pages {
-		if _, exists := indexSet[page.ID]; !exists {
+		pagePath := strings.TrimPrefix(page.Path, "wiki/")
+		if _, exists := reachable[pagePath]; !exists {
 			findings = append(findings, knowl.LintFinding{Code: "index.missing_page", Severity: lintWarning, Path: index.Path, PageID: page.ID, Message: "canonical page is not listed in index"})
 		}
 		if _, exists := incoming[page.ID]; !exists {
-			if _, indexed := indexSet[page.ID]; !indexed {
+			if _, indexed := reachable[pagePath]; !indexed {
 				findings = append(findings, knowl.LintFinding{Code: "page.orphan", Severity: lintWarning, Path: page.Path, PageID: page.ID, Message: "page has no incoming wiki link or index entry"})
 			}
 		}

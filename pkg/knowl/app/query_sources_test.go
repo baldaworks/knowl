@@ -15,6 +15,7 @@ import (
 const (
 	queryTestSourceEngineering = "engineering"
 	queryTestSourceOperations  = "operations"
+	queryTestSourceRevision    = "revision-1"
 )
 
 func TestNormalizeSourcesFilter(t *testing.T) {
@@ -69,18 +70,21 @@ func TestQueryServicePreservesSourceEvidenceAndCuratedJSON(t *testing.T) {
 	t.Parallel()
 
 	document := &knowl.SourceDocument{
-		SourceID: queryTestSourceEngineering, DocumentID: "docs/one.md", Revision: "revision-1", URI: "file:///engineering/docs/one.md",
+		SourceID: queryTestSourceEngineering, DocumentID: "docs/one.md", Revision: queryTestSourceRevision, URI: "file:///engineering/docs/one.md",
+	}
+	operationsDocument := knowl.SourceDocument{
+		SourceID: queryTestSourceOperations, DocumentID: "runbook.md", Revision: queryTestSourceRevision, URI: "file:///operations/runbook.md",
 	}
 	index := &recordingSourceFilterIndex{results: []knowl.PageReference{
 		{ID: "curated", Path: "wiki/curated.md", Title: "Curated", Snippet: "curated evidence", SourceRefs: []string{"source:curated"}},
-		{ID: "sourced", Path: "wiki/sources/engineering/docs/one.md", Title: "Sourced", Snippet: "source evidence", SourceRefs: []string{"source:engineering"}, SourceDocument: document},
+		{ID: "sourced", Path: "wiki/entities/shared.md", Title: "Sourced", Snippet: "source evidence", SourceRefs: []string{"source:engineering", "source:operations"}, SourceDocument: document, SourceDocuments: []knowl.SourceDocument{operationsDocument, *document, *document}},
 	}}
 	service := &QueryService{index: index, limits: DefaultReadLimits()}
 	references, err := service.Search(context.Background(), "local", "evidence", knowl.ReadLimits{}, nil)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if len(references) != 2 || references[0].SourceDocument != nil || references[1].SourceDocument == nil || *references[1].SourceDocument != *document || !references[0].Untrusted || !references[1].Untrusted {
+	if len(references) != 2 || references[0].SourceDocument != nil || references[1].SourceDocument == nil || *references[1].SourceDocument != *document || len(references[1].SourceDocuments) != 2 || references[1].SourceDocuments[0] != *document || references[1].SourceDocuments[1] != operationsDocument || !references[0].Untrusted || !references[1].Untrusted {
 		t.Fatalf("Search() references = %#v", references)
 	}
 	encoded, err := json.Marshal(references[0])
@@ -92,15 +96,16 @@ func TestQueryServicePreservesSourceEvidenceAndCuratedJSON(t *testing.T) {
 		t.Fatalf("curated reference JSON = %s, want %s", encoded, wantJSON)
 	}
 
-	references[1].SourceDocument.Revision = "mutated"
-	if document.Revision != "revision-1" {
+	references[1].SourceDocument.Revision = mutatedFixtureValue
+	references[1].SourceDocuments[0].Revision = mutatedFixtureValue
+	if document.Revision != queryTestSourceRevision {
 		t.Fatalf("Search() exposed mutable index provenance: %#v", document)
 	}
 	result, err := service.Query(context.Background(), "local", "evidence", knowl.ReadLimits{}, nil)
 	if err != nil {
 		t.Fatalf("Query() error = %v", err)
 	}
-	if len(result.Pages) != 2 || result.Pages[1].SourceDocument == nil || *result.Pages[1].SourceDocument != *document {
+	if len(result.Pages) != 2 || result.Pages[1].SourceDocument == nil || *result.Pages[1].SourceDocument != *document || len(result.Pages[1].SourceDocuments) != 2 || result.Pages[1].SourceDocuments[1] != operationsDocument {
 		t.Fatalf("Query() pages = %#v", result.Pages)
 	}
 }

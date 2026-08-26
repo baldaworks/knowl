@@ -68,7 +68,7 @@ func (f *flakyFinalizeState) FinalizeSync(ctx context.Context, finalization app.
 // changedListing seeds one finalized document and queues an update listing.
 func changedListing(t *testing.T, harness *stageHarness) (seededRef, updatedRef knowl.DocumentRef) {
 	t.Helper()
-	harness.seedFinalized(t, []seededDoc{{path: sagaDocPath, body: "before"}})
+	harness.seedFinalized(t, []seededDoc{{path: sagaDocPath, body: "before", legacyMirror: true}})
 	updatedRef = harness.descriptor(sagaDocPath, "after")
 	harness.adapter.script(updatedRef.ExternalID, "after")
 	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{updatedRef}, ""))
@@ -279,16 +279,15 @@ func TestDurableTransitionsIgnoreCallerCancellation(t *testing.T) {
 func assertCanonicalConverged(t *testing.T, harness *stageHarness, wantBody string) {
 	t.Helper()
 	inventory, err := harness.service.sourceContent.SourceDigests(context.Background(), harness.scope, harness.sourceID, 16)
-	if err != nil || len(inventory) != 1 || inventory[0].Path != sagaMirrorPath {
+	if err != nil || len(inventory) != 0 {
 		t.Fatalf("converged inventory = %#v, %v", inventory, err)
 	}
 	head, headErr := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, sagaDocPath)
-	if headErr != nil || head.Deleted || head.MirrorPath != inventory[0].Path {
+	if headErr != nil || head.Deleted || head.MirrorPath != "" || head.MirrorDigest != "" {
 		t.Fatalf("converged head = %#v, %v", head, headErr)
 	}
-	fileBytes, fileErr := os.ReadFile(filepath.Join(harness.workspace.Root(), filepath.FromSlash(head.MirrorPath)))
-	if fileErr != nil || string(fileBytes) != wantBody {
-		t.Fatalf("canonical bytes = %q, %v; want %q", fileBytes, fileErr, wantBody)
+	if _, fileErr := os.Stat(filepath.Join(harness.workspace.Root(), filepath.FromSlash(sagaMirrorPath))); !errors.Is(fileErr, os.ErrNotExist) {
+		t.Fatalf("legacy mirror still exists: %v", fileErr)
 	}
 	raw, rawErr := harness.service.content.ReadSource(context.Background(), head.AcceptedSource, knowl.ReadLimits{})
 	if rawErr != nil || string(raw) != wantBody {

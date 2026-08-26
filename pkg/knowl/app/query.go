@@ -137,12 +137,43 @@ func (service *QueryService) Search(ctx context.Context, scope knowl.ScopeRef, q
 	for index := range references {
 		references[index].Untrusted = true
 		references[index].SourceRefs = append([]string(nil), references[index].SourceRefs...)
+		references[index].SourceDocuments = sortedSourceDocuments(references[index].SourceDocuments)
 		if references[index].SourceDocument != nil {
 			document := *references[index].SourceDocument
+			references[index].SourceDocument = &document
+			if len(references[index].SourceDocuments) == 0 {
+				references[index].SourceDocuments = []knowl.SourceDocument{document}
+			}
+		} else if len(references[index].SourceDocuments) > 0 {
+			document := references[index].SourceDocuments[0]
 			references[index].SourceDocument = &document
 		}
 	}
 	return references, nil
+}
+
+func sortedSourceDocuments(documents []knowl.SourceDocument) []knowl.SourceDocument {
+	result := append([]knowl.SourceDocument(nil), documents...)
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].SourceID != result[right].SourceID {
+			return result[left].SourceID < result[right].SourceID
+		}
+		if result[left].DocumentID != result[right].DocumentID {
+			return result[left].DocumentID < result[right].DocumentID
+		}
+		if result[left].Revision != result[right].Revision {
+			return result[left].Revision < result[right].Revision
+		}
+		return result[left].URI < result[right].URI
+	})
+	unique := result[:0]
+	for _, document := range result {
+		if len(unique) > 0 && unique[len(unique)-1] == document {
+			continue
+		}
+		unique = append(unique, document)
+	}
+	return unique
 }
 
 // Links returns bounded, untrusted graph references for one page.

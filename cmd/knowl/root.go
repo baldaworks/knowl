@@ -52,7 +52,7 @@ func newRootCommand() *cobra.Command {
    - knowl retrieve <text>
    - knowl ingest --input request.json
    - knowl operation <operation-id>
-4. Inspect or synchronize configured sources without a maintainer provider:
+4. Inspect or synchronize sources with the configured maintainer provider:
    - knowl source list
    - knowl source sync <source-id>
    - knowl source status <source-id>

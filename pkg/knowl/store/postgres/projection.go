@@ -35,6 +35,7 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 
 	for _, statement := range []string{
 		"DELETE FROM knowl_links WHERE scope = $1",
+		"DELETE FROM knowl_page_sources WHERE scope = $1",
 		"DELETE FROM knowl_pages WHERE scope = $1",
 		"DELETE FROM knowl_projection_state WHERE scope = $1",
 	} {
@@ -46,7 +47,16 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	semanticPages := make([]knowl.PageSnapshot, 0, len(snapshot.Pages))
+	excludedPageIDs := make(map[knowl.PageID]struct{})
 	for _, page := range snapshot.Pages {
+		if !projectionmeta.SemanticPage(page) {
+			excludedPageIDs[page.ID] = struct{}{}
+			continue
+		}
+		semanticPages = append(semanticPages, page)
+	}
+	for _, page := range semanticPages {
 		format, description, body, metadata, valuesErr := projectionmeta.PageValues(page)
 		if valuesErr != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, valuesErr)
@@ -59,11 +69,20 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		if err != nil {
 			return fmt.Errorf("encode page source refs: %w", err)
 		}
+		documents := projectionmeta.SourceDocuments(page)
+		encodedDocuments, encodeErr := json.Marshal(documents)
+		if encodeErr != nil {
+			return fmt.Errorf("encode page source documents: %w", encodeErr)
+		}
 		var sourceID any
 		var sourceDocument any
-		if page.SourceDocument != nil {
-			sourceID = string(page.SourceDocument.SourceID)
-			encodedDocument, encodeErr := json.Marshal(page.SourceDocument)
+		legacyDocument := page.SourceDocument
+		if legacyDocument == nil && len(documents) > 0 {
+			legacyDocument = &documents[0]
+		}
+		if legacyDocument != nil {
+			sourceID = string(legacyDocument.SourceID)
+			encodedDocument, encodeErr := json.Marshal(legacyDocument)
 			if encodeErr != nil {
 				return fmt.Errorf("encode page source document: %w", encodeErr)
 			}
@@ -71,8 +90,8 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO knowl_pages (
-				scope, page_id, path, title, description, body, digest, source_refs, source_id, source_document, format, okf_metadata, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11, $12::jsonb, $13)
+				scope, page_id, path, title, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12, $13::jsonb, $14)
 			ON CONFLICT (scope, path) DO UPDATE SET
 				page_id = EXCLUDED.page_id,
 				title = EXCLUDED.title,
@@ -82,21 +101,35 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 				source_refs = EXCLUDED.source_refs,
 				source_id = EXCLUDED.source_id,
 				source_document = EXCLUDED.source_document,
+				source_documents = EXCLUDED.source_documents,
 				format = EXCLUDED.format,
 				okf_metadata = EXCLUDED.okf_metadata,
 				updated_at = EXCLUDED.updated_at`,
 			snapshot.Scope, page.ID, page.Path, page.Title, description, body, page.Digest,
-			string(sourceRefs), sourceID, sourceDocument, format, nullableJSON(metadata), updatedAt.UTC()); err != nil {
+			string(sourceRefs), sourceID, sourceDocument, string(encodedDocuments), format, nullableJSON(metadata), updatedAt.UTC()); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
+		for _, document := range documents {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_page_sources (scope, page_id, source_id, document_id, revision, uri) VALUES ($1, $2, $3, $4, $5, $6)`, snapshot.Scope, page.ID, document.SourceID, document.DocumentID, document.Revision, document.URI); err != nil {
+				return fmt.Errorf("project page source %q: %w", page.Path, err)
+			}
+		}
 	}
+	projectedLinks := 0
 	for _, link := range snapshot.Links {
+		if _, excluded := excludedPageIDs[link.From]; excluded {
+			continue
+		}
+		if _, excluded := excludedPageIDs[link.To]; excluded {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO knowl_links (scope, from_page, to_page, relation)
 			VALUES ($1, $2, $3, $4)`,
 			snapshot.Scope, link.From, link.To, link.Relation); err != nil {
 			return fmt.Errorf("project link: %w", err)
 		}
+		projectedLinks++
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO knowl_projection_state (
@@ -109,7 +142,7 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 			link_count = EXCLUDED.link_count,
 			ready_at = EXCLUDED.ready_at`,
 		snapshot.Scope, snapshot.SchemaDigest, snapshotDigest(snapshot),
-		len(snapshot.Pages), len(snapshot.Links), now); err != nil {
+		len(semanticPages), projectedLinks, now); err != nil {
 		return fmt.Errorf("record projection readiness: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -163,17 +196,18 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 
 func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	type digestPage struct {
-		ID             knowl.PageID
-		Path           string
-		Digest         string
-		Title          string
-		Format         string
-		Description    string
-		Body           string
-		OKF            json.RawMessage
-		SourceRefs     []string
-		SourceDocument *knowl.SourceDocument
-		UpdatedAt      time.Time
+		ID              knowl.PageID
+		Path            string
+		Digest          string
+		Title           string
+		Format          string
+		Description     string
+		Body            string
+		OKF             json.RawMessage
+		SourceRefs      []string
+		SourceDocument  *knowl.SourceDocument
+		SourceDocuments []knowl.SourceDocument
+		UpdatedAt       time.Time
 	}
 	type digestLink struct {
 		From     knowl.PageID
@@ -192,7 +226,8 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
 			Format: format, Description: description, Body: body, OKF: metadata,
 			SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
-			UpdatedAt: page.UpdatedAt.UTC(),
+			SourceDocuments: projectionmeta.SourceDocuments(page),
+			UpdatedAt:       page.UpdatedAt.UTC(),
 		})
 	}
 	sort.Slice(pages, func(left, right int) bool {

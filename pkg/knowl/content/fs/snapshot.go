@@ -18,6 +18,8 @@ import (
 
 const okfLinkRelation = "okf"
 
+const maxCatalogSnapshots = 1024
+
 // Snapshot captures canonical Markdown digests for projection rebuilds.
 func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) (knowl.WorkspaceSnapshot, error) {
 	return workspace.snapshot(ctx, scope, true)
@@ -36,6 +38,10 @@ func (workspace *Workspace) snapshot(ctx context.Context, scope knowl.ScopeRef, 
 	}
 	workspace.mu.Lock()
 	defer workspace.mu.Unlock()
+	rawSources, err := workspace.acceptedRawSourcesLocked(scope)
+	if err != nil {
+		return knowl.WorkspaceSnapshot{}, err
+	}
 	digests := make(map[string]string)
 	pages := make([]knowl.PageSnapshot, 0)
 	links := make([]knowl.LinkReference, 0)
@@ -100,19 +106,22 @@ func (workspace *Workspace) snapshot(ctx context.Context, scope knowl.ScopeRef, 
 		if infoErr != nil {
 			return infoErr
 		}
+		var pageSnapshot knowl.PageSnapshot
 		if parseErr == nil {
-			pageSnapshot, snapshotErr := parsedPageSnapshot(pageID, relative, content, digest, info.ModTime(), document, capturedAt)
+			var snapshotErr error
+			pageSnapshot, snapshotErr = parsedPageSnapshot(pageID, relative, content, digest, info.ModTime(), document, capturedAt)
 			if snapshotErr != nil {
 				return snapshotErr
 			}
-			pages = append(pages, pageSnapshot)
 		} else {
-			pages = append(pages, knowl.PageSnapshot{
+			pageSnapshot = knowl.PageSnapshot{
 				ID: pageID, Path: relative, Digest: digest, Title: markdownTitle(content), Content: string(content),
 				Body: knowlwiki.Body(string(content)), SourceRefs: markdownSourceRefs(content),
 				SourceDocument: markdownSourceDocument(content), UpdatedAt: info.ModTime().UTC(),
-			})
+			}
 		}
+		resolvePageProvenance(&pageSnapshot, rawSources)
+		pages = append(pages, pageSnapshot)
 		linkContent := content
 		if parseErr == nil {
 			linkContent = []byte(document.Body)
@@ -172,7 +181,75 @@ func (workspace *Workspace) Inspect(ctx context.Context, scope knowl.ScopeRef) (
 	if err != nil {
 		return knowl.WorkspaceInspection{}, err
 	}
-	return knowl.WorkspaceInspection{Scope: scope, Snapshot: snapshot, Index: controlPages[0], Log: controlPages[1], RawSources: rawSources}, nil
+	catalogs, err := workspace.catalogSnapshots(ctx)
+	if err != nil {
+		return knowl.WorkspaceInspection{}, err
+	}
+	return knowl.WorkspaceInspection{
+		Scope: scope, Snapshot: snapshot, Index: controlPages[0], Catalogs: catalogs,
+		Log: controlPages[1], RawSources: rawSources,
+	}, nil
+}
+
+func (workspace *Workspace) catalogSnapshots(ctx context.Context) ([]knowl.PageSnapshot, error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+	wikiRoot := filepath.Join(workspace.root, workspaceWikiDir)
+	catalogs := make([]knowl.PageSnapshot, 0)
+	err := filepath.WalkDir(wikiRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink in wiki: %w", ErrPathRejected)
+		}
+		if entry.IsDir() || entry.Name() != okfIndexFilename {
+			return nil
+		}
+		if len(catalogs) >= maxCatalogSnapshots {
+			return fmt.Errorf("catalog count exceeds %d: %w", maxCatalogSnapshots, ErrWorkspaceInvalid)
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		relative, relErr := filepath.Rel(workspace.root, path)
+		if relErr != nil {
+			return relErr
+		}
+		relative = filepath.ToSlash(relative)
+		bundleRelative := strings.TrimPrefix(relative, workspaceWikiDir+"/")
+		index, validateErr := okf.ValidateIndex(bundleRelative, content, okfLimits(workspace.maxSourceBytes))
+		if validateErr != nil {
+			return validateErr
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		catalogs = append(catalogs, knowl.PageSnapshot{
+			ID: knowl.PageID(strings.TrimSuffix(bundleRelative, markdownExt)), Path: relative,
+			Digest: digestBytes(content), Title: markdownTitle(content), Content: string(content),
+			Body: index.Body, Untrusted: true, UpdatedAt: info.ModTime().UTC(),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("snapshot catalogs: %w", err)
+	}
+	sort.Slice(catalogs, func(left, right int) bool {
+		if catalogs[left].Path == canonicalIndexPath {
+			return catalogs[right].Path != canonicalIndexPath
+		}
+		if catalogs[right].Path == canonicalIndexPath {
+			return false
+		}
+		return catalogs[left].Path < catalogs[right].Path
+	})
+	return catalogs, nil
 }
 
 type rawDirectoryState struct {

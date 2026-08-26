@@ -43,9 +43,10 @@ same runtime in-process.
 
 Use Knowl when you want one durable project/domain knowledge layer that can:
 
-- bootstrap an existing Markdown wiki, Obsidian vault, or OKF v0.2 bundle into
-  a Knowl-owned workspace through the production source synchronization engine;
-- mirror multiple named read-only filesystem wikis without path collisions;
+- optionally bootstrap an existing Markdown wiki, Obsidian vault, or OKF v0.2
+  bundle as raw evidence through the production source synchronization engine;
+- combine multiple named read-only filesystem sources into one deduplicated,
+  maintainer-owned semantic wiki;
 - ingest new text or URI sources through one canonical pipeline;
 - answer retrieval requests with bounded evidence and provenance;
 - run next to an agent as a sidecar service or inside a Go process through Fx.
@@ -112,7 +113,7 @@ Build the CLI:
 go build -o knowl ./cmd/knowl
 ```
 
-Bootstrap an existing wiki:
+Optionally bootstrap an existing wiki into a fresh workspace:
 
 ```bash
 ./knowl bootstrap wiki /path/to/existing/wiki
@@ -120,12 +121,12 @@ Bootstrap an existing wiki:
 ./knowl bootstrap okf /path/to/okf-bundle
 ```
 
-Bootstrap is a freshness-guarded first sync. It creates the deterministic
-`bootstrap-wiki` source (or `bootstrap-obsidian` / `bootstrap-okf`) and writes
-mirrors below `wiki/sources/<source_id>/**`; it does not replace curated
-`wiki/index.md`.
-The generated local config is provider-free, so later `source list`, `sync`,
-and `status` commands work without an LLM provider.
+Bootstrap is a freshness-guarded first sync, not a startup requirement. It
+creates the deterministic `bootstrap-wiki` source (or `bootstrap-obsidian` /
+`bootstrap-okf`), stores its exact documents under `raw/`, and queues durable
+maintenance operations. Source documents are never copied into `wiki/`.
+The generated local config includes a maintainer provider because every
+runnable host must be able to turn accepted text into semantic OKF pages.
 
 Or initialize an empty local workspace:
 
@@ -182,9 +183,10 @@ workspace mutation.
 ## Configuration shape
 
 Knowl config lives under the `knowl:` section and stays aligned with Balda's
-typed runtime/provider shape. The provider is optional: retrieval, lint, source
-synchronization, and status work without it; ingest remains registered and
-returns the stable `maintainer_unavailable` outcome until a provider is configured.
+typed runtime/provider shape. A runnable host requires either an explicitly
+injected maintainer or a `knowl.provider` entry resolved from
+`runtime.providers`; invalid or absent provider configuration fails before
+readiness.
 
 Minimal SQLite example:
 
@@ -208,12 +210,13 @@ knowl:
     token: replace-with-a-local-secret
 ```
 
-For provider-free source operation, omit `runtime.providers` and
-`knowl.provider`, then configure one or more `knowl.sources` entries.
+Configure one or more sources alongside the required provider. Initial
+bootstrap and automatic `on_start` synchronization are both optional; sources
+can instead be synchronized explicitly with `knowl source sync`.
 
 ```yaml
 knowl:
-  provider: ""
+  provider: opencode
   workspace:
     path: .
   sources:
@@ -224,7 +227,7 @@ knowl:
         include: ["**/*.md"]
         flavor: obsidian
       sync:
-        on_start: true
+        on_start: false
         interval: 5m
     - id: operations
       type: filesystem
@@ -233,7 +236,7 @@ knowl:
         include: ["**/*.md"]
         flavor: markdown
       sync:
-        on_start: true
+        on_start: false
         interval: 5m
     - id: catalog
       type: filesystem
@@ -242,7 +245,7 @@ knowl:
         include: ["**/*"]
         flavor: okf
       sync:
-        on_start: true
+        on_start: false
         interval: 5m
   storage:
     type: sqlite
@@ -250,10 +253,15 @@ knowl:
       path: .knowl/knowl.sqlite
 ```
 
-Source IDs are part of document identity. Equal paths such as `Shared.md` are
-stored independently under `wiki/sources/engineering/Shared.md` and
-`wiki/sources/operations/Shared.md`. Repeated syncs fetch no unchanged bytes;
-complete scans tombstone deletions while immutable raw revisions remain.
+Source IDs are part of document lineage. Equal paths such as `Shared.md` are
+stored as independent immutable revisions under `raw/`; the maintainer may
+synthesize their related facts into one semantic page carrying both source
+documents. Repeated syncs fetch no unchanged bytes. Complete scans tombstone
+deletions while raw history and previously curated knowledge remain.
+
+A successful source sync means raw acceptance plus durable maintenance
+reservation. LLM maintenance runs asynchronously; `source status` reports its
+bounded queued, replayed, committed, and failed counts and samples separately.
 
 Container baseline example:
 
@@ -280,7 +288,6 @@ workspace/
 ├── wiki/
 │   ├── index.md
 │   ├── log.md
-│   ├── sources/<source_id>/
 │   ├── entities/
 │   ├── concepts/
 │   └── syntheses/
@@ -298,6 +305,10 @@ remain rebuildable operational state.
 standard OKF metadata and unknown extension fields. Retrieval exposes that
 metadata as a structured `okf` object over CLI, HTTP, and MCP. Reserved
 `index.md` and `log.md` files are control documents, not search evidence.
+Configured source files are not part of this portable bundle. On the next
+successful reconciliation, legacy derived `wiki/sources/<source_id>/**`
+content is removed through the staged recovery mechanism without changing raw
+history or curated pages.
 
 Legacy workspaces are never rewritten implicitly. Back them up and run:
 

@@ -100,16 +100,17 @@ func (handler *handler) GetOperation(response http.ResponseWriter, request *http
 }
 
 type httpEvidenceItem struct {
-	PageID     domain.PageID `json:"page_id"`
-	Title      string        `json:"title"`
-	Snippet    string        `json:"snippet"`
-	SourceRefs []string      `json:"source_refs,omitempty"`
-	SourceID   string        `json:"source_id,omitempty"`
-	DocumentID string        `json:"document_id,omitempty"`
-	Revision   string        `json:"revision,omitempty"`
-	URI        string        `json:"uri,omitempty"`
-	OKF        *okf.Metadata `json:"okf,omitempty"`
-	Untrusted  bool          `json:"untrusted"`
+	PageID          domain.PageID           `json:"page_id"`
+	Title           string                  `json:"title"`
+	Snippet         string                  `json:"snippet"`
+	SourceRefs      []string                `json:"source_refs,omitempty"`
+	SourceDocuments []domain.SourceDocument `json:"source_documents,omitempty"`
+	SourceID        string                  `json:"source_id,omitempty"`
+	DocumentID      string                  `json:"document_id,omitempty"`
+	Revision        string                  `json:"revision,omitempty"`
+	URI             string                  `json:"uri,omitempty"`
+	OKF             *okf.Metadata           `json:"okf,omitempty"`
+	Untrusted       bool                    `json:"untrusted"`
 }
 
 type httpRetrieveResponse struct {
@@ -133,13 +134,18 @@ type httpOperationResponse struct {
 func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
 	evidence := make([]httpEvidenceItem, 0, len(result.Pages))
 	for _, page := range result.Pages {
+		sourceDocuments := append([]domain.SourceDocument(nil), page.SourceDocuments...)
+		if len(sourceDocuments) == 0 && page.SourceDocument != nil {
+			sourceDocuments = append(sourceDocuments, *page.SourceDocument)
+		}
 		item := httpEvidenceItem{
-			PageID:     page.ID,
-			Title:      page.Title,
-			Snippet:    page.Snippet,
-			SourceRefs: append([]string(nil), page.SourceRefs...),
-			OKF:        page.OKF,
-			Untrusted:  page.Untrusted,
+			PageID:          page.ID,
+			Title:           page.Title,
+			Snippet:         page.Snippet,
+			SourceRefs:      append([]string(nil), page.SourceRefs...),
+			SourceDocuments: sourceDocuments,
+			OKF:             page.OKF,
+			Untrusted:       page.Untrusted,
 		}
 		if page.SourceDocument != nil {
 			item.SourceID = string(page.SourceDocument.SourceID)

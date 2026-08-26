@@ -64,3 +64,23 @@ func TestDecodeRejectsInconsistentProjectionMetadata(t *testing.T) {
 		t.Fatalf("Decode() legacy row = %#v, %v", decoded, err)
 	}
 }
+
+func TestSemanticPageAndSourceDocuments(t *testing.T) {
+	const engineering = "engineering"
+	for _, pagePath := range []string{"wiki/index.md", "wiki/entities/index.md", "wiki/log.md", "wiki/sources/engineering/page.md"} {
+		if SemanticPage(knowl.PageSnapshot{Path: pagePath}) {
+			t.Errorf("SemanticPage(%q) = true", pagePath)
+		}
+	}
+	if !SemanticPage(knowl.PageSnapshot{Path: "wiki/entities/page.md"}) {
+		t.Fatal("semantic entity was excluded")
+	}
+	documents := SourceDocuments(knowl.PageSnapshot{SourceDocuments: []knowl.SourceDocument{
+		{SourceID: "operations", DocumentID: "runbook.md", Revision: "1"},
+		{SourceID: engineering, DocumentID: "architecture.md", Revision: "1"},
+		{SourceID: engineering, DocumentID: "architecture.md", Revision: "1"},
+	}})
+	if len(documents) != 2 || documents[0].SourceID != engineering || documents[1].SourceID != "operations" {
+		t.Fatalf("SourceDocuments() = %#v", documents)
+	}
+}

@@ -18,6 +18,7 @@ const (
 	okfIndexFilename   = "index.md"
 	okfLogFilename     = "log.md"
 	defaultMaxBytes    = 4 << 20
+	canonicalIndexPath = "wiki/index.md"
 	canonicalLogPath   = "wiki/log.md"
 	recoveryPrepared   = "prepared"
 	recoveryCommitted  = "committed"

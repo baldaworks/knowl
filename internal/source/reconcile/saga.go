@@ -101,6 +101,23 @@ func (service *Service) refreshRun(ctx context.Context, scope knowl.ScopeRef, ru
 // the deterministic no-op generation that advances durable state without any
 // canonical rewrite.
 func (service *Service) commitPrepared(ctx context.Context, scope knowl.ScopeRef, sourceID knowl.SourceID, input sagaInput) (string, []string, error) {
+	existing, loadErr := service.sourceContent.LoadSourceStage(ctx, scope, sourceID, input.run.ID)
+	if loadErr == nil {
+		commit, err := service.sourceContent.CommitSource(ctx, existing)
+		if err != nil {
+			return "", nil, failStage(classCommit, err)
+		}
+		if err := service.markContentCommitted(ctx, app.SyncGeneration{
+			RunID: input.run.ID, Scope: scope, SourceID: sourceID,
+			Generation: existing.Generation, UpdatedAt: service.options.Clock(),
+		}); err != nil {
+			return "", nil, err
+		}
+		return existing.Generation, commit.Files, nil
+	}
+	if !errors.Is(loadErr, app.ErrStageNotFound) {
+		return "", nil, failStage(classStaging, loadErr)
+	}
 	if len(input.mutations) == 0 {
 		inventory, err := service.canonicalInventory(ctx, scope, sourceID)
 		if err != nil {

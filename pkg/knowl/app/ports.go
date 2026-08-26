@@ -98,6 +98,10 @@ func ValidateExecutionDescriptor(key knowl.OperationKey, descriptor knowl.Execut
 		len(schema.Content) == 0 || len(schema.Content) > maxExecutionSchemaBytes {
 		return ErrExecutionDescriptorUnavailable
 	}
+	if source.SourceDocument != (knowl.SourceDocument{}) &&
+		(ValidateSourceDocument(source.SourceDocument) != nil || source.SourceDocument.Revision != source.Version.Version) {
+		return ErrExecutionDescriptorUnavailable
+	}
 	digest := fmt.Sprintf("%x", sha256.Sum256(schema.Content))
 	if !strings.EqualFold(schema.Digest, digest) {
 		return ErrExecutionDescriptorUnavailable

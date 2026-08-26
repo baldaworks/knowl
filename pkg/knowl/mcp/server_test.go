@@ -11,6 +11,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
+	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -141,7 +142,7 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 		t.Fatalf("filtered knowl_retrieve: %v", err)
 	}
 	filteredResult, ok := filtered.(mcp.RetrieveResult)
-	if !ok || len(filteredResult.Evidence) != 1 || filteredResult.Evidence[0].SourceID != testEngineeringSource || filteredResult.Evidence[0].DocumentID != "shared.md" || filteredResult.Evidence[0].Revision != "revision-1" || filteredResult.Evidence[0].URI == "" || !filteredResult.Evidence[0].Untrusted {
+	if !ok || len(filteredResult.Evidence) != 1 || len(filteredResult.Evidence[0].SourceDocuments) != 2 || filteredResult.Evidence[0].SourceDocuments[0].SourceID != testEngineeringSource || !filteredResult.Evidence[0].Untrusted {
 		t.Fatalf("filtered knowl_retrieve result = %#v", filtered)
 	}
 	unknown, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testTransportQuery, testSourcesArgument: []string{"ghost"}})
@@ -179,13 +180,12 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 }
 
 func transportSearchSnapshot() knowl.WorkspaceSnapshot {
-	document := func(sourceID knowl.SourceID) *knowl.SourceDocument {
-		return &knowl.SourceDocument{SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md"}
+	document := func(sourceID knowl.SourceID) knowl.SourceDocument {
+		return knowl.SourceDocument{SourceID: sourceID, DocumentID: "shared.md", Revision: "revision-1", URI: "file:///" + string(sourceID) + "/shared.md"}
 	}
 	return knowl.WorkspaceSnapshot{Scope: "local", Pages: []knowl.PageSnapshot{
 		{ID: "curated", Path: "wiki/curated.md", Title: "Transportbeacon Curated", Content: testTransportQuery, Digest: "curated"},
-		{ID: testEngineeringSource, Path: "wiki/sources/engineering/shared.md", Title: "Transportbeacon Engineering", Content: testTransportQuery, Digest: testEngineeringSource, SourceDocument: document(testEngineeringSource)},
-		{ID: "operations", Path: "wiki/sources/operations/shared.md", Title: "Transportbeacon Operations", Content: testTransportQuery, Digest: "operations", SourceDocument: document("operations")},
+		{ID: "shared", Path: "wiki/entities/shared.md", Title: "Transportbeacon Shared", Content: testTransportQuery, Digest: "shared", SourceRefs: []string{"raw:engineering@1", "raw:operations@1"}, SourceDocuments: []knowl.SourceDocument{document(testEngineeringSource), document("operations")}},
 	}}
 }
 
@@ -212,11 +212,11 @@ type countingMaintainer struct {
 	counter int
 }
 
-func (maintainer *countingMaintainer) Plan(_ context.Context, _ knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
+func (maintainer *countingMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
 	maintainer.mu.Lock()
 	defer maintainer.mu.Unlock()
 	maintainer.counter++
-	return maintainer.plan, nil
+	return (provider.Fixture{Result: maintainer.plan}).Plan(ctx, input)
 }
 
 func (maintainer *countingMaintainer) calls() int {

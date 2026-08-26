@@ -26,6 +26,9 @@ func TestRetrieveResultMapsOptionalSourceEvidence(t *testing.T) {
 	if len(result.Evidence) != 2 || result.Evidence[0].SourceID != "" || result.Evidence[1].SourceID != "engineering" || result.Evidence[1].DocumentID != "docs/one.md" || result.Evidence[1].Revision != "revision-1" || result.Evidence[1].URI != document.URI {
 		t.Fatalf("retrieve evidence = %#v", result.Evidence)
 	}
+	if len(result.Evidence[1].SourceDocuments) != 1 || result.Evidence[1].SourceDocuments[0] != *document {
+		t.Fatalf("retrieve source documents = %#v", result.Evidence[1].SourceDocuments)
+	}
 	if result.Evidence[1].OKF == nil || result.Evidence[1].OKF.Executor == nil || result.Evidence[1].OKF.Attester == nil || !result.Evidence[1].Untrusted {
 		t.Fatalf("MCP OKF evidence = %#v", result.Evidence[1])
 	}

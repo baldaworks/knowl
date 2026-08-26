@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	testPageID      = "entities/one"
-	testPagePath    = "wiki/entities/one.md"
-	testPageTwoPath = "wiki/entities/two.md"
-	cleanPageOne    = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[[entities/two]]\n"
-	cleanPageTwo    = "---\nid: entities/two\ntitle: Two\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n\n[[entities/one]]\n"
+	testPageID          = "entities/one"
+	testPagePath        = "wiki/entities/one.md"
+	testPageTwoPath     = "wiki/entities/two.md"
+	testRootCatalogPath = "wiki/index.md"
+	cleanPageOne        = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[[entities/two]]\n"
+	cleanPageTwo        = "---\nid: entities/two\ntitle: Two\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n\n[[entities/one]]\n"
 )
 
 func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
@@ -75,10 +76,17 @@ func TestExplicitQueryFilingUsesTheStandardPlanApplyGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read schema: %v", err)
 	}
+	inspection, err := workspace.Inspect(ctx, "local")
+	if err != nil {
+		t.Fatalf("inspect catalogs: %v", err)
+	}
 	request := app.FilingRequest{
 		Query:  "file this result",
-		Result: app.QueryResult{Scope: "local", Query: "file this result", Pages: []knowl.PageReference{{ID: "entities/source", Path: "wiki/entities/source.md", Title: "Source", Untrusted: true}}, Citations: []app.Citation{{Kind: "raw", Reference: testSourceRef, SourceRef: testSourceRef, Untrusted: true}}},
-		Plan:   knowl.ModelEditPlan{SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef}, Edits: []knowl.FileEdit{{Path: "wiki/entities/filed.md", Content: []byte("---\nid: entities/filed\ntitle: Filed\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Filed\n")}}},
+		Result: app.QueryResult{Scope: testSourceScope, Query: "file this result", Pages: []knowl.PageReference{{ID: "entities/source", Path: "wiki/entities/source.md", Title: "Source", Untrusted: true}}, Citations: []app.Citation{{Kind: "raw", Reference: testSourceRef, SourceRef: testSourceRef, Untrusted: true}}},
+		Plan: knowl.ModelEditPlan{SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef}, Edits: []knowl.FileEdit{
+			{Path: "wiki/entities/filed.md", Content: []byte("---\nid: entities/filed\ntitle: Filed\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Filed\n")},
+			{Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [Filed](entities/filed.md)\n")},
+		}},
 	}
 	planned, err := queryService.File(ctx, "local", request)
 	if err != nil {
@@ -170,9 +178,9 @@ func prepareCanonicalQueryWorkspace(t *testing.T, workspace interface {
 		t.Fatalf("accept query fixture source: %v", err)
 	}
 	for relative, content := range map[string]string{
-		testPagePath:    cleanPageOne,
-		testPageTwoPath: cleanPageTwo,
-		"wiki/index.md": "---\nokf_version: \"0.2\"\n---\n# Knowl Index\n\n* [One](entities/one.md)\n* [Two](entities/two.md)\n",
+		testPagePath:        cleanPageOne,
+		testPageTwoPath:     cleanPageTwo,
+		testRootCatalogPath: "---\nokf_version: \"0.2\"\n---\n# Knowl Index\n\n* [One](entities/one.md)\n* [Two](entities/two.md)\n",
 	} {
 		if err := os.WriteFile(filepath.Join(workspace.Root(), filepath.FromSlash(relative)), []byte(content), 0o600); err != nil {
 			t.Fatalf("write query fixture %q: %v", relative, err)

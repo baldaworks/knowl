@@ -670,7 +670,7 @@ func TestHostStopAllowsActiveOperationToFinishAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestNewAllowsProviderFreeHost(t *testing.T) {
+func TestNewRequiresMaintainerOrRuntimeProvider(t *testing.T) {
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("new workspace: %v", err)
@@ -681,35 +681,47 @@ func TestNewAllowsProviderFreeHost(t *testing.T) {
 	config := knowl.DefaultConfig()
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
-	config.ListenAddr = hostListenAddr
 
-	host, err := knowl.New(context.Background(), knowl.Options{Config: config})
+	tests := []struct {
+		name       string
+		maintainer app.Maintainer
+	}{
+		{name: "missing"},
+		{name: "typed nil", maintainer: (*blockingMaintainer)(nil)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := knowl.New(context.Background(), knowl.Options{Config: config, Maintainer: test.maintainer})
+			if err == nil || !strings.Contains(err.Error(), "knowl.provider is required") {
+				t.Fatalf("New() error = %v, want required provider", err)
+			}
+			if _, statErr := os.Stat(config.StorePath); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("store opened before maintainer validation: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestNewAcceptsExplicitMaintainerWithoutBootstrap(t *testing.T) {
+	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
-		t.Fatalf("compose provider-free host: %v", err)
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.Sources = nil
+
+	host, err := knowl.New(context.Background(), knowl.Options{Config: config, Maintainer: provider.Fixture{}})
+	if err != nil {
+		t.Fatalf("New() with explicit maintainer: %v", err)
 	}
 	defer shutdownHost(t, host)
-	if err := host.Start(context.Background()); err != nil {
-		t.Fatalf("start provider-free host: %v", err)
-	}
-	if !host.Ready() {
-		t.Fatal("provider-free host is not ready")
-	}
-	if tools := host.MCP().Tools(); len(tools) != 3 || tools[0].Name != hostRetrieveToolName || tools[1].Name != hostIngestToolName || tools[2].Name != hostOperationToolName {
-		t.Fatalf("provider-free MCP tools = %#v", tools)
-	}
-	if _, err := host.MCP().Call(context.Background(), hostIngestToolName, map[string]any{
-		hostSourceContentKey: hostSourceContent, hostSourceOriginKey: hostSourceOrigin,
-		hostSourceIdempotencyKeyName: hostSourceIdempotencyKey,
-	}); !errors.Is(err, app.ErrMaintainerUnavailable) {
-		t.Fatalf("provider-free MCP ingest error = %v", err)
-	}
-	body := []byte(`{"content":"source text","origin":"source-1","idempotency_key":"1"}`)
-	responseBody, status, err := doHostRequest(t, host, http.MethodPost, "/v1/ingest", body)
-	if err != nil {
-		t.Fatalf("provider-free HTTP ingest: %v", err)
-	}
-	if status != http.StatusServiceUnavailable || !bytes.Contains(responseBody, []byte(`"error":"maintainer_unavailable"`)) {
-		t.Fatalf("provider-free HTTP ingest = status %d, body %s", status, responseBody)
+	if host.Ready() {
+		t.Fatal("host became ready before explicit Start")
 	}
 }
 
@@ -788,11 +800,11 @@ type blockingMaintainer struct {
 	once    sync.Once
 }
 
-func (maintainer *blockingMaintainer) Plan(ctx context.Context, _ domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+func (maintainer *blockingMaintainer) Plan(ctx context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
 	maintainer.once.Do(func() { close(maintainer.started) })
 	select {
 	case <-maintainer.release:
-		return maintainer.plan, nil
+		return (provider.Fixture{Result: maintainer.plan}).Plan(ctx, input)
 	case <-ctx.Done():
 		return domain.ModelEditPlan{}, ctx.Err()
 	}

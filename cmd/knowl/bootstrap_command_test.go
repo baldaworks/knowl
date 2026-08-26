@@ -8,9 +8,10 @@ import (
 	"testing"
 
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
+func TestBootstrapWikiCreatesRawBackedWorkspace(t *testing.T) {
 	clearKnowlEnv(t)
 	workdir := t.TempDir()
 	sourceDir := t.TempDir()
@@ -42,7 +43,7 @@ func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read bootstrap config: %v", err)
 	}
-	for _, want := range []string{"provider: \"\"", "id: bootstrap-wiki", "type: filesystem", "flavor: markdown", sourceDir} {
+	for _, want := range []string{"runtime:", "providers:", "provider: opencode", "id: bootstrap-wiki", "type: filesystem", "flavor: markdown", sourceDir} {
 		if !strings.Contains(string(configContent), want) {
 			t.Fatalf("bootstrap config missing %q:\n%s", want, configContent)
 		}
@@ -58,32 +59,29 @@ func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect bootstrapped workspace: %v", err)
 	}
-	if len(inspection.Snapshot.Pages) != 2 {
-		t.Fatalf("bootstrapped pages = %d, want 2", len(inspection.Snapshot.Pages))
+	if len(inspection.Snapshot.Pages) != 0 {
+		t.Fatalf("bootstrap copied source pages into LLM wiki: %#v", inspection.Snapshot.Pages)
 	}
 	if len(inspection.RawSources) != 2 {
 		t.Fatalf("bootstrapped raw sources = %d, want 2", len(inspection.RawSources))
 	}
 
-	content, err := os.ReadFile(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapWikiSourceID), "Home.md"))
-	if err != nil {
-		t.Fatalf("read canonical page: %v", err)
+	if _, err := os.Stat(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapWikiSourceID))); !os.IsNotExist(err) {
+		t.Fatalf("bootstrap created source mirror directory: %v", err)
 	}
-	for _, want := range []string{
-		"knowl:",
-		"id: sources/bootstrap-wiki/Home",
-		"title: Home",
-		"type: Reference",
-		"source_refs:",
-		"wiki-filesystem:bootstrap-wiki/Home.md@",
-		"source_id: bootstrap-wiki",
-		"document_id: Home.md",
-		"tags:",
-		"- imported",
-	} {
-		if !strings.Contains(string(content), want) {
-			t.Fatalf("canonical page missing %q:\n%s", want, content)
+	foundHome := false
+	for _, record := range inspection.RawSources {
+		if record.Source.SourceDocument.DocumentID != "Home.md" {
+			continue
 		}
+		content, readErr := workspace.ReadSource(context.Background(), record.Source, knowl.ReadLimits{})
+		if readErr != nil || !strings.Contains(string(content), "tags:") || !strings.Contains(string(content), "See [Guide]") {
+			t.Fatalf("bootstrap Home raw = %q, %v", content, readErr)
+		}
+		foundHome = true
+	}
+	if !foundHome {
+		t.Fatal("bootstrap Home raw revision missing")
 	}
 
 	indexContent, err := os.ReadFile(filepath.Join(workdir, indexFile))
@@ -103,7 +101,7 @@ func TestBootstrapWikiCreatesNormalizedWorkspace(t *testing.T) {
 	}
 }
 
-func TestBootstrapObsidianRewritesWikiLinksAndCopiesAssets(t *testing.T) {
+func TestBootstrapObsidianPreservesRawLinksAndAssets(t *testing.T) {
 	clearKnowlEnv(t)
 	workdir := t.TempDir()
 	sourceDir := t.TempDir()
@@ -135,43 +133,35 @@ func TestBootstrapObsidianRewritesWikiLinksAndCopiesAssets(t *testing.T) {
 		t.Fatalf("bootstrap obsidian stderr missing zerolog summary:\n%s", stderr)
 	}
 
-	alphaContent, err := os.ReadFile(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapObsidianSourceID), "Alpha.md"))
-	if err != nil {
-		t.Fatalf("read alpha page: %v", err)
-	}
-	for _, want := range []string{
-		"[[sources/bootstrap-obsidian/Beta|Second]]",
-		"![](diagram.png)",
-		"wiki-filesystem:bootstrap-obsidian/Alpha.md@",
-	} {
-		if !strings.Contains(string(alphaContent), want) {
-			t.Fatalf("bootstrapped obsidian page missing %q:\n%s", want, alphaContent)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapObsidianSourceID), "diagram.png")); err != nil {
-		t.Fatalf("expected copied asset: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapObsidianSourceID), ".obsidian")); !os.IsNotExist(err) {
-		t.Fatalf("obsidian metadata directory should not be copied, stat err = %v", err)
-	}
-
 	workspace, err := contentfs.New(workdir)
 	if err != nil {
 		t.Fatalf("open bootstrapped workspace: %v", err)
 	}
-	snapshot, err := workspace.Snapshot(context.Background(), "local")
+	inspection, err := workspace.Inspect(context.Background(), "local")
 	if err != nil {
-		t.Fatalf("snapshot bootstrapped workspace: %v", err)
+		t.Fatalf("inspect bootstrapped workspace: %v", err)
 	}
-	found := false
-	for _, link := range snapshot.Links {
-		if link.From == "sources/bootstrap-obsidian/Alpha" && link.To == "sources/bootstrap-obsidian/Beta" {
-			found = true
-			break
+	if len(inspection.Snapshot.Pages) != 0 || len(inspection.RawSources) != 3 {
+		t.Fatalf("Obsidian bootstrap = pages:%d raw:%d", len(inspection.Snapshot.Pages), len(inspection.RawSources))
+	}
+	foundAlpha, foundAsset := false, false
+	for _, record := range inspection.RawSources {
+		content, readErr := workspace.ReadSource(context.Background(), record.Source, knowl.ReadLimits{})
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		switch record.Source.SourceDocument.DocumentID {
+		case "Alpha.md":
+			foundAlpha = strings.Contains(string(content), "[[Beta|Second]]") && strings.Contains(string(content), "![[diagram.png]]")
+		case "diagram.png":
+			foundAsset = string(content) == "png"
 		}
 	}
-	if !found {
-		t.Fatalf("expected rewritten obsidian wiki link in snapshot: %#v", snapshot.Links)
+	if !foundAlpha || !foundAsset {
+		t.Fatalf("Obsidian raw preservation = alpha:%v asset:%v", foundAlpha, foundAsset)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, workspaceWikiDir, "sources", string(bootstrapObsidianSourceID))); !os.IsNotExist(err) {
+		t.Fatalf("Obsidian bootstrap created source mirror directory: %v", err)
 	}
 }
 
@@ -223,7 +213,7 @@ func TestBootstrapPreservesExistingConfig(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	existing := "knowl:\n  provider: \"\"\n  workspace:\n    path: " + workdir + "\n  storage:\n    type: sqlite\n    sqlite:\n      path: .knowl/knowl.sqlite\n  scope: local\n# operator-owned marker\n"
+	existing := "runtime:\n  providers:\n    opencode:\n      type: opencode_acp\n      opencode_acp:\n        model: opencode/big-pickle\nknowl:\n  provider: opencode\n  workspace:\n    path: " + workdir + "\n  storage:\n    type: sqlite\n    sqlite:\n      path: .knowl/knowl.sqlite\n  scope: local\n# operator-owned marker\n"
 	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +226,39 @@ func TestBootstrapPreservesExistingConfig(t *testing.T) {
 	content, err := os.ReadFile(configPath)
 	if err != nil || string(content) != existing {
 		t.Fatalf("existing config changed:\n%s\nerror=%v", content, err)
+	}
+}
+
+func TestBootstrapRejectsMissingProviderBeforeWorkspaceMutation(t *testing.T) {
+	clearKnowlEnv(t)
+	workdir := t.TempDir()
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "Page.md"), []byte("# Page\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(workdir, ".config", appName, "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "knowl:\n  provider: \"\"\n  workspace:\n    path: " + workdir + "\n  storage:\n    type: sqlite\n    sqlite:\n      path: .knowl/knowl.sqlite\n"
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(workdir)
+	_, _, err := executeCLICommand(newRootCommand(), []string{bootstrapCommandName, bootstrapWikiName, sourceDir}, nil)
+	if err == nil || !strings.Contains(err.Error(), "knowl.provider is required") {
+		t.Fatalf("bootstrap error = %v, want required provider", err)
+	}
+	for _, path := range []string{
+		filepath.Join(workdir, schemaFile),
+		filepath.Join(workdir, workspaceWikiDir),
+		filepath.Join(workdir, "raw"),
+		filepath.Join(workdir, ".knowl"),
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("provider validation created %q: %v", path, statErr)
+		}
 	}
 }
 

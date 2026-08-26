@@ -41,8 +41,9 @@ KNOWL_OPERATOR_TOKEN=replace-with-the-configured-secret \
 
 The program submits each source, polls its durable operation to a terminal
 state, asks why Badger was selected and what replaced it, prints the returned
-untrusted evidence and `source_refs`, and only then produces a line labeled
-`Host answer`. Knowl itself does not generate that final answer.
+untrusted evidence, `source_refs`, and resolved `source_documents`, and only
+then produces a line labeled `Host answer`. Knowl itself does not generate that
+final answer.
 
 Re-running the command is safe: each source has a stable origin and revision.
 Change a revision only when the corresponding source content changes. In a

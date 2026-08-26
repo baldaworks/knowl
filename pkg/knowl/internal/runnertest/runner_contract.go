@@ -14,6 +14,7 @@ import (
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -79,15 +80,19 @@ func Run(t *testing.T, operations app.OperationStore, index app.SearchIndex, sco
 	if err != nil {
 		t.Fatalf("submit adopted source: %v", err)
 	}
+	inspection, err := workspace.Inspect(ctx, scope)
+	if err != nil {
+		t.Fatalf("inspect adopted catalogs: %v", err)
+	}
 	staged, err := workspace.StagePlan(ctx, domain.ValidatedEditPlan{
 		OperationID:  string(adopted.Operation.ID),
 		Scope:        scope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{"fixture:adopted@1"},
-		Edits: []domain.FileEdit{{
-			Path:    "wiki/entities/adopted.md",
-			Content: contractPage("entities/adopted", "Adopted", "fixture:adopted@1"),
-		}},
+		Edits: []domain.FileEdit{
+			{Path: "wiki/entities/adopted.md", Content: contractPage("entities/adopted", "Adopted", "fixture:adopted@1")},
+			{Path: inspection.Index.Path, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [Adopted](entities/adopted.md)\n")},
+		},
 	})
 	if err != nil {
 		t.Fatalf("persist adopted stage: %v", err)
@@ -129,11 +134,11 @@ type contractMaintainer struct {
 	counter int
 }
 
-func (maintainer *contractMaintainer) Plan(context.Context, domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+func (maintainer *contractMaintainer) Plan(ctx context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
 	maintainer.mu.Lock()
 	defer maintainer.mu.Unlock()
 	maintainer.counter++
-	return maintainer.plan, nil
+	return (provider.Fixture{Result: maintainer.plan}).Plan(ctx, input)
 }
 
 func (maintainer *contractMaintainer) Calls() int {

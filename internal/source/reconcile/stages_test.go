@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -15,9 +16,10 @@ import (
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/baldaworks/knowl/internal/source/filesystem"
-	"github.com/baldaworks/knowl/internal/source/normalize"
 	"github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	sqlitestore "github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 )
@@ -102,6 +104,7 @@ type stageHarness struct {
 	workspace *fs.Workspace
 	scope     knowl.ScopeRef
 	sourceID  knowl.SourceID
+	queue     *recordingMaintenanceQueue
 }
 
 const stageScope = knowl.ScopeRef("stage_contract")
@@ -122,6 +125,7 @@ func newStageHarness(t *testing.T, mutate func(*Options)) *stageHarness {
 		t.Fatalf("init workspace: %v", err)
 	}
 	adapter := newScriptedAdapter()
+	queue := newRecordingMaintenanceQueue()
 	options := Options{}
 	if mutate != nil {
 		mutate(&options)
@@ -144,11 +148,11 @@ func newStageHarness(t *testing.T, mutate func(*Options)) *stageHarness {
 	}
 	dependencies := Dependencies{
 		Adapters:      map[knowl.SourceType]app.SourceAdapter{knowl.SourceTypeFilesystem: adapter},
-		Normalizer:    normalize.NewDefaultAdapter(),
 		State:         store,
 		Content:       workspace,
 		SourceContent: workspace,
 		Search:        store,
+		Maintenance:   queue,
 	}
 	service, err := NewService(dependencies, options)
 	if err != nil {
@@ -156,8 +160,29 @@ func newStageHarness(t *testing.T, mutate func(*Options)) *stageHarness {
 	}
 	return &stageHarness{
 		service: service, adapter: adapter, state: store, workspace: workspace,
-		scope: stageScope, sourceID: testEngineeringSourceID,
+		scope: stageScope, sourceID: testEngineeringSourceID, queue: queue,
 	}
+}
+
+type recordingMaintenanceQueue struct {
+	requests []app.AcceptedMaintenanceRequest
+	seen     map[knowl.OperationID]struct{}
+	err      error
+}
+
+func newRecordingMaintenanceQueue() *recordingMaintenanceQueue {
+	return &recordingMaintenanceQueue{seen: make(map[knowl.OperationID]struct{})}
+}
+
+func (queue *recordingMaintenanceQueue) ReserveAccepted(_ context.Context, request app.AcceptedMaintenanceRequest) (app.MaintenanceReservation, error) {
+	queue.requests = append(queue.requests, request)
+	if queue.err != nil {
+		return app.MaintenanceReservation{}, queue.err
+	}
+	id := knowl.OperationID(app.SourceRefKey(request.Source))
+	_, replayed := queue.seen[id]
+	queue.seen[id] = struct{}{}
+	return app.MaintenanceReservation{OperationID: id, Replayed: replayed}, nil
 }
 
 func (harness *stageHarness) source(flavor string) knowl.Source {
@@ -228,14 +253,21 @@ func TestStageInitialSyncClassifiesAddsAndPreparesWithoutCanonicalWrites(t *test
 		t.Fatalf("finalized head = %#v, %v", head, headErr)
 	}
 	for _, document := range read.Documents {
-		if document.Action != app.SyncDocumentActive || document.State.MirrorPath == "" || len(document.State.MirrorDigest) != 64 ||
+		if document.Action != app.SyncDocumentActive || document.State.MirrorPath != "" || document.State.MirrorDigest != "" ||
 			document.State.LastSeenRunID != result.Run.ID || document.State.AcceptedSource.Version.Digest == "" {
 			t.Fatalf("candidate = %#v", document)
 		}
+		textual := strings.HasSuffix(string(document.State.DocumentID), ".md")
+		if textual != (document.State.MaintenanceRevision == document.State.Revision && document.State.MaintenanceOperationID != "") {
+			t.Fatalf("maintenance state = %#v", document.State)
+		}
 	}
 	canonical, err := harness.service.sourceContent.SourceDigests(context.Background(), harness.scope, harness.sourceID, 16)
-	if err != nil || len(canonical) != 3 {
-		t.Fatalf("canonical inventory after commit = %#v, %v; want three mirrors", canonical, err)
+	if err != nil || len(canonical) != 0 {
+		t.Fatalf("canonical source inventory after commit = %#v, %v; want no mirrors", canonical, err)
+	}
+	if len(harness.queue.requests) != 2 {
+		t.Fatalf("maintenance requests = %d, want one per textual document", len(harness.queue.requests))
 	}
 	if !result.Changed {
 		t.Fatal("initial adds must claim canonical change")
@@ -266,6 +298,77 @@ func TestStageRepeatSyncIsConvergentWithZeroFetchAndZeroMutations(t *testing.T) 
 	}
 	if second.Changed {
 		t.Fatal("unchanged sync claimed canonical change")
+	}
+}
+
+func TestStageBackfillsMaintenanceFromRawWithoutFetch(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	body := "# Existing\n"
+	harness.seedFinalized(t, []seededDoc{{path: "docs/existing.md", body: body, missingMaintenance: true}})
+	ref := harness.descriptor("docs/existing.md", body)
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+
+	result, err := harness.sync(t)
+	requireSyncSuccess(t, result, err)
+	if harness.adapter.fetches != 0 || len(harness.queue.requests) != 1 || !result.Changed {
+		t.Fatalf("backfill = fetches:%d requests:%d changed:%v", harness.adapter.fetches, len(harness.queue.requests), result.Changed)
+	}
+	head, err := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, ref.ExternalID)
+	if err != nil || head.MaintenanceRevision != ref.Revision || head.MaintenanceOperationID == "" {
+		t.Fatalf("backfilled head = %#v, %v", head, err)
+	}
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+	repeated, err := harness.sync(t)
+	requireSyncSuccess(t, repeated, err)
+	if repeated.Changed || harness.adapter.fetches != 0 || len(harness.queue.requests) != 1 {
+		t.Fatalf("repeated backfill = %#v fetches:%d requests:%d", repeated, harness.adapter.fetches, len(harness.queue.requests))
+	}
+}
+
+func TestStageMaintenanceReservationFailureRetriesSafely(t *testing.T) {
+	var logOutput bytes.Buffer
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&logOutput)
+	t.Cleanup(func() { log.Logger = previousLogger })
+
+	harness := newStageHarness(t, nil)
+	ref := harness.descriptor("docs/new.md", "# New\n")
+	harness.adapter.script(ref.ExternalID, "# New\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+	reservationCause := errors.New(secretInjection)
+	harness.queue.err = reservationCause
+
+	failed, err := harness.sync(t)
+	if !strings.Contains(classOf(err), classMaintenance) || strings.Contains(err.Error(), secretInjection) || !errors.Is(err, reservationCause) {
+		t.Fatalf("reservation failure = %v", err)
+	}
+	harness.assertFailedRun(t, failed.Run.ID, classMaintenance)
+	if _, stateErr := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, ref.ExternalID); !errors.Is(stateErr, app.ErrSourceNotFound) {
+		t.Fatalf("failed reservation published state: %v", stateErr)
+	}
+	if len(harness.queue.requests) != 1 {
+		t.Fatalf("failed reservation requests = %d", len(harness.queue.requests))
+	}
+
+	harness.queue.err = nil
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+	retried, err := harness.sync(t)
+	requireSyncSuccess(t, retried, err)
+	if len(harness.queue.requests) != 2 {
+		t.Fatalf("retry reservations = %d", len(harness.queue.requests))
+	}
+	head, err := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, ref.ExternalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedLogs := logOutput.String()
+	for _, required := range []string{string(harness.sourceID), string(ref.ExternalID), ref.Revision, string(head.MaintenanceOperationID), classMaintenance} {
+		if !strings.Contains(encodedLogs, required) {
+			t.Errorf("maintenance reservation logs missing %q: %s", required, encodedLogs)
+		}
+	}
+	if strings.Contains(encodedLogs, secretInjection) || strings.Contains(encodedLogs, "# New") {
+		t.Fatalf("maintenance reservation logs leaked source or cause: %s", encodedLogs)
 	}
 }
 
@@ -412,7 +515,7 @@ func TestStageFailuresNeverPrepareUnsafeDeletions(t *testing.T) {
 		}
 	})
 
-	t.Run("foreign canonical path blocks preparation", func(t *testing.T) {
+	t.Run("legacy canonical orphan is removed", func(t *testing.T) {
 		harness := newStageHarness(t, nil)
 		ref := harness.descriptor("docs/real.md", "# Real\n")
 		harness.adapter.script(ref.ExternalID, "# Real\n")
@@ -425,10 +528,10 @@ func TestStageFailuresNeverPrepareUnsafeDeletions(t *testing.T) {
 			t.Fatal(err)
 		}
 		result, err := harness.sync(t)
-		if !strings.Contains(classOf(err), "state") {
-			t.Fatalf("foreign path error = %v, want state class", err)
+		requireSyncSuccess(t, result, err)
+		if _, statErr := os.Stat(target); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("legacy orphan still exists: %v", statErr)
 		}
-		harness.assertFailedRun(t, result.Run.ID, "state")
 	})
 }
 
@@ -452,22 +555,19 @@ func TestStageTwoSourcesWithEqualPathsStayIsolated(t *testing.T) {
 	otherResult, otherErr := harness.service.SyncSource(context.Background(), harness.scope, other)
 	requireSyncSuccess(t, otherResult, otherErr)
 	otherInventory, err := harness.service.sourceContent.SourceDigests(context.Background(), harness.scope, other.ID, 16)
-	if err != nil || len(otherInventory) != 1 || otherInventory[0].Path != "wiki/sources/operations/shared/page.md" {
+	if err != nil || len(otherInventory) != 0 {
 		t.Fatalf("other inventory = %#v, %v", otherInventory, err)
 	}
 	leftInventory, err := harness.service.sourceContent.SourceDigests(context.Background(), harness.scope, harness.sourceID, 16)
-	if err != nil || len(leftInventory) != 1 || leftInventory[0].Path != "wiki/sources/engineering/shared/page.md" {
+	if err != nil || len(leftInventory) != 0 {
 		t.Fatalf("left inventory = %#v, %v", leftInventory, err)
-	}
-	if leftInventory[0].Digest == otherInventory[0].Digest {
-		t.Fatal("equal-path sources converged to one mirror")
 	}
 	prepared, err := harness.state.PreparedSync(context.Background(), harness.scope, knowl.SyncRunID("run-002"))
 	if err != nil || len(prepared.Documents) != 1 {
 		t.Fatalf("second prepared = %#v, %v", prepared, err)
 	}
-	if got := prepared.Documents[0].State.MirrorPath; got != "wiki/sources/operations/shared/page.md" {
-		t.Fatalf("isolated mirror path = %q", got)
+	if state := prepared.Documents[0].State; state.MirrorPath != "" || state.AcceptedSource.SourceDocument.SourceID != other.ID {
+		t.Fatalf("isolated raw state = %#v", state)
 	}
 }
 
@@ -507,9 +607,11 @@ func requireSyncSuccess(t *testing.T, result Result, err error) {
 
 // seededDoc describes one durably finalized historical document head.
 type seededDoc struct {
-	path    string
-	body    string
-	deleted bool
+	path               string
+	body               string
+	deleted            bool
+	legacyMirror       bool
+	missingMaintenance bool
 }
 
 // seedFinalized replays a complete prior synchronization through the durable
@@ -519,7 +621,6 @@ func (harness *stageHarness) seedFinalized(t *testing.T, docs []seededDoc) {
 	ctx := context.Background()
 	runID := harness.service.options.NewRunID()
 	now := harness.service.options.Clock()
-	normalizer := normalize.NewDefaultAdapter()
 	source := harness.source(knowl.SourceFlavorMarkdown)
 
 	type seeded struct {
@@ -540,40 +641,35 @@ func (harness *stageHarness) seedFinalized(t *testing.T, docs []seededDoc) {
 		}
 		refs = append(refs, ref)
 		accepted, err := harness.workspace.AcceptSource(ctx, knowl.SourceEnvelope{
-			Scope:      harness.scope,
-			Source:     knowl.SourceRef{Adapter: "wiki-filesystem", ID: string(harness.sourceID) + "/" + doc.path},
-			Version:    knowl.SourceVersion{Version: revision, Digest: revision},
-			MediaType:  mediaTypeFor(doc.path),
+			Scope:     harness.scope,
+			Source:    knowl.SourceRef{Adapter: "wiki-filesystem", ID: string(harness.sourceID) + "/" + doc.path},
+			Version:   knowl.SourceVersion{Version: revision, Digest: revision},
+			MediaType: mediaTypeFor(doc.path),
+			SourceDocument: knowl.SourceDocument{
+				SourceID: harness.sourceID, DocumentID: ref.ExternalID, Revision: revision,
+				URI: filesystem.DocumentURI(*source.Config.Filesystem, ref.Path),
+			},
 			Content:    []byte(doc.body),
 			ReceivedAt: now,
 		})
 		if err != nil {
 			t.Fatalf("seed accept source: %v", err)
 		}
-		config := *source.Config.Filesystem
-		document := knowl.Document{
-			DocumentRef: ref,
-			Title:       filesystem.DocumentTitle(ref.Path, []byte(doc.body)),
-			URI:         filesystem.DocumentURI(config, ref.Path),
-			MediaType:   filesystem.DocumentMediaType(ref.Path),
-			Content:     []byte(doc.body),
-		}
-		rendered, err := normalizer.NormalizeSource(ctx, app.SourceNormalizationInput{
-			Source: source, Document: document, RawSource: accepted, Catalog: refsSnapshot(refs),
-		})
-		if err != nil {
-			t.Fatalf("seed normalize %q: %v", doc.path, err)
-		}
-		if len(rendered.Mutations) != 1 {
-			t.Fatalf("seed normalize %q shape = %#v", doc.path, rendered)
-		}
 		state := knowl.DocumentState{
 			Scope: harness.scope, SourceID: harness.sourceID, DocumentID: ref.ExternalID, Revision: revision,
 			AcceptedSource: accepted,
-			MirrorPath:     rendered.Mutations[0].Path,
-			MirrorDigest:   rendered.MirrorDigest,
 			LastSeenRunID:  runID,
 			CreatedAt:      now, UpdatedAt: now,
+		}
+		content := []byte(nil)
+		if doc.legacyMirror {
+			state.MirrorPath = "wiki/sources/" + string(harness.sourceID) + "/" + doc.path
+			state.MirrorDigest = sha256Hex(doc.body)
+			content = []byte(doc.body)
+		}
+		if strings.HasSuffix(doc.path, ".md") && !doc.deleted && !doc.missingMaintenance {
+			state.MaintenanceRevision = revision
+			state.MaintenanceOperationID = knowl.OperationID(app.SourceRefKey(accepted))
 		}
 		action := app.SyncDocumentActive
 		if doc.deleted {
@@ -586,11 +682,11 @@ func (harness *stageHarness) seedFinalized(t *testing.T, docs []seededDoc) {
 		} else {
 			counts.Added++
 		}
-		entries = append(entries, seeded{ref: ref, accepted: accepted, state: state, action: action, content: rendered.Mutations[0].Content})
+		entries = append(entries, seeded{ref: ref, accepted: accepted, state: state, action: action, content: content})
 	}
 	candidates := make([]app.PreparedDocumentState, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.state.Deleted {
+		if !entry.state.Deleted && entry.state.MirrorPath != "" {
 			writeSeedFile(t, harness.workspace, entry.state.MirrorPath, entry.content)
 		}
 		candidates = append(candidates, app.PreparedDocumentState{Action: entry.action, State: entry.state})
@@ -651,8 +747,4 @@ func writeSeedFile(t *testing.T, workspace *fs.Workspace, relative string, conte
 	if err := os.WriteFile(target, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func refsSnapshot(refs []knowl.DocumentRef) []knowl.DocumentRef {
-	return append([]knowl.DocumentRef(nil), refs...)
 }

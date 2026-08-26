@@ -182,7 +182,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 
 func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string, sources []knowl.SourceID, enforceRelevance bool) ([]knowl.PageReference, error) {
 	statement := `
-		SELECT p.page_id, p.path, p.title, p.description, p.body, p.source_refs, p.source_document,
+		SELECT p.page_id, p.path, p.title, p.description, p.body, p.source_refs, p.source_document, p.source_documents,
 		       p.format, p.okf_metadata, snippet(knowl_pages_fts, 5, '', '', ' … ', 64)
 		FROM knowl_pages_fts
 		JOIN knowl_pages p ON p.scope = knowl_pages_fts.scope AND p.page_id = knowl_pages_fts.page_id
@@ -195,7 +195,11 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 			placeholders[index] = "?"
 			arguments = append(arguments, source)
 		}
-		statement += ` AND p.source_id IN (` + strings.Join(placeholders, ", ") + `)`
+		statement += ` AND EXISTS (
+			SELECT 1 FROM knowl_page_sources AS source
+			WHERE source.scope = p.scope AND source.page_id = p.page_id
+			  AND source.source_id IN (` + strings.Join(placeholders, ", ") + `)
+		)`
 	}
 	statement += `
 		ORDER BY bm25(knowl_pages_fts, 0.0, 0.0, 0.0, 8.0, 4.0, 1.0, 0.0) ASC, p.path ASC
@@ -209,9 +213,9 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 	var references []knowl.PageReference
 	for rows.Next() {
 		var reference knowl.PageReference
-		var description, body, sourceRefs, format, nativeSnippet string
+		var description, body, sourceRefs, sourceDocuments, format, nativeSnippet string
 		var sourceDocument, metadata sql.NullString
-		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &description, &body, &sourceRefs, &sourceDocument, &format, &metadata, &nativeSnippet); err != nil {
+		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata, &nativeSnippet); err != nil {
 			return nil, fmt.Errorf("scan search page: %w", err)
 		}
 		if err := json.Unmarshal([]byte(sourceRefs), &reference.SourceRefs); err != nil {
@@ -223,6 +227,16 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 				return nil, fmt.Errorf("decode page source document: %w", err)
 			}
 			reference.SourceDocument = document
+		}
+		if err := json.Unmarshal([]byte(sourceDocuments), &reference.SourceDocuments); err != nil {
+			return nil, fmt.Errorf("decode page source documents: %w", err)
+		}
+		if len(reference.SourceDocuments) == 0 && reference.SourceDocument != nil {
+			reference.SourceDocuments = []knowl.SourceDocument{*reference.SourceDocument}
+		}
+		if reference.SourceDocument == nil && len(reference.SourceDocuments) > 0 {
+			document := reference.SourceDocuments[0]
+			reference.SourceDocument = &document
 		}
 		var encodedMetadata []byte
 		if metadata.Valid {

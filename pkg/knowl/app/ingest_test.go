@@ -99,8 +99,8 @@ func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	if applied.Operation.Status != knowl.StatusCommitted {
 		t.Fatalf("applied status = %q, want committed", applied.Operation.Status)
 	}
-	if applied.Commit == nil || len(applied.Commit.Files) != 3 {
-		t.Fatalf("commit = %#v, want two pages and log", applied.Commit)
+	if applied.Commit == nil || len(applied.Commit.Files) != 4 {
+		t.Fatalf("commit = %#v, want two pages, root catalog, and log", applied.Commit)
 	}
 	page, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "entities", "one.md"))
 	if err != nil {
@@ -247,7 +247,7 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	maintainer.plan.Edits = []knowl.FileEdit{
 		{Path: testPagePath, Content: planPageContent},
 		{Path: testPageTwoPath, Content: planSupportingContent},
-		{Path: "wiki/index.md", ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n* [One](entities/one.md)\n")...)},
+		{Path: testRootCatalogPath, ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n* [One](entities/one.md)\n* [Two](entities/two.md)\n")...)},
 	}
 	maintainer.mu.Unlock()
 	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
@@ -265,7 +265,7 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read updated index: %v", err)
 	}
-	if string(indexAfter) != string(append(indexBefore, []byte("\n* [One](entities/one.md)\n")...)) {
+	if string(indexAfter) != string(append(indexBefore, []byte("\n* [One](entities/one.md)\n* [Two](entities/two.md)\n")...)) {
 		t.Fatalf("updated index = %q", indexAfter)
 	}
 }
@@ -301,21 +301,23 @@ func TestConcurrentReviewReplayConvergesToOneOperation(t *testing.T) {
 
 func TestIngestRejectsStaleReviewedPlan(t *testing.T) {
 	ctx := context.Background()
+	before := []byte("---\nid: entities/stale\ntitle: Stale\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Stale\n\nbefore\n")
 	workspace, store, service, _ := newWorkflow(t, false, nil, func(schema knowl.SchemaDocument) knowl.ModelEditPlan {
 		return knowl.ModelEditPlan{
 			SchemaDigest: schema.Digest,
 			SourceRefs:   []string{testSourceRef},
-			Edits:        []knowl.FileEdit{{Path: "wiki/entities/stale.md", ExpectedDigest: digest([]byte("before")), Content: []byte("---\nid: entities/stale\ntitle: Stale\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Stale\n\nafter\n")}},
+			Edits:        []knowl.FileEdit{{Path: "wiki/entities/stale.md", ExpectedDigest: digest(before), Content: []byte("---\nid: entities/stale\ntitle: Stale\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Stale\n\nafter\n")}},
 		}
 	})
-	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "stale.md"), []byte("before"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "stale.md"), before, 0o600); err != nil {
 		t.Fatalf("write stale fixture: %v", err)
 	}
 	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
 	if err != nil {
 		t.Fatalf("ingest stale plan: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "stale.md"), []byte("human edit"), 0o600); err != nil {
+	humanEdit := []byte("---\nid: entities/stale\ntitle: Human edit\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Human edit\n")
+	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "stale.md"), humanEdit, 0o600); err != nil {
 		t.Fatalf("write human edit: %v", err)
 	}
 	_, err = service.Apply(ctx, "local", planned.Operation.ID)
@@ -333,7 +335,7 @@ func TestIngestRejectsStaleReviewedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read human edit: %v", err)
 	}
-	if string(content) != "human edit" {
+	if string(content) != string(humanEdit) {
 		t.Fatalf("human edit was overwritten: %q", content)
 	}
 }
@@ -424,6 +426,10 @@ func TestRunToTerminalAdoptsDurableStageWithoutReplanning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema: %v", err)
 	}
+	inspection, err := workspace.Inspect(ctx, submission.Operation.Key.Scope)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
 	staged, err := workspace.StagePlan(ctx, knowl.ValidatedEditPlan{
 		OperationID:  string(submission.Operation.ID),
 		Scope:        submission.Operation.Key.Scope,
@@ -432,6 +438,7 @@ func TestRunToTerminalAdoptsDurableStageWithoutReplanning(t *testing.T) {
 		Edits: []knowl.FileEdit{
 			{Path: testPagePath, Content: planPageContent},
 			{Path: testPageTwoPath, Content: planSupportingContent},
+			{Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [One](entities/one.md)\n* [Two](entities/two.md)\n")},
 		},
 	})
 	if err != nil {
@@ -684,6 +691,145 @@ func TestSubmitReservesWithoutPlanningAndMarksReplay(t *testing.T) {
 	}
 }
 
+func TestReserveAcceptedUsesExistingRawAndDurableOperationIdentity(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, publicService, maintainer := newWorkflow(t, false, nil)
+	envelope := sourceEnvelope([]byte("configured source text"))
+	accepted, err := workspace.AcceptSource(ctx, envelope)
+	if err != nil {
+		t.Fatalf("accept legacy raw source: %v", err)
+	}
+	document := knowl.SourceDocument{
+		SourceID: testConfiguredSourceID, DocumentID: "docs/Привет.md", Revision: envelope.Version.Version,
+		URI: "file:///srv/wiki/docs/%D0%9F%D1%80%D0%B8%D0%B2%D0%B5%D1%82.md",
+	}
+	content := &rejectingAcceptStore{Workspace: workspace}
+	queue, err := app.NewIngestService(content, store, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatalf("new accepted-source queue: %v", err)
+	}
+	request := app.AcceptedMaintenanceRequest{Source: accepted, SourceDocument: document, ContentType: accepted.MediaType}
+
+	first, err := queue.ReserveAccepted(ctx, request)
+	if err != nil {
+		t.Fatalf("reserve accepted source: %v", err)
+	}
+	if first.OperationID == "" || first.Replayed {
+		t.Fatalf("first reservation = %#v, want new operation", first)
+	}
+	if content.acceptCalls != 0 {
+		t.Fatalf("accepted reservation called AcceptSource %d times", content.acceptCalls)
+	}
+	descriptor, err := store.Execution(ctx, accepted.Scope, first.OperationID)
+	if err != nil {
+		t.Fatalf("read accepted execution descriptor: %v", err)
+	}
+	if descriptor.Source.SourceDocument != document {
+		t.Fatalf("durable source document = %#v, want %#v", descriptor.Source.SourceDocument, document)
+	}
+
+	replay, err := queue.ReserveAccepted(ctx, request)
+	if err != nil {
+		t.Fatalf("replay accepted source: %v", err)
+	}
+	if !replay.Replayed || replay.OperationID != first.OperationID {
+		t.Fatalf("replay reservation = %#v, want operation %q", replay, first.OperationID)
+	}
+	publicReplay, err := publicService.Submit(ctx, envelope)
+	if err != nil {
+		t.Fatalf("public submit identity replay: %v", err)
+	}
+	if publicReplay.Operation.ID != first.OperationID {
+		t.Fatalf("public operation = %q, accepted operation = %q", publicReplay.Operation.ID, first.OperationID)
+	}
+	inspection, err := workspace.Inspect(ctx, accepted.Scope)
+	if err != nil {
+		t.Fatalf("inspect raw sources: %v", err)
+	}
+	if len(inspection.RawSources) != 1 {
+		t.Fatalf("raw sources = %d, want exactly one immutable revision", len(inspection.RawSources))
+	}
+}
+
+func TestReserveAcceptedRejectsInvalidOrBinaryRequestsBeforeReservation(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, _, maintainer := newWorkflow(t, false, nil)
+	envelope := sourceEnvelope([]byte("configured source text"))
+	accepted, err := workspace.AcceptSource(ctx, envelope)
+	if err != nil {
+		t.Fatalf("accept raw source: %v", err)
+	}
+	content := &rejectingAcceptStore{Workspace: workspace}
+	queue, err := app.NewIngestService(content, store, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatalf("new accepted-source queue: %v", err)
+	}
+	document := knowl.SourceDocument{SourceID: testConfiguredSourceID, DocumentID: "docs/page.md", Revision: "wrong", URI: "file:///srv/wiki/docs/page.md"}
+	if _, err := queue.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{Source: accepted, SourceDocument: document, ContentType: accepted.MediaType}); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("mismatched revision error = %v, want source invalid", err)
+	}
+	document.Revision = accepted.Version.Version
+	if _, err := queue.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{Source: accepted, SourceDocument: document, ContentType: "application/octet-stream"}); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("binary content error = %v, want source invalid", err)
+	}
+	persisted := accepted
+	persisted.SourceDocument = document
+	conflict := document
+	conflict.DocumentID = "docs/other.md"
+	conflict.URI = "file:///srv/wiki/docs/other.md"
+	if _, err := queue.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{Source: persisted, SourceDocument: conflict, ContentType: persisted.MediaType}); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("provenance conflict error = %v, want source invalid", err)
+	}
+	ready, err := store.ResumeReady(ctx, accepted.Scope, 10)
+	if err != nil {
+		t.Fatalf("inspect operations after rejection: %v", err)
+	}
+	if len(ready) != 0 || content.acceptCalls != 0 {
+		t.Fatalf("invalid request mutated queue/raw: ready=%v accepts=%d", ready, content.acceptCalls)
+	}
+}
+
+func TestReserveAcceptedReturnsReservationFailureWithoutRawReplay(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, _, maintainer := newWorkflow(t, false, nil)
+	envelope := sourceEnvelope([]byte("configured source text"))
+	accepted, err := workspace.AcceptSource(ctx, envelope)
+	if err != nil {
+		t.Fatalf("accept raw source: %v", err)
+	}
+	document := knowl.SourceDocument{
+		SourceID: testConfiguredSourceID, DocumentID: "docs/page.md", Revision: accepted.Version.Version,
+		URI: "file:///srv/wiki/docs/page.md",
+	}
+	wantErr := errors.New("reservation unavailable")
+	operations := &failingReservationStore{OperationStore: store, err: wantErr}
+	content := &rejectingAcceptStore{Workspace: workspace}
+	queue, err := app.NewIngestService(content, operations, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatalf("new failing accepted-source queue: %v", err)
+	}
+	_, err = queue.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{
+		Source: accepted, SourceDocument: document, ContentType: accepted.MediaType,
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("reservation error = %v, want injected failure", err)
+	}
+	if content.acceptCalls != 0 || operations.reserveCalls != 1 {
+		t.Fatalf("failure calls: accepts=%d reserves=%d", content.acceptCalls, operations.reserveCalls)
+	}
+	ready, err := store.ResumeReady(ctx, accepted.Scope, 10)
+	if err != nil {
+		t.Fatalf("inspect operations after reservation failure: %v", err)
+	}
+	inspection, inspectErr := workspace.Inspect(ctx, accepted.Scope)
+	if inspectErr != nil {
+		t.Fatalf("inspect raw after reservation failure: %v", inspectErr)
+	}
+	if len(ready) != 0 || len(inspection.RawSources) != 1 {
+		t.Fatalf("failure state: ready=%v raw=%d, want no operation and one raw revision", ready, len(inspection.RawSources))
+	}
+}
+
 func TestExecutePassesBoundedSourceSummaryToContextSelection(t *testing.T) {
 	ctx := context.Background()
 	index := &recordingContextIndex{}
@@ -741,7 +887,10 @@ func TestExecuteKeepsReadDeadlineOutOfMaintainerPlan(t *testing.T) {
 	}
 }
 
-const testSourceRef = "fixture:source-1@1"
+const (
+	testSourceRef          = "fixture:source-1@1"
+	testConfiguredSourceID = "configured-wiki"
+)
 
 var (
 	planPageContent       = []byte("---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[[entities/two]]\n")
@@ -762,6 +911,27 @@ type deadlineContentStore struct {
 	sourceHasDeadline bool
 }
 
+type rejectingAcceptStore struct {
+	*contentfs.Workspace
+	acceptCalls int
+}
+
+type failingReservationStore struct {
+	app.OperationStore
+	err          error
+	reserveCalls int
+}
+
+func (store *failingReservationStore) Reserve(context.Context, knowl.OperationKey, knowl.OperationMeta) (app.OperationReservation, error) {
+	store.reserveCalls++
+	return app.OperationReservation{}, store.err
+}
+
+func (store *rejectingAcceptStore) AcceptSource(context.Context, knowl.SourceEnvelope) (knowl.AcceptedSource, error) {
+	store.acceptCalls++
+	return knowl.AcceptedSource{}, errors.New("AcceptSource must not be called")
+}
+
 func (store *deadlineContentStore) Schema(ctx context.Context, scope knowl.ScopeRef) (knowl.SchemaDocument, error) {
 	_, store.schemaHasDeadline = ctx.Deadline()
 	return store.Workspace.Schema(ctx, scope)
@@ -778,14 +948,14 @@ type deadlineMaintainer struct {
 
 func (maintainer *deadlineMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
 	_, maintainer.hasDeadline = ctx.Deadline()
-	return knowl.ModelEditPlan{
+	return withRootCatalog(input, knowl.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest,
 		SourceRefs:   []string{testSourceRef},
 		Edits: []knowl.FileEdit{
 			{Path: testPagePath, Content: planPageContent},
 			{Path: testPageTwoPath, Content: planSupportingContent},
 		},
-	}, nil
+	}), nil
 }
 
 func (maintainer *countingMaintainer) Plan(_ context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
@@ -794,9 +964,40 @@ func (maintainer *countingMaintainer) Plan(_ context.Context, input knowl.Mainte
 	maintainer.counter++
 	maintainer.schema = input.Schema.Digest
 	if maintainer.factory != nil {
-		return maintainer.factory(input.Schema), nil
+		return withRootCatalog(input, maintainer.factory(input.Schema)), nil
 	}
-	return maintainer.plan, nil
+	return withRootCatalog(input, maintainer.plan), nil
+}
+
+func withRootCatalog(input knowl.MaintenanceInput, plan knowl.ModelEditPlan) knowl.ModelEditPlan {
+	if len(plan.Edits) == 0 {
+		return plan
+	}
+	for _, edit := range plan.Edits {
+		if edit.Path == testRootCatalogPath {
+			return plan
+		}
+	}
+	var root knowl.PageSnapshot
+	for _, catalog := range input.Catalogs {
+		if catalog.Path == testRootCatalogPath {
+			root = catalog
+			break
+		}
+	}
+	if root.Path == "" {
+		return plan
+	}
+	content := strings.TrimRight(root.Content, "\n") + "\n"
+	for _, edit := range plan.Edits {
+		if !strings.HasPrefix(edit.Path, "wiki/") || !strings.HasSuffix(edit.Path, ".md") || strings.HasSuffix(edit.Path, "/index.md") {
+			continue
+		}
+		target := strings.TrimPrefix(edit.Path, "wiki/")
+		content += "\n* [" + strings.TrimSuffix(filepath.Base(target), ".md") + "](" + target + ")\n"
+	}
+	plan.Edits = append(plan.Edits, knowl.FileEdit{Path: root.Path, ExpectedDigest: root.Digest, Content: []byte(content)})
+	return plan
 }
 
 func (maintainer *countingMaintainer) schemaDigest() string {
@@ -953,7 +1154,7 @@ func claimReady(t *testing.T, store *sqlite.Store, scope knowl.ScopeRef) knowl.W
 
 func sourceEnvelope(content []byte) knowl.SourceEnvelope {
 	return knowl.SourceEnvelope{
-		Scope:     "local",
+		Scope:     testSourceScope,
 		Source:    knowl.SourceRef{Adapter: "fixture", ID: "source-1"},
 		Version:   knowl.SourceVersion{Version: "1", Digest: digest(content)},
 		MediaType: "text/plain",

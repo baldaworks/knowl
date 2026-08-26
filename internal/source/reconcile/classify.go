@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
+	"mime"
 	"sort"
+	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/rs/zerolog/log"
 
 	filesystem "github.com/baldaworks/knowl/internal/source/filesystem"
 )
@@ -23,15 +25,11 @@ type sagaInput struct {
 	diagnostics []knowl.SourceDiagnostic
 }
 
-// reconstructPrepared rebuilds the exact prepared mutations of one
-// prepared-or-later run from persisted candidates, immutable raw content, and
-// the current canonical inventory, verifying every mirror identity on the way.
+// reconstructPrepared rebuilds legacy-mirror cleanup for one prepared run.
+// Candidate source and maintenance identities are already durable; raw bytes
+// never need to be fetched or normalized again.
 func (service *Service) reconstructPrepared(ctx context.Context, scope knowl.ScopeRef, source knowl.Source, run knowl.SyncRun) (sagaInput, error) {
 	read, err := service.state.PreparedSync(ctx, scope, run.ID)
-	if err != nil {
-		return sagaInput{}, failStage(classState, err)
-	}
-	refs, err := service.state.ScanDocuments(ctx, scope, run.ID, service.options.MaxScanDocuments)
 	if err != nil {
 		return sagaInput{}, failStage(classState, err)
 	}
@@ -39,45 +37,14 @@ func (service *Service) reconstructPrepared(ctx context.Context, scope knowl.Sco
 	if err != nil {
 		return sagaInput{}, err
 	}
-	var mutations []knowl.SourceMutation
-	var inputDiagnostics []knowl.SourceDiagnostic
-	for _, candidate := range read.Documents {
-		switch candidate.Action {
-		case app.SyncDocumentTombstone:
-			digest, present := inventory[candidate.State.MirrorPath]
-			if candidate.State.MirrorPath == "" || !present {
-				return sagaInput{}, failStage(classState, errors.New("prepared tombstone lost its canonical mirror"))
-			}
-			mutations = append(mutations, knowl.SourceMutation{
-				Action: knowl.SourceMutationDelete, Path: candidate.State.MirrorPath, ExpectedDigest: digest,
-			})
-		case app.SyncDocumentActive:
-			ref := knowl.DocumentRef{
-				ExternalID: candidate.State.DocumentID, Revision: candidate.State.Revision, Path: string(candidate.State.DocumentID),
-			}
-			rendered, content, diagnostics, renderErr := service.storedCandidate(ctx, source, run, ref, candidate.State.AcceptedSource, refs)
-			if renderErr != nil {
-				return sagaInput{}, renderErr
-			}
-			if rendered.State.MirrorPath != candidate.State.MirrorPath || rendered.State.MirrorDigest != candidate.State.MirrorDigest {
-				return sagaInput{}, failStage(classState, errors.New("prepared mirror identity drifted"))
-			}
-			mutations = append(mutations, knowl.SourceMutation{
-				Action: knowl.SourceMutationWrite, Path: rendered.State.MirrorPath,
-				ExpectedDigest: inventory[rendered.State.MirrorPath], Content: content,
-			})
-			inputDiagnostics = append(inputDiagnostics, diagnostics...)
-		default:
-			return sagaInput{}, failStage(classState, app.ErrSourceInvalid)
-		}
-	}
-	sort.Slice(mutations, func(left, right int) bool { return mutations[left].Path < mutations[right].Path })
-	return sagaInput{run: run, prepared: read, changed: len(mutations) > 0, mutations: mutations, diagnostics: inputDiagnostics}, nil
+	mutations := cleanupMutations(inventory)
+	changed := len(mutations) > 0 || read.Counts.Added > 0 || read.Counts.Updated > 0 || read.Counts.Deleted > 0
+	return sagaInput{run: run, prepared: read, changed: changed, mutations: mutations}, nil
 }
 
-// classifyAndPrepare compares the complete catalog against durable heads and
-// the exact canonical inventory, derives deterministic mutations, and durably
-// prepares the bounded candidate set before any canonical mutation executes.
+// classifyAndPrepare accepts exact raw revisions, reserves textual maintenance,
+// and prepares source state plus bounded legacy-mirror cleanup. It never renders
+// configured-source bytes into the semantic wiki.
 func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, refs []knowl.DocumentRef) (sagaInput, error) {
 	heads, err := service.state.DocumentStates(ctx, scope, source.ID, app.DocumentListOptions{
 		IncludeDeleted: true, Limit: service.options.MaxScanDocuments,
@@ -102,8 +69,6 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 	sorted := sortedRefs(refs)
 	catalog := make(map[knowl.DocumentID]struct{}, len(sorted))
 	candidates := make([]app.PreparedDocumentState, 0, len(sorted))
-	var mutations []knowl.SourceMutation
-	var diagnostics []knowl.SourceDiagnostic
 	counts := knowl.SyncCounts{}
 	changed := false
 
@@ -114,25 +79,19 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 		case !isActive:
 			previous, reappeared := tombstoned[ref.ExternalID]
 			if reappeared && previous.Revision == ref.Revision {
-				// The earlier deletion removed the canonical mirror, so the
-				// stored raw revision renders a fresh create precondition.
-				candidate, content, observed, err := service.storedCandidate(ctx, source, run, ref, previous.AcceptedSource, sorted)
+				candidate, _, err := service.candidateFromAccepted(ctx, source, run, ref, previous.AcceptedSource, &previous)
 				if err != nil {
 					return sagaInput{}, err
 				}
-				mutations = appendWriteMutation(mutations, candidate, inventory, content)
-				diagnostics = append(diagnostics, observed...)
 				candidates = append(candidates, candidate)
 				counts.Updated++
 				changed = true
 				continue
 			}
-			candidate, content, observed, err := service.fetchAcceptNormalize(ctx, adapter, source, run, ref, sorted)
+			candidate, err := service.fetchAcceptCandidate(ctx, adapter, source, run, ref)
 			if err != nil {
 				return sagaInput{}, err
 			}
-			mutations = appendWriteMutation(mutations, candidate, inventory, content)
-			diagnostics = append(diagnostics, observed...)
 			candidates = append(candidates, candidate)
 			changed = true
 			if reappeared {
@@ -141,29 +100,21 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 				counts.Added++
 			}
 		case head.Revision != ref.Revision:
-			candidate, content, observed, err := service.fetchAcceptNormalize(ctx, adapter, source, run, ref, sorted)
+			candidate, err := service.fetchAcceptCandidate(ctx, adapter, source, run, ref)
 			if err != nil {
 				return sagaInput{}, err
 			}
-			mutations = appendWriteMutation(mutations, candidate, inventory, content)
-			diagnostics = append(diagnostics, observed...)
 			candidates = append(candidates, candidate)
 			counts.Updated++
-			if head.MirrorPath != candidate.State.MirrorPath || head.MirrorDigest != candidate.State.MirrorDigest {
-				changed = true
-			}
+			changed = true
 		default:
-			candidate, content, observed, err := service.normalizeStored(ctx, source, run, ref, head, sorted)
+			candidate, reserved, err := service.candidateFromAccepted(ctx, source, run, ref, head.AcceptedSource, &head)
 			if err != nil {
 				return sagaInput{}, err
 			}
-			if head.MirrorPath != candidate.State.MirrorPath || head.MirrorDigest != candidate.State.MirrorDigest {
-				mutations = appendWriteMutation(mutations, candidate, inventory, content)
-				changed = true
-			}
-			diagnostics = append(diagnostics, observed...)
 			candidates = append(candidates, candidate)
 			counts.Unchanged++
+			changed = changed || reserved
 		}
 	}
 
@@ -171,26 +122,19 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 		if _, listed := catalog[documentID]; listed {
 			continue
 		}
-		digest, present := inventory[head.MirrorPath]
-		if head.MirrorPath == "" || !present {
-			return sagaInput{}, failStage(classState, errors.New("active mirror missing from canonical inventory"))
-		}
-		mutations = append(mutations, knowl.SourceMutation{
-			Action: knowl.SourceMutationDelete, Path: head.MirrorPath, ExpectedDigest: digest,
-		})
 		tombstone := head
 		tombstone.LastSeenRunID = run.ID
 		tombstone.Deleted = true
 		tombstone.DeletedAt = service.options.Clock()
+		tombstone.MirrorPath = ""
+		tombstone.MirrorDigest = ""
 		candidates = append(candidates, app.PreparedDocumentState{Action: app.SyncDocumentTombstone, State: tombstone})
 		counts.Deleted++
 		changed = true
 	}
 
-	if err := assertNoForeignCanonicalPaths(inventory, mutations, activeHeads); err != nil {
-		return sagaInput{}, err
-	}
-
+	mutations := cleanupMutations(inventory)
+	changed = changed || len(mutations) > 0
 	sort.Slice(candidates, func(left, right int) bool {
 		return candidates[left].State.DocumentID < candidates[right].State.DocumentID
 	})
@@ -210,25 +154,20 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 		return sagaInput{}, failStage(classState, err)
 	}
 	return sagaInput{
-		run:         preparedRun,
-		prepared:    app.PreparedSyncRead{RunID: run.ID, Scope: scope, SourceID: source.ID, Checkpoint: checkpoint, Counts: counts, Documents: candidates, CandidateDigest: digest},
-		changed:     changed,
-		mutations:   mutations,
-		diagnostics: diagnostics,
+		run:       preparedRun,
+		prepared:  app.PreparedSyncRead{RunID: run.ID, Scope: scope, SourceID: source.ID, Checkpoint: checkpoint, Counts: counts, Documents: candidates, CandidateDigest: digest},
+		changed:   changed,
+		mutations: mutations,
 	}, nil
 }
 
-// appendWriteMutation derives the exact canonical write precondition for one
-// freshly rendered candidate and attaches the rendered content.
-func appendWriteMutation(mutations []knowl.SourceMutation, candidate app.PreparedDocumentState, inventory map[string]string, content []byte) []knowl.SourceMutation {
-	path := candidate.State.MirrorPath
-	if path == "" || content == nil {
-		return mutations
+func cleanupMutations(inventory map[string]string) []knowl.SourceMutation {
+	mutations := make([]knowl.SourceMutation, 0, len(inventory))
+	for path, digest := range inventory {
+		mutations = append(mutations, knowl.SourceMutation{Action: knowl.SourceMutationDelete, Path: path, ExpectedDigest: digest})
 	}
-	return append(mutations, knowl.SourceMutation{
-		Action: knowl.SourceMutationWrite, Path: path,
-		ExpectedDigest: inventory[path], Content: content,
-	})
+	sort.Slice(mutations, func(left, right int) bool { return mutations[left].Path < mutations[right].Path })
+	return mutations
 }
 
 // canonicalInventory reads the exact bounded canonical namespace snapshot.
@@ -251,112 +190,90 @@ func sortedRefs(refs []knowl.DocumentRef) []knowl.DocumentRef {
 	return sorted
 }
 
-// fetchAcceptNormalize selectively fetches one descriptor, accepts its exact
-// immutable raw revision, and renders the canonical mirror candidate.
-func (service *Service) fetchAcceptNormalize(ctx context.Context, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef, catalogRefs []knowl.DocumentRef) (app.PreparedDocumentState, []byte, []knowl.SourceDiagnostic, error) {
+// fetchAcceptCandidate selectively fetches and accepts one exact immutable raw
+// revision before reserving textual maintenance.
+func (service *Service) fetchAcceptCandidate(ctx context.Context, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef) (app.PreparedDocumentState, error) {
 	document, err := adapter.Fetch(ctx, source, ref)
 	if err != nil {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classFetch, err)
+		return app.PreparedDocumentState{}, failStage(classFetch, err)
 	}
 	if document.ExternalID != ref.ExternalID || document.Revision != ref.Revision || document.Path != ref.Path ||
 		app.ValidateDocument(document, service.options.MaxRawBytes) != nil {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classFetch, app.ErrSourceInvalid)
+		return app.PreparedDocumentState{}, failStage(classFetch, app.ErrSourceInvalid)
 	}
 	envelope := knowl.SourceEnvelope{
-		Scope:      run.Scope,
-		Source:     knowl.SourceRef{Adapter: filesystemAdapterName, ID: string(source.ID) + "/" + string(document.ExternalID)},
-		Version:    knowl.SourceVersion{Version: document.Revision, Digest: contentDigest(document.Content)},
-		MediaType:  document.MediaType,
+		Scope:     run.Scope,
+		Source:    knowl.SourceRef{Adapter: filesystemAdapterName, ID: string(source.ID) + "/" + string(document.ExternalID)},
+		Version:   knowl.SourceVersion{Version: document.Revision, Digest: contentDigest(document.Content)},
+		MediaType: document.MediaType,
+		SourceDocument: knowl.SourceDocument{
+			SourceID: source.ID, DocumentID: document.ExternalID, Revision: document.Revision, URI: document.URI,
+		},
 		Content:    document.Content,
 		ReceivedAt: service.options.Clock(),
 	}
 	accepted, err := service.content.AcceptSource(ctx, envelope)
 	if err != nil {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classRaw, err)
+		return app.PreparedDocumentState{}, failStage(classRaw, err)
 	}
+	candidate, _, err := service.candidateFromAccepted(ctx, source, run, ref, accepted, nil)
+	return candidate, err
+}
+
+func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef, accepted knowl.AcceptedSource, previous *knowl.DocumentState) (app.PreparedDocumentState, bool, error) {
 	config := *source.Config.Filesystem
-	rendered := knowl.Document{
-		DocumentRef: knowl.DocumentRef{ExternalID: ref.ExternalID, Revision: ref.Revision, Path: ref.Path},
-		Title:       filesystem.DocumentTitle(ref.Path, document.Content),
-		URI:         filesystem.DocumentURI(config, ref.Path),
-		MediaType:   accepted.MediaType,
-		Content:     document.Content,
-	}
-	if app.ValidateDocument(rendered, service.options.MaxRawBytes) != nil {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classNormalize, app.ErrSourceInvalid)
-	}
-	candidate, content, diagnostics, err := service.renderCandidateWith(ctx, source, run, rendered, accepted, catalogRefs)
-	if err != nil {
-		return app.PreparedDocumentState{}, nil, nil, err
-	}
-	return candidate, content, diagnostics, nil
-}
-
-// normalizeStored rerenders one stored raw revision against the fresh catalog
-// without any Fetch; provenance identity stays exactly as previously accepted.
-func (service *Service) normalizeStored(ctx context.Context, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef, head knowl.DocumentState, catalogRefs []knowl.DocumentRef) (app.PreparedDocumentState, []byte, []knowl.SourceDiagnostic, error) {
-	return service.storedCandidate(ctx, source, run, ref, head.AcceptedSource, catalogRefs)
-}
-
-func (service *Service) storedCandidate(ctx context.Context, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef, accepted knowl.AcceptedSource, catalogRefs []knowl.DocumentRef) (app.PreparedDocumentState, []byte, []knowl.SourceDiagnostic, error) {
-	raw, err := service.content.ReadSource(ctx, accepted, knowl.ReadLimits{Bytes: service.options.MaxRawBytes})
-	if err != nil {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classRaw, err)
-	}
-	config := *source.Config.Filesystem
-	document := knowl.Document{
-		DocumentRef: knowl.DocumentRef{ExternalID: ref.ExternalID, Revision: ref.Revision, Path: ref.Path},
-		Title:       filesystem.DocumentTitle(ref.Path, raw),
-		URI:         filesystem.DocumentURI(config, ref.Path),
-		MediaType:   filesystem.DocumentMediaType(ref.Path),
-		Content:     raw,
-	}
-	if app.ValidateDocument(document, service.options.MaxRawBytes) != nil {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classNormalize, app.ErrSourceInvalid)
-	}
-	return service.renderCandidateWith(ctx, source, run, document, accepted, catalogRefs)
-}
-
-// renderCandidateWith normalizes one raw document into its detached mirror
-// candidate plus the exact rendered bytes for the canonical write.
-func (service *Service) renderCandidateWith(ctx context.Context, source knowl.Source, run knowl.SyncRun, document knowl.Document, accepted knowl.AcceptedSource, catalogRefs []knowl.DocumentRef) (app.PreparedDocumentState, []byte, []knowl.SourceDiagnostic, error) {
-	if err := ctx.Err(); err != nil {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classCanceled, err)
-	}
-	result, err := service.normalizer.NormalizeSource(ctx, app.SourceNormalizationInput{
-		Source: source, Document: document, RawSource: accepted, Catalog: catalogRefs,
+	document, err := app.ResolveSourceDocument(source.ID, accepted, knowl.SourceDocument{
+		SourceID: source.ID, DocumentID: ref.ExternalID, Revision: ref.Revision,
+		URI: filesystem.DocumentURI(config, ref.Path),
 	})
 	if err != nil {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classNormalize, err)
+		return app.PreparedDocumentState{}, false, failStage(classRaw, err)
 	}
-	if len(result.Mutations) != 1 || result.Mutations[0].Action != knowl.SourceMutationWrite ||
-		len(result.Mutations[0].Content) == 0 {
-		return app.PreparedDocumentState{}, nil, nil, failStage(classNormalize, errors.New("unexpected normalization shape"))
-	}
+	accepted.SourceDocument = document
 	state := knowl.DocumentState{
-		Scope: run.Scope, SourceID: source.ID, DocumentID: document.ExternalID,
-		Revision: document.Revision, AcceptedSource: accepted,
-		MirrorPath: result.Mutations[0].Path, MirrorDigest: result.MirrorDigest, LastSeenRunID: run.ID,
+		Scope: run.Scope, SourceID: source.ID, DocumentID: ref.ExternalID, Revision: ref.Revision,
+		AcceptedSource: accepted, LastSeenRunID: run.ID,
 	}
-	return app.PreparedDocumentState{Action: app.SyncDocumentActive, State: state}, result.Mutations[0].Content, result.Diagnostics, nil
+	if previous != nil {
+		state.MaintenanceRevision = previous.MaintenanceRevision
+		state.MaintenanceOperationID = previous.MaintenanceOperationID
+		state.CreatedAt = previous.CreatedAt
+	}
+	textual, err := textualMediaType(accepted.MediaType)
+	if err != nil {
+		return app.PreparedDocumentState{}, false, failStage(classRaw, err)
+	}
+	reserved := false
+	if textual && (state.MaintenanceRevision != ref.Revision || state.MaintenanceOperationID == "") {
+		reservation, reserveErr := service.maintenance.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{
+			Source: accepted, SourceDocument: document, ContentType: accepted.MediaType,
+		})
+		if reserveErr != nil {
+			log.Warn().Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
+				Str("revision", document.Revision).Str("failure_class", classMaintenance).
+				Msg("knowl maintenance reservation failed")
+			return app.PreparedDocumentState{}, false, failStage(classMaintenance, reserveErr)
+		}
+		state.MaintenanceRevision = ref.Revision
+		state.MaintenanceOperationID = reservation.OperationID
+		outcome := "queued"
+		if reservation.Replayed {
+			outcome = "replayed"
+		}
+		log.Info().Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
+			Str("revision", document.Revision).Str("operation_id", string(reservation.OperationID)).
+			Str("maintenance_outcome", outcome).Msg("knowl maintenance reserved")
+		reserved = true
+	}
+	return app.PreparedDocumentState{Action: app.SyncDocumentActive, State: state}, reserved, nil
 }
 
-func assertNoForeignCanonicalPaths(inventory map[string]string, mutations []knowl.SourceMutation, activeHeads map[knowl.DocumentID]knowl.DocumentState) error {
-	referenced := make(map[string]struct{}, len(inventory)+len(activeHeads))
-	for _, mutation := range mutations {
-		referenced[mutation.Path] = struct{}{}
+func textualMediaType(value string) (bool, error) {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return false, app.ErrSourceInvalid
 	}
-	for _, head := range activeHeads {
-		if head.MirrorPath != "" {
-			referenced[head.MirrorPath] = struct{}{}
-		}
-	}
-	for path := range inventory {
-		if _, ok := referenced[path]; !ok {
-			return failStage(classState, errors.New("canonical file outside the classified catalog"))
-		}
-	}
-	return nil
+	return strings.HasPrefix(strings.ToLower(mediaType), "text/"), nil
 }
 
 // scanCheckpoint derives a deterministic bounded scan identity.

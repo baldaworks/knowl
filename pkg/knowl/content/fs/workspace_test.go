@@ -22,7 +22,9 @@ import (
 const testScope = "local"
 const (
 	testFixtureAdapter     = "fixture"
+	testMarkdownMediaType  = "text/markdown"
 	testWorkspaceSourceRef = "fixture:source-1@1"
+	testWikiSourceAdapter  = "wiki-filesystem"
 	testPageOnePath        = "wiki/entities/one.md"
 	testIndexPath          = "wiki/index.md"
 )
@@ -281,7 +283,7 @@ func TestWorkspaceAcceptsEmptyImmutableSource(t *testing.T) {
 		Scope:     testScope,
 		Source:    knowl.SourceRef{Adapter: testFixtureAdapter, ID: "empty-navigation.md"},
 		Version:   knowl.SourceVersion{Version: hex.EncodeToString(emptyDigest[:]), Digest: hex.EncodeToString(emptyDigest[:])},
-		MediaType: "text/markdown",
+		MediaType: testMarkdownMediaType,
 		Content:   []byte{},
 	})
 	if err != nil {
@@ -321,6 +323,74 @@ func TestWorkspaceReadsAcceptedSourceWithBoundedDigest(t *testing.T) {
 	}
 	if _, err := workspace.ReadSource(context.Background(), accepted, knowl.ReadLimits{Bytes: len(content) - 1}); !errors.Is(err, ErrInvalidSource) {
 		t.Fatalf("bounded source error = %v, want invalid source", err)
+	}
+}
+
+func TestWorkspacePersistsConfiguredSourceProvenance(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("# Architecture\n")
+	digestValue := sha256.Sum256(content)
+	document := knowl.SourceDocument{
+		SourceID: testSourceID, DocumentID: "Архитектура.md", Revision: "revision-1",
+		URI: "https://wiki.example.test/%D0%90%D1%80%D1%85%D0%B8%D1%82%D0%B5%D0%BA%D1%82%D1%83%D1%80%D0%B0.md",
+	}
+	envelope := knowl.SourceEnvelope{
+		Scope: testScope, Source: knowl.SourceRef{Adapter: testWikiSourceAdapter, ID: "engineering/Архитектура.md"},
+		Version:   knowl.SourceVersion{Version: document.Revision, Digest: hex.EncodeToString(digestValue[:])},
+		MediaType: testMarkdownMediaType, SourceDocument: document, Content: content,
+	}
+	accepted, err := workspace.AcceptSource(context.Background(), envelope)
+	if err != nil {
+		t.Fatalf("AcceptSource() error: %v", err)
+	}
+	if accepted.SourceDocument != document || accepted.MediaType != envelope.MediaType || accepted.Version.Digest != envelope.Version.Digest {
+		t.Fatalf("accepted source = %#v, want provenance %#v", accepted, document)
+	}
+	replayed, err := workspace.AcceptSource(context.Background(), envelope)
+	if err != nil || replayed != accepted {
+		t.Fatalf("replayed source = %#v, %v; want %#v", replayed, err, accepted)
+	}
+
+	conflict := envelope
+	conflict.SourceDocument.DocumentID = "other.md"
+	if _, err := workspace.AcceptSource(context.Background(), conflict); !errors.Is(err, ErrSourceConflict) {
+		t.Fatalf("provenance conflict error = %v", err)
+	}
+}
+
+func TestWorkspaceRejectsInvalidConfiguredSourceProvenanceBeforeWrite(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("source")
+	digestValue := sha256.Sum256(content)
+	_, err = workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
+		Scope: testScope, Source: knowl.SourceRef{Adapter: testWikiSourceAdapter, ID: "engineering/page.md"},
+		Version: knowl.SourceVersion{Version: "revision-1", Digest: hex.EncodeToString(digestValue[:])},
+		SourceDocument: knowl.SourceDocument{
+			SourceID: "engineering", DocumentID: "page.md", Revision: "other-revision", URI: "https://wiki.example.test/page.md",
+		},
+		Content: content,
+	})
+	if !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("AcceptSource() error = %v, want invalid source", err)
+	}
+	inspection, err := workspace.Inspect(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection.RawSources) != 0 {
+		t.Fatalf("invalid provenance wrote raw sources: %#v", inspection.RawSources)
 	}
 }
 
@@ -414,6 +484,7 @@ func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing
 		t.Fatalf("read schema: %v", err)
 	}
 	acceptWorkspaceSource(t, workspace)
+	writeRootCatalogTargets(t, workspace, "entities/recovered.md")
 	plan := knowl.ValidatedEditPlan{
 		OperationID:  "recovery-operation",
 		Scope:        testScope,
@@ -554,6 +625,7 @@ func TestWorkspaceStagePlanAllowsExistingAndSamePlanTargets(t *testing.T) {
 		t.Fatalf("init workspace: %v", err)
 	}
 	acceptWorkspaceSource(t, workspace)
+	writeRootCatalogTargets(t, workspace, "entities/one.md", "entities/two.md")
 	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "two.md"), validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, ""), 0o600); err != nil {
 		t.Fatalf("write existing target: %v", err)
 	}
@@ -636,6 +708,230 @@ func TestWorkspaceStagePlanAllowsIndexTargetsWithoutFrontmatter(t *testing.T) {
 		},
 	}); err != nil {
 		t.Fatalf("stage index same-plan target: %v", err)
+	}
+}
+
+func TestWorkspaceStagePlanValidatesProspectiveCatalogGraph(t *testing.T) {
+	const (
+		entitiesCatalogLink = "* [Entities](entities/index.md)\n"
+		entitiesCatalogPath = "entities/index.md"
+	)
+	tests := []struct {
+		name      string
+		rootLinks string
+		nested    map[string]string
+		wantError bool
+	}{
+		{
+			name: "nested hierarchy", rootLinks: entitiesCatalogLink,
+			nested: map[string]string{entitiesCatalogPath: "# Entities\n\n* [One](one.md)\n"},
+		},
+		{
+			name: "missing nested target", rootLinks: entitiesCatalogLink,
+			nested: map[string]string{entitiesCatalogPath: "# Entities\n\n* [Missing](missing.md)\n"}, wantError: true,
+		},
+		{
+			name: "catalog escape", rootLinks: entitiesCatalogLink,
+			nested: map[string]string{entitiesCatalogPath: "# Entities\n\n* [Escape](../../../outside.md)\n"}, wantError: true,
+		},
+		{
+			name: "catalog cycle", rootLinks: entitiesCatalogLink,
+			nested: map[string]string{entitiesCatalogPath: "# Entities\n\n* [Root](../index.md)\n* [One](one.md)\n"}, wantError: true,
+		},
+		{
+			name: "unreachable page", rootLinks: "",
+			nested: map[string]string{entitiesCatalogPath: "# Entities\n\n* [One](one.md)\n"}, wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, err := New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := workspace.Init(); err != nil {
+				t.Fatal(err)
+			}
+			acceptWorkspaceSource(t, workspace)
+			schema, err := workspace.Schema(context.Background(), testScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rootPath := filepath.Join(workspace.Root(), "wiki", "index.md")
+			rootBefore, err := os.ReadFile(rootPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			edits := []knowl.FileEdit{
+				{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "")},
+				{Path: testIndexPath, ExpectedDigest: digestBytes(rootBefore), Content: append(append([]byte(nil), rootBefore...), []byte("\n"+test.rootLinks)...)},
+			}
+			for relative, content := range test.nested {
+				edits = append(edits, knowl.FileEdit{Path: "wiki/" + relative, Content: []byte(content)})
+			}
+			_, err = workspace.StagePlan(context.Background(), knowl.ValidatedEditPlan{
+				OperationID: "catalog-" + token(test.name), Scope: testScope, SchemaDigest: schema.Digest,
+				SourceRefs: []string{testWorkspaceSourceRef}, Edits: edits,
+			})
+			if test.wantError {
+				if !errors.Is(err, ErrContentInvalid) {
+					t.Fatalf("StagePlan() error = %v, want content invalid", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("StagePlan() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceInspectionIncludesDeterministicCatalogs(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	for relative, content := range map[string]string{
+		"wiki/zeta/index.md":  "# Zeta\n",
+		"wiki/alpha/index.md": "# Alpha\n",
+	} {
+		target := filepath.Join(workspace.Root(), filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inspection, err := workspace.Inspect(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, 0, len(inspection.Catalogs))
+	for _, catalog := range inspection.Catalogs {
+		paths = append(paths, catalog.Path)
+		if !catalog.Untrusted || catalog.Digest == "" || catalog.Content == "" {
+			t.Fatalf("catalog snapshot = %#v", catalog)
+		}
+	}
+	want := []string{testIndexPath, "wiki/alpha/index.md", "wiki/zeta/index.md"}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("catalog paths = %v, want %v", paths, want)
+	}
+}
+
+func TestWorkspaceStagePlanPreservesSourceLineage(t *testing.T) {
+	tests := []struct {
+		name      string
+		refs      func(oldRef, currentRef, unrelatedRef string) []string
+		planRefs  func(currentRef, unrelatedRef string) []string
+		wantError bool
+	}{
+		{
+			name:     "same lineage replacement",
+			refs:     func(_, currentRef, unrelatedRef string) []string { return []string{currentRef, unrelatedRef} },
+			planRefs: func(currentRef, unrelatedRef string) []string { return []string{currentRef, unrelatedRef} },
+		},
+		{
+			name:      "unrelated lineage removal",
+			refs:      func(_, currentRef, _ string) []string { return []string{currentRef} },
+			planRefs:  func(currentRef, _ string) []string { return []string{currentRef} },
+			wantError: true,
+		},
+		{
+			name:      "current source missing",
+			refs:      func(oldRef, _, unrelatedRef string) []string { return []string{oldRef, unrelatedRef} },
+			planRefs:  func(currentRef, unrelatedRef string) []string { return []string{currentRef, unrelatedRef} },
+			wantError: true,
+		},
+		{
+			name:      "page ref absent from plan",
+			refs:      func(_, currentRef, unrelatedRef string) []string { return []string{currentRef, unrelatedRef} },
+			planRefs:  func(currentRef, _ string) []string { return []string{currentRef} },
+			wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, err := New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := workspace.Init(); err != nil {
+				t.Fatal(err)
+			}
+			oldRef := acceptStructuredWorkspaceSource(t, workspace, "engineering", "page.md", "revision-1")
+			currentRef := acceptStructuredWorkspaceSource(t, workspace, "engineering", "page.md", "revision-2")
+			unrelatedRef := acceptStructuredWorkspaceSource(t, workspace, "operations", "runbook.md", "revision-1")
+			writeRootCatalogTargets(t, workspace, "entities/shared.md")
+			existing := validWorkspacePageRefs("entities/shared", "Shared", []string{oldRef, unrelatedRef}, "Existing facts")
+			target := filepath.Join(workspace.Root(), "wiki", "entities", "shared.md")
+			if err := os.WriteFile(target, existing, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			schema, err := workspace.Schema(context.Background(), testScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			refs := test.refs(oldRef, currentRef, unrelatedRef)
+			_, err = workspace.StagePlan(context.Background(), knowl.ValidatedEditPlan{
+				OperationID: "lineage-" + token(test.name), Scope: testScope, SchemaDigest: schema.Digest,
+				RequiredSourceRef: currentRef, SourceRefs: test.planRefs(currentRef, unrelatedRef),
+				Edits: []knowl.FileEdit{{
+					Path: "wiki/entities/shared.md", ExpectedDigest: digestBytes(existing),
+					Content: validWorkspacePageRefs("entities/shared", "Shared", refs, "Updated facts"),
+				}},
+			})
+			if test.wantError {
+				if !errors.Is(err, ErrContentInvalid) {
+					t.Fatalf("StagePlan() error = %v, want content invalid", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("StagePlan() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceSnapshotResolvesSortedSourceDocuments(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	operationsRef := acceptStructuredWorkspaceSource(t, workspace, "operations", "runbook.md", "revision-1")
+	engineeringRef := acceptStructuredWorkspaceSource(t, workspace, "engineering", "architecture.md", "revision-1")
+	writeRootCatalogTargets(t, workspace, "entities/shared.md")
+	content := validWorkspacePageRefs("entities/shared", "Shared", []string{operationsRef, engineeringRef}, "Shared facts")
+	target := filepath.Join(workspace.Root(), "wiki", "entities", "shared.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := workspace.Snapshot(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Pages) != 1 || len(snapshot.Pages[0].SourceDocuments) != 2 {
+		t.Fatalf("snapshot provenance = %#v", snapshot.Pages)
+	}
+	documents := snapshot.Pages[0].SourceDocuments
+	if documents[0].SourceID != "engineering" || documents[1].SourceID != "operations" || snapshot.Pages[0].SourceDocument == nil || *snapshot.Pages[0].SourceDocument != documents[0] {
+		t.Fatalf("sorted source documents = %#v, singular = %#v", documents, snapshot.Pages[0].SourceDocument)
+	}
+	read, err := workspace.ReadPages(context.Background(), testScope, []knowl.PageID{"entities/shared"}, knowl.ReadLimits{Pages: 1, Bytes: len(content)})
+	if err != nil || len(read) != 1 || !slices.Equal(read[0].SourceDocuments, documents) {
+		t.Fatalf("ReadPages() provenance = %#v, %v", read, err)
 	}
 }
 
@@ -860,6 +1156,7 @@ func stageLoadFixture(t *testing.T) (*Workspace, knowl.StagedChange, string) {
 		t.Fatalf("init workspace: %v", err)
 	}
 	acceptWorkspaceSource(t, workspace)
+	writeRootCatalogTargets(t, workspace, "entities/one.md")
 	schema, err := workspace.Schema(context.Background(), testScope)
 	if err != nil {
 		t.Fatalf("read schema: %v", err)
@@ -889,6 +1186,7 @@ func TestWorkspaceCommitRejectsBrokenProspectiveStateBeforeJournal(t *testing.T)
 		t.Fatalf("init workspace: %v", err)
 	}
 	acceptWorkspaceSource(t, workspace)
+	writeRootCatalogTargets(t, workspace, "entities/one.md")
 	targetPath := filepath.Join(workspace.Root(), "wiki", "entities", "two.md")
 	if err := os.WriteFile(targetPath, validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, ""), 0o600); err != nil {
 		t.Fatalf("write target page: %v", err)
@@ -933,6 +1231,21 @@ func TestWorkspaceCommitRejectsBrokenProspectiveStateBeforeJournal(t *testing.T)
 	}
 }
 
+func writeRootCatalogTargets(t *testing.T, workspace *Workspace, targets ...string) {
+	t.Helper()
+	indexPath := filepath.Join(workspace.Root(), "wiki", "index.md")
+	content, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read root catalog: %v", err)
+	}
+	for _, target := range targets {
+		content = append(content, []byte("\n* [Target]("+target+")\n")...)
+	}
+	if err := os.WriteFile(indexPath, content, 0o600); err != nil {
+		t.Fatalf("write root catalog: %v", err)
+	}
+}
+
 func acceptWorkspaceSource(t *testing.T, workspace *Workspace) {
 	t.Helper()
 	content := []byte("source content")
@@ -949,11 +1262,37 @@ func acceptWorkspaceSource(t *testing.T, workspace *Workspace) {
 }
 
 func validWorkspacePage(id, title, sourceRef, body string) []byte {
-	content := "---\nid: " + id + "\ntitle: " + title + "\ntype: entity\nsource_refs:\n  - " + sourceRef + "\n---\n# " + title + "\n"
+	return validWorkspacePageRefs(id, title, []string{sourceRef}, body)
+}
+
+func validWorkspacePageRefs(id, title string, sourceRefs []string, body string) []byte {
+	content := "---\nid: " + id + "\ntitle: " + title + "\ntype: entity\nsource_refs:\n"
+	for _, sourceRef := range sourceRefs {
+		content += "  - " + sourceRef + "\n"
+	}
+	content += "---\n# " + title + "\n"
 	if body != "" {
 		content += "\n" + body + "\n"
 	}
 	return []byte(content)
+}
+
+func acceptStructuredWorkspaceSource(t *testing.T, workspace *Workspace, sourceID knowl.SourceID, documentID knowl.DocumentID, revision string) string {
+	t.Helper()
+	content := []byte(string(sourceID) + "/" + string(documentID) + "@" + revision)
+	accepted, err := workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
+		Scope: testScope, Source: knowl.SourceRef{Adapter: testWikiSourceAdapter, ID: string(sourceID) + "/" + string(documentID)},
+		Version: knowl.SourceVersion{Version: revision, Digest: digestBytes(content)}, MediaType: testMarkdownMediaType,
+		SourceDocument: knowl.SourceDocument{
+			SourceID: sourceID, DocumentID: documentID, Revision: revision,
+			URI: "https://wiki.example.test/" + string(documentID),
+		},
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("accept structured source: %v", err)
+	}
+	return sourceRefKey(accepted)
 }
 
 type canonicalState struct {

@@ -308,7 +308,12 @@ func Fixture(scope knowl.ScopeRef, id string, createdAt time.Time) (knowl.Operat
 		Key: key,
 		AcceptedSource: knowl.AcceptedSource{
 			Scope: scope, Source: key.Source, Version: key.Version,
-			MediaType: "text/markdown", ManifestRef: "raw/source/version/manifest.yaml",
+			MediaType: "text/markdown",
+			SourceDocument: knowl.SourceDocument{
+				SourceID: "configured-wiki", DocumentID: knowl.DocumentID(id + ".md"), Revision: "1",
+				URI: "file:///srv/wiki/" + id + ".md",
+			},
+			ManifestRef: "raw/source/version/manifest.yaml",
 		},
 		Schema:       knowl.SchemaDocument{Scope: scope, Digest: schemaDigest, Version: "1", Content: schema},
 		SchemaDigest: schemaDigest,

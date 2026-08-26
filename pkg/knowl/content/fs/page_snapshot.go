@@ -56,3 +56,38 @@ func uniquePageRefs(refs []string) []string {
 	}
 	return result
 }
+
+func resolvePageProvenance(page *knowl.PageSnapshot, rawSources map[string]knowl.AcceptedSource) {
+	documents := make([]knowl.SourceDocument, 0, len(page.SourceRefs))
+	for _, sourceRef := range page.SourceRefs {
+		source, exists := rawSources[sourceRef]
+		if !exists || source.SourceDocument == (knowl.SourceDocument{}) {
+			continue
+		}
+		documents = append(documents, source.SourceDocument)
+	}
+	sort.Slice(documents, func(left, right int) bool {
+		if documents[left].SourceID != documents[right].SourceID {
+			return documents[left].SourceID < documents[right].SourceID
+		}
+		if documents[left].DocumentID != documents[right].DocumentID {
+			return documents[left].DocumentID < documents[right].DocumentID
+		}
+		if documents[left].Revision != documents[right].Revision {
+			return documents[left].Revision < documents[right].Revision
+		}
+		return documents[left].URI < documents[right].URI
+	})
+	unique := documents[:0]
+	for _, document := range documents {
+		if len(unique) > 0 && unique[len(unique)-1] == document {
+			continue
+		}
+		unique = append(unique, document)
+	}
+	page.SourceDocuments = unique
+	if page.SourceDocument == nil && len(unique) > 0 {
+		document := unique[0]
+		page.SourceDocument = &document
+	}
+}
