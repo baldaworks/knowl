@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/normahq/runtime/v2/agentfactory"
 	adkagent "google.golang.org/adk/v2/agent"
@@ -18,6 +20,15 @@ import (
 )
 
 const wantMaintainerError = "maintainer"
+
+const (
+	hierarchySchemaDigest   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	hierarchySnapshotDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testSourcePlanJSON      = `{"schema_digest":"schema","source_refs":[],"edits":[]}`
+	testRoadmapPath         = "wiki/concepts/roadmap.md"
+	testArchitecturePath    = "wiki/concepts/architecture.md"
+	testArchitectureTitle   = "Architecture"
+)
 
 func TestMaintainerInstructionRequiresSemanticSynthesisAndProvenance(t *testing.T) {
 	for _, required := range []string{
@@ -33,6 +44,33 @@ func TestMaintainerInstructionRequiresSemanticSynthesisAndProvenance(t *testing.
 		if !strings.Contains(maintainerInstruction, required) {
 			t.Errorf("maintainer instruction missing %q", required)
 		}
+	}
+}
+
+func TestHierarchyMaintainerInstructionDefinesGenericTaxonomyContract(t *testing.T) {
+	for _, required := range []string{
+		"subject domains as the primary navigation axis",
+		"implementation technology as supporting signals",
+		"Recursively split broad heterogeneous groups",
+		"Never return an empty catalog",
+		"singleton catalog only when",
+		"primary subject placement",
+		"secondary catalog membership sparingly",
+		"Preserve suitable current catalog paths",
+		"stable semantic paths and titles",
+		"complete final catalog graph",
+	} {
+		if !strings.Contains(hierarchyMaintainerInstruction, required) {
+			t.Errorf("hierarchy maintainer instruction missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"fastronome", "valera", "billing", "kyc"} {
+		if strings.Contains(strings.ToLower(hierarchyMaintainerInstruction), forbidden) {
+			t.Errorf("hierarchy maintainer instruction contains tenant-specific term %q", forbidden)
+		}
+	}
+	if !strings.Contains(maintainerInstruction, hierarchyMaintainerInstruction) {
+		t.Fatal("composed maintainer instruction omits hierarchy contract")
 	}
 }
 
@@ -99,11 +137,12 @@ func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	}
 }
 
-func TestRuntimeMaintainerDeletesEachSession(t *testing.T) {
-	planJSON := `{"schema_digest":"schema","source_refs":[],"edits":[]}`
+func TestRuntimeMaintainerReusesSessionAcrossPlansAndDeletesOnClose(t *testing.T) {
+	planJSON := testSourcePlanJSON
 	service := &trackingSessionService{Service: session.InMemoryService()}
+	var remoteSessions atomic.Int32
 	maintainer, err := newRuntimeMaintainer(
-		&fakeRuntimeFactory{agent: newOutputAgent(t, planJSON)},
+		&fakeRuntimeFactory{agent: newSessionBindingOutputAgent(t, &remoteSessions, planJSON)},
 		"provider",
 		t.TempDir(),
 		runtimeMaintainerOptions{newSession: func() session.Service { return service }},
@@ -112,14 +151,261 @@ func TestRuntimeMaintainerDeletesEachSession(t *testing.T) {
 		t.Fatalf("new maintainer: %v", err)
 	}
 	if _, err := maintainer.Plan(context.Background(), testMaintenanceInput()); err != nil {
-		t.Fatalf("Plan() error: %v", err)
+		t.Fatalf("first Plan() error: %v", err)
+	}
+	if _, err := maintainer.Plan(context.Background(), testMaintenanceInput()); err != nil {
+		t.Fatalf("second Plan() error: %v", err)
 	}
 	if service.creates.Load() != 1 {
-		t.Fatalf("created sessions = %d, want one", service.creates.Load())
+		t.Fatalf("created sessions = %d, want one shared maintainer session", service.creates.Load())
 	}
-	if service.deletes.Load() != 2 {
-		t.Fatalf("deleted sessions = %d, want reset plus cleanup", service.deletes.Load())
+	if remoteSessions.Load() != 1 {
+		t.Fatalf("remote sessions = %d, want one persisted provider binding", remoteSessions.Load())
 	}
+	if service.deletes.Load() != 0 {
+		t.Fatalf("deleted sessions before Close = %d, want zero", service.deletes.Load())
+	}
+	if err := maintainer.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+	if service.deletes.Load() != 1 {
+		t.Fatalf("deleted sessions after Close = %d, want one", service.deletes.Load())
+	}
+}
+
+func TestRuntimeMaintainerPlansHierarchyThroughSharedBoundedSession(t *testing.T) {
+	hierarchyInput, hierarchyPlan := testHierarchyInputAndPlan()
+	hierarchyJSON, err := json.Marshal(hierarchyPlan)
+	if err != nil {
+		t.Fatalf("marshal hierarchy plan: %v", err)
+	}
+	sourceJSON := testSourcePlanJSON
+	service := &trackingSessionService{Service: session.InMemoryService()}
+	var remoteSessions atomic.Int32
+	var prompts []string
+	agent := newRoutingSessionBindingOutputAgent(t, &remoteSessions, &prompts, sourceJSON, string(hierarchyJSON))
+	factory := &fakeRuntimeFactory{agent: agent}
+	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{
+		newSession: func() session.Service { return service },
+	})
+	if err != nil {
+		t.Fatalf("new maintainer: %v", err)
+	}
+	if _, err := maintainer.Plan(context.Background(), testMaintenanceInput()); err != nil {
+		t.Fatalf("source Plan() error: %v", err)
+	}
+	got, err := maintainer.PlanHierarchy(context.Background(), hierarchyInput)
+	if err != nil {
+		t.Fatalf("PlanHierarchy() error: %v", err)
+	}
+	if !reflect.DeepEqual(got, hierarchyPlan) {
+		t.Fatalf("PlanHierarchy() = %#v, want %#v", got, hierarchyPlan)
+	}
+	if factory.builds != 1 || service.creates.Load() != 1 || remoteSessions.Load() != 1 {
+		t.Fatalf("shared runtime builds=%d sessions=%d remote=%d", factory.builds, service.creates.Load(), remoteSessions.Load())
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("provider prompts = %d, want two operations", len(prompts))
+	}
+	hierarchyPrompt := prompts[1]
+	for _, want := range []string{
+		`"operation":"hierarchy"`,
+		`"required_schema_digest":"` + hierarchySchemaDigest + `"`,
+		`"required_snapshot_digest":"` + hierarchySnapshotDigest + `"`,
+	} {
+		if !strings.Contains(hierarchyPrompt, want) {
+			t.Fatalf("hierarchy prompt does not contain %q: %s", want, hierarchyPrompt)
+		}
+	}
+	inputMarker := "\nInput JSON:\n"
+	inputOffset := strings.LastIndex(hierarchyPrompt, inputMarker)
+	if inputOffset < 0 {
+		t.Fatalf("hierarchy prompt has no input envelope: %s", hierarchyPrompt)
+	}
+	hierarchyEnvelope := hierarchyPrompt[inputOffset+len(inputMarker):]
+	if strings.Contains(hierarchyEnvelope, "required_source_ref") || strings.Contains(hierarchyEnvelope, "source_refs") ||
+		strings.Index(hierarchyEnvelope, testArchitecturePath) > strings.Index(hierarchyEnvelope, testRoadmapPath) {
+		t.Fatalf("hierarchy input leaked source context or is not path-sorted: %s", hierarchyEnvelope)
+	}
+	if err := maintainer.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+}
+
+func TestRuntimeMaintainerRejectsInvalidHierarchyOutputBeforeReturning(t *testing.T) {
+	input, validPlan := testHierarchyInputAndPlan()
+	tests := []struct {
+		name   string
+		output func() string
+		want   error
+	}{
+		{name: "stale snapshot", output: func() string {
+			plan := validPlan
+			plan.SnapshotDigest = strings.Repeat("f", 64)
+			encoded, _ := json.Marshal(plan)
+			return string(encoded)
+		}, want: app.ErrHierarchyDigestMismatch},
+		{name: "source mirror catalog", output: func() string {
+			plan := validPlan
+			plan.Catalogs = append([]knowl.HierarchyCatalogSpec(nil), plan.Catalogs...)
+			plan.Catalogs[1].Path = "wiki/sources/source-a/index.md"
+			encoded, _ := json.Marshal(plan)
+			return string(encoded)
+		}, want: app.ErrHierarchyForbiddenPath},
+		{name: "source branch", output: func() string {
+			return `{"schema_digest":"` + hierarchySchemaDigest + `","source_refs":[],"edits":[]}`
+		}},
+		{name: "arbitrary edit", output: func() string {
+			return `{"schema_digest":"` + hierarchySchemaDigest + `","snapshot_digest":"` + hierarchySnapshotDigest + `","catalogs":[],"edits":[]}`
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			maintainer, err := newRuntimeMaintainer(
+				&fakeRuntimeFactory{agent: newOutputAgent(t, test.output())},
+				"provider",
+				t.TempDir(),
+				runtimeMaintainerOptions{},
+			)
+			if err != nil {
+				t.Fatalf("new maintainer: %v", err)
+			}
+			_, err = maintainer.PlanHierarchy(context.Background(), input)
+			if err == nil {
+				t.Fatal("PlanHierarchy() error = nil")
+			}
+			if test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("PlanHierarchy() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeMaintainerRejectsOversizedHierarchyInputBeforeBuild(t *testing.T) {
+	input, _ := testHierarchyInputAndPlan()
+	factory := &fakeRuntimeFactory{agent: newOutputAgent(t, "")}
+	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{maxInputBytes: 64})
+	if err != nil {
+		t.Fatalf("new maintainer: %v", err)
+	}
+	_, err = maintainer.PlanHierarchy(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "configured limit") || factory.builds != 0 {
+		t.Fatalf("PlanHierarchy() error=%v builds=%d, want pre-build input limit", err, factory.builds)
+	}
+}
+
+func TestRuntimeMaintainerRejectsOversizedHierarchyOutput(t *testing.T) {
+	input, plan := testHierarchyInputAndPlan()
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal hierarchy plan: %v", err)
+	}
+	maintainer, err := newRuntimeMaintainer(
+		&fakeRuntimeFactory{agent: newOutputAgent(t, string(encoded))},
+		"provider",
+		t.TempDir(),
+		runtimeMaintainerOptions{maxOutputBytes: 32},
+	)
+	if err != nil {
+		t.Fatalf("new maintainer: %v", err)
+	}
+	if _, err := maintainer.PlanHierarchy(context.Background(), input); err == nil || !strings.Contains(err.Error(), "hierarchy provider") {
+		t.Fatalf("PlanHierarchy() error = %v, want bounded provider rejection", err)
+	}
+}
+
+func TestRuntimeMaintainerRedactsHierarchyProviderFailure(t *testing.T) {
+	input, _ := testHierarchyInputAndPlan()
+	secret := "hierarchy-provider-secret"
+	maintainer, err := newRuntimeMaintainer(
+		&fakeRuntimeFactory{agent: newErrorAgent(t, errors.New(secret))},
+		"provider",
+		t.TempDir(),
+		runtimeMaintainerOptions{},
+	)
+	if err != nil {
+		t.Fatalf("new maintainer: %v", err)
+	}
+	_, err = maintainer.PlanHierarchy(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "run hierarchy provider") {
+		t.Fatalf("PlanHierarchy() error = %v, want redacted provider failure", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("PlanHierarchy() leaked provider failure: %v", err)
+	}
+}
+
+func newRoutingSessionBindingOutputAgent(t *testing.T, remoteSessions *atomic.Int32, prompts *[]string, sourceOutput, hierarchyOutput string) adkagent.Agent {
+	t.Helper()
+	agent, err := adkagent.New(adkagent.Config{
+		Name:        "routing_session_binding_provider",
+		Description: "routes deterministic output while preserving provider session state",
+		Run: func(ctx adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				if _, stateErr := ctx.Session().State().Get("provider_session"); errors.Is(stateErr, session.ErrStateKeyNotExist) {
+					remoteSessions.Add(1)
+					if setErr := ctx.Session().State().Set("provider_session", "remote-1"); setErr != nil {
+						yield(nil, setErr)
+						return
+					}
+				} else if stateErr != nil {
+					yield(nil, stateErr)
+					return
+				}
+				var prompt strings.Builder
+				if ctx.UserContent() != nil {
+					for _, part := range ctx.UserContent().Parts {
+						if part != nil {
+							prompt.WriteString(part.Text)
+						}
+					}
+				}
+				*prompts = append(*prompts, prompt.String())
+				output := sourceOutput
+				if strings.Contains(prompt.String(), `"operation":"hierarchy"`) {
+					output = hierarchyOutput
+				}
+				event := session.NewEvent(context.Background(), ctx.InvocationID())
+				event.Content = genai.NewContentFromText(output, genai.RoleModel)
+				event.TurnComplete = true
+				yield(event, nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("create routing output agent: %v", err)
+	}
+	return agent
+}
+
+func newSessionBindingOutputAgent(t *testing.T, remoteSessions *atomic.Int32, output string) adkagent.Agent {
+	t.Helper()
+	agent, err := adkagent.New(adkagent.Config{
+		Name:        "session_binding_provider",
+		Description: "simulates a provider binding stored in ADK session state",
+		Run: func(ctx adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				if _, stateErr := ctx.Session().State().Get("provider_session"); errors.Is(stateErr, session.ErrStateKeyNotExist) {
+					remoteSessions.Add(1)
+					if setErr := ctx.Session().State().Set("provider_session", map[string]any{"id": "remote-1"}); setErr != nil {
+						yield(nil, setErr)
+						return
+					}
+				} else if stateErr != nil {
+					yield(nil, stateErr)
+					return
+				}
+				event := session.NewEvent(context.Background(), ctx.InvocationID())
+				event.Content = genai.NewContentFromText(output, genai.RoleModel)
+				event.TurnComplete = true
+				yield(event, nil)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("create session-binding output agent: %v", err)
+	}
+	return agent
 }
 
 func TestRuntimeMaintainerRejectsUnsafeOutputAndLimits(t *testing.T) {
@@ -205,7 +491,7 @@ func duplicateOutputRunner(agent adkagent.Agent, sessions session.Service) (*run
 }
 
 func TestRuntimeMaintainerHonorsCancellationBeforeBuild(t *testing.T) {
-	factory := &fakeRuntimeFactory{agent: newOutputAgent(t, `{"schema_digest":"schema","source_refs":[],"edits":[]}`)}
+	factory := &fakeRuntimeFactory{agent: newOutputAgent(t, testSourcePlanJSON)}
 	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{})
 	if err != nil {
 		t.Fatalf("new maintainer: %v", err)
@@ -222,7 +508,7 @@ func TestRuntimeMaintainerHonorsCancellationBeforeBuild(t *testing.T) {
 }
 
 func TestRuntimeMaintainerKeepsCachedRuntimeAfterCanceledPlan(t *testing.T) {
-	planJSON := `{"schema_digest":"schema","source_refs":[],"edits":[]}`
+	planJSON := testSourcePlanJSON
 	started := make(chan struct{})
 	factory := &fakeRuntimeFactory{agent: newCancelThenOutputAgent(t, started, planJSON)}
 	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{})
@@ -270,6 +556,34 @@ func testMaintenanceInput() knowl.MaintenanceInput {
 	}
 }
 
+func testHierarchyInputAndPlan() (knowl.HierarchyInput, knowl.HierarchyModelPlan) {
+	input := knowl.HierarchyInput{
+		Scope:           "local",
+		SchemaDigest:    hierarchySchemaDigest,
+		SnapshotDigest:  hierarchySnapshotDigest,
+		MinRootCatalogs: 2,
+		Limits:          app.DefaultHierarchyLimits(),
+		Pages: []knowl.HierarchyPage{
+			{ID: "roadmap", Path: testRoadmapPath, Digest: strings.Repeat("1", 64), Type: "Product", Title: "Roadmap", Tags: []string{"planning", "product"}, Excerpt: "Milestones", Catalogs: []string{fixtureRootCatalogPath}},
+			{ID: "architecture", Path: testArchitecturePath, Digest: strings.Repeat("2", 64), Type: testArchitectureTitle, Title: testArchitectureTitle, Tags: []string{"system", "architecture"}, Excerpt: "Components", Catalogs: []string{fixtureRootCatalogPath}},
+		},
+		Catalogs: []knowl.HierarchyCatalog{{
+			Path: fixtureRootCatalogPath, Digest: strings.Repeat("3", 64), Title: "Knowl",
+			Children: []string{testRoadmapPath, testArchitecturePath},
+		}},
+	}
+	plan := knowl.HierarchyModelPlan{
+		SchemaDigest:   hierarchySchemaDigest,
+		SnapshotDigest: hierarchySnapshotDigest,
+		Catalogs: []knowl.HierarchyCatalogSpec{
+			{Path: fixtureRootCatalogPath, Title: "Knowl", Children: []string{"wiki/catalogs/product/index.md", "wiki/catalogs/architecture/index.md"}},
+			{Path: "wiki/catalogs/architecture/index.md", Title: testArchitectureTitle, Children: []string{testArchitecturePath}},
+			{Path: "wiki/catalogs/product/index.md", Title: "Product", Children: []string{testRoadmapPath}},
+		},
+	}
+	return input, plan
+}
+
 func newCancelThenOutputAgent(t *testing.T, started chan<- struct{}, output string) adkagent.Agent {
 	t.Helper()
 	var calls atomic.Int32
@@ -303,6 +617,23 @@ func newCancelThenOutputAgent(t *testing.T, started chan<- struct{}, output stri
 
 func newOutputAgent(t *testing.T, output string) adkagent.Agent {
 	return newCapturingOutputAgent(t, nil, output)
+}
+
+func newErrorAgent(t *testing.T, runErr error) adkagent.Agent {
+	t.Helper()
+	agent, err := adkagent.New(adkagent.Config{
+		Name:        "failing_provider",
+		Description: "returns a deterministic provider failure",
+		Run: func(adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				yield(nil, runErr)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("create failing output agent: %v", err)
+	}
+	return agent
 }
 
 func newCapturingOutputAgent(t *testing.T, prompt *string, output string) adkagent.Agent {

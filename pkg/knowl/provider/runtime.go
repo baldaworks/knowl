@@ -35,10 +35,9 @@ type RuntimeMaintainer struct {
 	newSession func() session.Service
 	newRunner  runnerFactory
 
-	mu       sync.Mutex
-	runtime  *maintainerRuntime
-	sequence uint64
-	closed   bool
+	mu      sync.Mutex
+	runtime *maintainerRuntime
+	closed  bool
 }
 
 // NewRuntimeMaintainer creates a lazy, structured maintainer for one runtime
@@ -48,3 +47,4 @@ func NewRuntimeMaintainer(factory RuntimeFactory, providerID, workspace string) 
 }
 
 var _ app.Maintainer = (*RuntimeMaintainer)(nil)
+var _ app.HierarchyMaintainer = (*RuntimeMaintainer)(nil)

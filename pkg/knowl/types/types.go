@@ -124,6 +124,23 @@ type RecoveryResult struct {
 // OperationID identifies an ingest or filing operation.
 type OperationID string
 
+// WorkKind distinguishes durable source maintenance from hierarchy work.
+type WorkKind string
+
+const (
+	WorkSourceMaintenance WorkKind = "source"
+	WorkHierarchy         WorkKind = "hierarchy"
+)
+
+// OperationIdentity is the generic deterministic identity of durable work.
+type OperationIdentity struct {
+	Scope    ScopeRef `json:"scope"`
+	Kind     WorkKind `json:"kind"`
+	Subject  string   `json:"subject"`
+	Revision string   `json:"revision"`
+	Digest   string   `json:"digest"`
+}
+
 // OperationKey is the idempotency identity for an immutable source revision.
 type OperationKey struct {
 	Scope   ScopeRef      `json:"scope"`
@@ -144,9 +161,18 @@ type OperationMeta struct {
 // accepted operation. It is internal operational state, not a public operation
 // read model.
 type ExecutionDescriptor struct {
-	OperationID OperationID    `json:"operation_id"`
-	Source      AcceptedSource `json:"source"`
-	Schema      SchemaDocument `json:"schema"`
+	OperationID OperationID                   `json:"operation_id"`
+	Kind        WorkKind                      `json:"kind,omitempty"`
+	Source      AcceptedSource                `json:"source,omitzero"`
+	Hierarchy   *HierarchyExecutionDescriptor `json:"hierarchy,omitempty"`
+	Schema      SchemaDocument                `json:"schema"`
+}
+
+// HierarchyExecutionDescriptor is the bounded versioned payload needed to
+// re-inspect and execute one reserved hierarchy snapshot.
+type HierarchyExecutionDescriptor struct {
+	SnapshotDigest string `json:"snapshot_digest"`
+	PlannerVersion string `json:"planner_version"`
 }
 
 // WorkLease grants temporary ownership of application-level operation work.
@@ -178,7 +204,8 @@ const (
 // Operation is a redacted operation read model.
 type Operation struct {
 	ID        OperationID     `json:"id"`
-	Key       OperationKey    `json:"key"`
+	Kind      WorkKind        `json:"kind,omitempty"`
+	Key       OperationKey    `json:"key,omitzero"`
 	Status    OperationStatus `json:"status"`
 	Attempt   int             `json:"attempt"`
 	Failure   *Failure        `json:"failure,omitempty"`

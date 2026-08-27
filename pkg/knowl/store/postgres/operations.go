@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/operationpayload"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -102,6 +103,52 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		}
 	}
 	return app.OperationReservation{Operation: operation, Descriptor: descriptor, New: created == 1}, nil
+}
+
+// ReserveOperation creates or replays one generic hierarchy operation.
+func (store *Store) ReserveOperation(ctx context.Context, identity knowl.OperationIdentity, descriptor knowl.ExecutionDescriptor) (app.OperationReservation, error) {
+	id, err := app.OperationIDForIdentity(identity)
+	if err != nil || descriptor.OperationID != id || app.ValidateOperationDescriptor(identity, descriptor) != nil {
+		return app.OperationReservation{}, app.ErrExecutionDescriptorUnavailable
+	}
+	payload, err := operationpayload.EncodeHierarchy(descriptor)
+	if err != nil {
+		return app.OperationReservation{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	now := time.Now().UTC()
+	result, err := store.db.ExecContext(ctx, `
+		INSERT INTO knowl_operations (
+			operation_id, scope, source_adapter, source_id, source_version, source_digest,
+			schema_digest, status, created_at, updated_at, accepted_media_type,
+			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at,
+			work_kind, execution_payload
+		) VALUES ($1, $2, '', '', $1, '', $3, $4, $5, $5, '', '', '', $6, $7, $5, $8, $9)
+		ON CONFLICT (operation_id) DO NOTHING`,
+		id, identity.Scope, descriptor.Schema.Digest, knowl.StatusReceived, now,
+		descriptor.Schema.Version, descriptor.Schema.Content, identity.Kind, payload)
+	if err != nil {
+		return app.OperationReservation{}, fmt.Errorf("reserve generic operation: %w", err)
+	}
+	created, err := result.RowsAffected()
+	if err != nil {
+		return app.OperationReservation{}, fmt.Errorf("inspect generic reservation: %w", err)
+	}
+	var existingScope, existingKind, existingPayload string
+	if err := store.db.QueryRowContext(ctx, `SELECT scope, work_kind, execution_payload FROM knowl_operations WHERE operation_id = $1`, id).
+		Scan(&existingScope, &existingKind, &existingPayload); err != nil {
+		return app.OperationReservation{}, fmt.Errorf("inspect generic operation: %w", err)
+	}
+	if existingScope != string(identity.Scope) || existingKind != string(identity.Kind) || existingPayload != payload {
+		return app.OperationReservation{}, ErrConflict
+	}
+	operation, readErr := store.Operation(ctx, identity.Scope, id)
+	if readErr != nil {
+		return app.OperationReservation{}, readErr
+	}
+	stored, readErr := store.Execution(ctx, identity.Scope, id)
+	return app.OperationReservation{Operation: operation, Descriptor: stored, New: created == 1}, readErr
 }
 
 func encodeAcceptedSourceDocument(document knowl.SourceDocument) (string, error) {
@@ -227,17 +274,17 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	var (
 		operationIDValue                                     string
 		sourceAdapter, sourceID, sourceVersion, sourceDigest string
-		schemaDigest, status, failureClass                   string
+		kind, schemaDigest, status, failureClass             string
 		attempt                                              int
 		updatedAt                                            time.Time
 	)
 	err := store.db.QueryRowContext(ctx, `
-		SELECT operation_id, source_adapter, source_id, source_version, source_digest,
+		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
 		       schema_digest, status, attempt, failure_class, updated_at
 		FROM knowl_operations
 		WHERE scope = $1 AND operation_id = $2`,
 		scope, id).Scan(
-		&operationIDValue, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest,
+		&operationIDValue, &kind, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest,
 		&schemaDigest, &status, &attempt, &failureClass, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.Operation{}, ErrNotFound
@@ -246,7 +293,8 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 		return knowl.Operation{}, fmt.Errorf("read operation: %w", err)
 	}
 	operation := knowl.Operation{
-		ID: knowl.OperationID(operationIDValue),
+		ID:   knowl.OperationID(operationIDValue),
+		Kind: knowl.WorkKind(kind),
 		Key: knowl.OperationKey{
 			Scope:   scope,
 			Source:  knowl.SourceRef{Adapter: sourceAdapter, ID: sourceID},
@@ -255,6 +303,11 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 		Status:    knowl.OperationStatus(status),
 		Attempt:   attempt,
 		UpdatedAt: updatedAt,
+	}
+	if operation.Kind == knowl.WorkHierarchy {
+		operation.Key = knowl.OperationKey{}
+	} else {
+		operation.Kind = knowl.WorkSourceMaintenance
 	}
 	if failureClass != "" {
 		operation.Failure = &knowl.Failure{Class: failureClass, OperationID: operationIDValue}

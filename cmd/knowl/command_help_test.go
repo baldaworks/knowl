@@ -79,6 +79,7 @@ func TestRootExposesCurrentLifecycleCommands(t *testing.T) {
 		initCommandName:      true,
 		validateCommandName:  true,
 		migrateCommandName:   true,
+		hierarchyCommandName: true,
 		bootstrapCommandName: true,
 		startCommandName:     true,
 		ingestCommandName:    true,
@@ -105,6 +106,7 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 		"knowl retrieve <text>",
 		"knowl ingest --input request.json",
 		"knowl operation <operation-id>",
+		"knowl hierarchy reconcile",
 		startCommandUsage,
 		"Bootstrap creates a Knowl-owned workspace",
 		"retained loopback HTTP/OpenAPI service mode",
@@ -145,6 +147,16 @@ func TestImplementedWorkflowHelpDescribesCLIInputs(t *testing.T) {
 				"fresh Knowl workspace",
 				"stored under raw/",
 				"semantic-wiki maintenance",
+			},
+		},
+		{
+			name: "hierarchy reconcile",
+			cmd:  newHierarchyCommand(),
+			args: []string{hierarchyReconcileCommandName, commandHelpFlag},
+			wantParts: []string{
+				"canonical mutation",
+				"does not start source synchronization",
+				"structured JSON operation result",
 			},
 		},
 		{
@@ -209,6 +221,12 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 			cmd:       newBootstrapCommand(),
 			wantShort: "Bootstrap a Knowl workspace from an existing Markdown, Obsidian, or OKF tree",
 			wantSubs:  []string{bootstrapWikiName, bootstrapObsidianName, bootstrapOKFName},
+		},
+		{
+			name:      hierarchyCommandName,
+			cmd:       newHierarchyCommand(),
+			wantShort: "Manage the canonical semantic wiki hierarchy",
+			wantSubs:  []string{hierarchyReconcileCommandName},
 		},
 		{
 			name:      retrieveCommandName,

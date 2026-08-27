@@ -288,6 +288,7 @@ workspace/
 ├── wiki/
 │   ├── index.md
 │   ├── log.md
+│   ├── catalogs/**/index.md
 │   ├── entities/
 │   ├── concepts/
 │   └── syntheses/
@@ -310,6 +311,36 @@ successful reconciliation, legacy derived `wiki/sources/<source_id>/**`
 content is removed through the staged recovery mechanism without changing raw
 history or curated pages.
 
+An existing valid flat semantic wiki remains readable and is never reorganized
+by startup, bootstrap, validation, retrieval, source status, or source listing.
+To explicitly build or refresh source-independent nested catalogs, stop other
+writers and run:
+
+```bash
+./knowl hierarchy reconcile
+./knowl validate
+```
+
+The command invokes the configured maintainer once through a bounded structured
+hierarchy plan, owns only `wiki/index.md` and `wiki/catalogs/**/index.md`, and
+prints the durable operation ID, status, changed flag, generation, and affected
+files as JSON. It does not start HTTP, scheduled work, or `sync.on_start`.
+Re-running a converged hierarchy reports `"changed":false` without changing
+canonical bytes. Ordinary pages and immutable `raw/` revisions are never
+hierarchy targets.
+
+The generic hierarchy contract is subject-first: document kind and technology
+are supporting signals, broad heterogeneous subjects are recursively decomposed,
+and secondary catalog membership is used sparingly for genuinely cross-cutting
+pages. The maintainer is asked to retain suitable current paths and memberships
+for stability, but semantic quality remains provider-dependent. Its single call
+receives bounded page metadata and excerpts plus the schema digest, not schema
+content, raw sources, provenance, or source-native paths. Application validation
+rejects empty generated non-root catalogs and incomplete or unsafe graphs before
+staging; an empty root is valid only for an empty wiki.
+This contract uses planner identity `hierarchy-v3`; existing catalogs change only
+after an explicit reconcile under that identity.
+
 Legacy workspaces are never rewritten implicitly. Back them up and run:
 
 ```bash
@@ -321,6 +352,12 @@ The migration is journaled, interruption-safe, idempotent, preserves legacy
 content and logs, and rebuilds the configured SQL projection. Attested
 Computation fields are stored and returned only as inert metadata; Knowl never
 executes computations, executors, attesters, or referenced resources.
+
+Operational-store migration to generic source/hierarchy operations is additive
+for SQLite and PostgreSQL. Older binaries remain safe only while no hierarchy
+operation rows have been created; after the first reconcile, roll back by
+restoring the pre-upgrade operational database or keep the newer binary. The
+Markdown wiki remains canonical and portable in either case.
 
 ## Public packages
 

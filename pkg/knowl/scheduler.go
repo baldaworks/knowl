@@ -29,6 +29,25 @@ type terminalRunner interface {
 	RunToTerminal(ctx context.Context, claim domain.WorkClaim) (app.IngestResult, error)
 }
 
+type terminalRouter struct {
+	source    terminalRunner
+	hierarchy terminalRunner
+}
+
+func (router terminalRouter) RunToTerminal(ctx context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+	switch claim.Descriptor.Kind {
+	case domain.WorkHierarchy:
+		if router.hierarchy == nil {
+			return app.IngestResult{}, app.ErrMaintainerUnavailable
+		}
+		return router.hierarchy.RunToTerminal(ctx, claim)
+	case "", domain.WorkSourceMaintenance:
+		return router.source.RunToTerminal(ctx, claim)
+	default:
+		return app.IngestResult{}, app.ErrExecutionDescriptorUnavailable
+	}
+}
+
 type schedulerOptions struct {
 	wakeSize               int
 	claimBatch             int

@@ -210,6 +210,8 @@ func validStageManifest(manifest stageManifest) bool {
 		return validMaintainerStageManifest(manifest)
 	case stageWriterSource:
 		return validSourceStageManifest(manifest)
+	case stageWriterHierarchy:
+		return validHierarchyStageManifest(manifest)
 	default:
 		return false
 	}
@@ -348,7 +350,8 @@ func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
 func stageGeneration(manifest stageManifest) string {
 	core := stageManifest{
 		OperationID: manifest.OperationID, Writer: manifest.Writer, SourceID: manifest.SourceID,
-		Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, RequiredSourceRef: manifest.RequiredSourceRef, SourceRefs: manifest.SourceRefs,
+		Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, SnapshotDigest: manifest.SnapshotDigest,
+		RequiredSourceRef: manifest.RequiredSourceRef, SourceRefs: manifest.SourceRefs,
 		Entries: manifest.Entries, LogDate: manifest.LogDate,
 	}
 	metadata, err := yaml.Marshal(core)

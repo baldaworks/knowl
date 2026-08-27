@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -130,6 +131,18 @@ func TestPageSourcesMigrationIsAdditiveAndNormalized(t *testing.T) {
 	}
 }
 
+func TestGenericOperationsMigrationIsAdditive(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00009_generic_operations.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"work_kind TEXT NOT NULL DEFAULT 'source'", "execution_payload TEXT NOT NULL DEFAULT ''", "downgrading"} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("generic operation migration missing %q", required)
+		}
+	}
+}
+
 func TestStoreContract(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("KNOWL_POSTGRES_DSN"))
 	if dsn == "" {
@@ -197,6 +210,7 @@ func runStoreContract(t *testing.T, dsn string) {
 	}
 	runnertest.Run(t, store, store, knowl.ScopeRef(string(scope)+"_runner"))
 	assertResumableMigration(t, ctx, store, dsn)
+	assertPostgresHierarchyWork(t, ctx, store, knowl.ScopeRef(string(scope)+"_hierarchy"))
 	key, meta := postgresExecutionFixture(scope, "source", time.Unix(1, 0).UTC())
 	operation, err := store.Reserve(ctx, key, meta)
 	if err != nil {
@@ -507,6 +521,60 @@ func assertConcurrentPostgresClaim(t *testing.T, ctx context.Context, dsn string
 	claim := <-claims
 	if claim.Operation.ID != wantID {
 		t.Fatalf("claimed %q, want %q", claim.Operation.ID, wantID)
+	}
+}
+
+func assertPostgresHierarchyWork(t *testing.T, ctx context.Context, store *Store, scope knowl.ScopeRef) {
+	t.Helper()
+	identity, descriptor := postgresHierarchyExecutionFixture(t, scope, "planner-v1", strings.Repeat("b", 64))
+	first, err := store.ReserveOperation(ctx, identity, descriptor)
+	if err != nil {
+		t.Fatalf("reserve hierarchy operation: %v", err)
+	}
+	replayed, err := store.ReserveOperation(ctx, identity, descriptor)
+	if err != nil || replayed.New || replayed.ID != first.ID || replayed.Kind != knowl.WorkHierarchy {
+		t.Fatalf("hierarchy replay = %#v, %v", replayed, err)
+	}
+	secondIdentity, secondDescriptor := postgresHierarchyExecutionFixture(t, scope, "planner-v1", strings.Repeat("c", 64))
+	if _, err := store.ReserveOperation(ctx, secondIdentity, secondDescriptor); err != nil {
+		t.Fatalf("reserve second hierarchy operation: %v", err)
+	}
+	ready, err := store.ResumeReady(ctx, scope, 10)
+	if err != nil || len(ready) != 2 {
+		t.Fatalf("hierarchy ready = %v, %v", ready, err)
+	}
+	claim, err := store.ClaimReady(ctx, scope, knowl.WorkLease{Token: "hierarchy-worker", ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil || claim.Descriptor.Kind != knowl.WorkHierarchy || claim.Descriptor.Hierarchy == nil || claim.Operation.Kind != knowl.WorkHierarchy {
+		t.Fatalf("hierarchy claim = %#v, %v", claim, err)
+	}
+	if err := store.ReleaseClaim(ctx, scope, claim.Operation.ID, claim.Lease.Token); err != nil {
+		t.Fatalf("release hierarchy claim: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE knowl_operations SET execution_payload = $1 WHERE operation_id = $2`, `{"version":2}`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Execution(ctx, scope, first.ID); !errors.Is(err, app.ErrExecutionDescriptorUnavailable) {
+		t.Fatalf("corrupt hierarchy descriptor error = %v", err)
+	}
+	failures, err := store.DescriptorFailures(ctx, scope, 10)
+	if err != nil || !slices.Contains(failures, first.ID) {
+		t.Fatalf("hierarchy descriptor failures = %v, %v", failures, err)
+	}
+}
+
+func postgresHierarchyExecutionFixture(t *testing.T, scope knowl.ScopeRef, planner, snapshot string) (knowl.OperationIdentity, knowl.ExecutionDescriptor) {
+	t.Helper()
+	schema := []byte("# Hierarchy schema\n")
+	schemaDigest := fmt.Sprintf("%x", sha256.Sum256(schema))
+	identity := knowl.OperationIdentity{Scope: scope, Kind: knowl.WorkHierarchy, Subject: planner, Revision: schemaDigest, Digest: snapshot}
+	id, err := app.OperationIDForIdentity(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity, knowl.ExecutionDescriptor{
+		OperationID: id, Kind: knowl.WorkHierarchy,
+		Hierarchy: &knowl.HierarchyExecutionDescriptor{SnapshotDigest: snapshot, PlannerVersion: planner},
+		Schema:    knowl.SchemaDocument{Scope: scope, Digest: schemaDigest, Version: "1", Content: schema},
 	}
 }
 

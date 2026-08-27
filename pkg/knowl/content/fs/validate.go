@@ -228,14 +228,20 @@ func validateCatalogGraph(documents map[string]string, editedPages map[string]st
 		reachable[current] = struct{}{}
 		queue = append(queue, edges[current]...)
 	}
-	editedPaths := make([]string, 0, len(editedPages))
-	for page := range editedPages {
-		editedPaths = append(editedPaths, page)
+	ordinaryPaths := make([]string, 0, len(kinds))
+	for documentPath, kind := range kinds {
+		if kind == okf.DocumentConcept {
+			ordinaryPaths = append(ordinaryPaths, documentPath)
+		}
 	}
-	sort.Strings(editedPaths)
-	for _, page := range editedPaths {
+	sort.Strings(ordinaryPaths)
+	for _, page := range ordinaryPaths {
 		if _, exists := reachable[page]; !exists {
-			return contentInvalidError(workspaceWikiDir+"/"+page, "catalog.unreachable")
+			rule := "catalog.reconciliation_required"
+			if _, edited := editedPages[page]; edited {
+				rule = "catalog.unreachable"
+			}
+			return contentInvalidError(workspaceWikiDir+"/"+page, rule)
 		}
 	}
 	return nil

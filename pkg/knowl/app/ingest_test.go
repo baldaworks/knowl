@@ -889,6 +889,9 @@ func TestExecuteKeepsReadDeadlineOutOfMaintainerPlan(t *testing.T) {
 
 const (
 	testSourceRef          = "fixture:source-1@1"
+	testSourceAdapter      = "fixture"
+	testPlainMediaType     = "text/plain"
+	testOperationsName     = "operations"
 	testConfiguredSourceID = "configured-wiki"
 )
 
@@ -1155,9 +1158,9 @@ func claimReady(t *testing.T, store *sqlite.Store, scope knowl.ScopeRef) knowl.W
 func sourceEnvelope(content []byte) knowl.SourceEnvelope {
 	return knowl.SourceEnvelope{
 		Scope:     testSourceScope,
-		Source:    knowl.SourceRef{Adapter: "fixture", ID: "source-1"},
+		Source:    knowl.SourceRef{Adapter: testSourceAdapter, ID: "source-1"},
 		Version:   knowl.SourceVersion{Version: "1", Digest: digest(content)},
-		MediaType: "text/plain",
+		MediaType: testPlainMediaType,
 		Content:   content,
 	}
 }

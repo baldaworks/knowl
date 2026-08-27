@@ -26,6 +26,10 @@ func (fakeContentStore) ReadPages(context.Context, knowl.ScopeRef, []knowl.PageI
 	return nil, nil
 }
 
+func (fakeContentStore) HierarchySnapshotDigest(context.Context, knowl.ScopeRef) (string, error) {
+	return "", nil
+}
+
 func (fakeContentStore) StagePlan(context.Context, knowl.ValidatedEditPlan) (knowl.StagedChange, error) {
 	return knowl.StagedChange{}, nil
 }
@@ -35,6 +39,18 @@ func (fakeContentStore) LoadStage(context.Context, knowl.ScopeRef, knowl.Operati
 }
 
 func (fakeContentStore) Commit(context.Context, knowl.StagedChange) (knowl.ContentCommit, error) {
+	return knowl.ContentCommit{}, nil
+}
+
+func (fakeContentStore) StageHierarchyPlan(context.Context, knowl.OperationID, knowl.ValidatedHierarchyPlan) (knowl.StagedChange, error) {
+	return knowl.StagedChange{}, nil
+}
+
+func (fakeContentStore) LoadHierarchyStage(context.Context, knowl.ScopeRef, knowl.OperationID) (knowl.StagedChange, error) {
+	return knowl.StagedChange{}, nil
+}
+
+func (fakeContentStore) CommitHierarchy(context.Context, knowl.StagedChange) (knowl.ContentCommit, error) {
 	return knowl.ContentCommit{}, nil
 }
 

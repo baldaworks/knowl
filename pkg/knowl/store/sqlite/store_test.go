@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +39,18 @@ const (
 	testRevision     = "revision-1"
 	testMediaType    = "text/markdown"
 )
+
+func TestGenericOperationsMigrationIsAdditive(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00009_generic_operations.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"work_kind TEXT NOT NULL DEFAULT 'source'", "execution_payload TEXT NOT NULL DEFAULT ''", "downgrading"} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("generic operation migration missing %q", required)
+		}
+	}
+}
 
 func TestResumableWorkContract(t *testing.T) {
 	ctx := context.Background()
@@ -232,15 +245,16 @@ func TestSourceMigrationPreservesVersionTwoOperation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	operation, err := store.Operation(ctx, "legacy", "legacy-operation")
-	if err != nil || operation.ID != "legacy-operation" {
+	if err != nil || operation.ID != "legacy-operation" || operation.Kind != knowl.WorkSourceMaintenance {
 		t.Fatalf("preserved operation = %#v, %v", operation, err)
 	}
-	var acceptedSourceDocument string
-	if err := store.db.QueryRowContext(ctx, `SELECT accepted_source_document FROM knowl_operations WHERE operation_id = ?`, operation.ID).Scan(&acceptedSourceDocument); err != nil {
+	var acceptedSourceDocument, workKind, executionPayload string
+	if err := store.db.QueryRowContext(ctx, `SELECT accepted_source_document, work_kind, execution_payload FROM knowl_operations WHERE operation_id = ?`, operation.ID).
+		Scan(&acceptedSourceDocument, &workKind, &executionPayload); err != nil {
 		t.Fatalf("read migrated operation provenance: %v", err)
 	}
-	if acceptedSourceDocument != "" {
-		t.Fatalf("legacy operation provenance = %q, want empty compatibility value", acceptedSourceDocument)
+	if acceptedSourceDocument != "" || workKind != string(knowl.WorkSourceMaintenance) || executionPayload != "" {
+		t.Fatalf("legacy operation columns = provenance %q kind %q payload %q", acceptedSourceDocument, workKind, executionPayload)
 	}
 	var title, body, digest, sourceRefs, sourceDocuments, format, description string
 	var sourceID, sourceDocument, metadata sql.NullString
@@ -515,6 +529,74 @@ func TestStorePersistsAndReplaysExecutionDescriptor(t *testing.T) {
 	}
 	if descriptor.Source != meta.AcceptedSource || string(descriptor.Schema.Content) != string(meta.Schema.Content) {
 		t.Fatalf("descriptor = %#v", descriptor)
+	}
+}
+
+func TestStorePersistsClaimsAndRejectsCorruptHierarchyWork(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/hierarchy.sqlite"
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity, descriptor := hierarchyExecutionFixture(t, "hierarchy", "planner-v1", strings.Repeat("b", 64))
+	first, err := store.ReserveOperation(ctx, identity, descriptor)
+	if err != nil {
+		t.Fatalf("ReserveOperation() error: %v", err)
+	}
+	replayed, err := store.ReserveOperation(ctx, identity, descriptor)
+	if err != nil || replayed.New || replayed.ID != first.ID || replayed.Kind != knowl.WorkHierarchy {
+		t.Fatalf("ReserveOperation() replay = %#v, %v", replayed, err)
+	}
+	secondIdentity, secondDescriptor := hierarchyExecutionFixture(t, "hierarchy", "planner-v1", strings.Repeat("c", 64))
+	second, err := store.ReserveOperation(ctx, secondIdentity, secondDescriptor)
+	if err != nil {
+		t.Fatalf("reserve second hierarchy snapshot: %v", err)
+	}
+	ready, err := store.ResumeReady(ctx, identity.Scope, 10)
+	if err != nil || len(ready) != 2 {
+		t.Fatalf("ResumeReady() = %v, %v", ready, err)
+	}
+	targeted, err := store.ClaimOperation(ctx, identity.Scope, second.ID, knowl.WorkLease{Token: "targeted-hierarchy-worker", ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil || targeted.Operation.ID != second.ID || targeted.Descriptor.OperationID != second.ID {
+		t.Fatalf("ClaimOperation() = %#v, %v", targeted, err)
+	}
+	if err := store.ReleaseClaim(ctx, identity.Scope, targeted.Operation.ID, targeted.Lease.Token); err != nil {
+		t.Fatalf("ReleaseClaim(targeted) error: %v", err)
+	}
+	claim, err := store.ClaimReady(ctx, identity.Scope, knowl.WorkLease{Token: "hierarchy-worker", ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil || claim.Descriptor.Kind != knowl.WorkHierarchy || claim.Descriptor.Hierarchy == nil || claim.Operation.Kind != knowl.WorkHierarchy {
+		t.Fatalf("ClaimReady() = %#v, %v", claim, err)
+	}
+	if err := store.ReleaseClaim(ctx, identity.Scope, claim.Operation.ID, claim.Lease.Token); err != nil {
+		t.Fatalf("ReleaseClaim() error: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE knowl_operations SET execution_payload = ? WHERE operation_id = ?`, `{"version":2}`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Execution(ctx, identity.Scope, first.ID); !errors.Is(err, app.ErrExecutionDescriptorUnavailable) {
+		t.Fatalf("Execution() corrupt payload error = %v", err)
+	}
+	failures, err := store.DescriptorFailures(ctx, identity.Scope, 10)
+	if err != nil || !slices.Contains(failures, first.ID) {
+		t.Fatalf("DescriptorFailures() = %v, %v", failures, err)
+	}
+}
+
+func hierarchyExecutionFixture(t *testing.T, scope knowl.ScopeRef, planner, snapshot string) (knowl.OperationIdentity, knowl.ExecutionDescriptor) {
+	t.Helper()
+	schema := []byte("# Hierarchy schema\n")
+	schemaDigest := fmt.Sprintf("%x", sha256.Sum256(schema))
+	identity := knowl.OperationIdentity{Scope: scope, Kind: knowl.WorkHierarchy, Subject: planner, Revision: schemaDigest, Digest: snapshot}
+	id, err := app.OperationIDForIdentity(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity, knowl.ExecutionDescriptor{
+		OperationID: id, Kind: knowl.WorkHierarchy,
+		Hierarchy: &knowl.HierarchyExecutionDescriptor{SnapshotDigest: snapshot, PlannerVersion: planner},
+		Schema:    knowl.SchemaDocument{Scope: scope, Digest: schemaDigest, Version: "1", Content: schema},
 	}
 }
 

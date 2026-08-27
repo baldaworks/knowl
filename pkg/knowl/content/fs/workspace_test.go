@@ -738,7 +738,7 @@ func TestWorkspaceStagePlanAllowsIndexTargetsWithoutFrontmatter(t *testing.T) {
 			{
 				Path:           testIndexPath,
 				ExpectedDigest: digestBytes(indexContent),
-				Content:        []byte(rootIndexContent + "\n* [Three](entities/three.md)\n"),
+				Content:        []byte(rootIndexContent + "\n* [Two](entities/two.md)\n* [Three](entities/three.md)\n"),
 			},
 			{
 				Path:    "wiki/entities/three.md",
@@ -822,6 +822,68 @@ func TestWorkspaceStagePlanValidatesProspectiveCatalogGraph(t *testing.T) {
 				t.Fatalf("StagePlan() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestWorkspaceStagePlanRequiresExistingOrphansToBeReconciled(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	acceptWorkspaceSource(t, workspace)
+	pageOne := validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "before")
+	pageTwo := validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, "orphan")
+	for target, content := range map[string][]byte{
+		testPageOnePath:        pageOne,
+		"wiki/entities/two.md": pageTwo,
+	} {
+		absolute := filepath.Join(workspace.Root(), filepath.FromSlash(target))
+		if err := os.WriteFile(absolute, content, 0o600); err != nil {
+			t.Fatalf("write %s: %v", target, err)
+		}
+	}
+	writeRootCatalogTargets(t, workspace, "entities/one.md")
+	if _, err := workspace.Snapshot(context.Background(), testScope); err != nil {
+		t.Fatalf("read-compatible workspace snapshot: %v", err)
+	}
+	schema, err := workspace.Schema(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pageOneAfter := validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "after")
+	_, err = workspace.StagePlan(context.Background(), knowl.ValidatedEditPlan{
+		OperationID:  "existing-orphan",
+		Scope:        testScope,
+		SchemaDigest: schema.Digest,
+		SourceRefs:   []string{testWorkspaceSourceRef},
+		Edits: []knowl.FileEdit{{
+			Path: testPageOnePath, ExpectedDigest: digestBytes(pageOne), Content: pageOneAfter,
+		}},
+	})
+	if !errors.Is(err, ErrContentInvalid) || !strings.Contains(err.Error(), `wiki/entities/two.md`) || !strings.Contains(err.Error(), "catalog.reconciliation_required") {
+		t.Fatalf("StagePlan() error = %v, want path-specific reconciliation requirement", err)
+	}
+
+	rootPath := filepath.Join(workspace.Root(), "wiki", "index.md")
+	rootBefore, err := os.ReadFile(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAfter := append(append([]byte(nil), rootBefore...), []byte("\n* [Two](entities/two.md)\n")...)
+	if _, err := workspace.StagePlan(context.Background(), knowl.ValidatedEditPlan{
+		OperationID:  "reconcile-existing-orphan",
+		Scope:        testScope,
+		SchemaDigest: schema.Digest,
+		SourceRefs:   []string{testWorkspaceSourceRef},
+		Edits: []knowl.FileEdit{
+			{Path: testPageOnePath, ExpectedDigest: digestBytes(pageOne), Content: pageOneAfter},
+			{Path: testIndexPath, ExpectedDigest: digestBytes(rootBefore), Content: rootAfter},
+		},
+	}); err != nil {
+		t.Fatalf("StagePlan() with complete reconciliation error = %v", err)
 	}
 }
 
@@ -1225,7 +1287,7 @@ func TestWorkspaceCommitRejectsBrokenProspectiveStateBeforeJournal(t *testing.T)
 		t.Fatalf("init workspace: %v", err)
 	}
 	acceptWorkspaceSource(t, workspace)
-	writeRootCatalogTargets(t, workspace, "entities/one.md")
+	writeRootCatalogTargets(t, workspace, "entities/one.md", "entities/two.md")
 	targetPath := filepath.Join(workspace.Root(), "wiki", "entities", "two.md")
 	if err := os.WriteFile(targetPath, validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, ""), 0o600); err != nil {
 		t.Fatalf("write target page: %v", err)

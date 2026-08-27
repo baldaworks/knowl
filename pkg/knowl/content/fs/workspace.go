@@ -25,6 +25,7 @@ const (
 	recoveryRolledBack = "rolled_back"
 	recoveryCompleted  = "completed"
 	commitFaultApplied = "applied"
+	commitFaultReceipt = "receipt"
 )
 
 // Workspace owns canonical filesystem content for one local Knowl workspace.

@@ -34,6 +34,7 @@ type composedRuntime struct {
 	sourceObserver   SourceObserver
 	scheduler        *operationScheduler
 	service          *app.IngestService
+	hierarchy        *app.HierarchyService
 	query            *app.QueryService
 	lint             *app.LintService
 	mcp              *mcp.Server
@@ -112,7 +113,15 @@ func composeRuntime(ctx context.Context, config Config, maintainer app.Maintaine
 		return composedRuntime{}, err
 	}
 	runtime.sources = cloneSources(config.Sources)
-	runtime.scheduler, err = newOperationScheduler(runtime.operations, runtime.service, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize})
+	runner := terminalRunner(runtime.service)
+	if hierarchyMaintainer, ok := maintainer.(app.HierarchyMaintainer); ok {
+		runtime.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, hierarchyMaintainer, app.HierarchyOptions{})
+		if err != nil {
+			return composedRuntime{}, fmt.Errorf("compose hierarchy service: %w", err)
+		}
+		runner = terminalRouter{source: runtime.service, hierarchy: runtime.hierarchy}
+	}
+	runtime.scheduler, err = newOperationScheduler(runtime.operations, runner, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize})
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose operation scheduler: %w", err)
 	}
@@ -223,6 +232,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		sourceJobs:       sourceJobs,
 		scheduler:        runtime.scheduler,
 		service:          runtime.service,
+		hierarchy:        runtime.hierarchy,
 		query:            runtime.query,
 		lint:             runtime.lint,
 		mcp:              runtime.mcp,
