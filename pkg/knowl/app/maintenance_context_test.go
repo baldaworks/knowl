@@ -26,8 +26,8 @@ func TestSourceAwareContextUpdatesExistingPageWithoutDuplicate(t *testing.T) {
 	_ = unusedMaintainer
 	legacyContent := []byte("legacy decision evidence")
 	if _, err := workspace.AcceptSource(ctx, knowl.SourceEnvelope{
-		Scope: testSourceScope, Source: knowl.SourceRef{Adapter: "fixture", ID: "legacy"},
-		Version: knowl.SourceVersion{Version: "1", Digest: digest(legacyContent)}, MediaType: "text/plain", Content: legacyContent,
+		Scope: testSourceScope, Source: knowl.SourceRef{Adapter: testSourceAdapter, ID: "legacy"},
+		Version: knowl.SourceVersion{Version: "1", Digest: digest(legacyContent)}, MediaType: testPlainMediaType, Content: legacyContent,
 	}); err != nil {
 		t.Fatalf("accept legacy source: %v", err)
 	}
@@ -36,7 +36,8 @@ func TestSourceAwareContextUpdatesExistingPageWithoutDuplicate(t *testing.T) {
 	unrelated := []byte("---\nid: releases/current\ntitle: Current Release\ntype: note\nsource_refs:\n  - fixture:release@1\n---\n# Current Release\n\nUnrelated packaging status.\n")
 	writeFixturePage(t, workspace.Root(), decisionPagePath, decisionBefore, time.Unix(10, 0).UTC())
 	writeFixturePage(t, workspace.Root(), "wiki/releases/current.md", unrelated, time.Unix(20, 0).UTC())
-	writeFixturePage(t, workspace.Root(), "wiki/decisions/index.md", []byte("# Decisions\n"), time.Unix(30, 0).UTC())
+	writeFixturePage(t, workspace.Root(), "wiki/decisions/index.md", []byte("# Decisions\n* [Badger](badger.md)\n"), time.Unix(30, 0).UTC())
+	writeFixturePage(t, workspace.Root(), testRootCatalogPath, []byte("---\nokf_version: \"0.2\"\n---\n# Knowl Index\n* [Decisions](decisions/index.md)\n* [Current release](releases/current.md)\n"), time.Unix(40, 0).UTC())
 	snapshot, err := workspace.Snapshot(ctx, "local")
 	if err != nil {
 		t.Fatalf("Snapshot(): %v", err)

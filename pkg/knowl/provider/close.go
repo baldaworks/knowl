@@ -1,10 +1,13 @@
 package provider
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	adkagent "google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/session"
 )
 
 // Close releases the provider agent. It is safe to call more than once.
@@ -21,13 +24,25 @@ func (maintainer *RuntimeMaintainer) Close() error {
 	if maintainer.cancel != nil {
 		defer maintainer.cancel()
 	}
-	if maintainer.runtime == nil || maintainer.runtime.closer == nil {
+	if maintainer.runtime == nil {
 		return nil
 	}
-	if err := maintainer.runtime.closer.Close(); err != nil {
-		return fmt.Errorf("close maintainer provider: %w", err)
+	var closeErrors []error
+	if maintainer.runtime.sessions != nil && maintainer.runtime.sessionID != "" {
+		if err := maintainer.runtime.sessions.Delete(context.Background(), &session.DeleteRequest{
+			AppName:   maintainerAppName,
+			UserID:    maintainerUserID,
+			SessionID: maintainer.runtime.sessionID,
+		}); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("delete maintainer session: %w", err))
+		}
 	}
-	return nil
+	if maintainer.runtime.closer != nil {
+		if err := maintainer.runtime.closer.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close maintainer provider: %w", err))
+		}
+	}
+	return errors.Join(closeErrors...)
 }
 
 func closeAgent(agent adkagent.Agent) {

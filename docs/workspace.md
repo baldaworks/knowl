@@ -16,6 +16,8 @@ an Open Knowledge Format (OKF) v0.2 bundle, alongside immutable source files in
 ├── wiki/
 │   ├── index.md
 │   ├── log.md
+│   ├── catalogs/
+│   │   └── <semantic-domain>/index.md
 │   ├── entities/*.md
 │   ├── concepts/*.md
 │   └── syntheses/*.md
@@ -125,6 +127,71 @@ Every `log.md` is a reserved, newest-first ISO-date-grouped OKF control. Source
 OKF logs remain immutable raw evidence and are not imported into the semantic
 wiki. Attested Computation metadata on semantic pages is parsed, preserved,
 projected, and returned, but never executed or dereferenced.
+
+## Explicit semantic hierarchy reconciliation
+
+A valid flat root catalog remains compatible and readable. Knowl reorganizes it
+only when an operator explicitly runs:
+
+```bash
+knowl hierarchy reconcile
+```
+
+The maintainer receives a structured, deterministically ordered description of
+ordinary pages: canonical ID/path/digest, OKF type/title/description/tags, a
+bounded excerpt of user content, and current catalog membership. It does not
+receive raw source bodies, source-native paths, frontmatter, or provenance
+envelopes as taxonomy input. The provider returns a graph; application code
+validates it and renders the OKF Markdown.
+
+The single provider call follows a generic subject-first planning contract.
+Subject domains are the primary navigation axis; page type, document kind, and
+implementation technology are supporting evidence rather than automatic root
+categories. Broad heterogeneous subjects are recursively decomposed into
+cohesive subdomains. Every page receives a primary placement, while a page may
+appear in an additional catalog only when its bounded semantic fields clearly
+span subjects. Suitable existing semantic paths and unrelated memberships are
+retained when possible so an unchanged snapshot can converge without churn.
+These instructions constrain the plan shape, but semantic quality is still
+provider-dependent and no numeric balance or optimal taxonomy is promised.
+
+The hierarchy input carries the current schema digest to bind the operation; it
+does not carry `schema.md` content or derive taxonomy policy from the schema.
+The current planning contract has durable identity `hierarchy-v3`. Catalogs
+created by an earlier planner remain valid and untouched until an operator runs
+the explicit reconcile command.
+
+Hierarchy reconciliation owns only `wiki/index.md` and generated
+`wiki/catalogs/**/index.md`. It may create, replace, or remove those managed
+catalog controls, but it cannot target ordinary pages, `wiki/log.md`, `raw/`,
+`wiki/sources/**`, or operator-created catalogs elsewhere. Every ordinary page
+must remain reachable from the single root, and catalog edges must stay inside
+`wiki/`, resolve, and remain acyclic. Reserved controls remain excluded from
+retrieval. Every generated non-root catalog must contain at least one child; an
+empty root is accepted only for an empty wiki. Cross-cutting pages may be linked
+from distinct catalogs, while a duplicate child edge within one catalog is
+invalid.
+
+The current conservative limits are 1,024 ordinary pages, 1,024 catalogs,
+16,384 edges, graph depth 16, 4 MiB total planner input, 4,096 excerpt
+characters per page, 1 MiB structured plan output, 1,024 managed edits, 256 KiB
+per generated catalog, and a 1 MiB stage manifest. Paths use the existing safe
+edit-path bound. The complete input must fit: Knowl fails before invoking the
+provider rather than silently classifying a partial wiki.
+
+The command reserves and claims one durable hierarchy operation, stages catalog
+changes with schema/snapshot/target digest preconditions, commits through the
+normal recovery journal, appends the audit log, updates the projection, and
+validates the resulting workspace. Its JSON result reports `operation_id`,
+`status`, `changed`, and, for a canonical change, `generation` and `files`.
+Re-running a converged snapshot is a byte-stable no-op. Stale snapshots, unsafe
+paths, invalid or incomplete graphs, exceeded limits, staging failures, and
+projection failures retain a specific wrapped cause; interrupted canonical
+commits are replayed from the durable stage and receipt.
+
+The command does not start the HTTP listener, the general scheduler, source
+jobs, or `sync.on_start`. Startup, bootstrap, validate, retrieve, operation
+reads, source list, and source status do not invoke hierarchy reconciliation.
 
 ## Explicit OKF migration
 

@@ -43,6 +43,7 @@ type Host struct {
 	sourceJobs  *sourceScheduler
 	scheduler   *operationScheduler
 	service     *app.IngestService
+	hierarchy   *app.HierarchyService
 	query       *app.QueryService
 	lint        *app.LintService
 	mcp         *mcp.Server

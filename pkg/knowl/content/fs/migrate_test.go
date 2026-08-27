@@ -112,7 +112,7 @@ func TestWorkspaceMigrateOKFV02RecoversInjectedInterruptions(t *testing.T) {
 	}{
 		{name: "prepared", point: recoveryPrepared, index: -1},
 		{name: "partially applied", point: commitFaultApplied, index: 1},
-		{name: "durably committed", point: recoveryCommitted, index: -1},
+		{name: testDurablyCommitted, point: recoveryCommitted, index: -1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

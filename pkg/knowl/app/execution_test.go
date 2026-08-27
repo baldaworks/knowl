@@ -83,6 +83,45 @@ func TestExecutionDescriptorValidationRejectsInvalidInputsWithoutDisclosure(t *t
 	}
 }
 
+func TestHierarchyOperationIdentityAndDescriptorAreDeterministicAndBounded(t *testing.T) {
+	t.Parallel()
+	schemaContent := []byte("# Hierarchy schema\n")
+	schemaDigest := digestForTest(schemaContent)
+	identity := knowl.OperationIdentity{
+		Scope: fixtureScope, Kind: knowl.WorkHierarchy, Subject: "hierarchy-v1",
+		Revision: schemaDigest, Digest: strings.Repeat("b", 64),
+	}
+	id, err := OperationIDForIdentity(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay, err := OperationIDForIdentity(identity); err != nil || replay != id {
+		t.Fatalf("OperationIDForIdentity() replay = %q, %v; want %q", replay, err, id)
+	}
+	descriptor := knowl.ExecutionDescriptor{
+		OperationID: id, Kind: knowl.WorkHierarchy,
+		Hierarchy: &knowl.HierarchyExecutionDescriptor{SnapshotDigest: identity.Digest, PlannerVersion: identity.Subject},
+		Schema:    knowl.SchemaDocument{Scope: fixtureScope, Digest: schemaDigest, Version: "1", Content: schemaContent},
+	}
+	if err := ValidateOperationDescriptor(identity, descriptor); err != nil {
+		t.Fatalf("ValidateOperationDescriptor() error: %v", err)
+	}
+	if err := ValidateGenericExecutionDescriptor(fixtureScope, descriptor); err != nil {
+		t.Fatalf("ValidateGenericExecutionDescriptor() error: %v", err)
+	}
+
+	invalid := descriptor
+	invalid.Hierarchy = &knowl.HierarchyExecutionDescriptor{SnapshotDigest: strings.Repeat("c", 64), PlannerVersion: identity.Subject}
+	if err := ValidateGenericExecutionDescriptor(fixtureScope, invalid); !errors.Is(err, ErrExecutionDescriptorUnavailable) {
+		t.Fatalf("stale hierarchy descriptor error = %v", err)
+	}
+	oversized := identity
+	oversized.Subject = strings.Repeat("x", maxPlannerVersionBytes+1)
+	if _, err := OperationIDForIdentity(oversized); !errors.Is(err, ErrExecutionDescriptorUnavailable) {
+		t.Fatalf("oversized planner version error = %v", err)
+	}
+}
+
 func TestOperationJSONRemainsRedacted(t *testing.T) {
 	t.Parallel()
 	encoded, err := json.Marshal(knowl.Operation{

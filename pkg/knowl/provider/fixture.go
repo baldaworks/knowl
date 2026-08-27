@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -9,13 +10,18 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+const fixtureRootCatalogPath = "wiki/index.md"
+
 // Fixture is a deterministic local Maintainer used by supported contract tests.
 type Fixture struct {
-	Result knowl.ModelEditPlan
-	Error  error
+	Result          knowl.ModelEditPlan
+	Error           error
+	HierarchyResult knowl.HierarchyModelPlan
+	HierarchyError  error
 }
 
 var _ app.Maintainer = Fixture{}
+var _ app.HierarchyMaintainer = Fixture{}
 
 // Plan returns the configured plan and never performs network I/O.
 func (fixture Fixture) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
@@ -36,18 +42,44 @@ func (fixture Fixture) Plan(ctx context.Context, input knowl.MaintenanceInput) (
 	return fixtureCatalogPlan(input, fixture.Result), nil
 }
 
+// PlanHierarchy returns the configured semantic graph and never performs
+// network I/O. A hierarchy fixture must be explicit to avoid inventing a test
+// taxonomy from source identities or paths.
+func (fixture Fixture) PlanHierarchy(ctx context.Context, _ knowl.HierarchyInput) (knowl.HierarchyModelPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return knowl.HierarchyModelPlan{}, err
+	}
+	if fixture.HierarchyError != nil {
+		return knowl.HierarchyModelPlan{}, fixture.HierarchyError
+	}
+	if fixture.HierarchyResult.SchemaDigest == "" && fixture.HierarchyResult.SnapshotDigest == "" && len(fixture.HierarchyResult.Catalogs) == 0 {
+		return knowl.HierarchyModelPlan{}, fmt.Errorf("fixture hierarchy plan is not configured")
+	}
+	return cloneHierarchyModelPlan(fixture.HierarchyResult), nil
+}
+
+func cloneHierarchyModelPlan(plan knowl.HierarchyModelPlan) knowl.HierarchyModelPlan {
+	cloned := plan
+	cloned.Catalogs = make([]knowl.HierarchyCatalogSpec, len(plan.Catalogs))
+	for index, catalog := range plan.Catalogs {
+		catalog.Children = append([]string(nil), catalog.Children...)
+		cloned.Catalogs[index] = catalog
+	}
+	return cloned
+}
+
 func fixtureCatalogPlan(input knowl.MaintenanceInput, plan knowl.ModelEditPlan) knowl.ModelEditPlan {
 	if len(plan.Edits) == 0 {
 		return plan
 	}
 	for _, edit := range plan.Edits {
-		if edit.Path == "wiki/index.md" {
+		if edit.Path == fixtureRootCatalogPath {
 			return plan
 		}
 	}
 	var root knowl.PageSnapshot
 	for _, catalog := range input.Catalogs {
-		if catalog.Path == "wiki/index.md" {
+		if catalog.Path == fixtureRootCatalogPath {
 			root = catalog
 			break
 		}

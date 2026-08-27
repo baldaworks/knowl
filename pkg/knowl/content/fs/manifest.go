@@ -55,6 +55,7 @@ type stageManifest struct {
 	SourceID          string       `yaml:"source_id,omitempty"`
 	Scope             string       `yaml:"scope,omitempty"`
 	SchemaDigest      string       `yaml:"schema_digest"`
+	SnapshotDigest    string       `yaml:"snapshot_digest,omitempty"`
 	RequiredSourceRef string       `yaml:"required_source_ref,omitempty"`
 	SourceRefs        []string     `yaml:"source_refs,omitempty"`
 	Entries           []stageEntry `yaml:"entries"`
@@ -67,6 +68,7 @@ const (
 	stageWriterMaintainer = "maintainer"
 	stageWriterSource     = "source"
 	stageWriterMigration  = "migration"
+	stageWriterHierarchy  = "hierarchy"
 )
 
 func manifestWriter(manifest stageManifest) string {

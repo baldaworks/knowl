@@ -8,30 +8,32 @@ import (
 )
 
 const (
-	appName                 = "knowl"
-	initCommandName         = "init"
-	validateCommandName     = "validate"
-	migrateCommandName      = "migrate"
-	migrateOKFV02Name       = "okf-v0.2"
-	bootstrapCommandName    = "bootstrap"
-	bootstrapWikiName       = "wiki"
-	bootstrapObsidianName   = "obsidian"
-	bootstrapOKFName        = "okf"
-	startCommandName        = "start"
-	ingestCommandName       = "ingest"
-	retrieveCommandName     = "retrieve"
-	searchCommandName       = "search"
-	lintCommandName         = "lint"
-	operationCommandName    = "operation"
-	pageCommandName         = "page"
-	sourceCommandName       = "source"
-	sourceListCommandName   = "list"
-	sourceSyncCommandName   = "sync"
-	sourceStatusCommandName = "status"
-	postgresStore           = "postgres"
-	defaultStore            = "sqlite"
-	defaultWorkspace        = "."
-	workspaceWikiDir        = "wiki"
+	appName                       = "knowl"
+	initCommandName               = "init"
+	validateCommandName           = "validate"
+	migrateCommandName            = "migrate"
+	migrateOKFV02Name             = "okf-v0.2"
+	hierarchyCommandName          = "hierarchy"
+	hierarchyReconcileCommandName = "reconcile"
+	bootstrapCommandName          = "bootstrap"
+	bootstrapWikiName             = "wiki"
+	bootstrapObsidianName         = "obsidian"
+	bootstrapOKFName              = "okf"
+	startCommandName              = "start"
+	ingestCommandName             = "ingest"
+	retrieveCommandName           = "retrieve"
+	searchCommandName             = "search"
+	lintCommandName               = "lint"
+	operationCommandName          = "operation"
+	pageCommandName               = "page"
+	sourceCommandName             = "source"
+	sourceListCommandName         = "list"
+	sourceSyncCommandName         = "sync"
+	sourceStatusCommandName       = "status"
+	postgresStore                 = "postgres"
+	defaultStore                  = "sqlite"
+	defaultWorkspace              = "."
+	workspaceWikiDir              = "wiki"
 )
 
 func newRootCommand() *cobra.Command {
@@ -56,7 +58,9 @@ func newRootCommand() *cobra.Command {
    - knowl source list
    - knowl source sync <source-id>
    - knowl source status <source-id>
-5. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
+5. Explicitly reconcile a flat semantic wiki into nested OKF catalogs:
+   - knowl hierarchy reconcile
+6. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
 
 Bootstrap creates a Knowl-owned workspace. Local workflow commands execute
 in-process and print structured JSON results. The retained loopback HTTP API
@@ -86,6 +90,7 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 		newInitCommand(),
 		newValidateCommand(),
 		newMigrateCommand(),
+		newHierarchyCommand(),
 		newBootstrapCommand(),
 		newStartCommand(),
 		newIngestCommand(),

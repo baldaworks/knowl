@@ -77,9 +77,10 @@ func (workspace *Workspace) Recover(ctx context.Context) ([]knowl.RecoveryResult
 					return nil, fmt.Errorf("remove partial file %q: %w", recovery.Target, err)
 				}
 			}
-			if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterSource {
-				if err := os.Remove(workspace.sourceCommitReceiptPath(journal.Scope, journal.OperationID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-					return nil, fmt.Errorf("remove rolled-back source receipt: %w", err)
+			writer := manifestWriter(stageManifest{Writer: journal.Writer})
+			if writer == stageWriterSource || writer == stageWriterHierarchy {
+				if err := os.Remove(workspace.commitReceiptPath(writer, journal.Scope, journal.OperationID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return nil, fmt.Errorf("remove rolled-back commit receipt: %w", err)
 				}
 			}
 			results = append(results, knowl.RecoveryResult{OperationID: journal.OperationID, Action: recoveryRolledBack})
@@ -89,18 +90,32 @@ func (workspace *Workspace) Recover(ctx context.Context) ([]knowl.RecoveryResult
 					return nil, err
 				}
 			}
-			if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterSource {
+			writer := manifestWriter(stageManifest{Writer: journal.Writer})
+			switch writer {
+			case stageWriterSource:
 				if !recoveryEntriesMatch(workspace.root, journal.Entries) {
 					return nil, fmt.Errorf("committed source recovery diverged: %w", ErrWorkspaceInvalid)
 				}
-				if err := workspace.writeSourceCommitReceipt(commitReceipt{
+				if err := workspace.writeCommitReceipt(commitReceipt{
 					Writer: stageWriterSource, SourceID: journal.SourceID, Scope: journal.Scope, OperationID: journal.OperationID,
 					Generation: journal.Generation, Files: append([]string(nil), journal.Files...),
 				}); err != nil {
 					return nil, err
 				}
-			} else if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterMigration && !recoveryEntriesMatch(workspace.root, journal.Entries) {
-				return nil, fmt.Errorf("committed migration recovery diverged: %w", ErrWorkspaceInvalid)
+			case stageWriterHierarchy:
+				if !recoveryEntriesMatch(workspace.root, journal.Entries) {
+					return nil, fmt.Errorf("committed hierarchy recovery diverged: %w", ErrWorkspaceInvalid)
+				}
+				if err := workspace.writeCommitReceipt(commitReceipt{
+					Writer: stageWriterHierarchy, Scope: journal.Scope, OperationID: journal.OperationID,
+					Generation: journal.Generation, Files: append([]string(nil), journal.Files...),
+				}); err != nil {
+					return nil, err
+				}
+			case stageWriterMigration:
+				if !recoveryEntriesMatch(workspace.root, journal.Entries) {
+					return nil, fmt.Errorf("committed migration recovery diverged: %w", ErrWorkspaceInvalid)
+				}
 			}
 			results = append(results, knowl.RecoveryResult{OperationID: journal.OperationID, Action: recoveryCompleted})
 		default:
@@ -180,8 +195,9 @@ func (workspace *Workspace) preflightPreparedRecovery(journal recoveryJournal, j
 		total += len(content)
 		preimages[index] = content
 	}
-	if manifestWriter(stageManifest{Writer: journal.Writer}) == stageWriterSource {
-		if err := rejectSymlinkPath(workspace.root, workspace.sourceCommitReceiptPath(journal.Scope, journal.OperationID)); err != nil {
+	writer := manifestWriter(stageManifest{Writer: journal.Writer})
+	if writer == stageWriterSource || writer == stageWriterHierarchy {
+		if err := rejectSymlinkPath(workspace.root, workspace.commitReceiptPath(writer, journal.Scope, journal.OperationID)); err != nil {
 			return nil, err
 		}
 	}
@@ -190,7 +206,7 @@ func (workspace *Workspace) preflightPreparedRecovery(journal recoveryJournal, j
 
 func validateRecoveryJournal(fileName string, journal recoveryJournal) (string, error) {
 	writer := manifestWriter(stageManifest{Writer: journal.Writer})
-	if (writer != stageWriterMaintainer && writer != stageWriterSource && writer != stageWriterMigration) ||
+	if (writer != stageWriterMaintainer && writer != stageWriterSource && writer != stageWriterMigration && writer != stageWriterHierarchy) ||
 		(journal.State != recoveryPrepared && journal.State != recoveryCommitted) || len(journal.Entries) == 0 || len(journal.Entries) > maxRecoveryEntries {
 		return "", fmt.Errorf("invalid recovery journal: %w", ErrWorkspaceInvalid)
 	}
@@ -205,6 +221,12 @@ func validateRecoveryJournal(fileName string, journal recoveryJournal) (string, 
 		if journal.OperationID != migrationOperationID || journal.SourceID != "" || journal.Scope != "" {
 			return "", fmt.Errorf("invalid migration recovery identity: %w", ErrWorkspaceInvalid)
 		}
+	case stageWriterHierarchy:
+		if strings.TrimSpace(journal.OperationID) == "" || strings.TrimSpace(journal.Scope) == "" || journal.SourceID != "" ||
+			!validSHA256(journal.Generation) || len(journal.Files) == 0 {
+			return "", fmt.Errorf("invalid hierarchy recovery journal: %w", ErrWorkspaceInvalid)
+		}
+		recoveryKey = hierarchyRecoveryKey(journal.Scope, journal.OperationID)
 	default:
 		if strings.TrimSpace(journal.OperationID) == "" || journal.SourceID != "" {
 			return "", fmt.Errorf("invalid maintainer recovery identity: %w", ErrWorkspaceInvalid)
@@ -226,7 +248,7 @@ func validateRecoveryJournal(fileName string, journal recoveryJournal) (string, 
 		if action != knowl.SourceMutationWrite && action != knowl.SourceMutationDelete {
 			return "", fmt.Errorf("invalid recovery action: %w", ErrWorkspaceInvalid)
 		}
-		if writer == stageWriterSource {
+		if writer == stageWriterSource || writer == stageWriterHierarchy {
 			if action == knowl.SourceMutationWrite && !validSHA256(entry.Digest) {
 				return "", fmt.Errorf("invalid recovery digest: %w", ErrWorkspaceInvalid)
 			}
@@ -241,8 +263,8 @@ func validateRecoveryJournal(fileName string, journal recoveryJournal) (string, 
 		targets = append(targets, entry.Target)
 	}
 	slices.Sort(targets)
-	if writer == stageWriterSource && !slices.Equal(targets, journal.Files) {
-		return "", fmt.Errorf("source recovery files mismatch: %w", ErrWorkspaceInvalid)
+	if (writer == stageWriterSource || writer == stageWriterHierarchy) && !slices.Equal(targets, journal.Files) {
+		return "", fmt.Errorf("commit recovery files mismatch: %w", ErrWorkspaceInvalid)
 	}
 	return recoveryKey, nil
 }

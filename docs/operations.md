@@ -178,6 +178,14 @@ run `./knowl migrate okf-v0.2`. Migration is explicit and idempotent; startup,
 afterward before retiring a backup. See [workspace semantics](workspace.md) for
 the recovery and archive contract.
 
+The operational-store migration that adds generic hierarchy operations is
+additive in both SQLite and PostgreSQL and leaves existing source operation IDs,
+descriptors, leases, and statuses unchanged. Downgrading to an older Knowl
+binary is safe only before any hierarchy operation row exists. After the first
+reconcile, restore the pre-upgrade operational database for a binary rollback;
+the canonical Markdown workspace remains portable and can rebuild a fresh
+projection.
+
 Empty workspace initialization:
 
 ```bash
@@ -202,6 +210,43 @@ an in-process Host without starting HTTP or scheduled runners:
 ./knowl source sync --all
 ./knowl source status engineering
 ```
+
+To explicitly replace a valid flat root with source-independent semantic
+catalogs, stop other writers and run:
+
+```bash
+./knowl hierarchy reconcile
+./knowl validate
+```
+
+This is the only hierarchy-specific mutation command. It constructs the normal
+provider, workspace, and selected store in process, claims exactly its reserved
+hierarchy operation, and does not start HTTP, the general operation scheduler,
+source jobs, or configured `on_start` synchronization. Output is structured
+JSON. A changed result includes its generation and affected catalog/log files;
+a converged replay returns `"changed":false` and leaves the canonical digest
+unchanged.
+
+Planner identity `hierarchy-v3` makes this subject-first contract a new durable
+operation identity. The maintainer is called once with deterministically ordered,
+bounded page metadata, excerpts, current memberships, and the schema digest;
+schema content, raw source bodies, provenance, and source-native paths are not
+taxonomy input. It treats type and technology as supporting signals, recursively
+decomposes broad heterogeneous subjects, permits sparse secondary membership for
+cross-cutting pages, and tries to reuse suitable current semantic structure.
+Semantic quality remains provider-dependent. Only this explicit command can
+apply the result; startup and source synchronization do not reconcile catalogs.
+
+Generated hierarchy controls are restricted to `wiki/index.md` and
+`wiki/catalogs/**/index.md`. Ordinary concepts and `raw/` evidence are preserved
+byte-for-byte. Planning is all-or-nothing and bounded: 1,024 pages, 1,024
+catalogs, 16,384 edges, depth 16, 4 MiB input, 4,096 excerpt characters per
+page, 1 MiB plan output, 1,024 edits, 256 KiB per catalog, and a 1 MiB manifest.
+The command fails closed on a stale snapshot, invalid/incomplete graph, unsafe
+path, an empty generated non-root catalog, or exceeded value and returns the
+wrapped cause. An empty root is valid only for an empty wiki. See
+[workspace semantics](workspace.md#explicit-semantic-hierarchy-reconciliation)
+for ownership and recovery details.
 
 These commands are operator conveniences, not the primary agent integration
 surface. Source management is not exposed as an MCP tool.

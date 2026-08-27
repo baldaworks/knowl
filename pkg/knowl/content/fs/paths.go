@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 )
 
 const maxCanonicalPathBytes = 2048
@@ -86,6 +88,11 @@ func validateJournalTarget(journal recoveryJournal, target string) error {
 			return fmt.Errorf("migration recovery target %q: %w", target, ErrPathRejected)
 		}
 		return nil
+	case stageWriterHierarchy:
+		if target == canonicalLogPath || app.IsManagedHierarchyCatalog(target) {
+			return nil
+		}
+		return fmt.Errorf("hierarchy recovery target %q: %w", target, ErrPathRejected)
 	default:
 		return fmt.Errorf("unknown recovery writer %q: %w", journal.Writer, ErrWorkspaceInvalid)
 	}

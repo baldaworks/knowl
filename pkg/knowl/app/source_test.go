@@ -337,7 +337,7 @@ func TestSourceDocumentValidation(t *testing.T) {
 	if err := app.ValidateSourceDocument(invalid); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("non-canonical URI error = %v", err)
 	}
-	if err := app.ValidateOwnedSourceDocument("operations", valid); !errors.Is(err, app.ErrSourceInvalid) {
+	if err := app.ValidateOwnedSourceDocument(testOperationsName, valid); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("owner mismatch error = %v", err)
 	}
 }
@@ -614,7 +614,7 @@ func TestPreparedSyncDigestRejectsInvalidPayloads(t *testing.T) {
 		}},
 		{"foreign accepted provenance", func(in app.PreparedSyncState) app.PreparedSyncState {
 			in.Documents[0].State.AcceptedSource.SourceDocument = knowl.SourceDocument{
-				SourceID: "operations", DocumentID: "docs/a.md", Revision: "revision-1", URI: "https://wiki.example.test/docs/a.md",
+				SourceID: testOperationsName, DocumentID: "docs/a.md", Revision: "revision-1", URI: "https://wiki.example.test/docs/a.md",
 			}
 			return in
 		}},

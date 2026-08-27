@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/operationpayload"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -25,7 +26,7 @@ func (store *Store) Execution(ctx context.Context, scope knowl.ScopeRef, id know
 		return knowl.ExecutionDescriptor{}, err
 	}
 	descriptor, key, err := scanExecution(store.db.QueryRowContext(ctx, `
-			SELECT operation_id, scope, source_adapter, source_id, source_version, source_digest,
+			SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest,
 			       accepted_media_type, source_manifest_ref, accepted_source_document, schema_digest, schema_version, schema_snapshot
 		FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -34,7 +35,7 @@ func (store *Store) Execution(ctx context.Context, scope knowl.ScopeRef, id know
 	if err != nil {
 		return knowl.ExecutionDescriptor{}, fmt.Errorf("read execution descriptor: %w", err)
 	}
-	if err := app.ValidateExecutionDescriptor(key, descriptor); err != nil {
+	if err := validateStoredExecution(scope, key, descriptor); err != nil {
 		return knowl.ExecutionDescriptor{}, err
 	}
 	return descriptor, nil
@@ -51,13 +52,14 @@ func (store *Store) ResumeReady(ctx context.Context, scope knowl.ScopeRef, limit
 		FROM knowl_operations
 		WHERE scope = $1
 		  AND status NOT IN ($2, $3)
-		  AND accepted_media_type <> '' AND source_manifest_ref <> ''
 		  AND schema_digest <> '' AND schema_snapshot IS NOT NULL
+		  AND ((work_kind = $4 AND accepted_media_type <> '' AND source_manifest_ref <> '')
+		       OR (work_kind = $5 AND execution_payload <> ''))
 		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)
 		ORDER BY CASE WHEN work_lease_token = '' THEN work_ready_at
 		              ELSE work_lease_expires_at END ASC,
 		         operation_id ASC
-		LIMIT $4`, scope, knowl.StatusCommitted, knowl.StatusFailed, maxWorkScanLimit)
+		LIMIT $6`, scope, knowl.StatusCommitted, knowl.StatusFailed, knowl.WorkSourceMaintenance, knowl.WorkHierarchy, maxWorkScanLimit)
 	if err != nil {
 		return nil, fmt.Errorf("inspect ready operations: %w", err)
 	}
@@ -109,19 +111,20 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 		return knowl.WorkClaim{}, app.ErrWorkLeaseConflict
 	}
 	rows, err := tx.QueryContext(ctx, `
-			SELECT operation_id, scope, source_adapter, source_id, source_version, source_digest,
+			SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest,
 			       accepted_media_type, source_manifest_ref, accepted_source_document, schema_digest, schema_version, schema_snapshot
 		FROM knowl_operations
 		WHERE scope = $1
 		  AND status NOT IN ($2, $3)
-		  AND accepted_media_type <> '' AND source_manifest_ref <> ''
 		  AND schema_digest <> '' AND schema_snapshot IS NOT NULL
+		  AND ((work_kind = $4 AND accepted_media_type <> '' AND source_manifest_ref <> '')
+		       OR (work_kind = $5 AND execution_payload <> ''))
 		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)
 		ORDER BY CASE WHEN work_lease_token = '' THEN work_ready_at
 		              ELSE work_lease_expires_at END ASC,
 		         operation_id ASC
-		LIMIT $4
-		FOR UPDATE SKIP LOCKED`, scope, knowl.StatusCommitted, knowl.StatusFailed, maxWorkScanLimit)
+		LIMIT $6
+		FOR UPDATE SKIP LOCKED`, scope, knowl.StatusCommitted, knowl.StatusFailed, knowl.WorkSourceMaintenance, knowl.WorkHierarchy, maxWorkScanLimit)
 	if err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("select ready operation: %w", err)
 	}
@@ -133,7 +136,7 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 			_ = rows.Close()
 			return knowl.WorkClaim{}, fmt.Errorf("scan ready descriptor: %w", scanErr)
 		}
-		if validationErr := app.ValidateExecutionDescriptor(key, candidate); validationErr != nil {
+		if validationErr := validateStoredExecution(scope, key, candidate); validationErr != nil {
 			if errors.Is(validationErr, app.ErrExecutionDescriptorUnavailable) {
 				continue
 			}
@@ -171,7 +174,7 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 		return knowl.WorkClaim{}, app.ErrWorkLeaseConflict
 	}
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
-		SELECT operation_id, source_adapter, source_id, source_version, source_digest,
+		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
 		       status, attempt, failure_class, updated_at
 		FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id), scope)
 	if err != nil {
@@ -179,6 +182,72 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 	}
 	if err := tx.Commit(); err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("commit work claim: %w", err)
+	}
+	return knowl.WorkClaim{Operation: operation, Descriptor: descriptor, Lease: lease}, nil
+}
+
+// ClaimOperation atomically grants a work lease for one specific claimable operation.
+func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, lease knowl.WorkLease) (knowl.WorkClaim, error) {
+	if err := validateScope(scope); err != nil {
+		return knowl.WorkClaim{}, err
+	}
+	if strings.TrimSpace(string(id)) == "" {
+		return knowl.WorkClaim{}, app.ErrNoReadyOperation
+	}
+	if err := validateWorkLease(lease); err != nil {
+		return knowl.WorkClaim{}, err
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return knowl.WorkClaim{}, fmt.Errorf("begin targeted work claim: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if !lease.ExpiresAt.After(time.Now().UTC()) {
+		return knowl.WorkClaim{}, app.ErrWorkLeaseConflict
+	}
+	descriptor, key, err := scanExecution(tx.QueryRowContext(ctx, `
+		SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest,
+		       accepted_media_type, source_manifest_ref, accepted_source_document, schema_digest, schema_version, schema_snapshot
+		FROM knowl_operations
+		WHERE scope = $1 AND operation_id = $2
+		  AND status NOT IN ($3, $4)
+		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)
+		FOR UPDATE`, scope, id, knowl.StatusCommitted, knowl.StatusFailed))
+	if errors.Is(err, sql.ErrNoRows) {
+		return knowl.WorkClaim{}, app.ErrNoReadyOperation
+	}
+	if err != nil {
+		return knowl.WorkClaim{}, fmt.Errorf("read targeted work descriptor: %w", err)
+	}
+	if err := validateStoredExecution(scope, key, descriptor); err != nil {
+		return knowl.WorkClaim{}, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE knowl_operations
+		SET work_attempt = work_attempt + 1, work_lease_token = $1, work_lease_expires_at = $2
+		WHERE scope = $3 AND operation_id = $4
+		  AND status NOT IN ($5, $6)
+		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)`,
+		lease.Token, lease.ExpiresAt.UTC(), scope, id, knowl.StatusCommitted, knowl.StatusFailed)
+	if err != nil {
+		return knowl.WorkClaim{}, fmt.Errorf("grant targeted work lease: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return knowl.WorkClaim{}, fmt.Errorf("inspect targeted work lease: %w", err)
+	}
+	if changed != 1 {
+		return knowl.WorkClaim{}, app.ErrWorkLeaseConflict
+	}
+	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
+		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
+		       status, attempt, failure_class, updated_at
+		FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id), scope)
+	if err != nil {
+		return knowl.WorkClaim{}, fmt.Errorf("read targeted claimed operation: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return knowl.WorkClaim{}, fmt.Errorf("commit targeted work claim: %w", err)
 	}
 	return knowl.WorkClaim{Operation: operation, Descriptor: descriptor, Lease: lease}, nil
 }
@@ -281,15 +350,20 @@ func (store *Store) DescriptorFailures(ctx context.Context, scope knowl.ScopeRef
 func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.OperationKey, error) {
 	var descriptor knowl.ExecutionDescriptor
 	var key knowl.OperationKey
-	var sourceDocument, schemaDigest, schemaVersion string
+	var kindText, payload, sourceDocument, schemaDigest, schemaVersion string
 	var schemaSnapshot []byte
 	if err := scanner.Scan(
-		&descriptor.OperationID, &key.Scope, &key.Source.Adapter, &key.Source.ID,
+		&descriptor.OperationID, &key.Scope, &kindText, &payload, &key.Source.Adapter, &key.Source.ID,
 		&key.Version.Version, &key.Version.Digest, &descriptor.Source.MediaType,
 		&descriptor.Source.ManifestRef, &sourceDocument, &schemaDigest, &schemaVersion, &schemaSnapshot,
 	); err != nil {
 		return knowl.ExecutionDescriptor{}, knowl.OperationKey{}, err
 	}
+	kind, err := operationpayload.Kind(kindText)
+	if err != nil {
+		return knowl.ExecutionDescriptor{}, knowl.OperationKey{}, app.ErrExecutionDescriptorUnavailable
+	}
+	descriptor.Kind = kind
 	descriptor.Source.Scope = key.Scope
 	descriptor.Source.Source = key.Source
 	descriptor.Source.Version = key.Version
@@ -302,25 +376,44 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 		Scope: key.Scope, Digest: schemaDigest, Version: schemaVersion,
 		Content: append([]byte(nil), schemaSnapshot...),
 	}
+	if kind == knowl.WorkHierarchy {
+		descriptor.Source = knowl.AcceptedSource{}
+		if err := operationpayload.DecodeHierarchy(payload, &descriptor); err != nil {
+			return knowl.ExecutionDescriptor{}, knowl.OperationKey{}, err
+		}
+	}
 	return descriptor, key, nil
 }
 
 func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Operation, error) {
 	var operation knowl.Operation
-	var status, failureClass string
+	var kind, status, failureClass string
 	if err := scanner.Scan(
-		&operation.ID, &operation.Key.Source.Adapter, &operation.Key.Source.ID,
+		&operation.ID, &kind, &operation.Key.Source.Adapter, &operation.Key.Source.ID,
 		&operation.Key.Version.Version, &operation.Key.Version.Digest,
 		&status, &operation.Attempt, &failureClass, &operation.UpdatedAt,
 	); err != nil {
 		return knowl.Operation{}, err
 	}
 	operation.Key.Scope = scope
+	operation.Kind = knowl.WorkKind(kind)
+	if operation.Kind == knowl.WorkHierarchy {
+		operation.Key = knowl.OperationKey{}
+	} else {
+		operation.Kind = knowl.WorkSourceMaintenance
+	}
 	operation.Status = knowl.OperationStatus(status)
 	if failureClass != "" {
 		operation.Failure = &knowl.Failure{Class: failureClass, OperationID: string(operation.ID)}
 	}
 	return operation, nil
+}
+
+func validateStoredExecution(scope knowl.ScopeRef, key knowl.OperationKey, descriptor knowl.ExecutionDescriptor) error {
+	if descriptor.Kind == knowl.WorkHierarchy {
+		return app.ValidateGenericExecutionDescriptor(scope, descriptor)
+	}
+	return app.ValidateExecutionDescriptor(key, descriptor)
 }
 
 func validateWorkLease(lease knowl.WorkLease) error {

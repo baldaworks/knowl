@@ -106,6 +106,93 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	})
 }
 
+// CommitHierarchy applies one staged catalog graph through the common
+// canonical writer and recovery journal.
+func (workspace *Workspace) CommitHierarchy(ctx context.Context, staged knowl.StagedChange) (knowl.ContentCommit, error) {
+	if err := contextErr(ctx); err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	if strings.TrimSpace(staged.OperationID) == "" {
+		return knowl.ContentCommit{}, ErrPlanConflict
+	}
+	workspace.mu.Lock()
+	defer workspace.mu.Unlock()
+	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(staged.OperationID))
+	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
+	if err != nil {
+		return knowl.ContentCommit{}, fmt.Errorf("read staged hierarchy plan: %w", err)
+	}
+	generation := stageGeneration(manifest)
+	if manifestWriter(manifest) != stageWriterHierarchy || manifest.OperationID != staged.OperationID || !validHierarchyStageManifest(manifest) ||
+		(staged.Digest != "" && staged.Digest != generation) || (staged.Files != nil && !slices.Equal(staged.Files, entryTargets(manifest.Entries))) {
+		return knowl.ContentCommit{}, ErrPlanConflict
+	}
+	if err := workspace.validateStageForCommitLocked(stageDir, manifest, ""); err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	if replayed, replayErr := workspace.hierarchyCommitReplayed(manifest, generation); replayErr != nil {
+		return knowl.ContentCommit{}, replayErr
+	} else if replayed {
+		return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries)), nil
+	}
+	schema, err := os.ReadFile(filepath.Join(workspace.root, schemaFile))
+	if err != nil {
+		return knowl.ContentCommit{}, fmt.Errorf("read schema before hierarchy commit: %w", err)
+	}
+	if digestBytes(schema) != manifest.SchemaDigest {
+		return knowl.ContentCommit{}, fmt.Errorf("schema changed after hierarchy staging: %w", ErrPrecondition)
+	}
+	logPath := filepath.Join(workspace.root, canonicalLogPath)
+	if err := rejectSymlinkPath(workspace.root, logPath); err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	logBefore, err := os.ReadFile(logPath)
+	if err != nil {
+		return knowl.ContentCommit{}, fmt.Errorf("read canonical log before hierarchy commit: %w", err)
+	}
+	if digestBytes(logBefore) != manifest.LogExpectedDigest {
+		if digestBytes(logBefore) == manifest.LogDigest && canonicalEntriesMatch(workspace.root, manifest.Entries) {
+			receipt := hierarchyCommitReceipt(manifest, generation)
+			if err := workspace.writeCommitReceipt(receipt); err != nil {
+				return knowl.ContentCommit{}, err
+			}
+			return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries)), nil
+		}
+		return knowl.ContentCommit{}, fmt.Errorf("canonical log changed after hierarchy staging: %w", ErrPrecondition)
+	}
+	currentSnapshot, err := workspace.hierarchySnapshotDigestLocked(knowl.ScopeRef(manifest.Scope))
+	if err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	if currentSnapshot != manifest.SnapshotDigest {
+		return knowl.ContentCommit{}, fmt.Errorf("canonical snapshot changed after hierarchy staging: %w", ErrPrecondition)
+	}
+	mutations, err := hierarchyMutationsFromStage(stageDir, manifest)
+	if err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	if err := workspace.validateProspectiveHierarchyLocked(mutations); err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	logAfter, err := appendLogEntry(logBefore, manifest, generation)
+	if err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	if digestBytes(logAfter) != manifest.LogDigest {
+		return knowl.ContentCommit{}, fmt.Errorf("staged hierarchy log digest changed: %w", ErrPlanConflict)
+	}
+	entries, err := stagedCommitEntries(stageDir, manifest.Entries)
+	if err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	entries = append(entries, canonicalCommitEntry{action: knowl.SourceMutationWrite, target: canonicalLogPath, expectedDigest: manifest.LogExpectedDigest, digest: manifest.LogDigest, content: logAfter})
+	return workspace.commitLocked(canonicalCommitRequest{
+		writer: stageWriterHierarchy, scope: manifest.Scope, operationID: manifest.OperationID,
+		recoveryKey: hierarchyRecoveryKey(manifest.Scope, manifest.OperationID), generation: generation,
+		files: commitTargets(manifest.Entries), entries: entries,
+	})
+}
+
 // CommitSource applies one exact staged source mutation through the common canonical writer.
 func (workspace *Workspace) CommitSource(ctx context.Context, staged knowl.StagedSourceMutation) (knowl.ContentCommit, error) {
 	if err := contextErr(ctx); err != nil {
@@ -308,14 +395,14 @@ func (workspace *Workspace) commitLocked(request canonicalCommitRequest) (knowl.
 	if err := workspace.injectCommitFault("committed", -1); err != nil {
 		return knowl.ContentCommit{}, err
 	}
-	if request.writer == stageWriterSource {
-		if err := workspace.writeSourceCommitReceipt(commitReceipt{
+	if request.writer == stageWriterSource || request.writer == stageWriterHierarchy {
+		if err := workspace.writeCommitReceipt(commitReceipt{
 			Writer: request.writer, SourceID: request.sourceID, Scope: request.scope, OperationID: request.operationID,
 			Generation: request.generation, Files: append([]string(nil), request.files...),
 		}); err != nil {
 			return knowl.ContentCommit{}, err
 		}
-		if err := workspace.injectCommitFault("receipt", -1); err != nil {
+		if err := workspace.injectCommitFault(commitFaultReceipt, -1); err != nil {
 			return knowl.ContentCommit{}, err
 		}
 	}
@@ -429,6 +516,10 @@ func sourceRecoveryKey(scope, operationID string) string {
 	return stageWriterSource + "\x00" + scope + "\x00" + operationID
 }
 
+func hierarchyRecoveryKey(scope, operationID string) string {
+	return stageWriterHierarchy + "\x00" + scope + "\x00" + operationID
+}
+
 func (workspace *Workspace) sourceCommitReplayed(manifest stageManifest, generation string) (bool, error) {
 	path := workspace.sourceCommitReceiptPath(manifest.Scope, manifest.OperationID)
 	if err := rejectSymlinkPath(workspace.root, path); err != nil {
@@ -452,24 +543,68 @@ func (workspace *Workspace) sourceCommitReplayed(manifest stageManifest, generat
 	return true, nil
 }
 
-func (workspace *Workspace) sourceCommitReceiptPath(scope, operationID string) string {
-	return filepath.Join(workspace.root, knowlDir, "commits", token(sourceRecoveryKey(scope, operationID))+".yaml")
+func (workspace *Workspace) hierarchyCommitReplayed(manifest stageManifest, generation string) (bool, error) {
+	path := workspace.hierarchyCommitReceiptPath(manifest.Scope, manifest.OperationID)
+	if err := rejectSymlinkPath(workspace.root, path); err != nil {
+		return false, err
+	}
+	receipt, err := readCommitReceipt(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read hierarchy commit receipt: %w", ErrPlanConflict)
+	}
+	want := hierarchyCommitReceipt(manifest, generation)
+	if receipt.Writer != want.Writer || receipt.SourceID != want.SourceID || receipt.Scope != want.Scope ||
+		receipt.OperationID != want.OperationID || receipt.Generation != want.Generation || !slices.Equal(receipt.Files, want.Files) ||
+		!canonicalEntriesMatch(workspace.root, manifest.Entries) {
+		return false, fmt.Errorf("committed hierarchy content diverged: %w", ErrPlanConflict)
+	}
+	log, err := os.ReadFile(filepath.Join(workspace.root, canonicalLogPath))
+	if err != nil || digestBytes(log) != manifest.LogDigest {
+		return false, fmt.Errorf("committed hierarchy log diverged: %w", ErrPlanConflict)
+	}
+	return true, nil
 }
 
-func (workspace *Workspace) writeSourceCommitReceipt(receipt commitReceipt) error {
+func hierarchyCommitReceipt(manifest stageManifest, generation string) commitReceipt {
+	return commitReceipt{
+		Writer: stageWriterHierarchy, Scope: manifest.Scope, OperationID: manifest.OperationID,
+		Generation: generation, Files: commitTargets(manifest.Entries),
+	}
+}
+
+func (workspace *Workspace) sourceCommitReceiptPath(scope, operationID string) string {
+	return workspace.commitReceiptPath(stageWriterSource, scope, operationID)
+}
+
+func (workspace *Workspace) hierarchyCommitReceiptPath(scope, operationID string) string {
+	return workspace.commitReceiptPath(stageWriterHierarchy, scope, operationID)
+}
+
+func (workspace *Workspace) commitReceiptPath(writer, scope, operationID string) string {
+	key := sourceRecoveryKey(scope, operationID)
+	if writer == stageWriterHierarchy {
+		key = hierarchyRecoveryKey(scope, operationID)
+	}
+	return filepath.Join(workspace.root, knowlDir, "commits", token(key)+".yaml")
+}
+
+func (workspace *Workspace) writeCommitReceipt(receipt commitReceipt) error {
 	content, err := yaml.Marshal(receipt)
 	if err != nil {
-		return fmt.Errorf("marshal source commit receipt: %w", err)
+		return fmt.Errorf("marshal commit receipt: %w", err)
 	}
 	if len(content) > maxStageManifestBytes {
 		return ErrPlanConflict
 	}
-	path := workspace.sourceCommitReceiptPath(receipt.Scope, receipt.OperationID)
+	path := workspace.commitReceiptPath(receipt.Writer, receipt.Scope, receipt.OperationID)
 	if err := rejectSymlinkPath(workspace.root, path); err != nil {
 		return err
 	}
 	if err := writeAtomic(path, content, 0o600); err != nil {
-		return fmt.Errorf("write source commit receipt: %w", err)
+		return fmt.Errorf("write commit receipt: %w", err)
 	}
 	return nil
 }

@@ -20,6 +20,44 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+func TestTerminalRouterDispatchesByDurableWorkKind(t *testing.T) {
+	t.Parallel()
+
+	sourceCalls := 0
+	hierarchyCalls := 0
+	router := terminalRouter{
+		source: runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+			sourceCalls++
+			return app.IngestResult{Operation: claim.Operation}, nil
+		}),
+		hierarchy: runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+			hierarchyCalls++
+			return app.IngestResult{Operation: claim.Operation}, nil
+		}),
+	}
+	legacy := schedulerClaim("legacy-source")
+	legacy.Descriptor.Kind = ""
+	if _, err := router.RunToTerminal(context.Background(), legacy); err != nil {
+		t.Fatalf("route legacy source: %v", err)
+	}
+	hierarchy := schedulerClaim("hierarchy")
+	hierarchy.Descriptor.Kind = domain.WorkHierarchy
+	if _, err := router.RunToTerminal(context.Background(), hierarchy); err != nil {
+		t.Fatalf("route hierarchy: %v", err)
+	}
+	if sourceCalls != 1 || hierarchyCalls != 1 {
+		t.Fatalf("route calls = source %d, hierarchy %d", sourceCalls, hierarchyCalls)
+	}
+	unknown := schedulerClaim("unknown")
+	unknown.Descriptor.Kind = domain.WorkKind("unknown")
+	if _, err := router.RunToTerminal(context.Background(), unknown); !errors.Is(err, app.ErrExecutionDescriptorUnavailable) {
+		t.Fatalf("unknown route error = %v, want descriptor unavailable", err)
+	}
+	if _, err := (terminalRouter{source: router.source}).RunToTerminal(context.Background(), hierarchy); !errors.Is(err, app.ErrMaintainerUnavailable) {
+		t.Fatalf("missing hierarchy runner error = %v, want maintainer unavailable", err)
+	}
+}
+
 func TestSchedulerLogsSafeMaintenanceCorrelation(t *testing.T) {
 	var output bytes.Buffer
 	previous := log.Logger
