@@ -28,6 +28,15 @@ type Query struct {
 	Terms []string
 }
 
+// DocumentFields contains only semantic page fields allowed to participate in
+// lexical retrieval. Tags is a newline-separated list of normalized OKF tags.
+type DocumentFields struct {
+	Title       string
+	Tags        string
+	Description string
+	Body        string
+}
+
 // Normalize tokenizes raw text into a bounded, first-seen sequence of distinct
 // lower-case Unicode terms. Only the version-1 question framing words are
 // removed.
@@ -118,6 +127,33 @@ func Excerpt(nativeFragment, title, body string, terms []string, maxRunes int) s
 	return centered(characters, matchStart, matchEnd, maxRunes)
 }
 
+// ExcerptFields returns clean evidence from semantic fields. Body-native
+// fragments retain priority; a tag-only match is identified explicitly without
+// exposing serialized OKF or provenance metadata.
+func ExcerptFields(nativeFragment string, fields DocumentFields, terms []string, maxRunes int) string {
+	content := strings.TrimSpace(fields.Title + "\n" + fields.Description + "\n" + fields.Body)
+	if ContainsTerm(content, terms) {
+		return Excerpt(nativeFragment, fields.Title, fields.Description+"\n"+fields.Body, terms, maxRunes)
+	}
+
+	tag := matchingTag(fields.Tags, terms)
+	if tag == "" {
+		return Excerpt(nativeFragment, fields.Title, fields.Description+"\n"+fields.Body, terms, maxRunes)
+	}
+	evidence := "tag: " + tag
+	context := strings.TrimSpace(fields.Description)
+	if context == "" {
+		context = strings.TrimSpace(fields.Title)
+	}
+	if context != "" {
+		evidence += " — " + context
+	}
+	if maxRunes <= 0 {
+		return evidence
+	}
+	return Excerpt(evidence, "", "", terms, maxRunes)
+}
+
 // ContainsTerm reports whether text contains a complete normalized term token.
 func ContainsTerm(text string, terms []string) bool {
 	_, _, matched := firstMatch(text, terms)
@@ -150,6 +186,22 @@ func Relevant(text string, terms []string) bool {
 		}
 	}
 	return false
+}
+
+// RelevantFields applies the shared relevance threshold to the complete
+// allowlisted semantic search document.
+func RelevantFields(fields DocumentFields, terms []string) bool {
+	return Relevant(fields.Title+"\n"+fields.Tags+"\n"+fields.Description+"\n"+fields.Body, terms)
+}
+
+func matchingTag(tags string, terms []string) string {
+	for tag := range strings.SplitSeq(tags, "\n") {
+		tag = strings.TrimSpace(tag)
+		if tag != "" && ContainsTerm(tag, terms) {
+			return tag
+		}
+	}
+	return ""
 }
 
 type token struct {

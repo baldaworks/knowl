@@ -182,8 +182,8 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 
 func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string, sources []knowl.SourceID, enforceRelevance bool) ([]knowl.PageReference, error) {
 	statement := `
-		SELECT p.page_id, p.path, p.title, p.description, p.body, p.source_refs, p.source_document, p.source_documents,
-		       p.format, p.okf_metadata, snippet(knowl_pages_fts, 5, '', '', ' … ', 64)
+		SELECT p.page_id, p.path, p.title, p.tags, p.description, p.body, p.source_refs, p.source_document, p.source_documents,
+		       p.format, p.okf_metadata, snippet(knowl_pages_fts, 6, '', '', ' … ', 64)
 		FROM knowl_pages_fts
 		JOIN knowl_pages p ON p.scope = knowl_pages_fts.scope AND p.page_id = knowl_pages_fts.page_id
 		WHERE knowl_pages_fts MATCH ? AND knowl_pages_fts.scope = ?`
@@ -202,7 +202,7 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 		)`
 	}
 	statement += `
-		ORDER BY bm25(knowl_pages_fts, 0.0, 0.0, 0.0, 8.0, 4.0, 1.0, 0.0) ASC, p.path ASC
+		ORDER BY bm25(knowl_pages_fts, 0.0, 0.0, 0.0, 10.0, 7.0, 4.0, 1.0, 0.0) ASC, p.path ASC
 		LIMIT ?`
 	arguments = append(arguments, maxPageLimit)
 	rows, err := store.db.QueryContext(ctx, statement, arguments...)
@@ -213,9 +213,9 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 	var references []knowl.PageReference
 	for rows.Next() {
 		var reference knowl.PageReference
-		var description, body, sourceRefs, sourceDocuments, format, nativeSnippet string
+		var tags, description, body, sourceRefs, sourceDocuments, format, nativeSnippet string
 		var sourceDocument, metadata sql.NullString
-		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata, &nativeSnippet); err != nil {
+		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &tags, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata, &nativeSnippet); err != nil {
 			return nil, fmt.Errorf("scan search page: %w", err)
 		}
 		if err := json.Unmarshal([]byte(sourceRefs), &reference.SourceRefs); err != nil {
@@ -246,10 +246,11 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 		if err != nil {
 			return nil, fmt.Errorf("decode page %q metadata: %w", reference.ID, err)
 		}
-		if enforceRelevance && !lexical.Relevant(reference.Title+"\n"+description+"\n"+body, terms) {
+		fields := lexical.DocumentFields{Title: reference.Title, Tags: tags, Description: description, Body: body}
+		if enforceRelevance && !lexical.RelevantFields(fields, terms) {
 			continue
 		}
-		reference.Snippet = lexical.Excerpt(nativeSnippet, reference.Title, description+"\n"+body, terms, maxCharacters)
+		reference.Snippet = lexical.ExcerptFields(nativeSnippet, fields, terms, maxCharacters)
 		reference.Untrusted = true
 		references = append(references, reference)
 		if len(references) == limit {

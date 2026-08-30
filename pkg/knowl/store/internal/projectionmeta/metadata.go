@@ -18,6 +18,17 @@ import (
 // OKFFormat is the discriminator persisted with OKF v0.2 projection metadata.
 const OKFFormat = "okf/0.2"
 
+// Values is the normalized, backend-neutral representation of one page in the
+// rebuildable search projection. Tags contains newline-separated semantic OKF
+// tags; the original structured values remain in Metadata.
+type Values struct {
+	Format      string
+	Tags        string
+	Description string
+	Body        string
+	Metadata    []byte
+}
+
 // SemanticPage reports whether a snapshot page belongs in the searchable
 // semantic projection. Legacy derived source mirrors are deliberately omitted.
 func SemanticPage(page knowl.PageSnapshot) bool {
@@ -56,22 +67,55 @@ func SourceDocuments(page knowl.PageSnapshot) []knowl.SourceDocument {
 	return unique
 }
 
-// PageValues returns normalized, transport-safe projection values. OKF pages
-// use their separately parsed user body, including a legitimately empty body.
-func PageValues(page knowl.PageSnapshot) (format, description, body string, metadata []byte, err error) {
-	body = page.Body
+// ValuesForPage returns normalized, transport-safe projection values. OKF
+// pages use their separately parsed user body, including a legitimately empty
+// body. Only standard semantic tags enter the flattened search field.
+func ValuesForPage(page knowl.PageSnapshot) (Values, error) {
+	values := Values{Body: page.Body}
 	if page.OKF == nil {
-		if body == "" {
-			body = knowlwiki.Body(page.Content)
+		if values.Body == "" {
+			values.Body = knowlwiki.Body(page.Content)
 		}
-		return "", "", body, nil, nil
+		return values, nil
 	}
 
-	metadata, err = json.Marshal(page.OKF)
+	metadata, err := json.Marshal(page.OKF)
 	if err != nil {
-		return "", "", "", nil, fmt.Errorf("encode OKF metadata: %w", err)
+		return Values{}, fmt.Errorf("encode OKF metadata: %w", err)
 	}
-	return OKFFormat, page.OKF.Description, body, metadata, nil
+	values.Format = OKFFormat
+	values.Tags = normalizeTags(page.OKF.Tags)
+	values.Description = page.OKF.Description
+	values.Metadata = metadata
+	return values, nil
+}
+
+// PageValues preserves the original tuple API while adapters migrate to the
+// shared Values representation.
+func PageValues(page knowl.PageSnapshot) (format, description, body string, metadata []byte, err error) {
+	values, err := ValuesForPage(page)
+	if err != nil {
+		return "", "", "", nil, err
+	}
+	return values.Format, values.Description, values.Body, values.Metadata, nil
+}
+
+func normalizeTags(tags []string) string {
+	normalized := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tag = strings.Join(strings.Fields(tag), " ")
+		if tag == "" {
+			continue
+		}
+		key := strings.ToLower(tag)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, tag)
+	}
+	return strings.Join(normalized, "\n")
 }
 
 // Decode validates a stored format discriminator and returns a detached OKF

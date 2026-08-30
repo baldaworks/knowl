@@ -20,17 +20,19 @@ import (
 )
 
 const (
-	Scope              knowl.ScopeRef = "search-contract"
-	ForeignScope       knowl.ScopeRef = "search-contract-foreign"
-	decisionBadgerID   knowl.PageID   = "decision-badger"
-	engineeringID      knowl.SourceID = "engineering"
-	operationsID       knowl.SourceID = "operations"
-	sharedSemanticID   knowl.PageID   = "shared-semantic"
-	headinglessTitle                  = "Глоссарий-проекта"
-	referenceType                     = "Reference"
-	lifecycleTitle                    = "Lifecycle reference"
-	testSourceRevision                = "revision-1"
-	testSharedDocument                = "shared.md"
+	Scope                    knowl.ScopeRef = "search-contract"
+	ForeignScope             knowl.ScopeRef = "search-contract-foreign"
+	decisionBadgerID         knowl.PageID   = "decision-badger"
+	engineeringID            knowl.SourceID = "engineering"
+	operationsID             knowl.SourceID = "operations"
+	sharedSemanticID         knowl.PageID   = "shared-semantic"
+	headinglessTitle                        = "Глоссарий-проекта"
+	referenceType                           = "Reference"
+	lifecycleTitle                          = "Lifecycle reference"
+	testSourceRevision                      = "revision-1"
+	testSharedDocument                      = "shared.md"
+	testNeutralTag                          = "neutral"
+	technicalExtensionBeacon                = "technicalextensionbeacon"
 )
 
 var capturedAt = time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
@@ -94,6 +96,12 @@ func Snapshot() knowl.WorkspaceSnapshot {
 		sourcePage("source-operations", "wiki/sources/operations/shared.md", "Sourcefilterbeacon Operations", operationsID),
 		headinglessSourcePage(),
 		metadataPage(),
+		semanticFieldPage("priority-title", "Prioritybeacon", []string{testNeutralTag}, "Neutral summary", "Neutral body"),
+		semanticFieldPage("priority-tags", "Tag priority", []string{"Prioritybeacon"}, "Neutral summary", "Neutral body"),
+		semanticFieldPage("priority-description", "Description priority", []string{testNeutralTag}, "Prioritybeacon", "Neutral body"),
+		semanticFieldPage("priority-body", "Body priority", []string{testNeutralTag}, "Neutral summary", "Prioritybeacon"),
+		semanticFieldPage("tag-only", "Semantic taxonomy", []string{"Taxonomybeacon", "Архитектураметка"}, "Tag-only evidence context", "No matching term in user content."),
+		technicalBoundaryPage(),
 	)
 	digests := make(map[string]string, len(pages))
 	for _, fixturePage := range pages {
@@ -137,6 +145,22 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 	t.Run("title weight", func(t *testing.T) {
 		got := search(t, index, Scope, "lease recovery", 5, 48)
 		assertPrefix(t, got, "title-weight", "body-weight")
+	})
+	t.Run("semantic field priority", func(t *testing.T) {
+		got := search(t, index, Scope, "prioritybeacon", 10, 64)
+		assertIDs(t, got, "priority-title", "priority-tags", "priority-description", "priority-body")
+	})
+	t.Run("tag only evidence", func(t *testing.T) {
+		for _, query := range []string{"taxonomybeacon", "архитектураметка"} {
+			got := search(t, index, Scope, query, 1, 64)
+			assertIDs(t, got, "tag-only")
+			if !strings.HasPrefix(strings.ToLower(got[0].Snippet), "tag: "+query) {
+				t.Fatalf("tag-only snippet for %q = %q", query, got[0].Snippet)
+			}
+			if got[0].OKF == nil || len(got[0].OKF.Tags) != 2 {
+				t.Fatalf("tag-only OKF metadata = %#v", got[0].OKF)
+			}
+		}
 	})
 	t.Run("deterministic tie", func(t *testing.T) {
 		got := search(t, index, Scope, "tieconcept", 5, 48)
@@ -208,7 +232,9 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 			t.Fatalf("stored OKF metadata was aliased through a result: %#v", again[0].OKF)
 		}
 		assertIDs(t, search(t, index, Scope, "descriptionsearchbeacon", 1, 96), "okf-lifecycle")
-		assertIDs(t, search(t, index, Scope, "technicalextensionbeacon", 10, 96))
+		for _, excluded := range []string{technicalExtensionBeacon, "technicalpathbeacon", "technicalsourcebeacon"} {
+			assertIDs(t, search(t, index, Scope, excluded, 10, 96))
+		}
 	})
 	t.Run("invalid normalization", func(t *testing.T) {
 		_, err := index.Search(ctx, Scope, "what is why", knowl.ReadLimits{Pages: 5, Characters: 48}, nil)
@@ -302,7 +328,29 @@ func metadataPage() knowl.PageSnapshot {
 			Status: okf.StatusDeprecated, StaleAfter: &staleAfter, Stale: true,
 			TrustTier: okf.TrustHumanReviewed, ResolvedStatus: okf.StatusDeprecated,
 			Verified:   []okf.Verification{{By: "human:reviewer", At: capturedAt.Add(-2 * time.Hour)}},
-			Extensions: map[string]any{"private_note": "technicalextensionbeacon"},
+			Extensions: map[string]any{"private_note": technicalExtensionBeacon},
+		},
+	}
+}
+
+func semanticFieldPage(id knowl.PageID, title string, tags []string, description, body string) knowl.PageSnapshot {
+	return knowl.PageSnapshot{
+		ID: id, Path: "semantic/" + string(id) + ".md", Digest: "digest-" + string(id),
+		Title: title, Content: body, Body: body,
+		SourceRefs: []string{"source:" + string(id)}, Untrusted: true, UpdatedAt: capturedAt,
+		OKF: &okf.Metadata{Type: referenceType, Title: title, Tags: tags, Description: description},
+	}
+}
+
+func technicalBoundaryPage() knowl.PageSnapshot {
+	body := "Ordinary semantic content without any technical boundary token."
+	return knowl.PageSnapshot{
+		ID: "technical-boundary", Path: "technicalpathbeacon/page.md", Digest: "digest-technical-boundary",
+		Title: "Technical boundary", Content: body, Body: body,
+		SourceRefs: []string{"raw:technicalsourcebeacon@1"}, Untrusted: true, UpdatedAt: capturedAt,
+		OKF: &okf.Metadata{
+			Type: referenceType, Title: "Technical boundary",
+			Extensions: map[string]any{"private_note": technicalExtensionBeacon},
 		},
 	}
 }

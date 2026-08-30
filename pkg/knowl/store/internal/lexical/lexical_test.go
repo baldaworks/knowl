@@ -155,6 +155,44 @@ func TestRelevantRequiresMultipleMatchesForLongQueries(t *testing.T) {
 	}
 }
 
+func TestDocumentFieldsIncludeTagsInRelevanceAndEvidence(t *testing.T) {
+	t.Parallel()
+	fields := DocumentFields{
+		Title:       "Knowledge service",
+		Tags:        "architecture\nСистема знаний",
+		Description: "Clean public summary",
+		Body:        "User-authored content without the query term.",
+	}
+	terms := []string{"система"}
+	if !RelevantFields(fields, terms) {
+		t.Fatal("RelevantFields() rejected a tag-only match")
+	}
+	excerpt := ExcerptFields("irrelevant native body", fields, terms, 48)
+	if !strings.Contains(excerpt, "tag: Система знаний") || !ContainsTerm(excerpt, terms) {
+		t.Fatalf("ExcerptFields() = %q, want semantic tag evidence", excerpt)
+	}
+	if utf8.RuneCountInString(excerpt) > 48 || !utf8.ValidString(excerpt) {
+		t.Fatalf("ExcerptFields() returned invalid bounded evidence %q", excerpt)
+	}
+	if RelevantFields(DocumentFields{Body: "unrelated content"}, terms) {
+		t.Fatal("RelevantFields() accepted fields without the query term")
+	}
+}
+
+func TestExcerptFieldsPreservesCleanContentMatches(t *testing.T) {
+	t.Parallel()
+	fields := DocumentFields{
+		Title:       "Decision",
+		Tags:        "badger",
+		Description: "Public recovery description",
+		Body:        "Useful quorumbeacon body evidence.",
+	}
+	got := ExcerptFields("Useful quorumbeacon body evidence.", fields, []string{"quorumbeacon"}, 24)
+	if !ContainsTerm(got, []string{"quorumbeacon"}) || strings.Contains(got, "tag:") {
+		t.Fatalf("ExcerptFields() = %q, want existing clean content evidence", got)
+	}
+}
+
 func TestExcerptPreservesMatchWithinEverySufficientBudget(t *testing.T) {
 	t.Parallel()
 	const term = testTerm

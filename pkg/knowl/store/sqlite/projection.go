@@ -54,7 +54,7 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		semanticPages = append(semanticPages, page)
 	}
 	for _, page := range semanticPages {
-		format, description, body, metadata, valuesErr := projectionmeta.PageValues(page)
+		values, valuesErr := projectionmeta.ValuesForPage(page)
 		if valuesErr != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, valuesErr)
 		}
@@ -86,10 +86,10 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 			sourceDocument = string(encodedDocument)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO knowl_pages (page_id, scope, path, title, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, description=excluded.description, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, source_documents=excluded.source_documents, format=excluded.format, okf_metadata=excluded.okf_metadata, updated_at=excluded.updated_at`,
-			page.ID, snapshot.Scope, page.Path, page.Title, description, body, page.Digest, sourceRefs, sourceID, sourceDocument, encodedDocuments, format, nullableJSON(metadata), updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			INSERT INTO knowl_pages (page_id, scope, path, title, tags, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, tags=excluded.tags, description=excluded.description, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, source_documents=excluded.source_documents, format=excluded.format, okf_metadata=excluded.okf_metadata, updated_at=excluded.updated_at`,
+			page.ID, snapshot.Scope, page.Path, page.Title, values.Tags, values.Description, values.Body, page.Digest, sourceRefs, sourceID, sourceDocument, encodedDocuments, values.Format, nullableJSON(values.Metadata), updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
 		for _, document := range documents {
@@ -97,7 +97,7 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 				return fmt.Errorf("project page source %q: %w", page.Path, err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, description, body, source_refs) VALUES (?, ?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, page.Title, description, body, sourceRefs); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, tags, description, body, source_refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, page.Title, values.Tags, values.Description, values.Body, sourceRefs); err != nil {
 			return fmt.Errorf("project page search %q: %w", page.Path, err)
 		}
 	}
@@ -180,6 +180,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		Digest          string
 		Title           string
 		Format          string
+		Tags            string
 		Description     string
 		Body            string
 		OKF             json.RawMessage
@@ -195,7 +196,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	}
 	pages := make([]digestPage, 0, len(snapshot.Pages))
 	for _, page := range snapshot.Pages {
-		format, description, body, metadata, err := projectionmeta.PageValues(page)
+		values, err := projectionmeta.ValuesForPage(page)
 		if err != nil {
 			return ""
 		}
@@ -203,7 +204,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		sort.Strings(sourceRefs)
 		pages = append(pages, digestPage{
 			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
-			Format: format, Description: description, Body: body, OKF: metadata,
+			Format: values.Format, Tags: values.Tags, Description: values.Description, Body: values.Body, OKF: values.Metadata,
 			SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
 			SourceDocuments: projectionmeta.SourceDocuments(page),
 			UpdatedAt:       page.UpdatedAt.UTC(),

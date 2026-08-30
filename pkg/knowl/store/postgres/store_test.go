@@ -18,6 +18,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/internal/knowledgetest"
 	"github.com/baldaworks/knowl/pkg/knowl/internal/runnertest"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/contexttest"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/searchtest"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/storetest"
@@ -75,6 +76,27 @@ func TestOKFProjectionMigrationIsPostgresNative(t *testing.T) {
 	for _, required := range []string{"ADD COLUMN format TEXT", "ADD COLUMN description TEXT", "ADD COLUMN okf_metadata JSONB", "coalesce(description", "DELETE FROM knowl_projection_state"} {
 		if !strings.Contains(string(content), required) {
 			t.Fatalf("OKF projection migration missing %q", required)
+		}
+	}
+}
+
+func TestOKFSearchTagsMigrationIsPostgresNative(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00010_okf_search_tags.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
+		"coalesce(title, '')), 'A'",
+		"coalesce(tags, '')), 'B'",
+		"coalesce(description, '')), 'C'",
+		"coalesce(body, '')), 'D'",
+		"USING GIN(search_vector)",
+		"DELETE FROM knowl_projection_state",
+		"DROP COLUMN tags",
+	} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("OKF tag migration missing %q", required)
 		}
 	}
 }
@@ -329,6 +351,7 @@ func runStoreContract(t *testing.T, dsn string) {
 	if err := store.CheckProjection(ctx, drifted); !errors.Is(err, ErrProjectionDrift) {
 		t.Fatalf("drift error = %v, want projection drift", err)
 	}
+	assertOKFTagSearch(t, ctx, store, knowl.ScopeRef(string(scope)+"_tags"))
 	searchtest.Run(t, store, func(err error) bool { return errors.Is(err, ErrInvalidQuery) })
 	contexttest.Run(t, store)
 	metrics, err := knowledgetest.EvaluateProjectionReplay(ctx, store, knowl.ScopeRef(string(scope)+"_golden"))
@@ -337,6 +360,43 @@ func runStoreContract(t *testing.T, dsn string) {
 	}
 	if metrics.Total != knowledgetest.QueryCount || metrics.Hits < knowledgetest.MinimumHits {
 		t.Fatalf("golden metrics = %#v", metrics)
+	}
+}
+
+func assertOKFTagSearch(t *testing.T, ctx context.Context, store *Store, scope knowl.ScopeRef) {
+	t.Helper()
+	const term = "prioritybeacon"
+	page := func(id, title, tags, description, body string) knowl.PageSnapshot {
+		return knowl.PageSnapshot{
+			ID: knowl.PageID(id), Path: "wiki/" + id + ".md", Title: title, Body: body, Content: body,
+			Digest: "digest-" + id, SourceRefs: []string{"raw:" + id + "@1"},
+			OKF: &okf.Metadata{Type: "Reference", Title: title, Tags: []string{tags}, Description: description},
+		}
+	}
+	snapshot := knowl.WorkspaceSnapshot{Scope: scope, SchemaDigest: "schema", Pages: []knowl.PageSnapshot{
+		page("title", term, "other", "neutral summary", "neutral body"),
+		page("tags", "Tag page", term, "neutral summary", "neutral body"),
+		page("description", "Description page", "other", term, "neutral body"),
+		page("body", "Body page", "other", "neutral summary", term),
+	}}
+	if err := store.Rebuild(ctx, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	results, err := store.Search(ctx, scope, term, knowl.ReadLimits{Pages: 10, Characters: 64}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []knowl.PageID{"title", "tags", "description", "body"}
+	if len(results) != len(want) {
+		t.Fatalf("tag search results = %#v", results)
+	}
+	for index, id := range want {
+		if results[index].ID != id {
+			t.Fatalf("tag search order = %#v, want %q", results, want)
+		}
+	}
+	if !strings.Contains(results[1].Snippet, "tag: "+term) || results[1].OKF == nil || results[1].OKF.Tags[0] != term {
+		t.Fatalf("tag evidence = %#v", results[1])
 	}
 }
 
@@ -433,14 +493,14 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	if committedGeneration != "generation-1" {
 		t.Fatalf("preserved commit generation = %q", committedGeneration)
 	}
-	var pageTitle, pageBody, pageDigest, pageFormat, pageDescription string
+	var pageTitle, pageBody, pageDigest, pageFormat, pageTags, pageDescription string
 	var sourceRefs, sourceDocument, metadata []byte
 	var sourceID sql.NullString
-	if err := migrated.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document, format, description, okf_metadata FROM knowl_pages WHERE scope = $1 AND page_id = $2`, scope, "legacy-page").Scan(&pageTitle, &pageBody, &pageDigest, &sourceRefs, &sourceID, &sourceDocument, &pageFormat, &pageDescription, &metadata); err != nil {
+	if err := migrated.db.QueryRowContext(ctx, `SELECT title, body, digest, source_refs, source_id, source_document, format, tags, description, okf_metadata FROM knowl_pages WHERE scope = $1 AND page_id = $2`, scope, "legacy-page").Scan(&pageTitle, &pageBody, &pageDigest, &sourceRefs, &sourceID, &sourceDocument, &pageFormat, &pageTags, &pageDescription, &metadata); err != nil {
 		t.Fatalf("read preserved projection page: %v", err)
 	}
-	if pageTitle != "Legacy page" || pageBody != "preserved projection body" || pageDigest != "page-digest" || string(sourceRefs) != `["raw/legacy.json"]` || sourceID.Valid || len(sourceDocument) != 0 || pageFormat != "" || pageDescription != "" || len(metadata) != 0 {
-		t.Fatalf("preserved projection page = %q %q %q %s %#v %s %q %q %s", pageTitle, pageBody, pageDigest, sourceRefs, sourceID, sourceDocument, pageFormat, pageDescription, metadata)
+	if pageTitle != "Legacy page" || pageBody != "preserved projection body" || pageDigest != "page-digest" || string(sourceRefs) != `["raw/legacy.json"]` || sourceID.Valid || len(sourceDocument) != 0 || pageFormat != "" || pageTags != "" || pageDescription != "" || len(metadata) != 0 {
+		t.Fatalf("preserved projection page = %q %q %q %s %#v %s %q %q %q %s", pageTitle, pageBody, pageDigest, sourceRefs, sourceID, sourceDocument, pageFormat, pageTags, pageDescription, metadata)
 	}
 	var snapshotDigest string
 	var pageCount, linkCount int

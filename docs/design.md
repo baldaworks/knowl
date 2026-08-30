@@ -71,6 +71,12 @@ The filesystem workspace is the canonical content owner:
   `index.md`/`log.md`, is control content rather than retrieval evidence.
 
 SQL and search state are operational and rebuildable, never canonical content.
+The lexical projection indexes four semantic fields with descending priority:
+title, normalized OKF tags, OKF description, and user-authored body. It excludes
+paths and filenames, OKF extensions, source references and documents, and other
+provenance or transport metadata from ranking and evidence snippets. SQLite FTS
+and PostgreSQL text search implement the same observable contract; the stored
+OKF object and public retrieval schema remain unchanged.
 The detailed filesystem contract is in [workspace.md](workspace.md).
 
 An ingest-side connector may translate text, a URI, origin, and idempotency
