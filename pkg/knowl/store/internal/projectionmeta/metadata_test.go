@@ -8,22 +8,34 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+const (
+	testPublicDescription = "public description"
+	testUserBody          = "user body"
+)
+
 func TestPageValuesAndDecodeRoundTripOKFMetadata(t *testing.T) {
 	page := knowl.PageSnapshot{
 		Content: "---\ntype: Reference\n---\ntechnical envelope",
-		Body:    "user body",
+		Body:    testUserBody,
 		OKF: &okf.Metadata{
 			Type:        "Reference",
-			Description: "public description",
-			Tags:        []string{"one"},
+			Description: testPublicDescription,
+			Tags:        []string{" one ", "Architecture\nDecision", "ONE", "  "},
 			Extensions:  map[string]any{"nested": map[string]any{"count": int64(2)}},
 		},
+	}
+	values, err := ValuesForPage(page)
+	if err != nil {
+		t.Fatalf("ValuesForPage() error = %v", err)
+	}
+	if values.Format != OKFFormat || values.Tags != "one\nArchitecture Decision" || values.Description != testPublicDescription || values.Body != testUserBody {
+		t.Fatalf("ValuesForPage() = %#v", values)
 	}
 	format, description, body, encoded, err := PageValues(page)
 	if err != nil {
 		t.Fatalf("PageValues() error = %v", err)
 	}
-	if format != OKFFormat || description != "public description" || body != "user body" {
+	if format != OKFFormat || description != testPublicDescription || body != testUserBody {
 		t.Fatalf("PageValues() = %q %q %q", format, description, body)
 	}
 	decoded, err := Decode(format, encoded)
@@ -38,8 +50,23 @@ func TestPageValuesAndDecodeRoundTripOKFMetadata(t *testing.T) {
 		t.Fatalf("Decode() = %#v, want %#v", decoded, page.OKF)
 	}
 	decoded.Tags[0] = "changed"
-	if page.OKF.Tags[0] != "one" {
+	if page.OKF.Tags[0] != " one " {
 		t.Fatal("Decode() returned metadata aliased to its input")
+	}
+}
+
+func TestValuesForPageKeepsLegacySearchFieldsClean(t *testing.T) {
+	t.Parallel()
+	page := knowl.PageSnapshot{
+		Content: "---\nsource_refs:\n  - raw:secret@1\n---\nlegacy user body",
+		Title:   "Legacy",
+	}
+	values, err := ValuesForPage(page)
+	if err != nil {
+		t.Fatalf("ValuesForPage() error = %v", err)
+	}
+	if values.Format != "" || values.Tags != "" || values.Description != "" || values.Metadata != nil || values.Body != "legacy user body" {
+		t.Fatalf("ValuesForPage() = %#v", values)
 	}
 }
 

@@ -306,6 +306,10 @@ remain rebuildable operational state.
 standard OKF metadata and unknown extension fields. Retrieval exposes that
 metadata as a structured `okf` object over CLI, HTTP, and MCP. Reserved
 `index.md` and `log.md` files are control documents, not search evidence.
+The rebuildable lexical projection searches only semantic title, OKF tags,
+OKF description, and user-authored body, weighted in that order. Filesystem
+paths, extensions, provenance envelopes, source references, and other technical
+metadata do not affect ranking or snippets.
 Configured source files are not part of this portable bundle. On the next
 successful reconciliation, legacy derived `wiki/sources/<source_id>/**`
 content is removed through the staged recovery mechanism without changing raw

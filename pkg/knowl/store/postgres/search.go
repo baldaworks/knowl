@@ -180,7 +180,7 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query
 		WITH lexical_query AS (
 			SELECT to_tsquery('simple'::regconfig, $2) AS query
 		)
-		SELECT p.page_id, p.path, p.title, p.description, p.body, p.source_refs, p.source_document, p.source_documents, p.format, p.okf_metadata,
+		SELECT p.page_id, p.path, p.title, p.tags, p.description, p.body, p.source_refs, p.source_document, p.source_documents, p.format, p.okf_metadata,
 		       ts_headline(
 		           'simple'::regconfig,
 		           body,
@@ -207,7 +207,7 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query
 	}
 	limitPlaceholder := fmt.Sprintf("$%d", len(arguments)+1)
 	statement += `
-		ORDER BY ts_rank_cd(ARRAY[0.01, 0.05, 0.125, 1.0]::real[], p.search_vector, lexical_query.query) DESC,
+		ORDER BY ts_rank_cd(ARRAY[0.1, 0.4, 0.7, 1.0]::real[], p.search_vector, lexical_query.query) DESC,
 		         p.path ASC
 		LIMIT ` + limitPlaceholder
 	arguments = append(arguments, maxPageLimit)
@@ -219,9 +219,9 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query
 	var references []knowl.PageReference
 	for rows.Next() {
 		var reference knowl.PageReference
-		var pageID, path, title, description, body, format, nativeSnippet string
+		var pageID, path, title, tags, description, body, format, nativeSnippet string
 		var sourceRefs, sourceDocument, sourceDocuments, metadata []byte
-		if err := rows.Scan(&pageID, &path, &title, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata, &nativeSnippet); err != nil {
+		if err := rows.Scan(&pageID, &path, &title, &tags, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata, &nativeSnippet); err != nil {
 			return nil, fmt.Errorf("scan search page: %w", err)
 		}
 		if err := json.Unmarshal(sourceRefs, &reference.SourceRefs); err != nil {
@@ -251,10 +251,11 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query
 		if err != nil {
 			return nil, fmt.Errorf("decode page %q metadata: %w", reference.ID, err)
 		}
-		if enforceRelevance && !lexical.Relevant(title+"\n"+description+"\n"+body, terms) {
+		fields := lexical.DocumentFields{Title: title, Tags: tags, Description: description, Body: body}
+		if enforceRelevance && !lexical.RelevantFields(fields, terms) {
 			continue
 		}
-		reference.Snippet = lexical.Excerpt(nativeSnippet, title, description+"\n"+body, terms, maxCharacters)
+		reference.Snippet = lexical.ExcerptFields(nativeSnippet, fields, terms, maxCharacters)
 		reference.Untrusted = true
 		references = append(references, reference)
 		if len(references) == limit {

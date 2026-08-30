@@ -859,7 +859,7 @@ func TestStoreRebuildIsScopedAndDetectsDrift(t *testing.T) {
 	}
 	other := knowl.WorkspaceSnapshot{
 		Scope:        "other",
-		SchemaDigest: "schema",
+		SchemaDigest: testSchemaDigest,
 		Pages:        []knowl.PageSnapshot{{ID: testSharedPageID, Path: "wiki/shared.md", Title: "Shared", Content: "other beta", Digest: "digest-other"}},
 	}
 	if err := store.Rebuild(ctx, snapshot); err != nil {
@@ -918,7 +918,7 @@ func TestStoreProjectsEmptyCanonicalScope(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer func() { _ = store.Close() }()
-	snapshot := knowl.WorkspaceSnapshot{Scope: "empty", SchemaDigest: "schema"}
+	snapshot := knowl.WorkspaceSnapshot{Scope: "empty", SchemaDigest: testSchemaDigest}
 	if err := store.Rebuild(ctx, snapshot); err != nil {
 		t.Fatalf("rebuild empty scope: %v", err)
 	}

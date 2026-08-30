@@ -57,7 +57,7 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		semanticPages = append(semanticPages, page)
 	}
 	for _, page := range semanticPages {
-		format, description, body, metadata, valuesErr := projectionmeta.PageValues(page)
+		values, valuesErr := projectionmeta.ValuesForPage(page)
 		if valuesErr != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, valuesErr)
 		}
@@ -90,11 +90,12 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO knowl_pages (
-				scope, page_id, path, title, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12, $13::jsonb, $14)
+				scope, page_id, path, title, tags, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13, $14::jsonb, $15)
 			ON CONFLICT (scope, path) DO UPDATE SET
 				page_id = EXCLUDED.page_id,
 				title = EXCLUDED.title,
+				tags = EXCLUDED.tags,
 				description = EXCLUDED.description,
 				body = EXCLUDED.body,
 				digest = EXCLUDED.digest,
@@ -105,8 +106,8 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 				format = EXCLUDED.format,
 				okf_metadata = EXCLUDED.okf_metadata,
 				updated_at = EXCLUDED.updated_at`,
-			snapshot.Scope, page.ID, page.Path, page.Title, description, body, page.Digest,
-			string(sourceRefs), sourceID, sourceDocument, string(encodedDocuments), format, nullableJSON(metadata), updatedAt.UTC()); err != nil {
+			snapshot.Scope, page.ID, page.Path, page.Title, values.Tags, values.Description, values.Body, page.Digest,
+			string(sourceRefs), sourceID, sourceDocument, string(encodedDocuments), values.Format, nullableJSON(values.Metadata), updatedAt.UTC()); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
 		for _, document := range documents {
@@ -201,6 +202,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		Digest          string
 		Title           string
 		Format          string
+		Tags            string
 		Description     string
 		Body            string
 		OKF             json.RawMessage
@@ -216,7 +218,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 	}
 	pages := make([]digestPage, 0, len(snapshot.Pages))
 	for _, page := range snapshot.Pages {
-		format, description, body, metadata, err := projectionmeta.PageValues(page)
+		values, err := projectionmeta.ValuesForPage(page)
 		if err != nil {
 			return ""
 		}
@@ -224,7 +226,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		sort.Strings(sourceRefs)
 		pages = append(pages, digestPage{
 			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
-			Format: format, Description: description, Body: body, OKF: metadata,
+			Format: values.Format, Tags: values.Tags, Description: values.Description, Body: values.Body, OKF: values.Metadata,
 			SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
 			SourceDocuments: projectionmeta.SourceDocuments(page),
 			UpdatedAt:       page.UpdatedAt.UTC(),
