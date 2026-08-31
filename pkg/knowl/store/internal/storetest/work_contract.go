@@ -23,6 +23,7 @@ type WorkHarness struct {
 	Store        app.OperationStore
 	OpenPeer     func(t *testing.T) app.OperationStore
 	Expire       func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID)
+	ReadyNow     func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID)
 	WorkAttempts func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID) int
 	IsConflict   func(error) bool
 	Scope        knowl.ScopeRef
@@ -32,7 +33,7 @@ type WorkHarness struct {
 // SQLite and PostgreSQL without depending on either engine's SQL details.
 func RunWorkContract(t *testing.T, harness WorkHarness) {
 	t.Helper()
-	if harness.Store == nil || harness.OpenPeer == nil || harness.Expire == nil || harness.WorkAttempts == nil || harness.IsConflict == nil || harness.Scope == "" {
+	if harness.Store == nil || harness.OpenPeer == nil || harness.Expire == nil || harness.ReadyNow == nil || harness.WorkAttempts == nil || harness.IsConflict == nil || harness.Scope == "" {
 		t.Fatal("resumable-work harness is incomplete")
 	}
 
@@ -214,6 +215,108 @@ func RunWorkContract(t *testing.T, harness WorkHarness) {
 		}
 		if attempts := harness.WorkAttempts(t, scope, expiringID); attempts != 2 {
 			t.Fatalf("reclaimed work attempts = %d, want 2", attempts)
+		}
+	})
+
+	t.Run("durable_delayed_retry_ownership_counters_and_commit_cleanup", func(t *testing.T) {
+		ctx := context.Background()
+		scope := childScope(harness.Scope, "retry")
+		key, meta := Fixture(scope, "transient", time.Unix(10, 0).UTC())
+		reserved, err := harness.Store.Reserve(ctx, key, meta)
+		if err != nil {
+			t.Fatalf("reserve retry work: %v", err)
+		}
+		firstLease := futureLease("retry-owner-1")
+		claim, err := harness.Store.ClaimOperation(ctx, scope, reserved.ID, firstLease)
+		if err != nil {
+			t.Fatalf("claim retry work: %v", err)
+		}
+		if claim.Operation.WorkAttempt != 1 || claim.Operation.RetryAttempt != 1 {
+			t.Fatalf("first retry counters = work %d cycle %d, want 1/1", claim.Operation.WorkAttempt, claim.Operation.RetryAttempt)
+		}
+		failure := knowl.Failure{Class: testProviderFailureClass, Reason: testProviderFailureReason, OperationID: string(reserved.ID)}
+		readyAt := time.Now().UTC().Truncate(time.Microsecond).Add(time.Hour)
+		if err := harness.Store.ScheduleRetry(ctx, scope, reserved.ID, "wrong-owner", failure, readyAt); !errors.Is(err, app.ErrWorkLeaseConflict) {
+			t.Fatalf("wrong-owner retry scheduling error = %v", err)
+		}
+		unsafe := failure
+		unsafe.Reason = testUnsafeFailureReason
+		if err := harness.Store.ScheduleRetry(ctx, scope, reserved.ID, firstLease.Token, unsafe, readyAt); !errors.Is(err, app.ErrWorkLeaseConflict) {
+			t.Fatalf("unsafe retry scheduling error = %v", err)
+		}
+		if err := harness.Store.ScheduleRetry(ctx, scope, reserved.ID, firstLease.Token, failure, readyAt); err != nil {
+			t.Fatalf("schedule delayed retry: %v", err)
+		}
+
+		peer := harness.OpenPeer(t)
+		delayed, err := peer.Operation(ctx, scope, reserved.ID)
+		if err != nil {
+			t.Fatalf("read delayed retry from peer: %v", err)
+		}
+		if delayed.Status == knowl.StatusFailed || delayed.WorkAttempt != 1 || delayed.RetryAttempt != 1 ||
+			delayed.Failure == nil || delayed.Failure.Class != failure.Class || delayed.Failure.Reason != failure.Reason ||
+			!delayed.ReadyAt.Equal(readyAt) {
+			t.Fatalf("durable delayed retry = %#v", delayed)
+		}
+		if ready, err := peer.ResumeReady(ctx, scope, 10); err != nil || len(ready) != 0 {
+			t.Fatalf("future retry ready set = %v, err = %v", ready, err)
+		}
+		if _, err := peer.ClaimOperation(ctx, scope, reserved.ID, futureLease("too-early")); !errors.Is(err, app.ErrNoReadyOperation) {
+			t.Fatalf("future targeted claim error = %v", err)
+		}
+
+		harness.ReadyNow(t, scope, reserved.ID)
+		secondLease := futureLease("retry-owner-2")
+		claim, err = peer.ClaimOperation(ctx, scope, reserved.ID, secondLease)
+		if err != nil {
+			t.Fatalf("claim retry after deadline: %v", err)
+		}
+		if claim.Operation.WorkAttempt != 2 || claim.Operation.RetryAttempt != 2 {
+			t.Fatalf("second retry counters = work %d cycle %d, want 2/2", claim.Operation.WorkAttempt, claim.Operation.RetryAttempt)
+		}
+		if err := peer.SavePlan(ctx, reserved.ID, knowl.PlanSummary{OperationID: string(reserved.ID), Digest: strings.Repeat("c", 64)}); err != nil {
+			t.Fatalf("save retry plan: %v", err)
+		}
+		if err := peer.MarkApplying(ctx, reserved.ID, knowl.Lease{Token: "apply-owner", ExpiresAt: time.Now().UTC().Add(time.Minute)}); err != nil {
+			t.Fatalf("mark retry applying: %v", err)
+		}
+		if err := peer.CommitOutcome(ctx, reserved.ID, knowl.ContentCommit{OperationID: string(reserved.ID), Generation: "retry-generation"}); err != nil {
+			t.Fatalf("commit retry: %v", err)
+		}
+		if err := peer.ScheduleRetry(ctx, scope, reserved.ID, secondLease.Token, failure, time.Now().UTC().Add(time.Hour)); !errors.Is(err, app.ErrWorkLeaseConflict) {
+			t.Fatalf("committed retry scheduling error = %v", err)
+		}
+		committed, err := harness.Store.Operation(ctx, scope, reserved.ID)
+		if err != nil || committed.Status != knowl.StatusCommitted || committed.Failure != nil || committed.WorkAttempt != 2 || committed.RetryAttempt != 2 {
+			t.Fatalf("committed retry operation = %#v, err = %v", committed, err)
+		}
+
+		expiredKey, expiredMeta := Fixture(scope, "expired-scheduler", time.Unix(20, 0).UTC())
+		expired, err := harness.Store.Reserve(ctx, expiredKey, expiredMeta)
+		if err != nil {
+			t.Fatalf("reserve expired scheduler work: %v", err)
+		}
+		expiredLease := futureLease("expired-scheduler")
+		if _, err := harness.Store.ClaimOperation(ctx, scope, expired.ID, expiredLease); err != nil {
+			t.Fatalf("claim expired scheduler work: %v", err)
+		}
+		harness.Expire(t, scope, expired.ID)
+		if err := harness.Store.ScheduleRetry(ctx, scope, expired.ID, expiredLease.Token, failure, time.Now().UTC().Add(time.Hour)); !errors.Is(err, app.ErrWorkLeaseConflict) {
+			t.Fatalf("expired-owner retry scheduling error = %v", err)
+		}
+		if err := harness.Store.FailClaim(ctx, scope, expired.ID, expiredLease.Token, failure); !errors.Is(err, app.ErrWorkLeaseConflict) {
+			t.Fatalf("expired-owner terminal failure error = %v", err)
+		}
+		reclaimed, err := harness.Store.ClaimOperation(ctx, scope, expired.ID, futureLease("terminal-owner"))
+		if err != nil {
+			t.Fatalf("reclaim terminal failure work: %v", err)
+		}
+		if err := harness.Store.FailClaim(ctx, scope, expired.ID, reclaimed.Lease.Token, failure); err != nil {
+			t.Fatalf("record owned terminal failure: %v", err)
+		}
+		terminal, err := harness.Store.Operation(ctx, scope, expired.ID)
+		if err != nil || terminal.Status != knowl.StatusFailed || terminal.Failure == nil || terminal.Failure.Reason != failure.Reason {
+			t.Fatalf("owned terminal failure = %#v, err = %v", terminal, err)
 		}
 	})
 

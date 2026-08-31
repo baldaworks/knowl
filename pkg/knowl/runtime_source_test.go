@@ -72,6 +72,72 @@ func TestPrepareReadOnlyDoesNotRunOnStartSourceSync(t *testing.T) {
 	}
 }
 
+func TestRetrySourceMaintenanceUsesConfiguredSourceWithoutStartingBackgroundJobs(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &runtimeSourceAdapter{}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.Sources = []domain.Source{runtimeFilesystemSource(runtimeAlphaSourceID, t.TempDir(), true)}
+	host, err := knowl.New(ctx, knowl.Options{
+		Config: config, Maintainer: provider.Fixture{},
+		SourceAdapters: map[domain.SourceType]app.SourceAdapter{domain.SourceTypeFilesystem: adapter},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = host.Stop(stopCtx)
+	})
+	if _, err := host.SyncSource(ctx, runtimeAlphaSourceID); err != nil {
+		t.Fatalf("sync source fixture: %v", err)
+	}
+	status, err := host.SourceStatus(ctx, runtimeAlphaSourceID)
+	if err != nil || len(status.Maintenance.Samples) != 1 {
+		t.Fatalf("source maintenance fixture = %#v, err = %v", status.Maintenance, err)
+	}
+	id := status.Maintenance.Samples[0].OperationID
+	if err := host.Operations().Fail(ctx, id, domain.Failure{Class: hostProviderID, Reason: "provider_run", OperationID: string(id)}); err != nil {
+		t.Fatalf("fail maintenance fixture: %v", err)
+	}
+
+	preview, err := host.RetrySourceMaintenance(ctx, runtimeAlphaSourceID, []string{hostProviderID}, true)
+	if err != nil || preview.Matched != 1 || preview.Requeued != 0 || len(preview.OperationIDs) != 1 || preview.OperationIDs[0] != id {
+		t.Fatalf("host retry preview = %#v, err = %v", preview, err)
+	}
+	requeued, err := host.RetrySourceMaintenance(ctx, runtimeAlphaSourceID, []string{hostProviderID}, false)
+	if err != nil || requeued.Requeued != 1 {
+		t.Fatalf("host retry mutation = %#v, err = %v", requeued, err)
+	}
+	if err := host.PrepareReadOnly(); err != nil {
+		t.Fatalf("prepare read-only host: %v", err)
+	}
+	operation, err := host.Operations().Operation(ctx, config.Scope, id)
+	if err != nil || operation.Status != domain.StatusReceived || operation.ManualRetryCount != 1 {
+		t.Fatalf("requeued host operation = %#v, err = %v", operation, err)
+	}
+	status, err = host.SourceStatus(ctx, runtimeAlphaSourceID)
+	if err != nil || status.Maintenance.Counts.Queued != 1 || status.Maintenance.Counts.Failed != 0 ||
+		len(status.Maintenance.Samples) != 1 || status.Maintenance.Samples[0].ManualRetryCount != 1 {
+		t.Fatalf("source status after retry = %#v, err = %v", status.Maintenance, err)
+	}
+	if lists, fetches := adapter.calls(); lists != 1 || fetches != 1 {
+		t.Fatalf("retry command started background source calls = (%d, %d)", lists, fetches)
+	}
+	if _, err := host.RetrySourceMaintenance(ctx, "missing", []string{hostProviderID}, false); !errors.Is(err, app.ErrSourceNotFound) {
+		t.Fatalf("unknown source retry error = %v", err)
+	}
+}
+
 func TestSourceRuntimeVerticalAndFailureIsolation(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())

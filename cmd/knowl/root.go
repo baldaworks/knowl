@@ -30,6 +30,7 @@ const (
 	sourceListCommandName         = "list"
 	sourceSyncCommandName         = "sync"
 	sourceStatusCommandName       = "status"
+	sourceRetryCommandName        = "retry"
 	postgresStore                 = "postgres"
 	defaultStore                  = "sqlite"
 	defaultWorkspace              = "."
@@ -58,6 +59,7 @@ func newRootCommand() *cobra.Command {
    - knowl source list
    - knowl source sync <source-id>
    - knowl source status <source-id>
+   - knowl source retry <source-id> --failure-class provider --dry-run
 5. Explicitly reconcile a flat semantic wiki into nested OKF catalogs:
    - knowl hierarchy reconcile
 6. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.

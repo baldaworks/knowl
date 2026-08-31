@@ -223,18 +223,20 @@ func (store *Store) CommitOutcome(ctx context.Context, id knowl.OperationID, com
 		if current.status != knowl.StatusApplying {
 			return invalidTransition(current.status, knowl.StatusCommitted)
 		}
-		return updateOperationTx(ctx, tx, id, `status = ?, commit_generation = ?, lease_token = '', lease_expires_at = '', updated_at = ?`, knowl.StatusCommitted, commit.Generation, nowString())
+		return updateOperationTx(ctx, tx, id, `status = ?, commit_generation = ?, failure_class = '', failure_reason = '',
+			lease_token = '', lease_expires_at = '', work_lease_token = '', work_lease_expires_at = '', updated_at = ?`,
+			knowl.StatusCommitted, commit.Generation, nowString())
 	})
 }
 
-// Fail records a stable redacted failure class.
+// Fail records stable redacted failure metadata.
 func (store *Store) Fail(ctx context.Context, id knowl.OperationID, failure knowl.Failure) error {
-	if strings.TrimSpace(failure.Class) == "" {
-		return fmt.Errorf("failure class is required: %w", ErrConflict)
+	if !app.ValidateSafeFailure(failure, false) {
+		return fmt.Errorf("safe failure metadata is required: %w", ErrConflict)
 	}
 	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
 		if current.status == knowl.StatusFailed {
-			if current.failureClass == failure.Class {
+			if current.failureClass == failure.Class && current.failureReason == failure.Reason {
 				return nil
 			}
 			return fmt.Errorf("failure class differs: %w", ErrConflict)
@@ -242,7 +244,9 @@ func (store *Store) Fail(ctx context.Context, id knowl.OperationID, failure know
 		if current.status == knowl.StatusCommitted {
 			return invalidTransition(current.status, knowl.StatusFailed)
 		}
-		return updateOperationTx(ctx, tx, id, `status = ?, failure_class = ?, lease_token = '', lease_expires_at = '', updated_at = ?`, knowl.StatusFailed, failure.Class, nowString())
+		return updateOperationTx(ctx, tx, id, `status = ?, failure_class = ?, failure_reason = ?,
+			lease_token = '', lease_expires_at = '', work_lease_token = '', work_lease_expires_at = '', updated_at = ?`,
+			knowl.StatusFailed, failure.Class, failure.Reason, nowString())
 	})
 }
 
@@ -250,13 +254,15 @@ func (store *Store) Fail(ctx context.Context, id knowl.OperationID, failure know
 func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error) {
 	var operation knowl.Operation
 	var sourceAdapter, sourceID, sourceVersion, sourceDigest, schemaDigest string
-	var kind, status, failureClass, updatedAt string
-	var attempt int
+	var kind, status, failureClass, failureReason, readyAt, updatedAt string
 	err := store.db.QueryRowContext(ctx, `
 		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
-		       schema_digest, status, attempt, failure_class, updated_at
+		       schema_digest, status, attempt, work_attempt, retry_attempt, manual_retry_count,
+		       failure_class, failure_reason, work_ready_at, updated_at
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id).
-		Scan(&operation.ID, &kind, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest, &schemaDigest, &status, &attempt, &failureClass, &updatedAt)
+		Scan(&operation.ID, &kind, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest,
+			&schemaDigest, &status, &operation.Attempt, &operation.WorkAttempt, &operation.RetryAttempt,
+			&operation.ManualRetryCount, &failureClass, &failureReason, &readyAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.Operation{}, ErrNotFound
 	}
@@ -273,10 +279,13 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 		operation.Key = knowl.OperationKey{Scope: scope, Source: knowl.SourceRef{Adapter: sourceAdapter, ID: sourceID}, Version: knowl.SourceVersion{Version: sourceVersion, Digest: sourceDigest}}
 	}
 	operation.Status = knowl.OperationStatus(status)
-	operation.Attempt = attempt
 	operation.UpdatedAt = parsed
+	operation.ReadyAt, err = parseOptionalTime(readyAt)
+	if err != nil {
+		return knowl.Operation{}, fmt.Errorf("parse operation readiness: %w", err)
+	}
 	if failureClass != "" {
-		operation.Failure = &knowl.Failure{Class: failureClass, OperationID: string(operation.ID)}
+		operation.Failure = &knowl.Failure{Class: failureClass, Reason: failureReason, OperationID: string(operation.ID)}
 	}
 	_ = schemaDigest
 	return operation, nil
@@ -287,6 +296,7 @@ type operationRow struct {
 	planDigest       string
 	commitGeneration string
 	failureClass     string
+	failureReason    string
 	leaseExpiresAt   string
 }
 
@@ -301,9 +311,9 @@ func (store *Store) transition(ctx context.Context, id knowl.OperationID, update
 	var current operationRow
 	var status string
 	if err := tx.QueryRowContext(ctx, `
-		SELECT status, plan_digest, commit_generation, failure_class, lease_expires_at
+		SELECT status, plan_digest, commit_generation, failure_class, failure_reason, lease_expires_at
 		FROM knowl_operations WHERE operation_id = ?`, id).
-		Scan(&status, &current.planDigest, &current.commitGeneration, &current.failureClass, &current.leaseExpiresAt); errors.Is(err, sql.ErrNoRows) {
+		Scan(&status, &current.planDigest, &current.commitGeneration, &current.failureClass, &current.failureReason, &current.leaseExpiresAt); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return fmt.Errorf("read operation transition: %w", err)

@@ -55,7 +55,8 @@ func (store *Store) ResumeReady(ctx context.Context, scope knowl.ScopeRef, limit
 		  AND schema_digest <> '' AND schema_snapshot IS NOT NULL
 		  AND ((work_kind = $4 AND accepted_media_type <> '' AND source_manifest_ref <> '')
 		       OR (work_kind = $5 AND execution_payload <> ''))
-		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)
+		  AND ((work_lease_token = '' AND work_ready_at <= CURRENT_TIMESTAMP)
+		       OR (work_lease_token <> '' AND work_lease_expires_at <= CURRENT_TIMESTAMP))
 		ORDER BY CASE WHEN work_lease_token = '' THEN work_ready_at
 		              ELSE work_lease_expires_at END ASC,
 		         operation_id ASC
@@ -119,7 +120,8 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 		  AND schema_digest <> '' AND schema_snapshot IS NOT NULL
 		  AND ((work_kind = $4 AND accepted_media_type <> '' AND source_manifest_ref <> '')
 		       OR (work_kind = $5 AND execution_payload <> ''))
-		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)
+		  AND ((work_lease_token = '' AND work_ready_at <= CURRENT_TIMESTAMP)
+		       OR (work_lease_token <> '' AND work_lease_expires_at <= CURRENT_TIMESTAMP))
 		ORDER BY CASE WHEN work_lease_token = '' THEN work_ready_at
 		              ELSE work_lease_expires_at END ASC,
 		         operation_id ASC
@@ -158,10 +160,12 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE knowl_operations
-		SET work_attempt = work_attempt + 1, work_lease_token = $1, work_lease_expires_at = $2
+		SET work_attempt = work_attempt + 1, retry_attempt = retry_attempt + 1,
+		    work_lease_token = $1, work_lease_expires_at = $2
 		WHERE scope = $3 AND operation_id = $4
 		  AND status NOT IN ($5, $6)
-		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)`,
+		  AND ((work_lease_token = '' AND work_ready_at <= CURRENT_TIMESTAMP)
+		       OR (work_lease_token <> '' AND work_lease_expires_at <= CURRENT_TIMESTAMP))`,
 		lease.Token, lease.ExpiresAt.UTC(), scope, id, knowl.StatusCommitted, knowl.StatusFailed)
 	if err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("grant work lease: %w", err)
@@ -175,7 +179,8 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 	}
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
 		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
-		       status, attempt, failure_class, updated_at
+		       status, attempt, work_attempt, retry_attempt, manual_retry_count,
+		       failure_class, failure_reason, work_ready_at, updated_at
 		FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id), scope)
 	if err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("read claimed operation: %w", err)
@@ -211,7 +216,8 @@ func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id
 		FROM knowl_operations
 		WHERE scope = $1 AND operation_id = $2
 		  AND status NOT IN ($3, $4)
-		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)
+		  AND ((work_lease_token = '' AND work_ready_at <= CURRENT_TIMESTAMP)
+		       OR (work_lease_token <> '' AND work_lease_expires_at <= CURRENT_TIMESTAMP))
 		FOR UPDATE`, scope, id, knowl.StatusCommitted, knowl.StatusFailed))
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.WorkClaim{}, app.ErrNoReadyOperation
@@ -224,10 +230,12 @@ func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE knowl_operations
-		SET work_attempt = work_attempt + 1, work_lease_token = $1, work_lease_expires_at = $2
+		SET work_attempt = work_attempt + 1, retry_attempt = retry_attempt + 1,
+		    work_lease_token = $1, work_lease_expires_at = $2
 		WHERE scope = $3 AND operation_id = $4
 		  AND status NOT IN ($5, $6)
-		  AND (work_lease_token = '' OR work_lease_expires_at <= CURRENT_TIMESTAMP)`,
+		  AND ((work_lease_token = '' AND work_ready_at <= CURRENT_TIMESTAMP)
+		       OR (work_lease_token <> '' AND work_lease_expires_at <= CURRENT_TIMESTAMP))`,
 		lease.Token, lease.ExpiresAt.UTC(), scope, id, knowl.StatusCommitted, knowl.StatusFailed)
 	if err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("grant targeted work lease: %w", err)
@@ -241,7 +249,8 @@ func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id
 	}
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
 		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
-		       status, attempt, failure_class, updated_at
+		       status, attempt, work_attempt, retry_attempt, manual_retry_count,
+		       failure_class, failure_reason, work_ready_at, updated_at
 		FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id), scope)
 	if err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("read targeted claimed operation: %w", err)
@@ -285,6 +294,45 @@ func (store *Store) ReleaseClaim(ctx context.Context, scope knowl.ScopeRef, id k
 		SET work_lease_token = '', work_lease_expires_at = NULL, work_ready_at = CURRENT_TIMESTAMP
 		WHERE scope = $1 AND operation_id = $2 AND work_lease_token = $3
 		  AND status NOT IN ($4, $5)`, scope, id, token,
+		knowl.StatusCommitted, knowl.StatusFailed)
+}
+
+// ScheduleRetry records a safe transient failure and delays work owned by the
+// current lease holder. The operation remains non-terminal.
+func (store *Store) ScheduleRetry(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, token string, failure knowl.Failure, readyAt time.Time) error {
+	if err := validateScope(scope); err != nil {
+		return err
+	}
+	if strings.TrimSpace(token) == "" || !app.ValidateSafeFailure(failure, true) || !readyAt.After(time.Now().UTC()) {
+		return app.ErrWorkLeaseConflict
+	}
+	return store.updateWorkLease(ctx, `
+		UPDATE knowl_operations
+		SET failure_class = $1, failure_reason = $2, work_lease_token = '',
+		    work_lease_expires_at = NULL, work_ready_at = $3, updated_at = $4
+		WHERE scope = $5 AND operation_id = $6 AND work_lease_token = $7
+		  AND work_lease_expires_at > CURRENT_TIMESTAMP
+		  AND status NOT IN ($8, $9)`,
+		failure.Class, failure.Reason, readyAt.UTC(), time.Now().UTC(), scope, id, token,
+		knowl.StatusCommitted, knowl.StatusFailed)
+}
+
+// FailClaim terminalizes work only while the caller still owns a live lease.
+func (store *Store) FailClaim(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, token string, failure knowl.Failure) error {
+	if err := validateScope(scope); err != nil {
+		return err
+	}
+	if strings.TrimSpace(token) == "" || !app.ValidateSafeFailure(failure, true) {
+		return app.ErrWorkLeaseConflict
+	}
+	return store.updateWorkLease(ctx, `
+		UPDATE knowl_operations
+		SET status = $1, failure_class = $2, failure_reason = $3,
+		    lease_token = '', lease_expires_at = NULL, work_lease_token = '', work_lease_expires_at = NULL, updated_at = $4
+		WHERE scope = $5 AND operation_id = $6 AND work_lease_token = $7
+		  AND work_lease_expires_at > CURRENT_TIMESTAMP
+		  AND status NOT IN ($8, $9)`,
+		knowl.StatusFailed, failure.Class, failure.Reason, time.Now().UTC(), scope, id, token,
 		knowl.StatusCommitted, knowl.StatusFailed)
 }
 
@@ -387,11 +435,12 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 
 func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Operation, error) {
 	var operation knowl.Operation
-	var kind, status, failureClass string
+	var kind, status, failureClass, failureReason string
 	if err := scanner.Scan(
 		&operation.ID, &kind, &operation.Key.Source.Adapter, &operation.Key.Source.ID,
 		&operation.Key.Version.Version, &operation.Key.Version.Digest,
-		&status, &operation.Attempt, &failureClass, &operation.UpdatedAt,
+		&status, &operation.Attempt, &operation.WorkAttempt, &operation.RetryAttempt,
+		&operation.ManualRetryCount, &failureClass, &failureReason, &operation.ReadyAt, &operation.UpdatedAt,
 	); err != nil {
 		return knowl.Operation{}, err
 	}
@@ -404,7 +453,7 @@ func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Opera
 	}
 	operation.Status = knowl.OperationStatus(status)
 	if failureClass != "" {
-		operation.Failure = &knowl.Failure{Class: failureClass, OperationID: string(operation.ID)}
+		operation.Failure = &knowl.Failure{Class: failureClass, Reason: failureReason, OperationID: string(operation.ID)}
 	}
 	return operation, nil
 }

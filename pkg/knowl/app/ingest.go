@@ -579,11 +579,12 @@ func (service *IngestService) failIngest(ctx context.Context, result IngestResul
 	if retryableExecutionError(cause) {
 		return result, cause
 	}
-	if err := service.operations.Fail(durableContext(ctx), result.Operation.ID, knowl.Failure{Class: class, OperationID: string(result.Operation.ID)}); err != nil {
+	failure := executionFailure(class, result.Operation.ID, cause)
+	if err := service.operations.Fail(durableContext(ctx), result.Operation.ID, failure); err != nil {
 		return result, errors.Join(cause, fmt.Errorf("record %s failure: %w", class, err))
 	}
 	result.Operation.Status = knowl.StatusFailed
-	result.Operation.Failure = &knowl.Failure{Class: class, OperationID: string(result.Operation.ID)}
+	result.Operation.Failure = &failure
 	return result, fmt.Errorf("%s: %w", class, cause)
 }
 
@@ -592,7 +593,8 @@ func (service *IngestService) failApply(ctx context.Context, scope knowl.ScopeRe
 		return ApplyResult{Operation: operation}, cause
 	}
 	stateCtx := durableContext(ctx)
-	if err := service.operations.Fail(stateCtx, id, knowl.Failure{Class: class, OperationID: string(id)}); err != nil {
+	failure := executionFailure(class, id, cause)
+	if err := service.operations.Fail(stateCtx, id, failure); err != nil {
 		return ApplyResult{Operation: operation}, errors.Join(cause, fmt.Errorf("record %s failure: %w", class, err))
 	}
 	operation, readErr := service.operations.Operation(stateCtx, scope, id)
@@ -602,15 +604,30 @@ func (service *IngestService) failApply(ctx context.Context, scope knowl.ScopeRe
 	return ApplyResult{Operation: operation}, fmt.Errorf("%s: %w", class, cause)
 }
 
+func executionFailure(class string, id knowl.OperationID, cause error) knowl.Failure {
+	failure := knowl.Failure{Class: class, OperationID: string(id)}
+	if classified, ok := ClassifyExecutionFailure(cause); ok {
+		failure.Class = classified.Class
+		failure.Reason = classified.Reason
+	}
+	return failure
+}
+
 func terminalOperation(status knowl.OperationStatus) bool {
 	return status == knowl.StatusCommitted || status == knowl.StatusFailed
 }
 
 func retryableExecutionError(err error) bool {
+	if failure, ok := ClassifyExecutionFailure(err); ok {
+		return failure.Retryable
+	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrApplyLeaseConflict)
 }
 
 func failureClass(err error) string {
+	if failure, ok := ClassifyExecutionFailure(err); ok {
+		return failure.Class
+	}
 	message := err.Error()
 	if index := strings.IndexByte(message, ':'); index > 0 {
 		return message[:index]

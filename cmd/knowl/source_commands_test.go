@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -17,7 +18,11 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-const commandEngineeringSourceID = "engineering"
+const (
+	commandEngineeringSourceID = "engineering"
+	failureClassFlag           = "--failure-class"
+	providerFailureClass       = "provider"
+)
 
 func TestSourceCommandsValidateBeforeSessionAndEmitRedactedJSON(t *testing.T) {
 	original := newLocalSourceSession
@@ -123,6 +128,67 @@ func TestSourceCommandPreservesOperationAndStopErrors(t *testing.T) {
 	}
 }
 
+func TestSourceRetryCommandValidatesBeforeSessionAndEmitsStructuredResult(t *testing.T) {
+	original := newLocalSourceSession
+	t.Cleanup(func() { newLocalSourceSession = original })
+	host := &stubLocalSourceHost{retryResult: app.SourceMaintenanceRetryResult{
+		SourceID: commandEngineeringSourceID, DryRun: true, Matched: 2,
+		OperationIDs: []domain.OperationID{"maintenance-a", "maintenance-b"},
+	}}
+	sessions := 0
+	newLocalSourceSession = func(context.Context) (localSourceSession, error) {
+		sessions++
+		return localSourceSession{Host: host, ShutdownTimeout: time.Second}, nil
+	}
+
+	for _, args := range [][]string{
+		{commandEngineeringSourceID},
+		{"INVALID SECRET", failureClassFlag, providerFailureClass},
+		{commandEngineeringSourceID, failureClassFlag, "provider secret"},
+	} {
+		command := newSourceRetryCommand()
+		command.SetArgs(args)
+		if err := command.Execute(); err == nil {
+			t.Fatalf("retry args %#v unexpectedly succeeded", args)
+		}
+	}
+	if sessions != 0 {
+		t.Fatalf("invalid retry constructed %d sessions", sessions)
+	}
+
+	var output bytes.Buffer
+	command := newSourceRetryCommand()
+	command.SetOut(&output)
+	command.SetArgs([]string{commandEngineeringSourceID, failureClassFlag, providerFailureClass, failureClassFlag, providerFailureClass, "--dry-run"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("source retry: %v", err)
+	}
+	if host.retryID != commandEngineeringSourceID || !host.retryDryRun || len(host.retryClasses) != 1 || host.retryClasses[0] != providerFailureClass {
+		t.Fatalf("source retry request = id %q classes %#v dry-run %v", host.retryID, host.retryClasses, host.retryDryRun)
+	}
+	for _, required := range []string{`"matched":2`, `"requeued":0`, `"operation_ids":["maintenance-a","maintenance-b"]`} {
+		if !strings.Contains(output.String(), required) {
+			t.Fatalf("source retry JSON missing %s: %s", required, output.String())
+		}
+	}
+	if host.stopCalls != 1 {
+		t.Fatalf("source retry stop calls = %d", host.stopCalls)
+	}
+
+	host.retryErr = app.ErrSourceRetryConflict
+	host.retryResult = app.SourceMaintenanceRetryResult{
+		SourceID: commandEngineeringSourceID, Matched: 2, Rejected: 1,
+		OperationIDs: []domain.OperationID{"maintenance-a", "maintenance-invalid"},
+	}
+	output.Reset()
+	rejected := newSourceRetryCommand()
+	rejected.SetOut(&output)
+	rejected.SetArgs([]string{commandEngineeringSourceID, failureClassFlag, providerFailureClass})
+	if err := rejected.Execute(); !errors.Is(err, app.ErrSourceRetryConflict) || !strings.Contains(output.String(), `"rejected":1`) {
+		t.Fatalf("rejected retry = %v, JSON %s", err, output.String())
+	}
+}
+
 func TestSourceCommandsUseRealHostWithMaintainer(t *testing.T) {
 	original := newLocalSourceSession
 	t.Cleanup(func() { newLocalSourceSession = original })
@@ -175,6 +241,62 @@ func TestSourceCommandsUseRealHostWithMaintainer(t *testing.T) {
 	if !strings.Contains(output.String(), `"status":"succeeded"`) {
 		t.Fatalf("status JSON: %s", output.String())
 	}
+	var status domain.SourceStatus
+	if err := json.Unmarshal(output.Bytes(), &status); err != nil || len(status.Maintenance.Samples) != 1 {
+		t.Fatalf("decode source status = %#v, err = %v, JSON %s", status, err, output.String())
+	}
+	operationID := status.Maintenance.Samples[0].OperationID
+	recoveryHost, err := knowl.New(context.Background(), knowl.Options{Config: config, Maintainer: provider.Fixture{}})
+	if err != nil {
+		t.Fatalf("open recovery host: %v", err)
+	}
+	if err := recoveryHost.Operations().Fail(context.Background(), operationID, domain.Failure{
+		Class: providerFailureClass, Reason: "provider_run", OperationID: string(operationID),
+	}); err != nil {
+		t.Fatalf("seed terminal provider failure: %v", err)
+	}
+	if err := recoveryHost.Stop(context.Background()); err != nil {
+		t.Fatalf("close recovery host: %v", err)
+	}
+
+	output.Reset()
+	previewCommand := newSourceRetryCommand()
+	previewCommand.SetOut(&output)
+	previewCommand.SetArgs([]string{commandEngineeringSourceID, failureClassFlag, providerFailureClass, "--dry-run"})
+	if err := previewCommand.Execute(); err != nil {
+		t.Fatalf("source retry preview: %v", err)
+	}
+	var preview app.SourceMaintenanceRetryResult
+	if err := json.Unmarshal(output.Bytes(), &preview); err != nil || preview.Matched != 1 || preview.Requeued != 0 ||
+		len(preview.OperationIDs) != 1 || preview.OperationIDs[0] != operationID {
+		t.Fatalf("source retry preview = %#v, err = %v, JSON %s", preview, err, output.String())
+	}
+
+	output.Reset()
+	retryCommand := newSourceRetryCommand()
+	retryCommand.SetOut(&output)
+	retryCommand.SetArgs([]string{commandEngineeringSourceID, failureClassFlag, providerFailureClass})
+	if err := retryCommand.Execute(); err != nil {
+		t.Fatalf("source retry: %v", err)
+	}
+	var retried app.SourceMaintenanceRetryResult
+	if err := json.Unmarshal(output.Bytes(), &retried); err != nil || retried.Matched != 1 || retried.Requeued != 1 {
+		t.Fatalf("source retry result = %#v, err = %v, JSON %s", retried, err, output.String())
+	}
+
+	output.Reset()
+	statusCommand = newSourceStatusCommand()
+	statusCommand.SetOut(&output)
+	statusCommand.SetArgs([]string{commandEngineeringSourceID})
+	if err := statusCommand.Execute(); err != nil {
+		t.Fatalf("source status after retry: %v", err)
+	}
+	status = domain.SourceStatus{}
+	if err := json.Unmarshal(output.Bytes(), &status); err != nil || status.Maintenance.Counts.Queued != 1 ||
+		status.Maintenance.Counts.Failed != 0 || len(status.Maintenance.Samples) != 1 ||
+		status.Maintenance.Samples[0].OperationID != operationID || status.Maintenance.Samples[0].ManualRetryCount != 1 {
+		t.Fatalf("source status after retry = %#v, err = %v, JSON %s", status.Maintenance, err, output.String())
+	}
 }
 
 type stubLocalSourceHost struct {
@@ -185,6 +307,11 @@ type stubLocalSourceHost struct {
 	stopCalls    int
 	syncErr      error
 	stopErr      error
+	retryID      domain.SourceID
+	retryClasses []string
+	retryDryRun  bool
+	retryResult  app.SourceMaintenanceRetryResult
+	retryErr     error
 }
 
 func (host *stubLocalSourceHost) Sources() []domain.Source { return host.sources }
@@ -208,6 +335,20 @@ func (host *stubLocalSourceHost) SourceStatus(_ context.Context, id domain.Sourc
 			Samples: []domain.MaintenanceSample{{DocumentID: "docs/page.md", Revision: "revision-1", OperationID: "maintenance-operation", Status: domain.StatusReceived}},
 		},
 	}, nil
+}
+
+func (host *stubLocalSourceHost) RetrySourceMaintenance(_ context.Context, id domain.SourceID, failureClasses []string, dryRun bool) (app.SourceMaintenanceRetryResult, error) {
+	host.retryID = id
+	host.retryClasses = append([]string(nil), failureClasses...)
+	host.retryDryRun = dryRun
+	result := host.retryResult
+	if result.SourceID == "" {
+		result.SourceID = id
+	}
+	if result.OperationIDs == nil {
+		result.OperationIDs = make([]domain.OperationID, 0)
+	}
+	return result, host.retryErr
 }
 
 func (host *stubLocalSourceHost) Stop(context.Context) error {

@@ -3,9 +3,12 @@ package knowl
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +23,9 @@ const (
 	defaultSchedulerBatch       = 16
 	defaultSchedulerScan        = 5 * time.Second
 	defaultSchedulerWorkLease   = 30 * time.Second
+	defaultRetryAttempts        = 3
+	defaultRetryInitialDelay    = 30 * time.Second
+	defaultRetryMaximumDelay    = 5 * time.Minute
 	descriptorUnavailableClass  = "descriptor_unavailable"
 	schedulerScanFailureClass   = "scheduler_scan"
 	schedulerRunnerFailureClass = "runner_interrupted"
@@ -54,6 +60,9 @@ type schedulerOptions struct {
 	descriptorFailureBatch int
 	scanInterval           time.Duration
 	workLeaseDuration      time.Duration
+	retryAttempts          int
+	retryInitialDelay      time.Duration
+	retryMaximumDelay      time.Duration
 	now                    func() time.Time
 	newToken               func() (string, error)
 	scanTicks              <-chan time.Time
@@ -108,6 +117,18 @@ func normalizeSchedulerOptions(options schedulerOptions) schedulerOptions {
 	}
 	if options.workLeaseDuration <= 0 {
 		options.workLeaseDuration = defaultSchedulerWorkLease
+	}
+	if options.retryAttempts <= 0 {
+		options.retryAttempts = defaultRetryAttempts
+	}
+	if options.retryInitialDelay <= 0 {
+		options.retryInitialDelay = defaultRetryInitialDelay
+	}
+	if options.retryMaximumDelay <= 0 {
+		options.retryMaximumDelay = defaultRetryMaximumDelay
+	}
+	if options.retryMaximumDelay < options.retryInitialDelay {
+		options.retryMaximumDelay = options.retryInitialDelay
 	}
 	if options.now == nil {
 		options.now = func() time.Time { return time.Now().UTC() }
@@ -284,18 +305,44 @@ func (scheduler *operationScheduler) cycle(ctx context.Context) {
 			return
 		}
 		claimed++
-		result, runErr := scheduler.runClaim(ctx, claim)
+		result, leaseToken, runErr := scheduler.runClaim(ctx, claim)
+		nextRetryAt, transitionErr := scheduler.handleTransientFailure(ctx, claim, leaseToken, &result, runErr)
 		failureClass := ""
+		failureReason := ""
+		failureDetail := ""
 		event := log.Info()
 		if runErr != nil {
 			event = log.Error()
 			failureClass = schedulerRunnerFailureClass
-			if result.Operation.Failure != nil {
+			if failure, ok := app.ClassifyExecutionFailure(runErr); ok {
+				failureClass = failure.Class
+				failureReason = failure.Reason
+			}
+			if result.Operation.Failure != nil && app.ValidateSafeFailure(*result.Operation.Failure, false) {
 				failureClass = result.Operation.Failure.Class
+				failureReason = result.Operation.Failure.Reason
+			}
+			var detailed interface{ SafeDetail() string }
+			if errors.As(runErr, &detailed) {
+				failureDetail = strings.TrimSpace(detailed.SafeDetail())
 			}
 		}
 		event.Str("class", failureClass).Str("operation_id", string(claim.Operation.ID)).
-			Str("maintenance_status", string(result.Operation.Status))
+			Str("maintenance_status", string(result.Operation.Status)).
+			Int("work_attempt", claim.Operation.WorkAttempt).
+			Int("retry_attempt", claim.Operation.RetryAttempt)
+		if failureReason != "" {
+			event.Str("reason", failureReason)
+		}
+		if failureDetail != "" {
+			event.Str("detail", failureDetail)
+		}
+		if !nextRetryAt.IsZero() {
+			event.Time("next_retry_at", nextRetryAt)
+		}
+		if transitionErr != nil && !errors.Is(transitionErr, context.Canceled) {
+			event.Bool("retry_transition_failed", true)
+		}
 		document := claim.Descriptor.Source.SourceDocument
 		if document != (domain.SourceDocument{}) {
 			event.Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
@@ -328,22 +375,21 @@ func (scheduler *operationScheduler) claim(ctx context.Context) (domain.WorkClai
 	})
 }
 
-func (scheduler *operationScheduler) runClaim(ctx context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+func (scheduler *operationScheduler) runClaim(ctx context.Context, claim domain.WorkClaim) (app.IngestResult, string, error) {
 	executionCtx, cancelExecution := context.WithCancel(ctx)
-	renewCtx, stopRenewal := context.WithCancel(ctx)
-	renewalDone := make(chan struct{})
+	stopRenewal := make(chan struct{})
+	renewalDone := make(chan string, 1)
 	go func() {
-		defer close(renewalDone)
-		scheduler.renew(renewCtx, cancelExecution, claim)
+		renewalDone <- scheduler.renew(ctx, stopRenewal, cancelExecution, claim)
 	}()
 	result, err := scheduler.runner.RunToTerminal(executionCtx, claim)
-	stopRenewal()
-	<-renewalDone
+	close(stopRenewal)
+	leaseToken := <-renewalDone
 	cancelExecution()
-	return result, err
+	return result, leaseToken, err
 }
 
-func (scheduler *operationScheduler) renew(ctx context.Context, cancelExecution context.CancelFunc, claim domain.WorkClaim) {
+func (scheduler *operationScheduler) renew(ctx context.Context, stop <-chan struct{}, cancelExecution context.CancelFunc, claim domain.WorkClaim) string {
 	interval := scheduler.options.workLeaseDuration / 3
 	if interval <= 0 {
 		interval = time.Nanosecond
@@ -354,22 +400,83 @@ func (scheduler *operationScheduler) renew(ctx context.Context, cancelExecution 
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return currentToken
+		case <-stop:
+			return currentToken
 		case <-ticks:
 			token, err := scheduler.options.newToken()
 			if err != nil {
 				cancelExecution()
-				return
+				return ""
 			}
 			now := scheduler.options.now().UTC()
 			next := domain.WorkLease{Token: token, ExpiresAt: now.Add(scheduler.options.workLeaseDuration)}
 			if err := scheduler.operations.RenewClaim(ctx, scheduler.scope, claim.Operation.ID, currentToken, next); err != nil {
 				cancelExecution()
-				return
+				return ""
 			}
 			currentToken = next.Token
 		}
 	}
+}
+
+func (scheduler *operationScheduler) handleTransientFailure(
+	ctx context.Context,
+	claim domain.WorkClaim,
+	leaseToken string,
+	result *app.IngestResult,
+	runErr error,
+) (time.Time, error) {
+	failureInfo, classified := app.ClassifyExecutionFailure(runErr)
+	if !classified || !failureInfo.Retryable || errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || ctx.Err() != nil {
+		return time.Time{}, nil
+	}
+	failure := domain.Failure{
+		Class: failureInfo.Class, Reason: failureInfo.Reason, OperationID: string(claim.Operation.ID),
+	}
+	result.Operation = claim.Operation
+	result.Operation.Failure = &failure
+	if claim.Operation.RetryAttempt >= scheduler.options.retryAttempts {
+		if err := scheduler.operations.FailClaim(ctx, scheduler.scope, claim.Operation.ID, leaseToken, failure); err != nil {
+			return time.Time{}, err
+		}
+		result.Operation.Status = domain.StatusFailed
+		return time.Time{}, nil
+	}
+	readyAt := scheduler.options.now().UTC().Add(scheduler.retryDelay(claim.Operation.ID, claim.Operation.RetryAttempt))
+	if err := scheduler.operations.ScheduleRetry(ctx, scheduler.scope, claim.Operation.ID, leaseToken, failure, readyAt); err != nil {
+		return time.Time{}, err
+	}
+	result.Operation.ReadyAt = readyAt
+	return readyAt, nil
+}
+
+func (scheduler *operationScheduler) retryDelay(id domain.OperationID, attempt int) time.Duration {
+	delay := scheduler.options.retryInitialDelay
+	for step := 1; step < attempt && delay < scheduler.options.retryMaximumDelay; step++ {
+		if delay > scheduler.options.retryMaximumDelay/2 {
+			delay = scheduler.options.retryMaximumDelay
+			break
+		}
+		delay *= 2
+	}
+	if delay >= scheduler.options.retryMaximumDelay {
+		return scheduler.options.retryMaximumDelay
+	}
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(id))
+	var encodedAttempt [8]byte
+	binary.LittleEndian.PutUint64(encodedAttempt[:], uint64(max(attempt, 0)))
+	_, _ = hash.Write(encodedAttempt[:])
+	jitterRange := delay / 5
+	if jitterRange <= 0 {
+		return delay
+	}
+	jitter := time.Duration(hash.Sum64() % uint64(jitterRange+1))
+	if delay+jitter > scheduler.options.retryMaximumDelay {
+		return scheduler.options.retryMaximumDelay
+	}
+	return delay + jitter
 }
 
 func (scheduler *operationScheduler) ticks(injected <-chan time.Time, interval time.Duration) (<-chan time.Time, func()) {

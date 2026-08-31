@@ -133,7 +133,7 @@ func TestMultiSourceDocumentationSurfacesStayAligned(t *testing.T) {
 			t.Fatalf("read %s: %v", relative, err)
 		}
 		text := string(content)
-		for _, required := range []string{"raw/", "semantic", "provider"} {
+		for _, required := range []string{"raw/", "semantic", providerFailureClass} {
 			if !strings.Contains(text, required) {
 				t.Errorf("%s missing %q", relative, required)
 			}
@@ -167,6 +167,10 @@ func TestActiveDocumentationDescribesSemanticWikiMaintenance(t *testing.T) {
 		operationsDocRelativePath: {
 			"Bootstrap is optional",
 			"successful sync reports raw acceptance and maintenance reservation, not LLM completion",
+			"source retry engineering --failure-class provider --dry-run",
+			"limited to three total work attempts",
+			"maintenance.counts.retrying",
+			"provider error text",
 		},
 		sidecarDocRelativePath: {
 			"Initial bootstrap is optional",
