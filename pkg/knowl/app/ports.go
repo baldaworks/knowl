@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
@@ -62,12 +63,14 @@ type OperationStore interface {
 	ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, lease knowl.WorkLease) (knowl.WorkClaim, error)
 	RenewClaim(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, currentToken string, next knowl.WorkLease) error
 	ReleaseClaim(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, token string) error
+	ScheduleRetry(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, token string, failure knowl.Failure, readyAt time.Time) error
 	DescriptorFailures(ctx context.Context, scope knowl.ScopeRef, limit int) ([]knowl.OperationID, error)
 	SavePlan(ctx context.Context, id knowl.OperationID, summary knowl.PlanSummary) error
 	MarkAwaitingReview(ctx context.Context, id knowl.OperationID) error
 	MarkApplying(ctx context.Context, id knowl.OperationID, lease knowl.Lease) error
 	CommitOutcome(ctx context.Context, id knowl.OperationID, commit knowl.ContentCommit) error
 	Fail(ctx context.Context, id knowl.OperationID, failure knowl.Failure) error
+	FailClaim(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, token string, failure knowl.Failure) error
 	Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error)
 }
 

@@ -106,6 +106,7 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 		"knowl retrieve <text>",
 		"knowl ingest --input request.json",
 		"knowl operation <operation-id>",
+		"knowl source retry <source-id> --failure-class provider --dry-run",
 		"knowl hierarchy reconcile",
 		startCommandUsage,
 		"Bootstrap creates a Knowl-owned workspace",
@@ -250,7 +251,7 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 			name:      sourceCommandName,
 			cmd:       newSourceCommand(),
 			wantShort: "Inspect and synchronize configured knowledge sources",
-			wantSubs:  []string{sourceListCommandName, sourceSyncCommandName, sourceStatusCommandName},
+			wantSubs:  []string{sourceListCommandName, sourceSyncCommandName, sourceStatusCommandName, sourceRetryCommandName},
 		},
 	}
 

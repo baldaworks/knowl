@@ -20,6 +20,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	testProviderFailureClass  = "provider"
+	testProviderFailureReason = "provider_run"
+)
+
 func TestTerminalRouterDispatchesByDurableWorkKind(t *testing.T) {
 	t.Parallel()
 
@@ -73,13 +78,16 @@ func TestSchedulerLogsSafeMaintenanceCorrelation(t *testing.T) {
 	store := &schedulerStore{claims: []domain.WorkClaim{claim}}
 	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
 		claim.Operation.Status = domain.StatusFailed
-		claim.Operation.Failure = &domain.Failure{Class: "provider", OperationID: string(claim.Operation.ID)}
-		return app.IngestResult{Operation: claim.Operation}, errors.New("provider-secret-detail")
+		claim.Operation.Failure = &domain.Failure{Class: testProviderFailureClass, OperationID: string(claim.Operation.ID)}
+		return app.IngestResult{Operation: claim.Operation}, schedulerSafeDetailError{}
 	}), schedulerOptions{claimBatch: 1})
 	scheduler.cycle(context.Background())
 
 	encoded := output.String()
-	for _, required := range []string{"engineering", "architecture.md", "revision-1", string(claim.Operation.ID), "provider"} {
+	for _, required := range []string{
+		"engineering", "architecture.md", "revision-1", string(claim.Operation.ID), testProviderFailureClass,
+		`content validation failed for \"wiki/concepts/orphan.md\" (catalog.reconciliation_required)`,
+	} {
 		if !strings.Contains(encoded, required) {
 			t.Errorf("maintenance log missing %q: %s", required, encoded)
 		}
@@ -88,6 +96,152 @@ func TestSchedulerLogsSafeMaintenanceCorrelation(t *testing.T) {
 		if strings.Contains(encoded, secret) {
 			t.Errorf("maintenance log leaked %q: %s", secret, encoded)
 		}
+	}
+}
+
+func TestSchedulerSchedulesTransientRetryThenSucceeds(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(&output)
+	t.Cleanup(func() { log.Logger = previous })
+
+	first := schedulerClaim("transient-recovery")
+	first.Operation.WorkAttempt = 1
+	first.Operation.RetryAttempt = 1
+	store := &schedulerStore{claims: []domain.WorkClaim{first}}
+	calls := 0
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		calls++
+		if calls == 1 {
+			return app.IngestResult{Operation: claim.Operation}, schedulerClassifiedError{
+				message: "provider credential and prompt body", class: testProviderFailureClass, reason: testProviderFailureReason, retryable: true,
+			}
+		}
+		claim.Operation.Status = domain.StatusCommitted
+		return app.IngestResult{Operation: claim.Operation}, nil
+	}), schedulerOptions{retryInitialDelay: 30 * time.Second, retryMaximumDelay: 5 * time.Minute})
+	scheduler.cycle(context.Background())
+
+	retries := store.recordedRetries()
+	if len(retries) != 1 {
+		t.Fatalf("scheduled retries = %#v, want one", retries)
+	}
+	wantReadyAt := scheduler.options.now().UTC().Add(scheduler.retryDelay(first.Operation.ID, first.Operation.RetryAttempt))
+	if retries[0].id != first.Operation.ID || retries[0].token != "test-token" || retries[0].failure.Class != testProviderFailureClass ||
+		retries[0].failure.Reason != testProviderFailureReason || !retries[0].readyAt.Equal(wantReadyAt) {
+		t.Fatalf("scheduled retry = %#v, want ready at %s", retries[0], wantReadyAt)
+	}
+	encoded := output.String()
+	for _, required := range []string{testProviderFailureReason, "work_attempt", "retry_attempt", "next_retry_at"} {
+		if !strings.Contains(encoded, required) {
+			t.Errorf("retry log missing %q: %s", required, encoded)
+		}
+	}
+	for _, secret := range []string{"credential", "prompt body"} {
+		if strings.Contains(encoded, secret) {
+			t.Errorf("retry log leaked %q: %s", secret, encoded)
+		}
+	}
+
+	second := first
+	second.Operation.WorkAttempt = 2
+	second.Operation.RetryAttempt = 2
+	store.addClaim(second)
+	scheduler.cycle(context.Background())
+	if calls != 2 || len(store.recordedRetries()) != 1 || len(store.recordedClaimFailures()) != 0 {
+		t.Fatalf("recovered retry calls=%d schedules=%#v failures=%#v", calls, store.recordedRetries(), store.recordedClaimFailures())
+	}
+}
+
+func TestSchedulerExhaustsTransientRetryBudget(t *testing.T) {
+	claim := schedulerClaim("transient-exhausted")
+	claim.Operation.WorkAttempt = 7
+	claim.Operation.RetryAttempt = defaultRetryAttempts
+	store := &schedulerStore{claims: []domain.WorkClaim{claim}}
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		return app.IngestResult{Operation: claim.Operation}, schedulerClassifiedError{
+			message: "sensitive provider outage", class: testProviderFailureClass, reason: testProviderFailureReason, retryable: true,
+		}
+	}), schedulerOptions{})
+	scheduler.cycle(context.Background())
+
+	if retries := store.recordedRetries(); len(retries) != 0 {
+		t.Fatalf("exhausted operation scheduled retries: %#v", retries)
+	}
+	failures := store.recordedClaimFailures()
+	if len(failures) != 1 || failures[0].id != claim.Operation.ID || failures[0].failure.Class != testProviderFailureClass || failures[0].failure.Reason != testProviderFailureReason {
+		t.Fatalf("exhausted claim failures = %#v", failures)
+	}
+}
+
+func TestSchedulerSchedulesRetryWithRenewedLeaseToken(t *testing.T) {
+	renewTicks := make(chan time.Time, 1)
+	claim := schedulerClaim("renewed-retry")
+	claim.Operation.WorkAttempt = 1
+	claim.Operation.RetryAttempt = 1
+	store := &schedulerStore{claims: []domain.WorkClaim{claim}, renewCalls: make(chan struct{}, 1)}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	tokens := []string{"initial-token", "renewed-token"}
+	var tokenMu sync.Mutex
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		close(started)
+		<-release
+		return app.IngestResult{Operation: claim.Operation}, schedulerClassifiedError{
+			message: "provider unavailable", class: testProviderFailureClass, reason: testProviderFailureReason, retryable: true,
+		}
+	}), schedulerOptions{
+		renewTicks: renewTicks,
+		newToken: func() (string, error) {
+			tokenMu.Lock()
+			defer tokenMu.Unlock()
+			if len(tokens) == 0 {
+				return "unused-token", nil
+			}
+			token := tokens[0]
+			tokens = tokens[1:]
+			return token, nil
+		},
+	})
+	done := make(chan struct{})
+	go func() {
+		scheduler.cycle(context.Background())
+		close(done)
+	}()
+	<-started
+	renewTicks <- time.Now()
+	select {
+	case <-store.renewCalls:
+	case <-time.After(time.Second):
+		t.Fatal("retry fixture did not renew its lease")
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("retry fixture did not finish")
+	}
+	retries := store.recordedRetries()
+	if len(retries) != 1 || retries[0].token != "renewed-token" {
+		t.Fatalf("retry lease token = %#v, want renewed token", retries)
+	}
+}
+
+func TestSchedulerRetryDelayIsDeterministicExponentialAndBounded(t *testing.T) {
+	scheduler := &operationScheduler{options: normalizeSchedulerOptions(schedulerOptions{})}
+	first := scheduler.retryDelay("operation-a", 1)
+	if first < defaultRetryInitialDelay || first > defaultRetryInitialDelay+defaultRetryInitialDelay/5 {
+		t.Fatalf("first retry delay = %s", first)
+	}
+	if repeat := scheduler.retryDelay("operation-a", 1); repeat != first {
+		t.Fatalf("repeat retry delay = %s, want %s", repeat, first)
+	}
+	second := scheduler.retryDelay("operation-a", 2)
+	if second < 2*defaultRetryInitialDelay || second > 2*defaultRetryInitialDelay+(2*defaultRetryInitialDelay)/5 {
+		t.Fatalf("second retry delay = %s", second)
+	}
+	if capped := scheduler.retryDelay("operation-a", 20); capped != defaultRetryMaximumDelay {
+		t.Fatalf("capped retry delay = %s, want %s", capped, defaultRetryMaximumDelay)
 	}
 }
 
@@ -372,6 +526,9 @@ func TestSchedulerRenewalLossCancelsWithoutFailOrRelease(t *testing.T) {
 	if store.releaseCount() != 0 {
 		t.Fatalf("renewal loss released work lease %d times, want expiry", store.releaseCount())
 	}
+	if len(store.recordedRetries()) != 0 || len(store.recordedClaimFailures()) != 0 {
+		t.Fatalf("renewal loss changed retry state: retries=%#v failures=%#v", store.recordedRetries(), store.recordedClaimFailures())
+	}
 }
 
 func TestSchedulerShutdownStopsClaimsAndAllowsBoundedCompletion(t *testing.T) {
@@ -461,6 +618,9 @@ func TestSchedulerShutdownDeadlineCancelsActiveExecution(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expired shutdown bound did not cancel active execution")
 	}
+	if len(store.recordedRetries()) != 0 || len(store.recordedClaimFailures()) != 0 {
+		t.Fatalf("shutdown cancellation changed retry state: retries=%#v failures=%#v", store.recordedRetries(), store.recordedClaimFailures())
+	}
 }
 
 type runnerFunc func(context.Context, domain.WorkClaim) (app.IngestResult, error)
@@ -489,8 +649,23 @@ type schedulerStore struct {
 	renewErr           error
 	renewCalls         chan struct{}
 	releases           int
+	retries            []schedulerRetry
+	claimFailures      []schedulerClaimFailure
 	claimCalls         int
 	inspectionCalls    []int
+}
+
+type schedulerRetry struct {
+	id      domain.OperationID
+	token   string
+	failure domain.Failure
+	readyAt time.Time
+}
+
+type schedulerClaimFailure struct {
+	id      domain.OperationID
+	token   string
+	failure domain.Failure
 }
 
 func (store *schedulerStore) addClaim(claim domain.WorkClaim) {
@@ -554,6 +729,20 @@ func (store *schedulerStore) ReleaseClaim(context.Context, domain.ScopeRef, doma
 	return nil
 }
 
+func (store *schedulerStore) ScheduleRetry(_ context.Context, _ domain.ScopeRef, id domain.OperationID, token string, failure domain.Failure, readyAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.retries = append(store.retries, schedulerRetry{id: id, token: token, failure: failure, readyAt: readyAt})
+	return nil
+}
+
+func (store *schedulerStore) FailClaim(_ context.Context, _ domain.ScopeRef, id domain.OperationID, token string, failure domain.Failure) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.claimFailures = append(store.claimFailures, schedulerClaimFailure{id: id, token: token, failure: failure})
+	return nil
+}
+
 func (store *schedulerStore) Fail(_ context.Context, id domain.OperationID, failure domain.Failure) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -571,6 +760,18 @@ func (store *schedulerStore) recordedFailures() []domain.Failure {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	return append([]domain.Failure(nil), store.failures...)
+}
+
+func (store *schedulerStore) recordedRetries() []schedulerRetry {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return append([]schedulerRetry(nil), store.retries...)
+}
+
+func (store *schedulerStore) recordedClaimFailures() []schedulerClaimFailure {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return append([]schedulerClaimFailure(nil), store.claimFailures...)
 }
 
 func (store *schedulerStore) releaseCount() int {
@@ -601,12 +802,38 @@ func schedulerClaim(id domain.OperationID) domain.WorkClaim {
 	return domain.WorkClaim{Operation: domain.Operation{ID: id, Key: domain.OperationKey{Scope: DefaultScope}, Status: domain.StatusReceived}}
 }
 
+type schedulerClassifiedError struct {
+	message   string
+	class     string
+	reason    string
+	retryable bool
+}
+
+func (failure schedulerClassifiedError) Error() string         { return failure.message }
+func (failure schedulerClassifiedError) FailureClass() string  { return failure.class }
+func (failure schedulerClassifiedError) FailureReason() string { return failure.reason }
+func (failure schedulerClassifiedError) Retryable() bool       { return failure.retryable }
+
+type schedulerSafeDetailError struct{}
+
+func (schedulerSafeDetailError) Error() string {
+	return "provider-secret-detail"
+}
+
+func (schedulerSafeDetailError) SafeDetail() string {
+	return `content validation failed for "wiki/concepts/orphan.md" (catalog.reconciliation_required)`
+}
+
 func newTestScheduler(t *testing.T, store app.OperationStore, runner terminalRunner, options schedulerOptions) *operationScheduler {
 	t.Helper()
 	options.scanInterval = time.Hour
 	options.workLeaseDuration = 9 * time.Second
-	options.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
-	options.newToken = func() (string, error) { return "test-token", nil }
+	if options.now == nil {
+		options.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+	}
+	if options.newToken == nil {
+		options.newToken = func() (string, error) { return "test-token", nil }
+	}
 	scheduler, err := newOperationScheduler(store, runner, DefaultScope, options)
 	if err != nil {
 		t.Fatalf("new scheduler: %v", err)

@@ -101,6 +101,22 @@ func TestOKFSearchTagsMigrationIsPostgresNative(t *testing.T) {
 	}
 }
 
+func TestOperationRetryMigrationIsAdditive(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00011_operation_retry.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"failure_reason TEXT NOT NULL DEFAULT ''",
+		"retry_attempt INTEGER NOT NULL DEFAULT 0",
+		"manual_retry_count INTEGER NOT NULL DEFAULT 0",
+	} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("operation retry migration missing %q", required)
+		}
+	}
+}
+
 func TestSourceMaintenanceMigrationIsAdditive(t *testing.T) {
 	content, err := migrationFiles.ReadFile("migrations/00006_source_maintenance.sql")
 	if err != nil {
@@ -200,6 +216,12 @@ func runStoreContract(t *testing.T, dsn string) {
 				t.Fatalf("expire contract work lease: %v", err)
 			}
 		},
+		ReadyNow: func(t *testing.T, _ knowl.ScopeRef, id knowl.OperationID) {
+			t.Helper()
+			if _, err := store.db.ExecContext(ctx, `UPDATE knowl_operations SET work_ready_at = $1 WHERE operation_id = $2`, time.Unix(1, 0).UTC(), id); err != nil {
+				t.Fatalf("ready contract work: %v", err)
+			}
+		},
 		WorkAttempts: func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID) int {
 			t.Helper()
 			var attempts int
@@ -210,6 +232,57 @@ func runStoreContract(t *testing.T, dsn string) {
 		},
 		IsConflict: func(err error) bool { return errors.Is(err, ErrConflict) },
 		Scope:      knowl.ScopeRef(string(scope) + "_shared_contract"),
+	})
+	storetest.RunSourceRetryContract(t, storetest.SourceRetryHarness{
+		Store: store,
+		Seed: func(t *testing.T, fixtureScope knowl.ScopeRef, sourceID knowl.SourceID, fixtures []storetest.SourceRetryFixture) {
+			t.Helper()
+			now := time.Now().UTC()
+			if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_sources (scope, source_id, source_type, config_digest, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5) ON CONFLICT(scope, source_id) DO NOTHING`, fixtureScope, sourceID, knowl.SourceTypeFilesystem, strings.Repeat("a", 64), now); err != nil {
+				t.Fatal(err)
+			}
+			for _, fixture := range fixtures {
+				var workExpiry, applyExpiry any
+				leaseDelta := time.Hour
+				if fixture.LeasesExpired {
+					leaseDelta = -time.Hour
+				}
+				if fixture.WorkToken != "" {
+					workExpiry = time.Now().UTC().Add(leaseDelta)
+				}
+				if fixture.ApplyToken != "" {
+					applyExpiry = time.Now().UTC().Add(leaseDelta)
+				}
+				if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_operations (
+					operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest,
+					status, plan_digest, failure_class, failure_reason, commit_generation, lease_token, lease_expires_at,
+					created_at, updated_at, work_attempt, work_lease_token, work_lease_expires_at, work_ready_at,
+					work_kind, retry_attempt, manual_retry_count
+				) VALUES ($1, $2, 'fixture', $1, '1', $3, $4, $5, 'planned-digest', $6, $7, 'commit-generation', $8, $9, $10, $10, $11, $12, $13, $10, $14, $15, $16)`,
+					fixture.OperationID, fixture.OperationScope, strings.Repeat("b", 64), testSchemaDigest,
+					fixture.Status, fixture.FailureClass, fixture.FailureReason, fixture.ApplyToken, applyExpiry, now,
+					fixture.WorkAttempt, fixture.WorkToken, workExpiry, fixture.Kind, fixture.RetryAttempt, fixture.ManualRetryCount); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_source_documents (
+					scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id,
+					last_seen_run_id, created_at, updated_at
+				) VALUES ($1, $2, $3, $4, '{}', $5, $6, 'retry-run', $7, $7)`,
+					fixtureScope, sourceID, fixture.DocumentID, fixture.Revision, fixture.MaintenanceRevision, fixture.OperationID, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+		},
+		Audit: func(t *testing.T, id knowl.OperationID) storetest.SourceRetryAudit {
+			t.Helper()
+			var audit storetest.SourceRetryAudit
+			if err := store.db.QueryRowContext(ctx, `SELECT plan_digest, commit_generation, work_lease_token, lease_token FROM knowl_operations WHERE operation_id = $1`, id).
+				Scan(&audit.PlanDigest, &audit.CommitGeneration, &audit.WorkToken, &audit.ApplyToken); err != nil {
+				t.Fatal(err)
+			}
+			return audit
+		},
+		Scope: knowl.ScopeRef(string(scope) + "_retry_contract"),
 	})
 	sourceScope := knowl.ScopeRef(string(scope) + "_source_contract")
 	storetest.RunSourceContract(t, storetest.SourceHarness{

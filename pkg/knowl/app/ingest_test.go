@@ -488,6 +488,51 @@ func TestRunToTerminalFailsPlannedOperationWithoutStage(t *testing.T) {
 	}
 }
 
+func TestRunToTerminalPreservesTransientClassifiedFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		retryable  bool
+		wantStatus knowl.OperationStatus
+	}{
+		{name: "transient", retryable: true, wantStatus: knowl.StatusReceived},
+		{name: "permanent", retryable: false, wantStatus: knowl.StatusFailed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			workspace, store, _, _ := newWorkflow(t, false, nil)
+			service, err := app.NewIngestService(workspace, store, store, classifiedFailureMaintainer{
+				err: classifiedTestError{class: "provider", reason: "provider_run", retryable: test.retryable},
+			}, app.IngestOptions{AutoApply: true})
+			if err != nil {
+				t.Fatalf("new ingest service: %v", err)
+			}
+			submission, err := service.Submit(ctx, sourceEnvelope([]byte("classified provider failure")))
+			if err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			result, runErr := service.RunToTerminal(ctx, claimReady(t, store, submission.Operation.Key.Scope))
+			if runErr == nil {
+				t.Fatal("RunToTerminal() error = nil")
+			}
+			operation, err := store.Operation(ctx, submission.Operation.Key.Scope, submission.Operation.ID)
+			if err != nil {
+				t.Fatalf("read operation: %v", err)
+			}
+			if operation.Status != test.wantStatus {
+				t.Fatalf("operation status = %q, want %q", operation.Status, test.wantStatus)
+			}
+			if test.retryable {
+				if operation.Failure != nil || result.Operation.Status == knowl.StatusFailed {
+					t.Fatalf("transient result = %#v, operation = %#v", result, operation)
+				}
+			} else if operation.Failure == nil || operation.Failure.Class != "provider" || operation.Failure.Reason != "provider_run" || result.Operation.Status != knowl.StatusFailed {
+				t.Fatalf("permanent result = %#v, operation = %#v", result, operation)
+			}
+		})
+	}
+}
+
 func TestRunToTerminalRetriesAfterCanonicalProjectionFailure(t *testing.T) {
 	ctx := context.Background()
 	index := &failOnceProjectionIndex{}
@@ -948,6 +993,23 @@ func (store *deadlineContentStore) ReadSource(ctx context.Context, source knowl.
 type deadlineMaintainer struct {
 	hasDeadline bool
 }
+
+type classifiedFailureMaintainer struct{ err error }
+
+func (maintainer classifiedFailureMaintainer) Plan(context.Context, knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
+	return knowl.ModelEditPlan{}, maintainer.err
+}
+
+type classifiedTestError struct {
+	class     string
+	reason    string
+	retryable bool
+}
+
+func (failure classifiedTestError) Error() string         { return failure.reason }
+func (failure classifiedTestError) FailureClass() string  { return failure.class }
+func (failure classifiedTestError) FailureReason() string { return failure.reason }
+func (failure classifiedTestError) Retryable() bool       { return failure.retryable }
 
 func (maintainer *deadlineMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
 	_, maintainer.hasDeadline = ctx.Deadline()

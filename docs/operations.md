@@ -209,6 +209,7 @@ an in-process Host without starting HTTP or scheduled runners:
 ./knowl source sync engineering
 ./knowl source sync --all
 ./knowl source status engineering
+./knowl source retry engineering --failure-class provider --dry-run
 ```
 
 To explicitly replace a valid flat root with source-independent semantic
@@ -260,9 +261,66 @@ work before readiness.
 
 A successful sync reports raw acceptance and maintenance reservation, not LLM
 completion. `source status` reports bounded maintenance counts and samples for
-queued, replayed, committed, and failed operations. Each sample correlates the
-source document/revision with its operation ID and stable failure class without
-including source bodies, prompts, or credentials.
+queued, retrying, replayed, committed, and failed operations. Each sample
+correlates the source document/revision with its operation ID. It also reports
+`work_attempt`, `retry_attempt`, `manual_retry_count`, and, when applicable,
+`failure_class`, a stable safe `failure_reason`, and `next_retry_at`. Source
+bodies, prompts, provider error text, credentials, and raw provider output are
+never included.
+
+Transient provider build, transport, and execution failures are retried by the
+operation scheduler. Each automatic retry cycle is limited to three total work
+attempts. The first retry waits at least 30 seconds; later delays grow
+exponentially with deterministic bounded positive jitter and never exceed five
+minutes. The deadline and attempt counters are durable, so restarting Knowl does
+not make work eligible early or reset its budget. Invalid, empty, oversized, or
+undecodable provider output is a permanent contract failure and is not retried
+automatically.
+
+`maintenance.counts.queued` covers non-terminal work that is ready now or is
+currently claimed. `maintenance.counts.retrying` covers unleased non-terminal
+work whose `next_retry_at` is in the future. `replayed` counts operations with
+more than one durable work attempt and can overlap another outcome. `failed`
+remains terminal until an operator explicitly recovers the operation.
+
+### Recovering failed source maintenance
+
+Deploy the corrected binary and let its additive store migration complete
+before recovering historical failures. Existing failed operations stay failed;
+Knowl does not automatically requeue them. Start with a class-filtered preview:
+
+```bash
+./knowl source status engineering
+./knowl source retry engineering --failure-class provider --dry-run
+```
+
+The retry result is structured JSON with `source_id`, `dry_run`, `matched`,
+`requeued`, `rejected`, `operation_ids`, and `truncated`. A preview returns the
+same bounded eligible operation set without changing state, so `requeued` is
+zero. Counts cover the complete match; `operation_ids` is limited to 100 entries
+and `truncated` says whether more matched.
+
+If the preview is expected, requeue exactly that failure class and observe it:
+
+```bash
+./knowl source retry engineering --failure-class provider
+./knowl source status engineering
+```
+
+Repeat `--failure-class` to select more than one class only after each class's
+root cause is fixed. The transition preserves operation identity and total work
+attempts, starts a fresh bounded retry cycle, increments `manual_retry_count`,
+and wakes the existing durable scheduler without starting source synchronization.
+The request fails atomically, with a non-zero exit, if any selected candidate is
+committed, stale, cross-scope, not source maintenance, or actively leased; no
+candidate is requeued in that case. The JSON result still reports the bounded
+candidate IDs and `rejected` count for safe diagnosis. Running the same command
+again after a successful requeue matches no terminal operations and makes no
+additional change.
+
+Recover `provider` failures first. Re-run a preview and inspect status before
+separately deciding whether corrected `source` or `staging` failures should be
+requeued. Never use a broad multi-class retry merely to clear a red status.
 
 The maintainer builds one root-reachable semantic OKF wiki. Related evidence
 from different sources may support the same page; retrieve returns all resolved

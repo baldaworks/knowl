@@ -154,6 +154,7 @@ Run one-shot local wrappers over the same KISS contract:
 ./knowl source list
 ./knowl source sync engineering
 ./knowl source status engineering
+./knowl source retry engineering --failure-class provider --dry-run
 ```
 
 These CLI commands are operator conveniences. They are not the primary product
@@ -261,7 +262,22 @@ deletions while raw history and previously curated knowledge remain.
 
 A successful source sync means raw acceptance plus durable maintenance
 reservation. LLM maintenance runs asynchronously; `source status` reports its
-bounded queued, replayed, committed, and failed counts and samples separately.
+bounded queued, retrying, replayed, committed, and failed counts and samples
+separately. Transient provider execution failures get at most three automatic
+attempts per cycle, starting with a 30-second durable delay and using bounded
+exponential jitter capped at five minutes.
+
+Historical terminal failures are never requeued automatically. Preview an exact,
+source-scoped recovery set before requeueing it:
+
+```bash
+./knowl source retry engineering --failure-class provider --dry-run
+./knowl source retry engineering --failure-class provider
+```
+
+The structured result includes matched, requeued, and rejected counts plus at
+most 100 operation IDs. See the [operations guide](docs/operations.md#recovering-failed-source-maintenance)
+for safe rollout and status interpretation.
 
 Container baseline example:
 
