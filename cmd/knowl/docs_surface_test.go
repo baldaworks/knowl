@@ -25,7 +25,8 @@ func TestPublicDocumentationSurface(t *testing.T) {
 		filepath.Join("examples", "source-to-wiki", "sources", "database-retention-policy.md"),
 		filepath.Join("examples", "source-to-wiki", "sources", "incident-response-runbook.md"),
 		filepath.Join("examples", "source-to-wiki", "wiki", "index.md"),
-		filepath.Join("examples", "source-to-wiki", "wiki", "catalogs", "engineering", "index.md"),
+		filepath.Join("examples", "source-to-wiki", "wiki", "log.md"),
+		filepath.Join("examples", "source-to-wiki", "wiki", "entities", "acme-cloud-platform.md"),
 	}
 	for _, relative := range canonicalFiles {
 		if _, err := os.Stat(filepath.Join(repoRoot, relative)); err != nil {

@@ -26,27 +26,24 @@ Knowl organizes these inputs into an **Open Knowledge Format (OKF)** Markdown wi
 ```text
 wiki/
 ├── index.md                              # Root catalog linking the knowledge base
-├── catalogs/
-│   └── engineering/
-│       └── index.md                      # Engineering catalog
+├── concepts/
+│   ├── authentication-and-session-security.md
+│   ├── data-retention-and-lifecycle.md
+│   └── incident-response-and-failover.md
 └── entities/
-    ├── architecture-overview.md          # Normalized entity page with OKF frontmatter
-    ├── authentication-service.md         # Normalized entity page with OKF frontmatter
-    ├── database-retention-policy.md      # Normalized entity page with OKF frontmatter
-    └── incident-response-runbook.md      # Normalized entity page with OKF frontmatter
+    └── acme-cloud-platform.md
 ```
 
 Every page contains exact provenance references linking back to the raw source file and immutable revision:
 
 ```yaml
 ---
-id: entities/authentication-service
-title: Authentication Service
-type: entity
-version: "0.2"
-parent: catalogs/engineering
-source_refs:
-  - wiki-filesystem:engineering-docs/authentication-service.md
+type: topic
+title: Authentication & Session Security
+knowl:
+  id: concepts/authentication-and-session-security
+  source_refs:
+    - wiki-filesystem:engineering-docs/authentication-service.md@72f58ee1af237dec1f3c78631782b5127f1b1e8748e2195d5f19c86137e7971c
 ---
 ```
 
@@ -75,27 +72,26 @@ runtime:
   providers:
     antigravity:
       type: antigravity_acp
-      antigravity_acp: {}
+      antigravity_acp:
+        model: gemini-3.7-flash-medium
 
 knowl:
   provider: antigravity
   workspace:
-    path: .
+    path: knowledge
   storage:
     type: sqlite
     sqlite:
-      path: .knowl/state.db
+      path: knowledge/.knowl/state.db
   scope: local
   sources:
     - id: engineering-docs
       type: filesystem
-      enabled: true
-      config:
-        filesystem:
-          root: sources
-          include:
-            - "**/*.md"
-          flavor: markdown
+      filesystem:
+        root: sources
+        include:
+          - "**/*.md"
+        flavor: markdown
 ```
 
 ---
