@@ -65,7 +65,7 @@ func TestValidateHierarchyPlanRendersDeterministicSemanticCatalogs(t *testing.T)
 	if parsedRoot.ObservedVersion != okf.Version || strings.Contains(string(root), "/concepts/") {
 		t.Fatalf("root catalog is not nested OKF v0.2:\n%s", root)
 	}
-	if !strings.Contains(string(root), "/catalogs/architecture/index.md") || !strings.Contains(string(root), "/catalogs/product/index.md") {
+	if !strings.Contains(string(root), "catalogs/architecture/index.md") || !strings.Contains(string(root), "catalogs/product/index.md") {
 		t.Fatalf("root links =\n%s", root)
 	}
 	product := contents[hierarchyProductCat]

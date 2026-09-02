@@ -107,7 +107,7 @@ func TestWorkspaceHierarchyStageRejectsUnsafeOrInvalidPlans(t *testing.T) {
 			plan.Mutations = []knowl.HierarchyMutation{{Action: knowl.SourceMutationDelete, Path: testIndexPath, ExpectedDigest: digestBytes(root)}}
 		}, want: ErrPlanConflict},
 		{name: "broken graph", mutate: func(_ *testing.T, _ *Workspace, plan *knowl.ValidatedHierarchyPlan) {
-			plan.Mutations[0].Content = []byte("---\nokf_version: \"0.2\"\n---\n# Broken\n* [Missing](/catalogs/missing/index.md)\n")
+			plan.Mutations[0].Content = []byte("---\nokf_version: \"0.2\"\n---\n# Broken\n* [Missing](catalogs/missing/index.md)\n")
 		}, want: ErrContentInvalid},
 	}
 	for _, test := range tests {
@@ -264,7 +264,7 @@ func newHierarchyWorkspace(t *testing.T) *Workspace {
 	writeCanonicalFixture(t, workspace, testPageOnePath, validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, ""))
 	writeCanonicalFixture(t, workspace, testHierarchyPageTwo, validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, ""))
 	writeRootCatalogTargets(t, workspace, "entities/one.md", "entities/two.md")
-	writeCanonicalFixture(t, workspace, testHierarchyOldPath, []byte("# Old\n\n* [One](/entities/one.md)\n"))
+	writeCanonicalFixture(t, workspace, testHierarchyOldPath, []byte("# Old\n\n* [One](../../entities/one.md)\n"))
 	return workspace
 }
 
@@ -283,10 +283,10 @@ func hierarchyStagePlan(t *testing.T, workspace *Workspace) knowl.ValidatedHiera
 	return knowl.ValidatedHierarchyPlan{
 		Scope: testScope, SchemaDigest: schema.Digest, SnapshotDigest: snapshotDigest,
 		Mutations: []knowl.HierarchyMutation{
-			{Action: knowl.SourceMutationWrite, Path: testIndexPath, ExpectedDigest: digestBytes(rootBefore), Content: []byte("---\nokf_version: \"0.2\"\n---\n# Knowl\n\n* [Architecture](/catalogs/architecture/index.md)\n* [Product](/catalogs/product/index.md)\n")},
-			{Action: knowl.SourceMutationWrite, Path: testHierarchyArchPath, Content: []byte("# Architecture\n\n* [One](/entities/one.md)\n")},
+			{Action: knowl.SourceMutationWrite, Path: testIndexPath, ExpectedDigest: digestBytes(rootBefore), Content: []byte("---\nokf_version: \"0.2\"\n---\n# Knowl\n\n* [Architecture](catalogs/architecture/index.md)\n* [Product](catalogs/product/index.md)\n")},
+			{Action: knowl.SourceMutationWrite, Path: testHierarchyArchPath, Content: []byte("# Architecture\n\n* [One](../../entities/one.md)\n")},
 			{Action: knowl.SourceMutationDelete, Path: testHierarchyOldPath, ExpectedDigest: digestBytes(oldBefore)},
-			{Action: knowl.SourceMutationWrite, Path: testHierarchyProdPath, Content: []byte("# Product\n\n* [Two](/entities/two.md)\n")},
+			{Action: knowl.SourceMutationWrite, Path: testHierarchyProdPath, Content: []byte("# Product\n\n* [Two](../../entities/two.md)\n")},
 		},
 	}
 }
