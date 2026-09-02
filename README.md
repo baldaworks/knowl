@@ -31,9 +31,10 @@ The intended shape is:
 sources -> Knowl -> grounded evidence -> host agent -> final answer
 ```
 
-See the [project-decisions host example](examples/project-decisions/README.md)
-for the complete ADR ingest, operation polling, provenance retrieval, and
-host-owned answer flow over MCP.
+See the [single-source showcase](examples/single-source-showcase/README.md)
+for building a project knowledge base from engineering documents using the
+one-shot run workflow, or [project-decisions](examples/project-decisions/README.md)
+for ADR ingest, operation polling, and provenance retrieval over MCP.
 
 The default path is a sidecar service with SQLite. Connect agents over MCP;
 use HTTP for deterministic control and Fx only when a Go process needs the
