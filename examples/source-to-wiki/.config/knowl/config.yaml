@@ -1,0 +1,28 @@
+runtime:
+  providers:
+    antigravity:
+      type: generic_acp
+      generic_acp:
+        cmd:
+          - acprun
+          - antigravity-acp
+
+knowl:
+  provider: antigravity
+  workspace:
+    path: .
+  storage:
+    type: sqlite
+    sqlite:
+      path: .knowl/state.db
+  scope: local
+  sources:
+    - id: engineering-docs
+      type: filesystem
+      enabled: true
+      config:
+        filesystem:
+          root: sources
+          include:
+            - "**/*.md"
+          flavor: markdown

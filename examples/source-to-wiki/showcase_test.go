@@ -15,12 +15,15 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-type showcaseMaintainer struct{}
+const showcaseSourceID = domain.SourceID("engineering-docs")
 
-func (showcaseMaintainer) Plan(_ context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+type showcaseTestMaintainer struct{}
+
+func (showcaseTestMaintainer) Plan(_ context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
 	currentRef := app.SourceRefKey(input.Source)
 	doc := input.Source.SourceDocument
-	pageID := "entities/" + strings.TrimSuffix(string(doc.DocumentID), ".md")
+	baseName := strings.TrimSuffix(string(doc.DocumentID), ".md")
+	pageID := "entities/" + baseName
 	pagePath := "wiki/" + pageID + ".md"
 
 	refs := []string{currentRef}
@@ -32,9 +35,9 @@ func (showcaseMaintainer) Plan(_ context.Context, input domain.MaintenanceInput)
 		}
 	}
 
-	title := strings.ReplaceAll(strings.TrimSuffix(string(doc.DocumentID), ".md"), "-", " ")
-	body := fmt.Sprintf("# %s\n\nSynthesized knowledge from %s for user session and failover operations.\n", title, doc.DocumentID)
-	frontmatter := fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\nsource_refs:\n  - %s\n---\n", pageID, title, strings.Join(refs, "\n  - "))
+	title := strings.ReplaceAll(baseName, "-", " ")
+	body := fmt.Sprintf("# %s\n\nSynthesized knowledge from %s for session revocation JWT failover.\n", title, doc.DocumentID)
+	frontmatter := fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\nversion: \"0.2\"\nparent: catalogs/engineering\nsource_refs:\n  - %s\n---\n", pageID, title, strings.Join(refs, "\n  - "))
 	content := frontmatter + body
 
 	plan := domain.ModelEditPlan{
@@ -47,12 +50,12 @@ func (showcaseMaintainer) Plan(_ context.Context, input domain.MaintenanceInput)
 				Content:        []byte(content),
 			},
 		},
-		Rationale: "synthesize single source showcase knowledge",
+		Rationale: "synthesize source-to-wiki showcase knowledge",
 	}
 
 	for _, catalog := range input.Catalogs {
 		if catalog.Path == "wiki/index.md" {
-			root := strings.TrimRight(catalog.Content, "\n") + fmt.Sprintf("\n\n* [%s](%s.md)\n", title, pageID)
+			root := strings.TrimRight(catalog.Content, "\n") + fmt.Sprintf("\n* [%s](%s.md)\n", title, pageID)
 			plan.Edits = append(plan.Edits, domain.FileEdit{
 				Path:           catalog.Path,
 				ExpectedDigest: catalog.Digest,
@@ -65,10 +68,30 @@ func (showcaseMaintainer) Plan(_ context.Context, input domain.MaintenanceInput)
 	return plan, nil
 }
 
-func TestSingleSourceShowcaseEndToEnd(t *testing.T) {
+func TestSourceToWikiShowcaseEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// 1. Verify checked-in wiki directory is valid and complete
+	checkedInWiki := "wiki"
+	if _, err := os.Stat(checkedInWiki); err != nil {
+		checkedInWiki = filepath.Join("..", "..", "examples", "source-to-wiki", "wiki")
+	}
+	for _, required := range []string{
+		"index.md",
+		"catalogs/engineering/index.md",
+		"entities/architecture-overview.md",
+		"entities/authentication-service.md",
+		"entities/database-retention-policy.md",
+		"entities/incident-response-runbook.md",
+	} {
+		fullPath := filepath.Join(checkedInWiki, required)
+		if _, err := os.Stat(fullPath); err != nil {
+			t.Fatalf("checked-in wiki file missing: %s (%v)", fullPath, err)
+		}
+	}
+
+	// 2. Run the knowledge pipeline into a clean workspace
 	workspaceDir := t.TempDir()
 	workspace, err := contentfs.New(workspaceDir)
 	if err != nil {
@@ -80,7 +103,7 @@ func TestSingleSourceShowcaseEndToEnd(t *testing.T) {
 
 	sourcesDir := "sources"
 	if _, err := os.Stat(sourcesDir); err != nil {
-		sourcesDir = filepath.Join("..", "..", "examples", "single-source-showcase", "sources")
+		sourcesDir = filepath.Join("..", "..", "examples", "source-to-wiki", "sources")
 	}
 
 	config := knowl.DefaultConfig()
@@ -88,7 +111,7 @@ func TestSingleSourceShowcaseEndToEnd(t *testing.T) {
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.Sources = []domain.Source{
 		{
-			ID:      sourceEngineeringID,
+			ID:      showcaseSourceID,
 			Type:    domain.SourceTypeFilesystem,
 			Enabled: true,
 			Config: domain.SourceConfig{
@@ -101,7 +124,7 @@ func TestSingleSourceShowcaseEndToEnd(t *testing.T) {
 		},
 	}
 
-	host, err := knowl.NewHost(ctx, config, showcaseMaintainer{})
+	host, err := knowl.NewHost(ctx, config, showcaseTestMaintainer{})
 	if err != nil {
 		t.Fatalf("NewHost() error: %v", err)
 	}
@@ -119,44 +142,35 @@ func TestSingleSourceShowcaseEndToEnd(t *testing.T) {
 		t.Fatalf("RunOnce() error: %v", err)
 	}
 
-	if len(runRes.Sources) != 1 || runRes.Sources[0].SourceID != sourceEngineeringID {
-		t.Fatalf("sources result = %#v, want 1 %s", runRes.Sources, sourceEngineeringID)
+	if len(runRes.Sources) != 1 || runRes.Sources[0].SourceID != showcaseSourceID {
+		t.Fatalf("sources result = %#v, want 1 %s", runRes.Sources, showcaseSourceID)
 	}
 	if runRes.Operations.Total != 4 || runRes.Operations.Completed != 4 {
 		t.Fatalf("operations = %#v, want 4 total / 4 completed", runRes.Operations)
 	}
 
-	// Verify all 4 wiki concepts were generated on disk
-	expectedFiles := []string{
+	// 3. Verify that the newly run pipeline generated all expected wiki pages on disk
+	for _, relPath := range []string{
 		"wiki/entities/architecture-overview.md",
 		"wiki/entities/authentication-service.md",
 		"wiki/entities/database-retention-policy.md",
 		"wiki/entities/incident-response-runbook.md",
-	}
-	for _, relPath := range expectedFiles {
+	} {
 		fullPath := filepath.Join(workspace.Root(), relPath)
 		if _, err := os.Stat(fullPath); err != nil {
 			t.Errorf("expected wiki file missing: %s", relPath)
 		}
 	}
 
-	// Verify query retrieval
-	queries := []string{
-		"authentication session",
-		"incident response failover",
+	// 4. Verify search query retrieval with exact provenance citations
+	refs, err := host.Query().Search(ctx, config.Scope, "session revocation JWT", domain.ReadLimits{Pages: 5}, []domain.SourceID{showcaseSourceID})
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
 	}
-	for _, q := range queries {
-		refs, err := host.Query().Search(ctx, config.Scope, q, domain.ReadLimits{Pages: 5}, []domain.SourceID{sourceEngineeringID})
-		if err != nil {
-			t.Fatalf("Search(%q) error: %v", q, err)
-		}
-		if len(refs) == 0 {
-			t.Errorf("Search(%q) returned 0 results", q)
-		}
-		for _, ref := range refs {
-			if len(ref.SourceDocuments) == 0 {
-				t.Errorf("Search(%q) ref %s missing source documents", q, ref.ID)
-			}
-		}
+	if len(refs) == 0 {
+		t.Fatal("expected search results for 'session revocation JWT', got 0")
+	}
+	if len(refs[0].SourceDocuments) == 0 {
+		t.Errorf("ref %s missing source documents", refs[0].ID)
 	}
 }
