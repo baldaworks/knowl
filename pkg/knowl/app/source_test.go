@@ -487,6 +487,10 @@ func (fixtureSourceStateStore) SourceStatus(context.Context, knowl.ScopeRef, kno
 	return knowl.SourceStatus{}, nil
 }
 
+func (fixtureSourceStateStore) RetrySourceMaintenance(context.Context, app.SourceMaintenanceRetryRequest) (app.SourceMaintenanceRetryResult, error) {
+	return app.SourceMaintenanceRetryResult{}, nil
+}
+
 func (fixtureSourceStateStore) ResumableSyncRuns(context.Context, knowl.ScopeRef, int) ([]knowl.SyncRun, error) {
 	return nil, nil
 }

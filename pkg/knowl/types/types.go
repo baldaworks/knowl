@@ -203,13 +203,17 @@ const (
 
 // Operation is a redacted operation read model.
 type Operation struct {
-	ID        OperationID     `json:"id"`
-	Kind      WorkKind        `json:"kind,omitempty"`
-	Key       OperationKey    `json:"key,omitzero"`
-	Status    OperationStatus `json:"status"`
-	Attempt   int             `json:"attempt"`
-	Failure   *Failure        `json:"failure,omitempty"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID               OperationID     `json:"id"`
+	Kind             WorkKind        `json:"kind,omitempty"`
+	Key              OperationKey    `json:"key,omitzero"`
+	Status           OperationStatus `json:"status"`
+	Attempt          int             `json:"attempt"`
+	WorkAttempt      int             `json:"work_attempt"`
+	RetryAttempt     int             `json:"retry_attempt"`
+	ManualRetryCount int             `json:"manual_retry_count"`
+	ReadyAt          time.Time       `json:"ready_at,omitempty"`
+	Failure          *Failure        `json:"failure,omitempty"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 // PlanSummary is the durable redacted summary of a model plan.
@@ -229,6 +233,7 @@ type Lease struct {
 // Failure is a stable, redacted operation failure.
 type Failure struct {
 	Class       string `json:"class"`
+	Reason      string `json:"reason,omitempty"`
 	OperationID string `json:"operation_id"`
 }
 

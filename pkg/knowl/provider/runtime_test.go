@@ -19,8 +19,6 @@ import (
 	"google.golang.org/genai"
 )
 
-const wantMaintainerError = "maintainer"
-
 const (
 	hierarchySchemaDigest   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	hierarchySnapshotDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -39,6 +37,7 @@ func TestMaintainerInstructionRequiresSemanticSynthesisAndProvenance(t *testing.
 		"Merge overlapping evidence",
 		"include every source ref used by any edited page",
 		"preserve every unrelated existing source ref",
+		"preserve every unrelated existing child link",
 		"same source/document lineage",
 	} {
 		if !strings.Contains(maintainerInstruction, required) {
@@ -143,7 +142,7 @@ func TestRuntimeMaintainerReusesSessionAcrossPlansAndDeletesOnClose(t *testing.T
 	var remoteSessions atomic.Int32
 	maintainer, err := newRuntimeMaintainer(
 		&fakeRuntimeFactory{agent: newSessionBindingOutputAgent(t, &remoteSessions, planJSON)},
-		"provider",
+		providerFailureClass,
 		t.TempDir(),
 		runtimeMaintainerOptions{newSession: func() session.Service { return service }},
 	)
@@ -185,7 +184,7 @@ func TestRuntimeMaintainerPlansHierarchyThroughSharedBoundedSession(t *testing.T
 	var prompts []string
 	agent := newRoutingSessionBindingOutputAgent(t, &remoteSessions, &prompts, sourceJSON, string(hierarchyJSON))
 	factory := &fakeRuntimeFactory{agent: agent}
-	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{
+	maintainer, err := newRuntimeMaintainer(factory, providerFailureClass, t.TempDir(), runtimeMaintainerOptions{
 		newSession: func() session.Service { return service },
 	})
 	if err != nil {
@@ -263,7 +262,7 @@ func TestRuntimeMaintainerRejectsInvalidHierarchyOutputBeforeReturning(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			maintainer, err := newRuntimeMaintainer(
 				&fakeRuntimeFactory{agent: newOutputAgent(t, test.output())},
-				"provider",
+				providerFailureClass,
 				t.TempDir(),
 				runtimeMaintainerOptions{},
 			)
@@ -284,12 +283,13 @@ func TestRuntimeMaintainerRejectsInvalidHierarchyOutputBeforeReturning(t *testin
 func TestRuntimeMaintainerRejectsOversizedHierarchyInputBeforeBuild(t *testing.T) {
 	input, _ := testHierarchyInputAndPlan()
 	factory := &fakeRuntimeFactory{agent: newOutputAgent(t, "")}
-	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{maxInputBytes: 64})
+	maintainer, err := newRuntimeMaintainer(factory, providerFailureClass, t.TempDir(), runtimeMaintainerOptions{maxInputBytes: 64})
 	if err != nil {
 		t.Fatalf("new maintainer: %v", err)
 	}
 	_, err = maintainer.PlanHierarchy(context.Background(), input)
-	if err == nil || !strings.Contains(err.Error(), "configured limit") || factory.builds != 0 {
+	failure, classified := app.ClassifyExecutionFailure(err)
+	if err == nil || !classified || failure.Reason != reasonProviderInputLimit || failure.Retryable || factory.builds != 0 {
 		t.Fatalf("PlanHierarchy() error=%v builds=%d, want pre-build input limit", err, factory.builds)
 	}
 }
@@ -302,15 +302,17 @@ func TestRuntimeMaintainerRejectsOversizedHierarchyOutput(t *testing.T) {
 	}
 	maintainer, err := newRuntimeMaintainer(
 		&fakeRuntimeFactory{agent: newOutputAgent(t, string(encoded))},
-		"provider",
+		providerFailureClass,
 		t.TempDir(),
 		runtimeMaintainerOptions{maxOutputBytes: 32},
 	)
 	if err != nil {
 		t.Fatalf("new maintainer: %v", err)
 	}
-	if _, err := maintainer.PlanHierarchy(context.Background(), input); err == nil || !strings.Contains(err.Error(), "hierarchy provider") {
-		t.Fatalf("PlanHierarchy() error = %v, want bounded provider rejection", err)
+	if _, err := maintainer.PlanHierarchy(context.Background(), input); err == nil {
+		t.Fatal("PlanHierarchy() error = nil, want bounded provider rejection")
+	} else if failure, ok := app.ClassifyExecutionFailure(err); !ok || failure.Reason != reasonProviderOutputLimit || failure.Retryable {
+		t.Fatalf("PlanHierarchy() error = %v, classification = %#v/%v", err, failure, ok)
 	}
 }
 
@@ -319,7 +321,7 @@ func TestRuntimeMaintainerRedactsHierarchyProviderFailure(t *testing.T) {
 	secret := "hierarchy-provider-secret"
 	maintainer, err := newRuntimeMaintainer(
 		&fakeRuntimeFactory{agent: newErrorAgent(t, errors.New(secret))},
-		"provider",
+		providerFailureClass,
 		t.TempDir(),
 		runtimeMaintainerOptions{},
 	)
@@ -327,11 +329,33 @@ func TestRuntimeMaintainerRedactsHierarchyProviderFailure(t *testing.T) {
 		t.Fatalf("new maintainer: %v", err)
 	}
 	_, err = maintainer.PlanHierarchy(context.Background(), input)
-	if err == nil || !strings.Contains(err.Error(), "run hierarchy provider") {
-		t.Fatalf("PlanHierarchy() error = %v, want redacted provider failure", err)
+	failure, classified := app.ClassifyExecutionFailure(err)
+	if err == nil || !classified || failure.Class != providerFailureClass || failure.Reason != reasonProviderRun || !failure.Retryable {
+		t.Fatalf("PlanHierarchy() error = %v, classification = %#v/%v", err, failure, classified)
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("PlanHierarchy() leaked provider failure: %v", err)
+	}
+}
+
+func TestRuntimeMaintainerClassifiesAndRedactsBuildFailure(t *testing.T) {
+	secret := "provider-build-secret"
+	maintainer, err := newRuntimeMaintainer(
+		&fakeRuntimeFactory{err: errors.New(secret)},
+		providerFailureClass,
+		t.TempDir(),
+		runtimeMaintainerOptions{},
+	)
+	if err != nil {
+		t.Fatalf("new maintainer: %v", err)
+	}
+	_, err = maintainer.Plan(context.Background(), testMaintenanceInput())
+	failure, classified := app.ClassifyExecutionFailure(err)
+	if err == nil || !classified || failure.Class != providerFailureClass || failure.Reason != reasonProviderBuild || !failure.Retryable {
+		t.Fatalf("Plan() error = %v, classification = %#v/%v", err, failure, classified)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("Plan() leaked provider build failure: %v", err)
 	}
 }
 
@@ -411,20 +435,20 @@ func newSessionBindingOutputAgent(t *testing.T, remoteSessions *atomic.Int32, ou
 func TestRuntimeMaintainerRejectsUnsafeOutputAndLimits(t *testing.T) {
 	secret := "provider-output-secret"
 	tests := []struct {
-		name      string
-		output    string
-		maxOutput int
-		wantError string
+		name       string
+		output     string
+		maxOutput  int
+		wantReason string
 	}{
-		{name: "malformed", output: secret + " not json", wantError: wantMaintainerError},
-		{name: "empty", output: "", wantError: wantMaintainerError},
-		{name: "oversized", output: strings.Repeat("x", 128), maxOutput: 32, wantError: wantMaintainerError},
+		{name: "malformed", output: secret + " not json", wantReason: reasonProviderOutputInvalid},
+		{name: "empty", output: "", wantReason: reasonProviderOutputInvalid},
+		{name: "oversized", output: testSourcePlanJSON, maxOutput: 32, wantReason: reasonProviderOutputLimit},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			maintainer, err := newRuntimeMaintainer(
 				&fakeRuntimeFactory{agent: newOutputAgent(t, test.output)},
-				"provider",
+				providerFailureClass,
 				t.TempDir(),
 				runtimeMaintainerOptions{maxOutputBytes: test.maxOutput},
 			)
@@ -435,8 +459,9 @@ func TestRuntimeMaintainerRejectsUnsafeOutputAndLimits(t *testing.T) {
 			if err == nil {
 				t.Fatal("Plan() error = nil, want provider output error")
 			}
-			if !strings.Contains(err.Error(), test.wantError) {
-				t.Fatalf("Plan() error = %q, want %q", err, test.wantError)
+			failure, classified := app.ClassifyExecutionFailure(err)
+			if !classified || failure.Class != providerFailureClass || failure.Reason != test.wantReason || failure.Retryable {
+				t.Fatalf("Plan() error = %q, classification = %#v/%v", err, failure, classified)
 			}
 			if strings.Contains(err.Error(), secret) {
 				t.Fatalf("Plan() leaked provider output: %q", err)
@@ -449,7 +474,7 @@ func TestRuntimeMaintainerDecodesRepeatedStructuredEvents(t *testing.T) {
 	planJSON := `{"schema_digest":"schema","source_refs":["fixture:source@1"],"edits":[]}`
 	maintainer, err := newRuntimeMaintainer(
 		&fakeRuntimeFactory{agent: newOutputAgent(t, planJSON)},
-		"provider",
+		providerFailureClass,
 		t.TempDir(),
 		runtimeMaintainerOptions{newRunner: duplicateOutputRunner},
 	)
@@ -492,7 +517,7 @@ func duplicateOutputRunner(agent adkagent.Agent, sessions session.Service) (*run
 
 func TestRuntimeMaintainerHonorsCancellationBeforeBuild(t *testing.T) {
 	factory := &fakeRuntimeFactory{agent: newOutputAgent(t, testSourcePlanJSON)}
-	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{})
+	maintainer, err := newRuntimeMaintainer(factory, providerFailureClass, t.TempDir(), runtimeMaintainerOptions{})
 	if err != nil {
 		t.Fatalf("new maintainer: %v", err)
 	}
@@ -511,7 +536,7 @@ func TestRuntimeMaintainerKeepsCachedRuntimeAfterCanceledPlan(t *testing.T) {
 	planJSON := testSourcePlanJSON
 	started := make(chan struct{})
 	factory := &fakeRuntimeFactory{agent: newCancelThenOutputAgent(t, started, planJSON)}
-	maintainer, err := newRuntimeMaintainer(factory, "provider", t.TempDir(), runtimeMaintainerOptions{})
+	maintainer, err := newRuntimeMaintainer(factory, providerFailureClass, t.TempDir(), runtimeMaintainerOptions{})
 	if err != nil {
 		t.Fatalf("new maintainer: %v", err)
 	}
@@ -673,6 +698,7 @@ func newCapturingOutputAgent(t *testing.T, prompt *string, output string) adkage
 
 type fakeRuntimeFactory struct {
 	agent        adkagent.Agent
+	err          error
 	request      agentfactory.BuildRequest
 	buildContext context.Context
 	builds       int
@@ -686,6 +712,9 @@ func (factory *fakeRuntimeFactory) Build(ctx context.Context, request agentfacto
 	factory.request = request
 	factory.buildContext = ctx
 	factory.builds++
+	if factory.err != nil {
+		return nil, factory.err
+	}
 	return &closableAgent{Agent: factory.agent, closed: &factory.closed}, nil
 }
 

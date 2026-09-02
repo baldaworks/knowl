@@ -84,14 +84,14 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 		t.Fatalf("run after oversized page = %#v, %v", afterOversized, err)
 	}
 
-	ref := knowl.DocumentRef{ExternalID: document, Revision: "revision-1", Path: string(document)}
+	ref := knowl.DocumentRef{ExternalID: document, Revision: testSourceRevision, Path: string(document)}
 	progressed, err := harness.Store.RecordScanPage(ctx, app.ScanPageRecord{
 		RunID: run.ID, Scope: scope, SourceID: sourceID, Documents: []knowl.DocumentRef{ref}, RecordedAt: base.Add(time.Second),
 	})
 	if err != nil || !progressed.UpdatedAt.Equal(base.Add(time.Second)) {
 		t.Fatalf("RecordScanPage() = %#v, %v", progressed, err)
 	}
-	state := contractDocumentState(scope, sourceID, document, run.ID, "revision-1", base)
+	state := contractDocumentState(scope, sourceID, document, run.ID, testSourceRevision, base)
 	rejectedDigest := strings.Repeat("a", 64)
 	if _, err := harness.Store.PrepareSync(ctx, app.PreparedSyncState{
 		RunID: run.ID, Scope: scope, SourceID: sourceID, CompleteScan: true, Checkpoint: checkpoint,
@@ -154,7 +154,7 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 		t.Fatalf("FinalizeSync() replay = %#v, %v", replayed, err)
 	}
 	active, err := harness.Store.DocumentState(ctx, scope, sourceID, document)
-	if err != nil || active.Deleted || active.Revision != "revision-1" || active.AcceptedSource.ManifestRef != "raw/manifest-1.json" ||
+	if err != nil || active.Deleted || active.Revision != testSourceRevision || active.AcceptedSource.ManifestRef != "raw/manifest-1.json" ||
 		active.MaintenanceRevision != active.Revision || active.MaintenanceOperationID == "" {
 		t.Fatalf("DocumentState() = %#v, %v", active, err)
 	}

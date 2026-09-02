@@ -555,7 +555,10 @@ func (store *Store) sourceMaintenanceStatus(ctx context.Context, scope knowl.Sco
 	var result knowl.SourceMaintenanceStatus
 	err := sourceQueryRow(ctx, store.db, `
 		SELECT
-			COALESCE(SUM(CASE WHEN operation.status NOT IN ('committed', 'failed') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN operation.status NOT IN ('committed', 'failed')
+				AND (operation.work_lease_token <> '' OR operation.work_ready_at <= CURRENT_TIMESTAMP) THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN operation.status NOT IN ('committed', 'failed')
+				AND operation.work_lease_token = '' AND operation.work_ready_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN operation.work_attempt > 1 THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN operation.status = 'committed' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN operation.status = 'failed' THEN 1 ELSE 0 END), 0)
@@ -566,13 +569,15 @@ func (store *Store) sourceMaintenanceStatus(ctx context.Context, scope knowl.Sco
 		WHERE document.scope = ? AND document.source_id = ? AND document.deleted = FALSE
 		  AND document.maintenance_operation_id <> ''
 		  AND document.maintenance_revision = document.revision`, scope, sourceID).Scan(
-		&result.Counts.Queued, &result.Counts.Replayed, &result.Counts.Committed, &result.Counts.Failed,
+		&result.Counts.Queued, &result.Counts.Retrying, &result.Counts.Replayed, &result.Counts.Committed, &result.Counts.Failed,
 	)
 	if err != nil {
 		return knowl.SourceMaintenanceStatus{}, fmt.Errorf("read source maintenance counts: %w", err)
 	}
 	rows, err := sourceQuery(ctx, store.db, `
-		SELECT document.document_id, document.revision, operation.operation_id, operation.status, operation.work_attempt, operation.failure_class
+		SELECT document.document_id, document.revision, operation.operation_id, operation.status,
+		       operation.work_attempt, operation.retry_attempt, operation.manual_retry_count,
+		       operation.failure_class, operation.failure_reason, operation.work_ready_at, operation.work_lease_token
 		FROM knowl_source_documents AS document
 		JOIN knowl_operations AS operation
 		  ON operation.scope = document.scope
@@ -588,11 +593,17 @@ func (store *Store) sourceMaintenanceStatus(ctx context.Context, scope knowl.Sco
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var sample knowl.MaintenanceSample
-		var attempts int
-		if err := rows.Scan(&sample.DocumentID, &sample.Revision, &sample.OperationID, &sample.Status, &attempts, &sample.FailureClass); err != nil {
+		var readyAt time.Time
+		var leaseToken string
+		if err := rows.Scan(&sample.DocumentID, &sample.Revision, &sample.OperationID, &sample.Status,
+			&sample.WorkAttempt, &sample.RetryAttempt, &sample.ManualRetryCount,
+			&sample.FailureClass, &sample.FailureReason, &readyAt, &leaseToken); err != nil {
 			return knowl.SourceMaintenanceStatus{}, fmt.Errorf("scan source maintenance sample: %w", err)
 		}
-		sample.Replayed = attempts > 1
+		sample.Replayed = sample.WorkAttempt > 1
+		if sample.Status != knowl.StatusCommitted && sample.Status != knowl.StatusFailed && leaseToken == "" && readyAt.After(time.Now().UTC()) {
+			sample.NextRetryAt = readyAt.UTC()
+		}
 		if len(result.Samples) == maxMaintenanceSamples {
 			result.Truncated = true
 			continue

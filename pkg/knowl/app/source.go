@@ -19,25 +19,27 @@ import (
 )
 
 const (
-	maxSourceIDBytes      = 64
-	maxDocumentIDBytes    = 1024
-	maxRevisionBytes      = 4096
-	maxCursorBytes        = 4096
-	maxMetadataEntries    = 64
-	maxMetadataKeyBytes   = 256
-	maxMetadataValueBytes = 4096
-	maxSourceStatePage    = 1000
-	maxSyncRunIDBytes     = 255
-	maxFailureClassBytes  = 128
-	maxDocumentTitleBytes = 1024
-	maxDocumentURIBytes   = 8192
-	maxMediaTypeBytes     = 255
-	maxDocumentContent    = 64 << 20
-	maxDocumentPage       = 1000
-	maxSourceMutationPath = 2048
-	maxSourceMutations    = 2048
-	maxSourceMutationFile = 64 << 20
-	maxSourceMutationPlan = 512 << 20
+	maxSourceIDBytes       = 64
+	maxDocumentIDBytes     = 1024
+	maxRevisionBytes       = 4096
+	maxCursorBytes         = 4096
+	maxMetadataEntries     = 64
+	maxMetadataKeyBytes    = 256
+	maxMetadataValueBytes  = 4096
+	maxSourceStatePage     = 1000
+	maxSyncRunIDBytes      = 255
+	maxFailureClassBytes   = 128
+	maxDocumentTitleBytes  = 1024
+	maxDocumentURIBytes    = 8192
+	maxMediaTypeBytes      = 255
+	maxDocumentContent     = 64 << 20
+	maxDocumentPage        = 1000
+	maxSourceMutationPath  = 2048
+	maxSourceMutations     = 2048
+	maxSourceMutationFile  = 64 << 20
+	maxSourceMutationPlan  = 512 << 20
+	maxRetryFailureClasses = 16
+	maxRetryResultIDs      = 100
 )
 
 var (
@@ -48,6 +50,7 @@ var (
 	ErrSyncStateTransition   = errors.New("invalid Knowl sync state transition")
 	ErrSourceMutationInvalid = errors.New("invalid Knowl source mutation")
 	ErrSourceMutationLimit   = errors.New("knowl source mutation exceeds a limit")
+	ErrSourceRetryConflict   = errors.New("knowl source maintenance retry conflicts")
 
 	sourceIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	failurePattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
@@ -184,8 +187,55 @@ type SourceStateStore interface {
 	DocumentState(ctx context.Context, scope knowl.ScopeRef, sourceID knowl.SourceID, documentID knowl.DocumentID) (knowl.DocumentState, error)
 	DocumentStates(ctx context.Context, scope knowl.ScopeRef, sourceID knowl.SourceID, options DocumentListOptions) ([]knowl.DocumentState, error)
 	SourceStatus(ctx context.Context, scope knowl.ScopeRef, sourceID knowl.SourceID) (knowl.SourceStatus, error)
+	RetrySourceMaintenance(ctx context.Context, request SourceMaintenanceRetryRequest) (SourceMaintenanceRetryResult, error)
 	ResumableSyncRuns(ctx context.Context, scope knowl.ScopeRef, limit int) ([]knowl.SyncRun, error)
 }
+
+// SourceMaintenanceRetryRequest selects terminal current-revision maintenance
+// operations for explicit operator recovery.
+type SourceMaintenanceRetryRequest struct {
+	Scope          knowl.ScopeRef `json:"scope"`
+	SourceID       knowl.SourceID `json:"source_id"`
+	FailureClasses []string       `json:"failure_classes"`
+	DryRun         bool           `json:"dry_run"`
+}
+
+// SourceMaintenanceRetryResult is bounded even when the selected source has
+// more matching operations than can be listed individually.
+type SourceMaintenanceRetryResult struct {
+	SourceID     knowl.SourceID      `json:"source_id"`
+	DryRun       bool                `json:"dry_run"`
+	Matched      int64               `json:"matched"`
+	Requeued     int64               `json:"requeued"`
+	Rejected     int64               `json:"rejected"`
+	OperationIDs []knowl.OperationID `json:"operation_ids"`
+	Truncated    bool                `json:"truncated"`
+}
+
+// NormalizeRetryFailureClasses validates, de-duplicates, and sorts the
+// operator-selected stable failure identifiers.
+func NormalizeRetryFailureClasses(classes []string) ([]string, error) {
+	if len(classes) == 0 || len(classes) > maxRetryFailureClasses {
+		return nil, ErrSourceInvalid
+	}
+	unique := make(map[string]struct{}, len(classes))
+	for _, class := range classes {
+		class = strings.TrimSpace(class)
+		if !validFailureClass(class) || class == "" {
+			return nil, ErrSourceInvalid
+		}
+		unique[class] = struct{}{}
+	}
+	normalized := make([]string, 0, len(unique))
+	for class := range unique {
+		normalized = append(normalized, class)
+	}
+	sort.Strings(normalized)
+	return normalized, nil
+}
+
+// MaxSourceMaintenanceRetryResultIDs is the public bound for affected IDs.
+func MaxSourceMaintenanceRetryResultIDs() int { return maxRetryResultIDs }
 
 // ValidateSourceID validates a canonical configured source identifier.
 func ValidateSourceID(id knowl.SourceID) error {

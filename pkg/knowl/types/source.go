@@ -204,6 +204,7 @@ type SourceStatus struct {
 // more than one durable worker attempt and may overlap another outcome.
 type MaintenanceCounts struct {
 	Queued    int64 `json:"queued"`
+	Retrying  int64 `json:"retrying"`
 	Replayed  int64 `json:"replayed"`
 	Committed int64 `json:"committed"`
 	Failed    int64 `json:"failed"`
@@ -211,12 +212,17 @@ type MaintenanceCounts struct {
 
 // MaintenanceSample is one bounded, redacted source-to-operation correlation.
 type MaintenanceSample struct {
-	DocumentID   DocumentID      `json:"document_id"`
-	Revision     string          `json:"revision"`
-	OperationID  OperationID     `json:"operation_id"`
-	Status       OperationStatus `json:"status"`
-	Replayed     bool            `json:"replayed"`
-	FailureClass string          `json:"failure_class,omitempty"`
+	DocumentID       DocumentID      `json:"document_id"`
+	Revision         string          `json:"revision"`
+	OperationID      OperationID     `json:"operation_id"`
+	Status           OperationStatus `json:"status"`
+	Replayed         bool            `json:"replayed"`
+	WorkAttempt      int             `json:"work_attempt"`
+	RetryAttempt     int             `json:"retry_attempt"`
+	ManualRetryCount int             `json:"manual_retry_count"`
+	FailureClass     string          `json:"failure_class,omitempty"`
+	FailureReason    string          `json:"failure_reason,omitempty"`
+	NextRetryAt      time.Time       `json:"next_retry_at,omitempty"`
 }
 
 // SourceMaintenanceStatus separates raw sync reservation success from the

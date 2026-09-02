@@ -3,11 +3,13 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/normahq/runtime/v2/structuredagent"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -21,10 +23,10 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 	}
 	payload, err := json.Marshal(input)
 	if err != nil {
-		return knowl.ModelEditPlan{}, fmt.Errorf("encode maintenance input: %w", err)
+		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
 	}
 	if len(payload) > maintainer.maxInput {
-		return knowl.ModelEditPlan{}, fmt.Errorf("maintenance input exceeds configured limit")
+		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInputLimit)
 	}
 	envelope, err := json.Marshal(struct {
 		Operation            string          `json:"operation"`
@@ -38,7 +40,7 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 		RequiredSourceRef:    app.SourceRefKey(input.Source),
 	})
 	if err != nil {
-		return knowl.ModelEditPlan{}, fmt.Errorf("encode maintenance request")
+		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
 	}
 	var plan knowl.ModelEditPlan
 	err = maintainer.runStructuredPlan(ctx, envelope, "maintainer", func(candidate string) error {
@@ -70,10 +72,10 @@ func (maintainer *RuntimeMaintainer) PlanHierarchy(ctx context.Context, input kn
 	}
 	payload, err := json.Marshal(normalized)
 	if err != nil {
-		return knowl.HierarchyModelPlan{}, fmt.Errorf("encode hierarchy input: %w", err)
+		return knowl.HierarchyModelPlan{}, permanentProviderFailure(reasonProviderInput)
 	}
 	if len(payload) > maintainer.maxInput {
-		return knowl.HierarchyModelPlan{}, fmt.Errorf("hierarchy input exceeds configured limit")
+		return knowl.HierarchyModelPlan{}, permanentProviderFailure(reasonProviderInputLimit)
 	}
 	envelope, err := json.Marshal(struct {
 		Operation              string          `json:"operation"`
@@ -87,7 +89,7 @@ func (maintainer *RuntimeMaintainer) PlanHierarchy(ctx context.Context, input kn
 		RequiredSnapshotDigest: normalized.SnapshotDigest,
 	})
 	if err != nil {
-		return knowl.HierarchyModelPlan{}, fmt.Errorf("encode hierarchy request")
+		return knowl.HierarchyModelPlan{}, permanentProviderFailure(reasonProviderInput)
 	}
 	var plan knowl.HierarchyModelPlan
 	err = maintainer.runStructuredPlan(ctx, envelope, "hierarchy", func(candidate string) error {
@@ -156,7 +158,13 @@ func (maintainer *RuntimeMaintainer) runStructuredPlan(ctx context.Context, enve
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			return fmt.Errorf("run %s provider", operation)
+			if errors.Is(runErr, structuredagent.ErrStructuredInputSchemaValidation) {
+				return permanentProviderFailure(reasonProviderInput)
+			}
+			if errors.Is(runErr, structuredagent.ErrStructuredOutputSchemaValidation) {
+				return permanentProviderFailure(reasonProviderOutputInvalid)
+			}
+			return transientProviderFailure(reasonProviderRun)
 		}
 		if event == nil || event.Content == nil {
 			continue
@@ -167,7 +175,7 @@ func (maintainer *RuntimeMaintainer) runStructuredPlan(ctx context.Context, enve
 		}
 		outputBytes += len(candidate)
 		if outputBytes > maintainer.maxOutput {
-			return fmt.Errorf("%s provider output exceeds configured limit", operation)
+			return permanentProviderFailure(reasonProviderOutputLimit)
 		}
 		if err := decode(candidate); err != nil {
 			decodeErr = err
@@ -179,12 +187,12 @@ func (maintainer *RuntimeMaintainer) runStructuredPlan(ctx context.Context, enve
 		return nil
 	}
 	if outputBytes == 0 {
-		return fmt.Errorf("%s provider returned empty output", operation)
+		return permanentProviderFailure(reasonProviderOutputEmpty)
 	}
 	if decodeErr != nil {
-		return fmt.Errorf("decode %s plan: %w", operation, decodeErr)
+		return permanentProviderFailure(reasonProviderOutputInvalid)
 	}
-	return fmt.Errorf("decode %s plan", operation)
+	return permanentProviderFailure(reasonProviderOutputInvalid)
 }
 
 type maintainerPlanOutput struct {

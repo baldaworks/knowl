@@ -31,13 +31,15 @@ func TestDurableRunnerContract(t *testing.T) {
 }
 
 const (
-	testLocalScope   = "local"
-	testFixture      = "fixture"
-	testSchemaDigest = "schema"
-	testSharedPageID = "shared"
-	testSourceID     = "engineering"
-	testRevision     = "revision-1"
-	testMediaType    = "text/markdown"
+	testLocalScope    = "local"
+	testFixture       = "fixture"
+	testSchemaDigest  = "schema"
+	testSharedPageID  = "shared"
+	testSourceID      = "engineering"
+	testRevision      = "revision-1"
+	testMediaType     = "text/markdown"
+	testFailureClass  = "provider"
+	testFailureReason = "provider_run"
 )
 
 func TestGenericOperationsMigrationIsAdditive(t *testing.T) {
@@ -48,6 +50,22 @@ func TestGenericOperationsMigrationIsAdditive(t *testing.T) {
 	for _, required := range []string{"work_kind TEXT NOT NULL DEFAULT 'source'", "execution_payload TEXT NOT NULL DEFAULT ''", "downgrading"} {
 		if !strings.Contains(string(content), required) {
 			t.Fatalf("generic operation migration missing %q", required)
+		}
+	}
+}
+
+func TestOperationRetryMigrationIsAdditive(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00011_operation_retry.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"failure_reason TEXT NOT NULL DEFAULT ''",
+		"retry_attempt INTEGER NOT NULL DEFAULT 0",
+		"manual_retry_count INTEGER NOT NULL DEFAULT 0",
+	} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("operation retry migration missing %q", required)
 		}
 	}
 }
@@ -77,6 +95,12 @@ func TestResumableWorkContract(t *testing.T) {
 				t.Fatalf("expire contract work lease: %v", err)
 			}
 		},
+		ReadyNow: func(t *testing.T, _ knowl.ScopeRef, id knowl.OperationID) {
+			t.Helper()
+			if _, err := store.db.ExecContext(ctx, `UPDATE knowl_operations SET work_ready_at = ? WHERE operation_id = ?`, time.Unix(1, 0).UTC().Format(time.RFC3339Nano), id); err != nil {
+				t.Fatalf("ready contract work: %v", err)
+			}
+		},
 		WorkAttempts: func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID) int {
 			t.Helper()
 			var attempts int
@@ -87,6 +111,66 @@ func TestResumableWorkContract(t *testing.T) {
 		},
 		IsConflict: func(err error) bool { return errors.Is(err, ErrConflict) },
 		Scope:      "sqlite_contract",
+	})
+}
+
+func TestSourceMaintenanceRetryContract(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, t.TempDir()+"/source-retry.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	storetest.RunSourceRetryContract(t, storetest.SourceRetryHarness{
+		Store: store,
+		Seed: func(t *testing.T, scope knowl.ScopeRef, sourceID knowl.SourceID, fixtures []storetest.SourceRetryFixture) {
+			t.Helper()
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_sources (scope, source_id, source_type, config_digest, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(scope, source_id) DO NOTHING`, scope, sourceID, knowl.SourceTypeFilesystem, strings.Repeat("a", 64), now, now); err != nil {
+				t.Fatal(err)
+			}
+			for _, fixture := range fixtures {
+				workExpiry, applyExpiry := "", ""
+				leaseDelta := time.Hour
+				if fixture.LeasesExpired {
+					leaseDelta = -time.Hour
+				}
+				if fixture.WorkToken != "" {
+					workExpiry = time.Now().UTC().Add(leaseDelta).Format(time.RFC3339Nano)
+				}
+				if fixture.ApplyToken != "" {
+					applyExpiry = time.Now().UTC().Add(leaseDelta).Format(time.RFC3339Nano)
+				}
+				if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_operations (
+					operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest,
+					status, plan_digest, failure_class, failure_reason, commit_generation, lease_token, lease_expires_at,
+					created_at, updated_at, work_attempt, work_lease_token, work_lease_expires_at, work_ready_at,
+					work_kind, retry_attempt, manual_retry_count
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					fixture.OperationID, fixture.OperationScope, "fixture", fixture.OperationID, "1", strings.Repeat("b", 64), testSchemaDigest,
+					fixture.Status, "planned-digest", fixture.FailureClass, fixture.FailureReason, "commit-generation", fixture.ApplyToken, applyExpiry,
+					now, now, fixture.WorkAttempt, fixture.WorkToken, workExpiry, now, fixture.Kind, fixture.RetryAttempt, fixture.ManualRetryCount); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_source_documents (
+					scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id,
+					last_seen_run_id, created_at, updated_at
+				) VALUES (?, ?, ?, ?, '{}', ?, ?, 'retry-run', ?, ?)`,
+					scope, sourceID, fixture.DocumentID, fixture.Revision, fixture.MaintenanceRevision, fixture.OperationID, now, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+		},
+		Audit: func(t *testing.T, id knowl.OperationID) storetest.SourceRetryAudit {
+			t.Helper()
+			var audit storetest.SourceRetryAudit
+			if err := store.db.QueryRowContext(ctx, `SELECT plan_digest, commit_generation, work_lease_token, lease_token FROM knowl_operations WHERE operation_id = ?`, id).
+				Scan(&audit.PlanDigest, &audit.CommitGeneration, &audit.WorkToken, &audit.ApplyToken); err != nil {
+				t.Fatal(err)
+			}
+			return audit
+		},
+		Scope: "sqlite_retry_contract",
 	})
 }
 
@@ -370,7 +454,7 @@ func TestResumableMigrationPreservesVersionOneOperations(t *testing.T) {
 	if _, err := db.ExecContext(ctx, insert, applyingID, scope, testFixture, "applying", strings.Repeat("b", 64), knowl.StatusApplying, 3, "plan-applying", "", "", "apply-owner", leaseExpiry, createdAt, createdAt); err != nil {
 		t.Fatalf("insert applying version-one row: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, insert, failedID, scope, testFixture, "failed", strings.Repeat("c", 64), knowl.StatusFailed, 1, "plan-failed", "provider", "", "", "", createdAt, createdAt); err != nil {
+	if _, err := db.ExecContext(ctx, insert, failedID, scope, testFixture, "failed", strings.Repeat("c", 64), knowl.StatusFailed, 1, "plan-failed", testFailureClass, "", "", "", createdAt, createdAt); err != nil {
 		t.Fatalf("insert failed version-one row: %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -391,7 +475,7 @@ func TestResumableMigrationPreservesVersionOneOperations(t *testing.T) {
 		t.Fatalf("migrated applying operation = %#v, err = %v", applying, err)
 	}
 	failed, err := store.Operation(ctx, scope, failedID)
-	if err != nil || failed.Status != knowl.StatusFailed || failed.Failure == nil || failed.Failure.Class != "provider" {
+	if err != nil || failed.Status != knowl.StatusFailed || failed.Failure == nil || failed.Failure.Class != testFailureClass {
 		t.Fatalf("migrated failed operation = %#v, err = %v", failed, err)
 	}
 	var committedGeneration string
@@ -945,12 +1029,15 @@ func TestSourceMaintenanceStatusIsBoundedAndDeterministic(t *testing.T) {
 		operationID := fmt.Sprintf("maintenance-%02d", index)
 		status := knowl.StatusReceived
 		failureClass := ""
+		failureReason := ""
+		readyAt := ""
+		retryAttempt := 0
 		switch index % 3 {
 		case 1:
 			status = knowl.StatusCommitted
 		case 2:
 			status = knowl.StatusFailed
-			failureClass = "provider"
+			failureClass = testFailureClass
 		}
 		switch status {
 		case knowl.StatusCommitted:
@@ -958,14 +1045,22 @@ func TestSourceMaintenanceStatusIsBoundedAndDeterministic(t *testing.T) {
 		case knowl.StatusFailed:
 			wantCounts.Failed++
 		default:
-			wantCounts.Queued++
+			if index == 0 {
+				wantCounts.Retrying++
+				failureClass = testFailureClass
+				failureReason = testFailureReason
+				retryAttempt = 2
+				readyAt = time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+			} else {
+				wantCounts.Queued++
+			}
 		}
 		attempt := 1
 		if index%4 == 0 {
 			attempt = 2
 			wantCounts.Replayed++
 		}
-		if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_operations (operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest, status, failure_class, work_attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, operationID, scope, testFixture, documentID, testRevision, strings.Repeat("b", 64), testSchemaDigest, status, failureClass, attempt, now, now); err != nil {
+		if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_operations (operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest, status, failure_class, failure_reason, work_attempt, retry_attempt, work_ready_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, operationID, scope, testFixture, documentID, testRevision, strings.Repeat("b", 64), testSchemaDigest, status, failureClass, failureReason, attempt, retryAttempt, readyAt, now, now); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_source_documents (scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id, last_seen_run_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, scope, testSourceID, documentID, testRevision, `{}`, testRevision, operationID, "run-1", now, now); err != nil {
@@ -985,6 +1080,9 @@ func TestSourceMaintenanceStatusIsBoundedAndDeterministic(t *testing.T) {
 		}
 		if sample.Replayed != (index%4 == 0) {
 			t.Fatalf("sample replay = %#v", sample)
+		}
+		if index == 0 && (sample.FailureReason != testFailureReason || sample.RetryAttempt != 2 || sample.NextRetryAt.IsZero()) {
+			t.Fatalf("retrying sample diagnostics = %#v", sample)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/spf13/cobra"
 )
@@ -18,6 +19,7 @@ type localSourceHost interface {
 	SyncSource(ctx context.Context, id domain.SourceID) (knowl.SourceSyncResult, error)
 	SyncAll(ctx context.Context) (knowl.SourceSyncAllResult, error)
 	SourceStatus(ctx context.Context, id domain.SourceID) (domain.SourceStatus, error)
+	RetrySourceMaintenance(ctx context.Context, id domain.SourceID, failureClasses []string, dryRun bool) (app.SourceMaintenanceRetryResult, error)
 	Stop(ctx context.Context) error
 }
 
@@ -46,7 +48,46 @@ func newSourceCommand() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	command.AddCommand(newSourceListCommand(), newSourceSyncCommand(), newSourceStatusCommand())
+	command.AddCommand(newSourceListCommand(), newSourceSyncCommand(), newSourceStatusCommand(), newSourceRetryCommand())
+	return command
+}
+
+func newSourceRetryCommand() *cobra.Command {
+	var failureClasses []string
+	var dryRun bool
+	command := &cobra.Command{
+		Use:           sourceRetryCommandName + " <source-id>",
+		Short:         "Preview or requeue failed source maintenance operations",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return fmt.Errorf("exactly one source ID is required")
+			}
+			id := domain.SourceID(strings.TrimSpace(args[0]))
+			if app.ValidateSourceID(id) != nil {
+				return app.ErrSourceInvalid
+			}
+			_, err := app.NormalizeRetryFailureClasses(failureClasses)
+			return err
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := domain.SourceID(strings.TrimSpace(args[0]))
+			classes, err := app.NormalizeRetryFailureClasses(failureClasses)
+			if err != nil {
+				return err
+			}
+			return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+				result, retryErr := host.RetrySourceMaintenance(cmd.Context(), id, classes, dryRun)
+				if err := writeSourceResult(cmd, result); err != nil {
+					return err
+				}
+				return retryErr
+			})
+		},
+	}
+	command.Flags().StringArrayVar(&failureClasses, "failure-class", nil, "terminal failure class to requeue (repeatable; required)")
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "preview the exact eligible set without changing state")
 	return command
 }
 

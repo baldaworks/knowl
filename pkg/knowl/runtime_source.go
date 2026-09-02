@@ -113,6 +113,25 @@ func (host *Host) SourceStatus(ctx context.Context, id domain.SourceID) (domain.
 	return host.sourceState.SourceStatus(ctx, host.config.Scope, id)
 }
 
+// RetrySourceMaintenance previews or requeues selected terminal maintenance
+// operations without starting source synchronization or background workers.
+func (host *Host) RetrySourceMaintenance(ctx context.Context, id domain.SourceID, failureClasses []string, dryRun bool) (app.SourceMaintenanceRetryResult, error) {
+	ctx = nonNilHostContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return app.SourceMaintenanceRetryResult{SourceID: id, DryRun: dryRun, OperationIDs: make([]domain.OperationID, 0)}, err
+	}
+	if _, err := host.configuredSource(id); err != nil {
+		return app.SourceMaintenanceRetryResult{SourceID: id, DryRun: dryRun, OperationIDs: make([]domain.OperationID, 0)}, err
+	}
+	result, err := host.sourceState.RetrySourceMaintenance(ctx, app.SourceMaintenanceRetryRequest{
+		Scope: host.config.Scope, SourceID: id, FailureClasses: failureClasses, DryRun: dryRun,
+	})
+	if err == nil && result.Requeued != 0 {
+		host.scheduler.Wake("")
+	}
+	return result, err
+}
+
 func (host *Host) configuredSource(id domain.SourceID) (domain.Source, error) {
 	if err := app.ValidateSourceID(id); err != nil {
 		return domain.Source{}, app.ErrSourceInvalid
