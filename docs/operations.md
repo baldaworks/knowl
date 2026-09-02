@@ -212,6 +212,20 @@ an in-process Host without starting HTTP or scheduled runners:
 ./knowl source retry engineering --failure-class provider --dry-run
 ```
 
+To run a complete one-shot knowledge processing cycle (synchronize sources, drain
+queued maintenance operations to completion, and optionally reconcile semantic OKF
+hierarchy) without running a persistent daemon:
+
+```bash
+./knowl run
+# or restrict to one source:
+./knowl run --source engineering
+# or skip optional phases:
+./knowl run --no-sync
+./knowl run --no-hierarchy
+```
+
+
 To explicitly replace a valid flat root with source-independent semantic
 catalogs, stop other writers and run:
 

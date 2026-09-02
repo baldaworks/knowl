@@ -913,3 +913,67 @@ func shutdownHost(t *testing.T, host *knowl.Host) {
 		t.Fatalf("shutdown host: %v", err)
 	}
 }
+
+func TestHostRunOnce(t *testing.T) {
+	workspaceDir := t.TempDir()
+	workspace, err := contentfs.New(workspaceDir)
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "doc1.md"), []byte("# Doc One\n\nContent for document one."), 0o600); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.Sources = []domain.Source{
+		{
+			ID:      "test-source",
+			Type:    domain.SourceTypeFilesystem,
+			Enabled: true,
+			Config: domain.SourceConfig{
+				Filesystem: &domain.FilesystemSourceConfig{
+					Root:    sourceDir,
+					Include: []string{"**/*.md"},
+					Flavor:  domain.SourceFlavorMarkdown,
+				},
+			},
+		},
+	}
+
+	maintainer := runtimeSharedAtlasMaintainer{}
+
+	host, err := knowl.NewHost(context.Background(), config, maintainer)
+	if err != nil {
+		t.Fatalf("NewHost(): %v", err)
+	}
+	defer shutdownHost(t, host)
+
+	res, err := host.RunOnce(context.Background(), knowl.RunOnceOptions{
+		SyncSources:     true,
+		DrainOperations: true,
+	})
+	if err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if len(res.Sources) != 1 || res.Sources[0].SourceID != "test-source" {
+		t.Errorf("res.Sources = %#v, want 1 test-source result", res.Sources)
+	}
+	if res.Operations.Total != 1 || res.Operations.Completed != 1 {
+		t.Errorf("res.Operations = %#v, want 1 total, 1 completed", res.Operations)
+	}
+
+	// Verify committed page exists in wiki
+	pagePath := filepath.Join(workspace.Root(), runtimeSharedAtlasPagePath)
+	if _, err := os.Stat(pagePath); err != nil {
+		t.Fatalf("committed wiki page missing: %v", err)
+	}
+}
+

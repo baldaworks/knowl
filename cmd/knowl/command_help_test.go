@@ -184,6 +184,14 @@ func TestImplementedWorkflowHelpDescribesCLIInputs(t *testing.T) {
 				workflowJSONStdoutHelp,
 			},
 		},
+		{
+			name: "run",
+			cmd:  newRunCommand(),
+			wantParts: []string{
+				"one complete, bounded knowledge processing cycle",
+				"structured JSON execution results to stdout",
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -245,6 +253,12 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 			name:      operationCommandName,
 			cmd:       newOperationCommand(),
 			wantShort: "Read one durable operation status",
+			wantSubs:  nil,
+		},
+		{
+			name:      runCommandName,
+			cmd:       newRunCommand(),
+			wantShort: "Run one complete, bounded knowledge processing cycle and exit",
 			wantSubs:  nil,
 		},
 		{

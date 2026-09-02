@@ -62,7 +62,10 @@ func newRootCommand() *cobra.Command {
    - knowl source retry <source-id> --failure-class provider --dry-run
 5. Explicitly reconcile a flat semantic wiki into nested OKF catalogs:
    - knowl hierarchy reconcile
-6. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
+6. Run one complete knowledge processing cycle (sync + drain + hierarchy) and exit:
+   - knowl run
+   - knowl run --source <source-id>
+7. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
 
 Bootstrap creates a Knowl-owned workspace. Local workflow commands execute
 in-process and print structured JSON results. The retained loopback HTTP API
@@ -95,6 +98,7 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 		newHierarchyCommand(),
 		newBootstrapCommand(),
 		newStartCommand(),
+		newRunCommand(),
 		newIngestCommand(),
 		newRetrieveCommand(),
 		newOperationCommand(),

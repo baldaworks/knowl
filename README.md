@@ -155,6 +155,8 @@ Run one-shot local wrappers over the same KISS contract:
 ./knowl source sync engineering
 ./knowl source status engineering
 ./knowl source retry engineering --failure-class provider --dry-run
+./knowl run
+./knowl run --source engineering
 ```
 
 These CLI commands are operator conveniences. They are not the primary product

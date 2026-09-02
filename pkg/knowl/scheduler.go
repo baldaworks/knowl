@@ -35,6 +35,14 @@ type terminalRunner interface {
 	RunToTerminal(ctx context.Context, claim domain.WorkClaim) (app.IngestResult, error)
 }
 
+// DrainResult summarizes maintenance operations processed during a drain cycle.
+type DrainResult struct {
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+	Retried   int `json:"retried"`
+	Total     int `json:"total"`
+}
+
 type terminalRouter struct {
 	source    terminalRunner
 	hierarchy terminalRunner
@@ -231,6 +239,99 @@ func (scheduler *operationScheduler) stop(ctx context.Context) error {
 			cancel()
 		}
 		return ctx.Err()
+	}
+}
+
+// Drain synchronously claims and executes all ready operations until none remain
+// or context expires. It does not start background tickers or goroutines.
+func (scheduler *operationScheduler) Drain(ctx context.Context) (DrainResult, error) {
+	if scheduler == nil {
+		return DrainResult{}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var result DrainResult
+	for {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if scheduler.isStopping() {
+			return result, nil
+		}
+		ready, err := scheduler.inspect(ctx)
+		if err != nil {
+			return result, err
+		}
+		if !ready {
+			return result, nil
+		}
+		claim, claimErr := scheduler.claim(ctx)
+		if errors.Is(claimErr, app.ErrNoReadyOperation) {
+			return result, nil
+		}
+		if claimErr != nil {
+			return result, claimErr
+		}
+
+		opResult, leaseToken, runErr := scheduler.runClaim(ctx, claim)
+		nextRetryAt, transitionErr := scheduler.handleTransientFailure(ctx, claim, leaseToken, &opResult, runErr)
+		result.Total++
+
+		failureClass := ""
+		failureReason := ""
+		failureDetail := ""
+		event := log.Info()
+		if runErr != nil {
+			event = log.Error()
+			failureClass = schedulerRunnerFailureClass
+			if failure, ok := app.ClassifyExecutionFailure(runErr); ok {
+				failureClass = failure.Class
+				failureReason = failure.Reason
+			}
+			if opResult.Operation.Failure != nil && app.ValidateSafeFailure(*opResult.Operation.Failure, false) {
+				failureClass = opResult.Operation.Failure.Class
+				failureReason = opResult.Operation.Failure.Reason
+			}
+			var detailed interface{ SafeDetail() string }
+			if errors.As(runErr, &detailed) {
+				failureDetail = strings.TrimSpace(detailed.SafeDetail())
+			}
+		}
+
+		switch opResult.Operation.Status {
+		case domain.StatusCommitted:
+			result.Completed++
+		case domain.StatusFailed:
+			result.Failed++
+		default:
+			if !nextRetryAt.IsZero() {
+				result.Retried++
+			}
+		}
+
+		event.Str("class", failureClass).Str("operation_id", string(claim.Operation.ID)).
+			Str("maintenance_status", string(opResult.Operation.Status)).
+			Int("work_attempt", claim.Operation.WorkAttempt).
+			Int("retry_attempt", claim.Operation.RetryAttempt)
+		if failureReason != "" {
+			event.Str("reason", failureReason)
+		}
+		if failureDetail != "" {
+			event.Str("detail", failureDetail)
+		}
+		if !nextRetryAt.IsZero() {
+			event.Time("next_retry_at", nextRetryAt)
+		}
+		if transitionErr != nil && !errors.Is(transitionErr, context.Canceled) {
+			event.Bool("retry_transition_failed", true)
+		}
+		document := claim.Descriptor.Source.SourceDocument
+		if document != (domain.SourceDocument{}) {
+			event.Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
+				Str("revision", document.Revision)
+		}
+		event.Msg("knowl maintenance operation drain")
 	}
 }
 

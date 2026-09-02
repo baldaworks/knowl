@@ -849,3 +849,65 @@ func stopScheduler(t *testing.T, scheduler *operationScheduler) {
 		t.Fatalf("stop scheduler: %v", err)
 	}
 }
+
+func TestSchedulerDrain(t *testing.T) {
+	t.Parallel()
+
+	c1 := schedulerClaim("op-1")
+	c2 := schedulerClaim("op-2")
+	c3 := schedulerClaim("op-3")
+	store := &schedulerStore{claims: []domain.WorkClaim{c1, c2, c3}}
+	executed := make(map[domain.OperationID]bool)
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		executed[claim.Operation.ID] = true
+		if claim.Operation.ID == "op-3" {
+			claim.Operation.Status = domain.StatusFailed
+			claim.Operation.Failure = &domain.Failure{Class: testProviderFailureClass, OperationID: string(claim.Operation.ID)}
+			return app.IngestResult{Operation: claim.Operation}, errors.New("non-retryable failure")
+		}
+		claim.Operation.Status = domain.StatusCommitted
+		return app.IngestResult{Operation: claim.Operation}, nil
+	}), schedulerOptions{claimBatch: 2})
+
+	result, err := scheduler.Drain(context.Background())
+	if err != nil {
+		t.Fatalf("Drain() error = %v", err)
+	}
+	if result.Total != 3 {
+		t.Errorf("result.Total = %d, want 3", result.Total)
+	}
+	if result.Completed != 2 {
+		t.Errorf("result.Completed = %d, want 2", result.Completed)
+	}
+	if result.Failed != 1 {
+		t.Errorf("result.Failed = %d, want 1", result.Failed)
+	}
+	if len(executed) != 3 {
+		t.Errorf("executed operations = %d, want 3", len(executed))
+	}
+	if store.claimCount() != 0 {
+		t.Errorf("remaining claims = %d, want 0", store.claimCount())
+	}
+}
+
+func TestSchedulerDrainContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	c1 := schedulerClaim("op-1")
+	c2 := schedulerClaim("op-2")
+	store := &schedulerStore{claims: []domain.WorkClaim{c1, c2}}
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		cancel()
+		claim.Operation.Status = domain.StatusCommitted
+		return app.IngestResult{Operation: claim.Operation}, nil
+	}), schedulerOptions{})
+
+	result, err := scheduler.Drain(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Drain() error = %v, want context.Canceled", err)
+	}
+	if result.Completed != 1 {
+		t.Errorf("result.Completed = %d, want 1", result.Completed)
+	}
+}
