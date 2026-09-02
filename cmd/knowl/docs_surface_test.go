@@ -18,13 +18,14 @@ func TestPublicDocumentationSurface(t *testing.T) {
 		filepath.Join("docs", "sidecar.md"),
 		filepath.Join("docs", "releases", "v0.1.0.md"),
 		filepath.Join("api", "openapi", "knowl.yaml"),
-		filepath.Join("examples", "project-decisions", "README.md"),
-		filepath.Join("examples", "project-decisions", "client.go"),
-		filepath.Join("examples", "project-decisions", "main.go"),
-		filepath.Join("examples", "project-decisions", "sources", "adr-session-memory-v1.md"),
-		filepath.Join("examples", "project-decisions", "sources", "investigation-session-recovery-v1.md"),
-		filepath.Join("examples", "project-decisions", "sources", "adr-session-memory-v2.md"),
-		filepath.Join("examples", "project-decisions", "sources", "runbook-session-recovery-v1.md"),
+		filepath.Join("examples", "source-to-wiki", "README.md"),
+		filepath.Join("examples", "source-to-wiki", "run.sh"),
+		filepath.Join("examples", "source-to-wiki", "sources", "architecture-overview.md"),
+		filepath.Join("examples", "source-to-wiki", "sources", "authentication-service.md"),
+		filepath.Join("examples", "source-to-wiki", "sources", "database-retention-policy.md"),
+		filepath.Join("examples", "source-to-wiki", "sources", "incident-response-runbook.md"),
+		filepath.Join("examples", "source-to-wiki", "wiki", "index.md"),
+		filepath.Join("examples", "source-to-wiki", "wiki", "catalogs", "engineering", "index.md"),
 	}
 	for _, relative := range canonicalFiles {
 		if _, err := os.Stat(filepath.Join(repoRoot, relative)); err != nil {
@@ -43,7 +44,7 @@ func TestPublicDocumentationSurface(t *testing.T) {
 		workspaceDocRelativePath,
 		sidecarDocRelativePath,
 		"api/openapi/knowl.yaml",
-		"examples/project-decisions/README.md",
+		"examples/source-to-wiki/README.md",
 	} {
 		if !strings.Contains(string(readme), link) {
 			t.Errorf("README does not link canonical artifact %q", link)
@@ -92,24 +93,19 @@ func TestPublicDocumentationSurface(t *testing.T) {
 		}
 	}
 
-	example, err := os.ReadFile(filepath.Join(repoRoot, "examples", "project-decisions", "README.md"))
+	example, err := os.ReadFile(filepath.Join(repoRoot, "examples", "source-to-wiki", "README.md"))
 	if err != nil {
-		t.Fatalf("read project-decisions example: %v", err)
+		t.Fatalf("read source-to-wiki example: %v", err)
 	}
 	exampleText := strings.Join(strings.Fields(string(example)), " ")
 	for _, statement := range []string{
-		mcpIngestToolName,
-		mcpOperationToolName,
-		mcpRetrieveToolName,
-		"http://127.0.0.1:8080/mcp",
-		"KNOWL_MCP_ENDPOINT",
-		operatorTokenEnvName,
-		"source_refs",
-		"Host answer",
-		"Change a revision only when the corresponding source content changes",
+		"sources/ (raw markdown) ──> knowl run ──> wiki/",
+		"acprun",
+		"antigravity-acp",
+		"knowl run",
 	} {
 		if !strings.Contains(exampleText, statement) {
-			t.Errorf("project-decisions example does not preserve contract statement %q", statement)
+			t.Errorf("source-to-wiki example does not preserve statement %q", statement)
 		}
 	}
 

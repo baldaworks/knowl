@@ -31,10 +31,9 @@ The intended shape is:
 sources -> Knowl -> grounded evidence -> host agent -> final answer
 ```
 
-See the [single-source showcase](examples/single-source-showcase/README.md)
-for building a project knowledge base from engineering documents using the
-one-shot run workflow, or [project-decisions](examples/project-decisions/README.md)
-for ADR ingest, operation polling, and provenance retrieval over MCP.
+See the [source-to-wiki showcase](examples/source-to-wiki/README.md)
+for a concrete demonstration of turning raw engineering documents into a
+structured, queryable Markdown wiki using the one-shot run workflow.
 
 The default path is a sidecar service with SQLite. Connect agents over MCP;
 use HTTP for deterministic control and Fx only when a Go process needs the
