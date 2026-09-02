@@ -11,11 +11,11 @@ echo "Building knowl CLI..."
 echo "Running one-shot knowledge processing cycle..."
 echo "Configuration: ${SCRIPT_DIR}/.config/knowl/config.yaml"
 echo "Input sources: ${SCRIPT_DIR}/sources"
-echo "Output wiki:   ${SCRIPT_DIR}/wiki"
+echo "Output wiki:   ${SCRIPT_DIR}/knowledge/wiki"
 echo ""
 
 (cd "${SCRIPT_DIR}" && ./knowl run)
 
 echo ""
 echo "=== Knowledge Processing Completed Successfully ==="
-echo "Inspect generated wiki files in: ${SCRIPT_DIR}/wiki"
+echo "Inspect generated wiki files in: ${SCRIPT_DIR}/knowledge/wiki"

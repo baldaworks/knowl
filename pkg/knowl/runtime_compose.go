@@ -169,6 +169,9 @@ func openWorkspace(path string) (*contentfs.Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := workspace.Init(); err != nil {
+		return nil, fmt.Errorf("initialize Knowl workspace: %w", err)
+	}
 	if err := workspace.Validate(); err != nil {
 		return nil, fmt.Errorf("validate Knowl workspace: %w", err)
 	}

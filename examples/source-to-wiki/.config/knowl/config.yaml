@@ -2,24 +2,23 @@ runtime:
   providers:
     antigravity:
       type: antigravity_acp
-      antigravity_acp: {}
+      antigravity_acp:
+        model: gemini-3.7-flash-medium
 
 knowl:
   provider: antigravity
   workspace:
-    path: .
+    path: knowledge
   storage:
     type: sqlite
     sqlite:
-      path: .knowl/state.db
+      path: knowledge/.knowl/state.db
   scope: local
   sources:
     - id: engineering-docs
       type: filesystem
-      enabled: true
-      config:
-        filesystem:
-          root: sources
-          include:
-            - "**/*.md"
-          flavor: markdown
+      filesystem:
+        root: sources
+        include:
+          - "**/*.md"
+        flavor: markdown

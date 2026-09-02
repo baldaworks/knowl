@@ -79,11 +79,11 @@ func TestSourceToWikiShowcaseEndToEnd(t *testing.T) {
 	}
 	for _, required := range []string{
 		"index.md",
-		"catalogs/engineering/index.md",
-		"entities/architecture-overview.md",
-		"entities/authentication-service.md",
-		"entities/database-retention-policy.md",
-		"entities/incident-response-runbook.md",
+		"log.md",
+		"concepts/authentication-and-session-security.md",
+		"concepts/data-retention-and-lifecycle.md",
+		"concepts/incident-response-and-failover.md",
+		"entities/acme-cloud-platform.md",
 	} {
 		fullPath := filepath.Join(checkedInWiki, required)
 		if _, err := os.Stat(fullPath); err != nil {
