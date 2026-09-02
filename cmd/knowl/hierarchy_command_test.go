@@ -79,7 +79,7 @@ func TestHierarchyReconcileCommandBuildsValidHierarchyAndReplaysAsNoOp(t *testin
 	if err != nil {
 		t.Fatalf("read hierarchy root: %v", err)
 	}
-	if !strings.Contains(string(root), "/catalogs/architecture/index.md") || !strings.Contains(string(root), "/catalogs/product/index.md") ||
+	if !strings.Contains(string(root), "catalogs/architecture/index.md") || !strings.Contains(string(root), "catalogs/product/index.md") ||
 		strings.Contains(string(root), "/entities/one.md") || strings.Contains(string(root), "/entities/two.md") {
 		t.Fatalf("root is not nested semantic catalogs:\n%s", root)
 	}

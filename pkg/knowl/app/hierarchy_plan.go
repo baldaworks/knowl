@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -465,8 +466,12 @@ func renderHierarchyCatalog(catalog knowl.HierarchyCatalogSpec, titles map[strin
 		}
 		body.WriteString("* [")
 		body.WriteString(escapeMarkdownLabel(title))
-		body.WriteString("](/")
-		body.WriteString(escapeHierarchyDestination(strings.TrimPrefix(child, "wiki/")))
+		body.WriteString("](")
+		relChild, err := filepath.Rel(filepath.Dir(catalog.Path), child)
+		if err != nil {
+			return nil, fmt.Errorf("catalog %q child %q relative path: %w", catalog.Path, child, err)
+		}
+		body.WriteString(escapeHierarchyDestination(filepath.ToSlash(relChild)))
 		body.WriteString(")\n")
 	}
 	if body.Len() > maxBytes {

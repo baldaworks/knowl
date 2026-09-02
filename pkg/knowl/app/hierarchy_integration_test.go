@@ -107,7 +107,7 @@ func TestHierarchyValeraScaleUnicodeMultiSourceRebuildAndExport(t *testing.T) {
 		t.Fatalf("scale inspection = %d pages, %d catalogs", len(inspection.Snapshot.Pages), len(inspection.Catalogs))
 	}
 	root := inspection.Index.Content
-	if !strings.Contains(root, "/catalogs/business/index.md") || !strings.Contains(root, "/catalogs/platform/index.md") ||
+	if !strings.Contains(root, "catalogs/business/index.md") || !strings.Contains(root, "catalogs/platform/index.md") ||
 		strings.Contains(root, "/архитектура/подсистемы/") || strings.Contains(root, "/продукт/дорожная-карта/") {
 		t.Fatalf("scale root is not nested and semantic:\n%s", root)
 	}

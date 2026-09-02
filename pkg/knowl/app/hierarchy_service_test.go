@@ -53,13 +53,13 @@ func TestHierarchyServiceReconcilesCatalogsWithoutChangingSourcePages(t *testing
 	assertHierarchyProtectedFiles(t, workspace, before)
 
 	root := readWorkspaceFile(t, workspace, "wiki/index.md")
-	if !strings.Contains(root, "/catalogs/architecture/index.md") || !strings.Contains(root, "/catalogs/product/index.md") ||
+	if !strings.Contains(root, "catalogs/architecture/index.md") || !strings.Contains(root, "catalogs/product/index.md") ||
 		strings.Contains(root, "/entities/one.md") || strings.Contains(root, "/entities/two.md") {
 		t.Fatalf("root is not a catalog-only hierarchy:\n%s", root)
 	}
 	architecture := readWorkspaceFile(t, workspace, hierarchyArchitectureCatalog)
 	product := readWorkspaceFile(t, workspace, hierarchyProductCatalog)
-	if !strings.Contains(architecture, "/entities/one.md") || !strings.Contains(product, "/entities/two.md") {
+	if !strings.Contains(architecture, "entities/one.md") || !strings.Contains(product, "entities/two.md") {
 		t.Fatalf("catalog memberships are incomplete:\narchitecture:\n%s\nproduct:\n%s", architecture, product)
 	}
 
