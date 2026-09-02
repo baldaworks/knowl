@@ -66,19 +66,16 @@ Or directly using the `knowl` binary from this directory:
 knowl run
 ```
 
-### Configured Backend: ACP via `acprun`
+### Configured Backend: Native Antigravity ACP
 
-The workspace configuration in [`.config/knowl/config.yaml`](.config/knowl/config.yaml) configures the maintainer backend using `acprun` with `antigravity-acp`:
+The workspace configuration in [`.config/knowl/config.yaml`](.config/knowl/config.yaml) configures the maintainer backend using native `antigravity_acp`:
 
 ```yaml
 runtime:
   providers:
     antigravity:
-      type: generic_acp
-      generic_acp:
-        cmd:
-          - acprun
-          - antigravity-acp
+      type: antigravity_acp
+      antigravity_acp: {}
 
 knowl:
   provider: antigravity

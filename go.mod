@@ -7,7 +7,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/metalagman/appkit v0.1.1-0.20260129033342-e19ea914eada
 	github.com/modelcontextprotocol/go-sdk v1.5.0
-	github.com/normahq/runtime/v2 v2.0.4
+	github.com/normahq/runtime/v2 v2.0.10
 	github.com/oapi-codegen/runtime v1.4.1
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/rs/zerolog v1.35.1
@@ -222,7 +222,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/nishanths/exhaustive v0.12.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
-	github.com/normahq/go-adk-acpagent/v2 v2.1.2 // indirect
+	github.com/normahq/go-adk-acpagent/v2 v2.2.1 // indirect
 	github.com/nunnatsa/ginkgolinter v0.23.0 // indirect
 	github.com/oapi-codegen/oapi-codegen/v2 v2.5.1 // indirect
 	github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 // indirect

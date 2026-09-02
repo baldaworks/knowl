@@ -100,8 +100,7 @@ func TestPublicDocumentationSurface(t *testing.T) {
 	exampleText := strings.Join(strings.Fields(string(example)), " ")
 	for _, statement := range []string{
 		"sources/ (raw markdown) ──> knowl run ──> wiki/",
-		"acprun",
-		"antigravity-acp",
+		"antigravity_acp",
 		"knowl run",
 	} {
 		if !strings.Contains(exampleText, statement) {
