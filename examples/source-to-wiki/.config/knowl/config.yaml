@@ -1,11 +1,8 @@
 runtime:
   providers:
     antigravity:
-      type: generic_acp
-      generic_acp:
-        cmd:
-          - acprun
-          - antigravity-acp
+      type: antigravity_acp
+      antigravity_acp: {}
 
 knowl:
   provider: antigravity
