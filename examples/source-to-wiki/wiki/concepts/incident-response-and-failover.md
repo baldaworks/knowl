@@ -8,16 +8,14 @@ knowl:
 ---
 # Incident Response & Failover
 
-## Triage & Severity Levels
-- **SEV-1**: Core service outage (API Gateway or Primary DB unreachable). Alerts on-call engineer immediately via PagerDuty.
-- **SEV-2**: Partial degradation (read replicas lagging or elevated error rates > 2%).
+Incident triage classifications and automated/manual failover runbooks ensure high availability across core services and data stores.
 
-## PostgreSQL Failover Procedure
-1. Verify primary node health: `kubectl exec -it pg-primary -- pg_isready`.
-2. If the primary node remains unresponsive for > 60 seconds, initiate Patroni leader election.
-3. Promote the designated standby replica using `patronictl -c /etc/patroni.yml failover`.
-4. Validate resumption of read-write traffic and replication lag convergence to < 50ms.
-5. Re-route PgBouncer database connection poolers if DNS cutover does not propagate within 30 seconds.
+## Incident Severity Classifications
+- **SEV-1**: Core service outage such as API Gateway or Primary Database unreachability. On-call engineers are alerted immediately via PagerDuty. Status updates are posted to `#incidents-live` within 10 minutes.
+- **SEV-2**: Partial service degradation, including elevated error rates (> 2%) or replica replication lag.
 
-## Communication Protocols
-- Post incident notifications to `#incidents-live` Slack channel within 10 minutes of SEV-1 declaration.
+## PostgreSQL Database Failover
+1. Check primary health via `kubectl exec -it pg-primary -- pg_isready`.
+2. If primary node is unresponsive for > 60 seconds, initiate Patroni leader election and promote designated standby (`patronictl -c /etc/patroni.yml failover`).
+3. Verify read-write traffic resumes and replication lag converges to < 50ms.
+4. Re-route PgBouncer connection poolers if DNS cutover does not propagate within 30 seconds.

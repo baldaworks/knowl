@@ -8,11 +8,13 @@ knowl:
 ---
 # Data Retention & Lifecycle
 
-## Data Classification & Schedules
-- **Transactional Records (Orders, Payments)**: Retained active in PostgreSQL for 2 years, then cold-archived as encrypted Parquet files in object storage for 7 years compliance.
-- **Audit Logs**: Streamed to WORM (Write Once Read Many) immutable storage and retained for 5 years.
-- **User Activity Logs**: Retained in hot storage for 90 days, aggregated monthly for analytics, and purged after 180 days.
+Acme Cloud enforces scheduled lifecycle policies for data classification, compliance archiving, and automated purging.
 
-## Automated Purging & Privacy
-- **Scheduled Purging**: Daily cron jobs execute bounded chunked deletions during off-peak hours (02:00–04:00 UTC) with sleep intervals to prevent database replication lag.
-- **GDPR Compliance**: "Right to be Forgotten" requests trigger asynchronous cascade deletion across primary tables within 30 business days.
+## Data Classification and Schedules
+- **Transactional Records**: Retained active in PostgreSQL for 2 years, then cold-archived as encrypted Parquet on object storage for 7 years.
+- **Audit Logs**: Streamed to Write Once Read Many (WORM) storage with a 5-year retention period.
+- **User Activity Logs**: Maintained in hot storage for 90 days, aggregated monthly for analytics, and purged after 180 days.
+
+## Automated Purging and Compliance
+- Daily cron jobs run chunked deletions during off-peak hours (02:00–04:00 UTC) with sleep pauses to mitigate replication lag.
+- GDPR "Right to be Forgotten" requests trigger asynchronous cascade deletions across primary tables within 30 business days.

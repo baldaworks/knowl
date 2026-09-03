@@ -8,15 +8,17 @@ knowl:
 ---
 # Authentication & Session Security
 
-## Authentication Protocol
-- Clients authenticate using OAuth2/OIDC providers or username/password with bcrypt hashing.
-- Successful authentication issues a short-lived JSON Web Token (JWT) access token (15-minute expiration) and a cryptographically random refresh token (7-day expiration).
+Acme Cloud implements token-based authentication, distributed session revocation, and mutual TLS for inter-service communication.
 
-## Session Revocation
-- Access tokens contain standard claims including `sub`, `exp`, `iss`, and `jti`.
-- Session revocations are broadcast over Redis Pub/Sub and recorded in a distributed bloom filter / blacklist keyed by `jti`.
-- Password changes and explicit logouts immediately invalidate all active refresh tokens for the user in PostgreSQL.
+## Authentication Protocols and Tokens
+- **Client Authentication**: Authenticates via OAuth2 / OIDC providers or username and password hashed with bcrypt.
+- **Access Tokens**: Short-lived JSON Web Tokens (JWT) with 15-minute expiration containing standard claims (`sub`, `exp`, `iss`, `jti`). Endpoints behind the API Gateway require valid bearer tokens.
+- **Refresh Tokens**: Cryptographically random tokens with 7-day expiration.
 
-## Security Requirements
-- All endpoints behind the API Gateway require valid bearer tokens.
-- Internal service-to-service communication uses mutual TLS (mTLS) with SPIFFE identities.
+## Session Revocation and Invalidation
+- Revocation events are broadcasted across services using Redis Pub/Sub.
+- Distributed bloom filter and blacklist keyed by `jti` track revoked sessions.
+- Password changes and explicit logouts immediately invalidate active user refresh tokens in PostgreSQL.
+
+## Inter-Service Security
+- Internal service-to-service communication is secured using mutual TLS (mTLS) with SPIFFE identities.
