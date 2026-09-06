@@ -56,6 +56,42 @@ func TestWorkspaceInitCreatesCanonicalOKFControls(t *testing.T) {
 	if err := workspace.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
+	schemaContent, err := os.ReadFile(filepath.Join(workspace.Root(), schemaFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		"schema_version: 1",
+		"operator-owned Markdown policy",
+		"untrusted input",
+		"independently enforces OKF structure",
+		"entities/",
+		"concepts/",
+		"syntheses/",
+		"source references",
+		"reachable from the root catalog",
+		"contradictions",
+		"superseded",
+	} {
+		if !strings.Contains(string(schemaContent), marker) {
+			t.Errorf("starter schema missing %q", marker)
+		}
+	}
+
+	custom := []byte("# Operator policy\n\nNever replace this file.\n")
+	if err := os.WriteFile(filepath.Join(workspace.Root(), schemaFile), custom, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("re-initialize workspace: %v", err)
+	}
+	gotCustom, err := os.ReadFile(filepath.Join(workspace.Root(), schemaFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(gotCustom, custom) {
+		t.Fatalf("re-initialization replaced operator schema:\n%s", gotCustom)
+	}
 }
 
 func TestWorkspaceSnapshotExcludesNestedReservedDocuments(t *testing.T) {

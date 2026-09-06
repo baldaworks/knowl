@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: engineering-docs/architecture-overview.md
+version: 85e388c68908fcde776b0728bf0534f78bd14b862abf85a6ac6fed3fdccbfdb2
+digest: 85e388c68908fcde776b0728bf0534f78bd14b862abf85a6ac6fed3fdccbfdb2
+media_type: text/markdown
+source_document:
+    source_id: engineering-docs
+    document_id: architecture-overview.md
+    revision: 85e388c68908fcde776b0728bf0534f78bd14b862abf85a6ac6fed3fdccbfdb2
+    uri: file:///home/bigboss/Projects/knowl/examples/source-to-wiki/sources/architecture-overview.md
+received_at: 2026-09-06T17:22:48.667204Z

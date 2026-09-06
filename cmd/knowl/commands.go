@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
+	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/spf13/cobra"
 )
@@ -18,14 +19,7 @@ const (
 	loopbackHTTPAPIText = "loopback HTTP API"
 	startCommandUsage   = "knowl start"
 
-	defaultSchema = `# Knowl schema
-
-This document defines the page, link, citation, ingest, query, and lint conventions for this workspace.
-
-Maintainer plans may read this document but may not modify it.
-`
 	defaultIndex = "---\nokf_version: \"0.2\"\n---\n# Knowl Index\n"
-	defaultLog   = "# Knowl Update Log\n"
 )
 
 func newInitCommand() *cobra.Command {
@@ -102,34 +96,12 @@ func newOperationCommand() *cobra.Command {
 }
 
 func initWorkspace(workspace string) error {
-	for _, path := range []string{
-		filepath.Join(workspace, "raw"),
-		filepath.Join(workspace, workspaceWikiDir, "entities"),
-		filepath.Join(workspace, workspaceWikiDir, "concepts"),
-		filepath.Join(workspace, workspaceWikiDir, "syntheses"),
-		filepath.Join(workspace, ".knowl", "staging"),
-		filepath.Join(workspace, ".knowl", "recovery"),
-		filepath.Join(workspace, ".knowl", "commits"),
-	} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			return fmt.Errorf("create workspace directory %q: %w", path, err)
-		}
+	canonical, err := contentfs.New(workspace)
+	if err != nil {
+		return fmt.Errorf("open workspace for initialization: %w", err)
 	}
-	files := map[string]string{
-		schemaFile: defaultSchema,
-		indexFile:  defaultIndex,
-		logFile:    defaultLog,
-	}
-	for relative, contents := range files {
-		path := filepath.Join(workspace, filepath.FromSlash(relative))
-		if _, err := os.Stat(path); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("stat workspace file %q: %w", path, err)
-		}
-		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-			return fmt.Errorf("write workspace file %q: %w", path, err)
-		}
+	if err := canonical.Init(); err != nil {
+		return fmt.Errorf("initialize workspace: %w", err)
 	}
 	return nil
 }

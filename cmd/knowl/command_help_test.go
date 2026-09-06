@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/spf13/cobra"
 )
 
@@ -28,6 +29,41 @@ func TestInitWorkspaceIsIdempotent(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(workspace, relative)); err != nil {
 			t.Errorf("expected initialized file %q: %v", relative, err)
 		}
+	}
+
+	directRoot := t.TempDir()
+	direct, err := contentfs.New(directRoot)
+	if err != nil {
+		t.Fatalf("new direct workspace: %v", err)
+	}
+	if err := direct.Init(); err != nil {
+		t.Fatalf("initialize direct workspace: %v", err)
+	}
+	cliSchema, err := os.ReadFile(filepath.Join(workspace, schemaFile))
+	if err != nil {
+		t.Fatalf("read CLI schema: %v", err)
+	}
+	directSchema, err := os.ReadFile(filepath.Join(directRoot, schemaFile))
+	if err != nil {
+		t.Fatalf("read direct schema: %v", err)
+	}
+	if !bytes.Equal(cliSchema, directSchema) {
+		t.Fatalf("CLI and direct starter schemas differ:\nCLI:\n%s\ndirect:\n%s", cliSchema, directSchema)
+	}
+
+	custom := []byte("# Custom operator schema\n")
+	if err := os.WriteFile(filepath.Join(workspace, schemaFile), custom, 0o600); err != nil {
+		t.Fatalf("write custom schema: %v", err)
+	}
+	if err := initWorkspace(workspace); err != nil {
+		t.Fatalf("re-init customized workspace: %v", err)
+	}
+	gotCustom, err := os.ReadFile(filepath.Join(workspace, schemaFile))
+	if err != nil {
+		t.Fatalf("read custom schema: %v", err)
+	}
+	if !bytes.Equal(gotCustom, custom) {
+		t.Fatalf("CLI re-init replaced custom schema: %q", gotCustom)
 	}
 }
 

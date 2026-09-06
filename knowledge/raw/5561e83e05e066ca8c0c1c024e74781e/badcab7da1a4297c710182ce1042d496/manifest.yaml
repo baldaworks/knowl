@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/workspace.md
+version: f3ad44d1383b2256e486b9da1e4943e6afaf6af471594db73ef3d87e4abc89f3
+digest: f3ad44d1383b2256e486b9da1e4943e6afaf6af471594db73ef3d87e4abc89f3
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: workspace.md
+    revision: f3ad44d1383b2256e486b9da1e4943e6afaf6af471594db73ef3d87e4abc89f3
+    uri: file:///home/bigboss/Projects/knowl/docs/workspace.md
+received_at: 2026-09-06T17:30:13.599528Z

@@ -1,3 +1,3 @@
 # Operations
+* [Release History](../../concepts/releases.md)
 * [Service Operations](../../concepts/service-operations.md)
-* [Sidecar Deployment](../../concepts/sidecar-deployment.md)

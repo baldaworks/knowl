@@ -10,6 +10,32 @@ import (
 )
 
 const (
+	defaultSchemaContent = `# Knowl workspace policy
+
+schema_version: 1
+
+## Purpose and enforcement boundary
+
+This operator-owned Markdown policy guides the maintainer as untrusted input. Maintainer plans may read it but may not modify it. Knowl code independently enforces OKF structure, safe paths, provenance, links, limits, and protected control files.
+
+## Page taxonomy
+
+- entities/ describes stable named things.
+- concepts/ describes reusable topics, policies, and procedures.
+- syntheses/ combines evidence across multiple subjects or sources.
+
+## Metadata and provenance
+
+Use concise titles and types. Preserve stable source references for every factual claim, and merge overlapping evidence into durable semantic pages instead of mirroring source files.
+
+## Links and organization
+
+Link only to existing or same-plan pages. Keep every page reachable from the root catalog and organize navigation by subject rather than source location.
+
+## Change handling
+
+Preserve compatible facts when updating a page. Record material contradictions explicitly, and mark superseded guidance instead of silently deleting historical context.
+`
 	rootIndexContent = "---\nokf_version: \"0.2\"\n---\n# Knowl Index\n"
 	rootLogContent   = "# Knowl Update Log\n"
 )
@@ -30,7 +56,7 @@ func (workspace *Workspace) Init() error {
 		}
 	}
 	files := map[string]string{
-		schemaFile: "# Knowl schema\n\nMaintainer plans may read this document but may not modify it.\n",
+		schemaFile: defaultSchemaContent,
 		filepath.Join(workspaceWikiDir, "index.md"): rootIndexContent,
 		filepath.Join(workspaceWikiDir, "log.md"):   rootLogContent,
 	}

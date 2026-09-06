@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: engineering-docs/incident-response-runbook.md
+version: d1a320d561ec3d45814a98010fab458e32e159de36037290aebd79981d20d110
+digest: d1a320d561ec3d45814a98010fab458e32e159de36037290aebd79981d20d110
+media_type: text/markdown
+source_document:
+    source_id: engineering-docs
+    document_id: incident-response-runbook.md
+    revision: d1a320d561ec3d45814a98010fab458e32e159de36037290aebd79981d20d110
+    uri: file:///home/bigboss/Projects/knowl/examples/source-to-wiki/sources/incident-response-runbook.md
+received_at: 2026-09-06T17:22:48.716342Z
