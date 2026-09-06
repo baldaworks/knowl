@@ -15,6 +15,8 @@ import (
 
 const runCommandName = "run"
 
+var errRunMaintenanceFailed = errors.New("one or more maintenance operations failed")
+
 type localRunHost interface {
 	RunOnce(ctx context.Context, options knowlruntime.RunOnceOptions) (knowlruntime.RunOnceResult, error)
 	Stop(ctx context.Context) error
@@ -29,15 +31,15 @@ var newLocalRunSession = newProductionLocalRunSession
 
 func newRunCommand() *cobra.Command {
 	var (
-		sourceID     string
-		noSync       bool
-		noDrain      bool
-		noHierarchy  bool
+		sourceID    string
+		noSync      bool
+		noDrain     bool
+		noHierarchy bool
 	)
 
 	command := &cobra.Command{
-		Use:           runCommandName,
-		Short:         "Run one complete, bounded knowledge processing cycle and exit",
+		Use:   runCommandName,
+		Short: "Run one complete, bounded knowledge processing cycle and exit",
 		Long: "Run one complete, bounded knowledge processing cycle and exit.\n\n" +
 			"Executes in-process without starting HTTP or MCP network listeners:\n" +
 			"1. Synchronizes configured sources (all or single).\n" +
@@ -58,6 +60,9 @@ func newRunCommand() *cobra.Command {
 				result, runErr := host.RunOnce(cmd.Context(), options)
 				if err := json.NewEncoder(cmd.OutOrStdout()).Encode(result); err != nil {
 					return fmt.Errorf("encode run result: %w", err)
+				}
+				if result.Operations.Failed > 0 {
+					runErr = errors.Join(runErr, fmt.Errorf("%w: %d", errRunMaintenanceFailed, result.Operations.Failed))
 				}
 				return runErr
 			})

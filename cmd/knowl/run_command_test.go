@@ -12,12 +12,12 @@ import (
 )
 
 type stubRunHost struct {
-	runOnceCalls   int
-	stopCalls      int
-	gotOptions     knowlruntime.RunOnceOptions
-	result         knowlruntime.RunOnceResult
-	runErr         error
-	stopErr        error
+	runOnceCalls int
+	stopCalls    int
+	gotOptions   knowlruntime.RunOnceOptions
+	result       knowlruntime.RunOnceResult
+	runErr       error
+	stopErr      error
 }
 
 const testRunSourceID = "src-1"
@@ -121,6 +121,39 @@ func TestRunCommandErrorPropagation(t *testing.T) {
 	err := cmd.Execute()
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("Execute() error = %v, want %v", err, expectedErr)
+	}
+	if stub.stopCalls != 1 {
+		t.Errorf("Stop calls = %d, want 1", stub.stopCalls)
+	}
+}
+
+func TestRunCommandReportsFailedMaintenanceAfterStructuredOutput(t *testing.T) {
+	original := newLocalRunSession
+	t.Cleanup(func() { newLocalRunSession = original })
+
+	stub := &stubRunHost{
+		result: knowlruntime.RunOnceResult{
+			Operations: knowlruntime.DrainResult{Failed: 1, Total: 1},
+		},
+	}
+	newLocalRunSession = func(context.Context) (localRunSession, error) {
+		return localRunSession{Host: stub, ShutdownTimeout: time.Second}, nil
+	}
+
+	cmd := newRunCommand()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+
+	err := cmd.Execute()
+	if !errors.Is(err, errRunMaintenanceFailed) {
+		t.Fatalf("Execute() error = %v, want maintenance failure", err)
+	}
+	var output knowlruntime.RunOnceResult
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode stdout JSON: %v", err)
+	}
+	if output.Operations.Failed != 1 || output.Operations.Total != 1 {
+		t.Fatalf("decoded Operations = %#v", output.Operations)
 	}
 	if stub.stopCalls != 1 {
 		t.Errorf("Stop calls = %d, want 1", stub.stopCalls)

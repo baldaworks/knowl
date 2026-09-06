@@ -49,6 +49,14 @@ func TestCheckedInConfigArtifactUsesTypedBaldaCompatibleShape(t *testing.T) {
 	repoRoot := testRepoRoot(t)
 	t.Chdir(repoRoot)
 	clearKnowlEnv(t)
+	const wantModel = "gemini-3.8-flash-medium"
+	rootConfig, err := os.ReadFile(filepath.Join(repoRoot, ".config", appName, "config.yaml"))
+	if err != nil {
+		t.Fatalf("read checked-in config: %v", err)
+	}
+	if strings.Contains(string(rootConfig), "opencode") {
+		t.Fatal("checked-in config unexpectedly contains opencode")
+	}
 
 	ctx, err := loadConfig(context.Background(), "", "")
 	if err != nil {
@@ -68,6 +76,35 @@ func TestCheckedInConfigArtifactUsesTypedBaldaCompatibleShape(t *testing.T) {
 	wantPath := filepath.Join(repoRoot, "knowledge", ".knowl", "knowl.sqlite")
 	if storage.Driver != knowl.StoreSQLite || storage.Path != wantPath {
 		t.Fatalf("checked-in storage = %#v, want sqlite path %q", storage, wantPath)
+	}
+	assertAntigravityProvider(t, loaded, wantModel)
+
+	t.Chdir(filepath.Join(repoRoot, "examples", "source-to-wiki"))
+	exampleCtx, err := loadConfig(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("load source-to-wiki config: %v", err)
+	}
+	example, err := configFromContext(exampleCtx)
+	if err != nil {
+		t.Fatalf("read source-to-wiki config: %v", err)
+	}
+	assertAntigravityProvider(t, example, wantModel)
+}
+
+func assertAntigravityProvider(t *testing.T, loaded loadedConfig, wantModel string) {
+	t.Helper()
+	if loaded.Document.Knowl.Provider != "antigravity" {
+		t.Fatalf("knowl.provider = %q, want antigravity", loaded.Document.Knowl.Provider)
+	}
+	provider, ok := loaded.Document.Runtime.Providers["antigravity"]
+	if !ok {
+		t.Fatal("runtime.providers missing antigravity")
+	}
+	if provider.Type != agentconfig.AgentTypeAntigravityACP {
+		t.Fatalf("antigravity provider type = %q, want %q", provider.Type, agentconfig.AgentTypeAntigravityACP)
+	}
+	if provider.AntigravityACP == nil || provider.AntigravityACP.Model != wantModel {
+		t.Fatalf("antigravity ACP config = %#v, want model %q", provider.AntigravityACP, wantModel)
 	}
 }
 

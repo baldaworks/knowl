@@ -48,6 +48,7 @@ When updating a page, preserve every unrelated existing source ref. An older ref
 When replacing an existing page, copy its digest to expected_digest. Omit expected_digest for a new page.
 input.catalogs contains the bounded root-first OKF catalog hierarchy. Every new or edited ordinary page must be reachable from wiki/index.md through catalog links.
 When needed, create or update root and nested index.md catalogs in the same plan. Catalog links must target existing or same-plan Markdown documents, stay inside wiki/, and remain acyclic.
+Every double-bracket wiki link in an ordinary page must target an ordinary page present in input.pages or created by the same plan. Never invent a wiki-link target; use plain text when no confirmed target exists.
 When updating an existing catalog, preserve every unrelated existing child link; the current source does not authorize removing other pages from navigation.
 Only propose edits that are necessary to maintain the canonical knowledge workspace.`
 	hierarchyMaintainerInstruction = `For hierarchy, return only schema_digest, snapshot_digest, and catalogs; never return edits, source_refs, rationale, Markdown content, or factual page changes.

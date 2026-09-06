@@ -1,12 +1,12 @@
 runtime:
   providers:
-    opencode:
-      type: opencode_acp
-      opencode_acp:
-        model: opencode/big-pickle
+    antigravity:
+      type: antigravity_acp
+      antigravity_acp:
+        model: gemini-3.8-flash-medium
 
 knowl:
-  provider: opencode
+  provider: antigravity
   workspace:
     path: ./knowledge
   storage:
@@ -18,3 +18,11 @@ knowl:
     listen_addr: 127.0.0.1:8080
   operator:
     token: replace-with-a-local-secret
+  sources:
+    - id: knowl-docs
+      type: filesystem
+      filesystem:
+        root: docs
+        include:
+          - "**/*.md"
+        flavor: markdown

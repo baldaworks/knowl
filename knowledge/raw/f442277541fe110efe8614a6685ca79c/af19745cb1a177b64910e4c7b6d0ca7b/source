@@ -1,0 +1,61 @@
+# Knowl v0.1.0 — Crash-safe Knowledge Loop
+
+Knowl v0.1.0 is the first release of the self-hosted knowledge sidecar for
+agentic applications: durable project knowledge for agents.
+
+## What is proven
+
+- Accepted immutable sources and their execution descriptors survive restart.
+- One application runner resumes work to a terminal `completed` or `failed`
+  operation with at-least-once execution and idempotent canonical commit.
+- Markdown and immutable raw sources remain canonical; SQLite/PostgreSQL and
+  lexical search remain rebuildable projections.
+- Lexical results are relevance ordered and return match-centered bounded
+  excerpts. Source-aware maintenance context updates existing decisions instead
+  of creating semantic duplicates.
+- The deterministic project-decisions corpus reaches 12/12 expected top-five
+  retrieval hits through MCP, HTTP, SQLite, and PostgreSQL with source refs.
+- HTTP business endpoints and MCP require the configured operator bearer token;
+  `/healthz` and `/readyz` remain public probes.
+
+The public business contract still contains exactly three operations:
+`knowl_retrieve`, `knowl_ingest`, and `knowl_operation` over MCP, with their
+equivalent HTTP control-plane routes.
+
+## Run the image
+
+```bash
+docker pull ghcr.io/baldaworks/knowl:v0.1.0
+docker run --rm \
+  -p 127.0.0.1:8080:8080 \
+  -e KNOWL_OPERATOR_TOKEN=replace-with-a-strong-secret \
+  -v knowl-data:/var/lib/knowl \
+  ghcr.io/baldaworks/knowl:v0.1.0
+```
+
+The release workflow appends the immutable manifest digest to the GitHub
+Release. Production deployments should replace the mutable tag with
+`ghcr.io/baldaworks/knowl@sha256:<published-digest>`.
+
+`GET /readyz` becomes successful only after workspace recovery, durable-work
+resumption setup, and projection preparation. Persist `/var/lib/knowl`; it owns
+the canonical raw/Markdown workspace and SQLite operational state.
+
+## Upgrade and rollback
+
+1. Back up or snapshot the persistent volume according to local policy.
+2. Stop the old container without deleting `/var/lib/knowl`.
+3. Start v0.1.0 by immutable digest with the same volume and operator token.
+4. Wait for `/readyz`, then verify authenticated retrieve and operation reads.
+
+For rollback, stop the new container and run the previous known-good image
+digest against the retained volume. Do not discard pending operations, delete
+the volume, or run destructive down migrations. Additive operational schema is
+retained for forward recovery.
+
+## Known limits
+
+v0.1.0 intentionally has no UI, connector zoo, embeddings, multi-tenancy,
+Git synchronization, generic memory API, or section-level provenance. Hosts
+decide which events are durable and generate final user answers; Knowl maintains
+inspectable project knowledge and returns bounded provenance-backed evidence.

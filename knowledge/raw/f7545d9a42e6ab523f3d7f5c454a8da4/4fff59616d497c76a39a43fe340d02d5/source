@@ -1,0 +1,72 @@
+# Knowl v0.3.0 — Semantic Source Maintenance
+
+Knowl v0.3.0 turns configured sources into immutable evidence for one
+maintainer-owned semantic wiki. Source revisions no longer become pages inside
+the portable OKF bundle.
+
+## Breaking changes
+
+- A runnable Host must have either an explicitly injected maintainer or a valid
+  `knowl.provider` selected from `runtime.providers`. The maintainer provider is
+  now required before readiness.
+- Filesystem synchronization stores exact accepted revisions under `raw/` and
+  no longer materializes active `wiki/sources/<source_id>/**` mirrors.
+- A successful source sync means raw acceptance and durable maintenance
+  reservation. Model-backed wiki updates complete asynchronously and are
+  reported separately by source status.
+
+Bootstrap remains optional. `sync.on_start` also remains explicit per-source
+configuration and may be disabled in favor of manual synchronization.
+
+## Semantic wiki behavior
+
+- The maintainer creates and updates root-reachable semantic OKF entities,
+  concepts, syntheses, and catalogs instead of copying source paths.
+- Curated factual pages must cite accepted raw refs. Updates preserve unrelated
+  source lineages and may replace only an older revision from the same source
+  document lineage.
+- Related evidence from multiple configured sources can support one page.
+  Retrieval returns its sorted `source_documents` collection, and filtering by
+  any contributing source returns the shared page.
+- Catalog and source-mirror control pages are excluded from retrieval evidence.
+  SQLite and PostgreSQL use the same rebuildable page-to-source projection.
+
+## Upgrade
+
+1. Stop active writers and back up the complete workspace and operational
+   store.
+2. Configure `runtime.providers` and select one with `knowl.provider` before
+   starting the new image.
+3. Deploy `ghcr.io/baldaworks/knowl:v0.3.0` and wait for `/readyz`.
+4. Run `knowl source sync --all`, then inspect each `knowl source status`.
+5. Wait for queued maintenance operations to commit and verify unfiltered and
+   source-filtered retrieval.
+
+On each source's next successful reconciliation, Knowl removes only that
+source's legacy derived `wiki/sources/<source_id>/**` subtree through staged
+recovery. Existing raw revisions and curated semantic pages remain unchanged.
+Upstream deletion tombstones source state but does not implicitly delete
+accumulated knowledge.
+
+Source status exposes deterministic bounded queued, replayed, committed, and
+failed maintenance counts and samples. Structured logs correlate source,
+document, revision, and operation identifiers without source bodies, prompts,
+credentials, or provider secrets.
+
+## Published artifact
+
+The release workflow publishes and attests a multi-platform Linux image for
+`amd64` and `arm64` to:
+
+```text
+ghcr.io/baldaworks/knowl:v0.3.0
+```
+
+Pin the digest emitted by the GitHub Release for production deployments.
+
+## Validation
+
+The release gate verifies modules and generated OpenAPI bindings, runs the full
+race-enabled Go suite, vulnerability and architecture checks, strict linting,
+the PostgreSQL integration contract, and a release-shaped persistent-volume
+sidecar smoke test before publishing.
