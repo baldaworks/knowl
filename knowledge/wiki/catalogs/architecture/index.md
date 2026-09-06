@@ -1,4 +1,4 @@
 # Architecture
-* [Product Architecture](../../concepts/product-architecture.md)
-* [Semantic Source Maintenance](../../concepts/semantic-source-maintenance.md)
-* [Workspace Semantics](../../concepts/workspace-semantics.md)
+* [Product Architecture](../../concepts/architecture.md)
+* [Content and Trust Boundaries](../../concepts/content-and-trust-boundaries.md)
+* [Public Contract](../../concepts/public-contract.md)

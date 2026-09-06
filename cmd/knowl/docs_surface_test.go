@@ -24,9 +24,10 @@ func TestPublicDocumentationSurface(t *testing.T) {
 		filepath.Join("examples", "source-to-wiki", "sources", "authentication-service.md"),
 		filepath.Join("examples", "source-to-wiki", "sources", "database-retention-policy.md"),
 		filepath.Join("examples", "source-to-wiki", "sources", "incident-response-runbook.md"),
-		filepath.Join("examples", "source-to-wiki", "wiki", "index.md"),
-		filepath.Join("examples", "source-to-wiki", "wiki", "log.md"),
-		filepath.Join("examples", "source-to-wiki", "wiki", "entities", "acme-cloud-platform.md"),
+		filepath.Join("examples", "source-to-wiki", "knowledge", "schema.md"),
+		filepath.Join("examples", "source-to-wiki", "knowledge", "wiki", "index.md"),
+		filepath.Join("examples", "source-to-wiki", "knowledge", "wiki", "log.md"),
+		filepath.Join("examples", "source-to-wiki", "knowledge", "wiki", "entities", "acme-cloud-platform.md"),
 	}
 	for _, relative := range canonicalFiles {
 		if _, err := os.Stat(filepath.Join(repoRoot, relative)); err != nil {
@@ -100,7 +101,7 @@ func TestPublicDocumentationSurface(t *testing.T) {
 	}
 	exampleText := strings.Join(strings.Fields(string(example)), " ")
 	for _, statement := range []string{
-		"sources/ (raw markdown) ──> knowl run ──> wiki/",
+		"sources/ (raw markdown) ──> knowl run ──> knowledge/wiki/",
 		"antigravity_acp",
 		"knowl run",
 	} {

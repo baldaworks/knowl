@@ -12,7 +12,7 @@ knowl:
   storage:
     type: sqlite
     sqlite:
-      path: knowledge/.knowl/state.db
+      path: .knowl/state.db
   scope: local
   sources:
     - id: engineering-docs

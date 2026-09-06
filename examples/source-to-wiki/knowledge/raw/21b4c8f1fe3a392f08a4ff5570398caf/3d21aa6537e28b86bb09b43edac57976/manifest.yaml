@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: engineering-docs/authentication-service.md
+version: 72f58ee1af237dec1f3c78631782b5127f1b1e8748e2195d5f19c86137e7971c
+digest: 72f58ee1af237dec1f3c78631782b5127f1b1e8748e2195d5f19c86137e7971c
+media_type: text/markdown
+source_document:
+    source_id: engineering-docs
+    document_id: authentication-service.md
+    revision: 72f58ee1af237dec1f3c78631782b5127f1b1e8748e2195d5f19c86137e7971c
+    uri: file:///home/bigboss/Projects/knowl/examples/source-to-wiki/sources/authentication-service.md
+received_at: 2026-09-06T17:22:48.682155Z

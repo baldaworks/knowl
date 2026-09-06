@@ -1,9 +1,14 @@
 # Showcase: Source -> Wiki
 
-This directory demonstrates Knowl's core knowledge pipeline: turning raw, disparate project documentation (`sources/`) into a structured, queryable Open Knowledge Format (OKF) Markdown wiki (`wiki/`).
+This directory demonstrates Knowl's core knowledge pipeline: turning raw, disparate project documentation (`sources/`) into a structured, queryable Open Knowledge Format (OKF) Markdown wiki (`knowledge/wiki/`).
+
+The operator-owned [`knowledge/schema.md`](knowledge/schema.md) supplies domain-specific taxonomy,
+provenance, linking, and change-handling guidance to the maintainer as untrusted
+Markdown. It is not an executable schema: Knowl code independently validates
+OKF structure, safe paths, provenance, links, limits, and protected controls.
 
 ```text
-sources/ (raw markdown)  ──>  knowl run  ──>  wiki/ (semantic entities, catalogs, search index)
+sources/ (raw markdown)  ──>  knowl run  ──>  knowledge/wiki/ (semantic entities and catalogs)
 ```
 
 ---
@@ -19,19 +24,27 @@ Project documentation starts as unstructured or semi-structured files:
 
 ---
 
-## 2. Output: The Generated Wiki (`wiki/`)
+## 2. Output: The Generated Wiki (`knowledge/wiki/`)
 
-Knowl organizes these inputs into an **Open Knowledge Format (OKF)** Markdown wiki. Notice the clean, browseable structure checked in directly under `wiki/`:
+Knowl organizes these inputs into an **Open Knowledge Format (OKF)** Markdown wiki. Notice the clean, browseable structure checked in under `knowledge/wiki/`:
 
 ```text
-wiki/
+knowledge/wiki/
 ├── index.md                              # Root catalog linking the knowledge base
+├── catalogs/
+│   ├── operations/index.md
+│   ├── security/index.md
+│   └── services/index.md
 ├── concepts/
-│   ├── authentication-and-session-security.md
-│   ├── data-retention-and-lifecycle.md
-│   └── incident-response-and-failover.md
+│   ├── data-lifecycle.md
+│   ├── incident-response.md
+│   └── security.md
 └── entities/
-    └── acme-cloud-platform.md
+    ├── acme-cloud-platform.md
+    ├── api-gateway.md
+    ├── authentication-service.md
+    ├── inventory-service.md
+    └── order-processing-service.md
 ```
 
 Every page contains exact provenance references linking back to the raw source file and immutable revision:
@@ -39,9 +52,9 @@ Every page contains exact provenance references linking back to the raw source f
 ```yaml
 ---
 type: topic
-title: Authentication & Session Security
+title: Authentication Service
 knowl:
-  id: concepts/authentication-and-session-security
+  id: entities/authentication-service
   source_refs:
     - wiki-filesystem:engineering-docs/authentication-service.md@72f58ee1af237dec1f3c78631782b5127f1b1e8748e2195d5f19c86137e7971c
 ---
@@ -82,7 +95,7 @@ knowl:
   storage:
     type: sqlite
     sqlite:
-      path: knowledge/.knowl/state.db
+      path: .knowl/state.db
   scope: local
   sources:
     - id: engineering-docs

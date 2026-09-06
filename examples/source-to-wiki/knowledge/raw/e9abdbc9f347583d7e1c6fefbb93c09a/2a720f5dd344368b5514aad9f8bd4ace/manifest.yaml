@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: engineering-docs/database-retention-policy.md
+version: 2b47dd12cbe3fd9c8da48712f72b0eedc5f6b8dda108e7eb5d8ecc271ad24590
+digest: 2b47dd12cbe3fd9c8da48712f72b0eedc5f6b8dda108e7eb5d8ecc271ad24590
+media_type: text/markdown
+source_document:
+    source_id: engineering-docs
+    document_id: database-retention-policy.md
+    revision: 2b47dd12cbe3fd9c8da48712f72b0eedc5f6b8dda108e7eb5d8ecc271ad24590
+    uri: file:///home/bigboss/Projects/knowl/examples/source-to-wiki/sources/database-retention-policy.md
+received_at: 2026-09-06T17:22:48.699729Z

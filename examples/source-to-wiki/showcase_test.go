@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
+	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 const showcaseSourceID = domain.SourceID("engineering-docs")
@@ -71,19 +74,24 @@ func (showcaseTestMaintainer) Plan(_ context.Context, input domain.MaintenanceIn
 func TestSourceToWikiShowcaseEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	assertCheckedInShowcaseContract(t)
 
 	// 1. Verify checked-in wiki directory is valid and complete
-	checkedInWiki := "wiki"
+	checkedInWiki := filepath.Join("knowledge", "wiki")
 	if _, err := os.Stat(checkedInWiki); err != nil {
-		checkedInWiki = filepath.Join("..", "..", "examples", "source-to-wiki", "wiki")
+		checkedInWiki = filepath.Join("..", "..", "examples", "source-to-wiki", "knowledge", "wiki")
 	}
 	for _, required := range []string{
 		"index.md",
 		"log.md",
-		"concepts/authentication-and-session-security.md",
-		"concepts/data-retention-and-lifecycle.md",
-		"concepts/incident-response-and-failover.md",
+		"catalogs/operations/index.md",
+		"catalogs/security/index.md",
+		"catalogs/services/index.md",
+		"concepts/data-lifecycle.md",
+		"concepts/incident-response.md",
+		"concepts/security.md",
 		"entities/acme-cloud-platform.md",
+		"entities/authentication-service.md",
 	} {
 		fullPath := filepath.Join(checkedInWiki, required)
 		if _, err := os.Stat(fullPath); err != nil {
@@ -172,5 +180,119 @@ func TestSourceToWikiShowcaseEndToEnd(t *testing.T) {
 	}
 	if len(refs[0].SourceDocuments) == 0 {
 		t.Errorf("ref %s missing source documents", refs[0].ID)
+	}
+}
+
+func assertCheckedInShowcaseContract(t *testing.T) {
+	t.Helper()
+	artifacts := map[string][]string{
+		filepath.Join("knowledge", "schema.md"): {
+			"schema_version: 1", "operator-owned Markdown policy", "untrusted input",
+			"Acme Cloud", "data lifecycle", "knowl.source_refs", "superseded",
+		},
+		filepath.Join(".config", "knowl", "config.yaml"): {
+			"workspace:\n    path: knowledge", "path: .knowl/state.db",
+		},
+		"run.sh": {
+			"${SCRIPT_DIR}/knowledge/schema.md", "${SCRIPT_DIR}/knowledge/wiki",
+			"${SCRIPT_DIR}/knowledge/.knowl/bin/knowl",
+		},
+		"README.md": {
+			"[`knowledge/schema.md`](knowledge/schema.md)", "not an executable schema", "path: .knowl/state.db",
+		},
+	}
+	for relative, markers := range artifacts {
+		content, err := os.ReadFile(relative)
+		if err != nil {
+			t.Fatalf("read checked-in showcase artifact %s: %v", relative, err)
+		}
+		for _, marker := range markers {
+			if !strings.Contains(string(content), marker) {
+				t.Errorf("%s missing showcase contract %q", relative, marker)
+			}
+		}
+	}
+	assertCheckedInShowcaseDigest(t)
+}
+
+func assertCheckedInShowcaseDigest(t *testing.T) {
+	t.Helper()
+	workspaceRoot := "knowledge"
+	operationalRoot := filepath.Join(workspaceRoot, ".knowl")
+	if err := os.Mkdir(operationalRoot, 0o700); err == nil {
+		t.Cleanup(func() {
+			if err := os.Remove(operationalRoot); err != nil && !os.IsNotExist(err) {
+				t.Errorf("remove temporary showcase operational directory: %v", err)
+			}
+		})
+	} else if !os.IsExist(err) {
+		t.Fatalf("create showcase operational directory: %v", err)
+	}
+	workspace, err := contentfs.New(workspaceRoot)
+	if err != nil {
+		t.Fatalf("open checked-in showcase workspace: %v", err)
+	}
+	if err := workspace.Validate(); err != nil {
+		t.Fatalf("validate checked-in showcase workspace: %v", err)
+	}
+	schema, err := os.ReadFile(filepath.Join(workspaceRoot, "schema.md"))
+	if err != nil {
+		t.Fatalf("read showcase schema: %v", err)
+	}
+	logContent, err := os.ReadFile(filepath.Join(workspaceRoot, "wiki", "log.md"))
+	if err != nil {
+		t.Fatalf("read showcase log: %v", err)
+	}
+	wantDigest := fmt.Sprintf("%x", sha256.Sum256(schema))
+	matches := regexp.MustCompile(`"schema_digest":"([0-9a-f]+)"`).FindAllStringSubmatch(string(logContent), -1)
+	if len(matches) == 0 {
+		t.Fatal("checked-in showcase log has no schema digests")
+	}
+	for _, match := range matches {
+		if match[1] != wantDigest {
+			t.Errorf("checked-in showcase log schema digest = %q, want %q", match[1], wantDigest)
+		}
+	}
+
+	allowedRefs := make(map[string]struct{})
+	sourcePaths, err := filepath.Glob(filepath.Join("sources", "*.md"))
+	if err != nil {
+		t.Fatalf("enumerate showcase sources: %v", err)
+	}
+	for _, sourcePath := range sourcePaths {
+		content, readErr := os.ReadFile(sourcePath)
+		if readErr != nil {
+			t.Fatalf("read showcase source %s: %v", sourcePath, readErr)
+		}
+		ref := fmt.Sprintf("wiki-filesystem:%s/%s@%x", showcaseSourceID, filepath.Base(sourcePath), sha256.Sum256(content))
+		allowedRefs[ref] = struct{}{}
+	}
+	err = filepath.Walk(filepath.Join(workspaceRoot, "wiki"), func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() || filepath.Ext(path) != ".md" || info.Name() == "index.md" || info.Name() == "log.md" {
+			return nil
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		metadata, parseErr := knowlwiki.ParseFrontmatter(string(content))
+		if parseErr != nil {
+			return fmt.Errorf("parse %s: %w", path, parseErr)
+		}
+		if len(metadata.SourceRefs) == 0 {
+			return fmt.Errorf("%s has no source refs", path)
+		}
+		for _, ref := range metadata.SourceRefs {
+			if _, ok := allowedRefs[ref]; !ok {
+				return fmt.Errorf("%s has unknown source ref %q", path, ref)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("validate checked-in showcase provenance: %v", err)
 	}
 }

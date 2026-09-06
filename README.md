@@ -41,7 +41,10 @@ This repository uses Knowl itself to maintain the checked-in
 [project wiki](knowledge/wiki/index.md). The single `knowl-docs` filesystem
 source reads every non-hidden Markdown file below `docs/` through the
 `docs/**/*.md` include in [.config/knowl/config.yaml](.config/knowl/config.yaml).
-Generated output cannot feed back into that source.
+Generated output cannot feed back into that source. The operator-owned
+[self-wiki policy](knowledge/schema.md) guides the maintainer's taxonomy and
+synthesis as untrusted Markdown; Knowl's Go validation still enforces workspace
+safety, OKF, provenance, and link invariants.
 
 From the repository root, refresh and validate the wiki with:
 

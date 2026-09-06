@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -73,6 +76,7 @@ func TestCheckedInSelfWikiContract(t *testing.T) {
 	if err := workspace.Validate(); err != nil {
 		t.Fatalf("validate checked-in self-wiki: %v", err)
 	}
+	assertSelfWikiSchemaDigest(t, workspaceRoot)
 
 	ordinaryPages := selfWikiOrdinaryPages(t, filepath.Join(repoRoot, "knowledge", "wiki"))
 	if len(ordinaryPages) == 0 {
@@ -99,11 +103,11 @@ func TestCheckedInSelfWikiContract(t *testing.T) {
 		sourceRefs = append(sourceRefs, metadata.SourceRefs...)
 	}
 	for _, pageID := range []string{
-		"concepts/product-architecture",
+		"concepts/architecture",
+		"concepts/content-and-trust-boundaries",
+		"concepts/public-contract",
+		"concepts/releases",
 		"concepts/service-operations",
-		"concepts/workspace-semantics",
-		"concepts/sidecar-deployment",
-		"concepts/semantic-source-maintenance",
 	} {
 		if _, exists := pageIDs[pageID]; !exists {
 			t.Errorf("self-wiki missing representative semantic page %q", pageID)
@@ -125,9 +129,58 @@ func TestCheckedInSelfWikiContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read README: %v", err)
 	}
-	for _, required := range []string{"knowledge/wiki/index.md", "docs/**/*.md", "task wiki:generate", "task wiki:validate", "knowledge/.knowl/**", "model-dependent", "knowl.source_refs"} {
+	for _, required := range []string{"knowledge/wiki/index.md", "knowledge/schema.md", "docs/**/*.md", "task wiki:generate", "task wiki:validate", "knowledge/.knowl/**", "model-dependent", "knowl.source_refs"} {
 		if !strings.Contains(string(readme), required) {
 			t.Errorf("README missing self-wiki contract %q", required)
+		}
+	}
+	assertDocumentationSchemaContract(t, repoRoot)
+}
+
+func assertSelfWikiSchemaDigest(t *testing.T, workspaceRoot string) {
+	t.Helper()
+	schema, err := os.ReadFile(filepath.Join(workspaceRoot, "schema.md"))
+	if err != nil {
+		t.Fatalf("read self-wiki schema: %v", err)
+	}
+	logContent, err := os.ReadFile(filepath.Join(workspaceRoot, "wiki", "log.md"))
+	if err != nil {
+		t.Fatalf("read self-wiki log: %v", err)
+	}
+	wantDigest := fmt.Sprintf("%x", sha256.Sum256(schema))
+	matches := regexp.MustCompile(`"schema_digest":"([0-9a-f]+)"`).FindAllStringSubmatch(string(logContent), -1)
+	if len(matches) == 0 {
+		t.Fatal("checked-in self-wiki log has no schema digests")
+	}
+	for _, match := range matches {
+		if match[1] != wantDigest {
+			t.Errorf("checked-in self-wiki log schema digest = %q, want %q", match[1], wantDigest)
+		}
+	}
+}
+
+func assertDocumentationSchemaContract(t *testing.T, repoRoot string) {
+	t.Helper()
+	artifacts := map[string][]string{
+		filepath.Join("knowledge", "schema.md"): {
+			"schema_version: 1", "operator-owned Markdown policy", "untrusted input",
+			"product architecture", "workspace semantics", "knowl.source_refs", "superseded",
+		},
+		filepath.Join("docs", "workspace.md"): {
+			"not an executable schema or validation DSL", "schema_version:",
+			"does not parse the remaining prose", "rechecked before staging and commit",
+		},
+	}
+	for relative, markers := range artifacts {
+		content, err := os.ReadFile(filepath.Join(repoRoot, relative))
+		if err != nil {
+			t.Fatalf("read schema contract %s: %v", relative, err)
+		}
+		normalized := strings.Join(strings.Fields(string(content)), " ")
+		for _, marker := range markers {
+			if !strings.Contains(normalized, marker) {
+				t.Errorf("%s missing schema contract %q", relative, marker)
+			}
 		}
 	}
 }
