@@ -39,6 +39,7 @@ func TestMaintainerInstructionRequiresSemanticSynthesisAndProvenance(t *testing.
 		"preserve every unrelated existing source ref",
 		"preserve every unrelated existing child link",
 		"same source/document lineage",
+		"Never invent a wiki-link target",
 	} {
 		if !strings.Contains(maintainerInstruction, required) {
 			t.Errorf("maintainer instruction missing %q", required)

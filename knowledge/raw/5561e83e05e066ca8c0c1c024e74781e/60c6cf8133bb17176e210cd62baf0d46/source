@@ -74,7 +74,7 @@ knowl:
 
 The page body is human-readable and cites the accepted source above.
 
-See the workspace root index for navigation.
+See [[concepts/related]] or [[entities/other|display text]].
 ```
 
 The enforced and linted conventions are:
@@ -83,17 +83,14 @@ The enforced and linted conventions are:
 - `type` is required; `title`, `description`, `resource`, `tags`, `sources`,
   lifecycle, generation, and verification fields follow OKF v0.2;
 - unknown producer fields round-trip as OKF extensions;
-- internal links must resolve to a page in the current bundle;
 - the `knowl` namespaced extension carries Knowl provenance. Its `source_refs`
   contains stable citations in the form
   `adapter:source-id@version`; every maintained page must cite at least one
   accepted raw source.
-- Curated Knowl pages use double-bracket wiki links whose target is an existing
-  bundle-relative page identity; these links remain strict. Imported OKF
+- Curated Knowl pages use `[[page/id]]`; these links remain strict. Imported OKF
   concepts use standard Markdown links such as `[Related](related.md)`. Local
-  concept targets are resolved deterministically; unresolved internal targets
-  are rejected, while external URLs and assets are excluded from the concept
-  graph.
+  concept targets are resolved deterministically; external URLs, assets, and
+  broken targets are tolerated and excluded from the concept graph.
 - Maintainer edit plans may target safe semantic `wiki/**/*.md` except
   `wiki/log.md` and the reserved legacy `wiki/sources/**` boundary. The plan must carry the
   current schema digest, cite the accepted source, use unique paths, and stay

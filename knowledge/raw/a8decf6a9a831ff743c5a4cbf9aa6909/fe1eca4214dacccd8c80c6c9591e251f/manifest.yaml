@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/sidecar.md
+version: 17c5d32a0547e501b796e12127226b2585fd3dda405936755f1b4b7591a02e8b
+digest: 17c5d32a0547e501b796e12127226b2585fd3dda405936755f1b4b7591a02e8b
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: sidecar.md
+    revision: 17c5d32a0547e501b796e12127226b2585fd3dda405936755f1b4b7591a02e8b
+    uri: file:///home/bigboss/Projects/knowl/docs/sidecar.md
+received_at: 2026-09-06T10:58:13.453598Z

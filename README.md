@@ -35,6 +35,35 @@ See the [source-to-wiki showcase](examples/source-to-wiki/README.md)
 for a concrete demonstration of turning raw engineering documents into a
 structured, queryable Markdown wiki using the one-shot run workflow.
 
+## Knowl's self-generated wiki
+
+This repository uses Knowl itself to maintain the checked-in
+[project wiki](knowledge/wiki/index.md). The single `knowl-docs` filesystem
+source reads every non-hidden Markdown file below `docs/` through the
+`docs/**/*.md` include in [.config/knowl/config.yaml](.config/knowl/config.yaml).
+Generated output cannot feed back into that source.
+
+From the repository root, refresh and validate the wiki with:
+
+```bash
+task wiki:generate
+task wiki:validate
+```
+
+Generation requires the Go version declared in `go.mod`, Task, Node.js/npm for
+the pinned `acprun` invocation, and a usable Antigravity ACP session. The task
+resolves the pinned ACP binary, runs only the `knowl-docs` source, reconciles
+the hierarchy, and validates the result. `wiki:validate` is local-only and does
+not invoke the provider.
+
+Commit `knowledge/schema.md`, `knowledge/raw/**`, and `knowledge/wiki/**`.
+Treat `knowledge/.knowl/**` as rebuildable local operational state. Generated
+prose and organization are model-dependent, so regeneration is an explicit
+maintainer action rather than a CI requirement. Before committing a refresh,
+review the generated diff, its `knowl.source_refs`, and the append-only
+`knowledge/wiki/log.md`; do not accept a merely syntactically valid factual
+change without checking it against the cited raw revision.
+
 The default path is a sidecar service with SQLite. Connect agents over MCP;
 use HTTP for deterministic control and Fx only when a Go process needs the
 same runtime in-process.

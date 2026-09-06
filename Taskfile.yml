@@ -1,0 +1,18 @@
+version: "3"
+
+vars:
+  ACPRUN_VERSION: "0.1.8"
+  ACP_DOWNLOAD_TIMEOUT: "20m"
+
+tasks:
+  wiki:generate:
+    desc: Generate Knowl's wiki from docs/**/*.md and validate the workspace
+    cmds:
+      - npx -y @baldaworks/acprun@{{.ACPRUN_VERSION}} --download-timeout {{.ACP_DOWNLOAD_TIMEOUT}} resolve antigravity-acp
+      - go run ./cmd/knowl run --source knowl-docs
+      - go run ./cmd/knowl validate
+
+  wiki:validate:
+    desc: Validate the checked-in Knowl wiki without invoking a maintainer
+    cmds:
+      - go run ./cmd/knowl validate
