@@ -64,7 +64,9 @@ func TestCheckedInSelfWikiContract(t *testing.T) {
 		allowedDocuments[document] = struct{}{}
 	}
 
-	workspace, err := contentfs.New(filepath.Join(repoRoot, "knowledge"))
+	workspaceRoot := filepath.Join(repoRoot, "knowledge")
+	ensureSelfWikiOperationalDir(t, workspaceRoot)
+	workspace, err := contentfs.New(workspaceRoot)
 	if err != nil {
 		t.Fatalf("open checked-in self-wiki: %v", err)
 	}
@@ -127,6 +129,23 @@ func TestCheckedInSelfWikiContract(t *testing.T) {
 		if !strings.Contains(string(readme), required) {
 			t.Errorf("README missing self-wiki contract %q", required)
 		}
+	}
+}
+
+func ensureSelfWikiOperationalDir(t *testing.T, workspaceRoot string) {
+	t.Helper()
+	operationalDir := filepath.Join(workspaceRoot, ".knowl")
+	err := os.Mkdir(operationalDir, 0o700)
+	if err == nil {
+		t.Cleanup(func() {
+			if err := os.Remove(operationalDir); err != nil && !os.IsNotExist(err) {
+				t.Errorf("remove temporary operational directory: %v", err)
+			}
+		})
+		return
+	}
+	if !os.IsExist(err) {
+		t.Fatalf("create temporary operational directory: %v", err)
 	}
 }
 
