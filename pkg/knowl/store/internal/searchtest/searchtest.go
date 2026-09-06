@@ -142,6 +142,18 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 		}
 		assertUnique(t, got)
 	})
+	t.Run("native relaxed eligibility", func(t *testing.T) {
+		for _, query := range []string{
+			"Что известно о Badger?",
+			"unfindablealpha unfindablebeta badger unfindablegamma",
+		} {
+			got := search(t, index, Scope, query, 10, 64)
+			if !containsIDs(got, decisionBadgerID, "badger-only") {
+				t.Fatalf("Search(%q) = %#v, want native Badger matches", query, got)
+			}
+			assertUnique(t, got)
+		}
+	})
 	t.Run("title weight", func(t *testing.T) {
 		got := search(t, index, Scope, "lease recovery", 5, 48)
 		assertPrefix(t, got, "title-weight", "body-weight")
@@ -205,7 +217,7 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 		assertIDs(t, searchSources(t, index, "sourcefilterbeacon", []knowl.SourceID{"ghost"}))
 	})
 	t.Run("out of vocabulary", func(t *testing.T) {
-		assertIDs(t, search(t, index, Scope, "xyzzy-valera-no-such-term-92841", 20, 64))
+		assertIDs(t, search(t, index, Scope, "xyzzy-valera-qoph-nargle-92841", 20, 64))
 	})
 	t.Run("headingless source content", func(t *testing.T) {
 		got := search(t, index, Scope, "пользовательскийглоссарий", 1, 96)
