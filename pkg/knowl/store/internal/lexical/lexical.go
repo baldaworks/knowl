@@ -160,40 +160,6 @@ func ContainsTerm(text string, terms []string) bool {
 	return matched
 }
 
-// Relevant reports whether a candidate matches enough distinct query terms to
-// be useful. Two-term queries retain relaxed single-term recall; longer
-// queries must match at least half their terms, with a floor of two.
-func Relevant(text string, terms []string) bool {
-	if len(terms) == 0 {
-		return false
-	}
-	minimum := 1
-	if len(terms) > 2 {
-		minimum = max(2, (len(terms)+1)/2)
-	}
-	wanted := make(map[string]struct{}, len(terms))
-	for _, term := range terms {
-		wanted[strings.ToLower(term)] = struct{}{}
-	}
-	matched := make(map[string]struct{}, minimum)
-	for _, candidate := range scanTokens(text) {
-		if _, ok := wanted[candidate.value]; !ok {
-			continue
-		}
-		matched[candidate.value] = struct{}{}
-		if len(matched) >= minimum {
-			return true
-		}
-	}
-	return false
-}
-
-// RelevantFields applies the shared relevance threshold to the complete
-// allowlisted semantic search document.
-func RelevantFields(fields DocumentFields, terms []string) bool {
-	return Relevant(fields.Title+"\n"+fields.Tags+"\n"+fields.Description+"\n"+fields.Body, terms)
-}
-
 func matchingTag(tags string, terms []string) string {
 	for tag := range strings.SplitSeq(tags, "\n") {
 		tag = strings.TrimSpace(tag)

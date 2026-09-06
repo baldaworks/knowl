@@ -43,7 +43,7 @@ func (store *Store) contextCandidates(ctx context.Context, scope knowl.ScopeRef,
 	if len(terms) == 0 || limit <= 0 {
 		return nil, nil
 	}
-	references, err := store.search(ctx, scope, strings.Join(terms, " "), knowl.ReadLimits{Pages: limit, Characters: 1}, nil, false)
+	references, err := store.search(ctx, scope, strings.Join(terms, " "), knowl.ReadLimits{Pages: limit, Characters: 1}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("select relevant context: %w", err)
 	}
@@ -132,10 +132,10 @@ func (store *Store) recentContext(ctx context.Context, scope knowl.ScopeRef, exc
 
 // Search returns bounded, untrusted PostgreSQL full-text references.
 func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
-	return store.search(ctx, scope, query, limits, sources, true)
+	return store.search(ctx, scope, query, limits, sources)
 }
 
-func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID, enforceRelevance bool) ([]knowl.PageReference, error) {
+func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return nil, fmt.Errorf("normalize search query: %w", ErrInvalidQuery)
 	}
 	limit := boundedLimit(limits.Pages)
-	strict, err := store.searchPhase(ctx, scope, tsQuery(normalized.Terms, "&"), limit, limits.Characters, normalized.Terms, sources, enforceRelevance)
+	strict, err := store.searchPhase(ctx, scope, tsQuery(normalized.Terms, "&"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +152,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return strict, nil
 	}
 
-	relaxed, err := store.searchPhase(ctx, scope, tsQuery(normalized.Terms, "|"), limit, limits.Characters, normalized.Terms, sources, enforceRelevance)
+	relaxed, err := store.searchPhase(ctx, scope, tsQuery(normalized.Terms, "|"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 	return references, nil
 }
 
-func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query string, limit, maxCharacters int, terms []string, sources []knowl.SourceID, enforceRelevance bool) ([]knowl.PageReference, error) {
+func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query string, limit, maxCharacters int, terms []string, sources []knowl.SourceID) ([]knowl.PageReference, error) {
 	statement := `
 		WITH lexical_query AS (
 			SELECT to_tsquery('simple'::regconfig, $2) AS query
@@ -252,9 +252,6 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query
 			return nil, fmt.Errorf("decode page %q metadata: %w", reference.ID, err)
 		}
 		fields := lexical.DocumentFields{Title: title, Tags: tags, Description: description, Body: body}
-		if enforceRelevance && !lexical.RelevantFields(fields, terms) {
-			continue
-		}
 		reference.Snippet = lexical.ExcerptFields(nativeSnippet, fields, terms, maxCharacters)
 		reference.Untrusted = true
 		references = append(references, reference)

@@ -11,6 +11,7 @@
 - Run `go test ./...` before pushing.
 - Run `go tool golangci-lint run ./...` before pushing.
 - Run `go mod verify` after dependency changes.
+- Close a Prism Story only after all required GitHub checks are green and all changes belonging to the Story have been merged.
 
 ## Repository Conventions
 

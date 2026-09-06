@@ -142,20 +142,7 @@ func TestContainsTermRequiresCompleteToken(t *testing.T) {
 	}
 }
 
-func TestRelevantRequiresMultipleMatchesForLongQueries(t *testing.T) {
-	t.Parallel()
-	if Relevant("an unrelated document containing only term", []string{"xyzzy", "valera", "no", "such", "term", "92841"}) {
-		t.Fatal("Relevant() accepted one common match from a long OOV query")
-	}
-	if !Relevant("xyzzy valera useful evidence", []string{"xyzzy", "valera", "no", "such"}) {
-		t.Fatal("Relevant() rejected a half-term match")
-	}
-	if !Relevant("badger evidence", []string{"badger", "session"}) {
-		t.Fatal("Relevant() rejected relaxed two-term recall")
-	}
-}
-
-func TestDocumentFieldsIncludeTagsInRelevanceAndEvidence(t *testing.T) {
+func TestDocumentFieldsIncludeTagsInEvidence(t *testing.T) {
 	t.Parallel()
 	fields := DocumentFields{
 		Title:       "Knowledge service",
@@ -164,18 +151,12 @@ func TestDocumentFieldsIncludeTagsInRelevanceAndEvidence(t *testing.T) {
 		Body:        "User-authored content without the query term.",
 	}
 	terms := []string{"система"}
-	if !RelevantFields(fields, terms) {
-		t.Fatal("RelevantFields() rejected a tag-only match")
-	}
 	excerpt := ExcerptFields("irrelevant native body", fields, terms, 48)
 	if !strings.Contains(excerpt, "tag: Система знаний") || !ContainsTerm(excerpt, terms) {
 		t.Fatalf("ExcerptFields() = %q, want semantic tag evidence", excerpt)
 	}
 	if utf8.RuneCountInString(excerpt) > 48 || !utf8.ValidString(excerpt) {
 		t.Fatalf("ExcerptFields() returned invalid bounded evidence %q", excerpt)
-	}
-	if RelevantFields(DocumentFields{Body: "unrelated content"}, terms) {
-		t.Fatal("RelevantFields() accepted fields without the query term")
 	}
 }
 
