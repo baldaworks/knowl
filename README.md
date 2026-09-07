@@ -6,354 +6,178 @@ Knowl is a self-hosted knowledge sidecar for agentic applications. It turns
 durable sources into an inspectable Markdown knowledge base and returns
 bounded, provenance-backed evidence.
 
+```text
+sources → Knowl → grounded evidence → host agent → final answer
+```
+
+## Release status
+
+This README documents the current `main` branch. The latest published release is
+[v0.3.1](https://github.com/baldaworks/knowl/releases/tag/v0.3.1). Use an image
+tag or immutable digest in production; do not assume every `main` command exists
+in the latest release.
+
+| Capability | v0.3.1 | Current `main` |
+| --- | --- | --- |
+| MCP and HTTP retrieve, ingest, and operation status | Yes | Yes |
+| Filesystem sources and SQLite/PostgreSQL storage | Yes | Yes |
+| Remote Git sources | No | Yes |
+| `knowl run` | No | Yes |
+| `knowl hierarchy reconcile` | No | Yes |
+| `knowl source retry` | No | Yes |
+
+## When to use Knowl
+
+Use Knowl when an agent or application needs a durable project or domain
+knowledge layer that can:
+
+- accept selected text, URI references, or read-only source trees;
+- maintain a human-inspectable Markdown wiki from immutable raw evidence;
+- retrieve bounded evidence with source references;
+- survive process restarts and resume durable operations;
+- run beside an agent over MCP/HTTP or inside a Go process.
+
+Typical uses include grounding an engineering agent in internal documentation,
+turning accepted findings into durable project knowledge, and sharing one
+knowledge service across several agent hosts.
+
+Knowl is not session memory, user-fact or temporal memory, workflow
+orchestration, a connector for Slack/Jira/GitHub, or the primary final-answer
+generator. The host chooses what becomes durable and generates the user-facing
+answer. Knowl does not answer the user itself.
+
 The ownership boundary is deliberate:
 
 | Component | Owns |
 | --- | --- |
-| Host agent or application | Deciding which events are durable, assigning immutable source revisions, orchestrating tools, and generating the final user answer. |
-| Knowl | Accepting durable sources, maintaining canonical raw and Markdown artifacts, resuming operations, and retrieving bounded evidence with source references. |
-| Maintainer provider | Proposing Markdown updates inside Knowl's validated write path; it is an implementation detail, not a connector or public interface. |
+| Host agent or application | Selecting durable events, assigning immutable source revisions, orchestrating tools, and generating the final answer. |
+| Knowl | Accepting sources, maintaining raw and Markdown artifacts, resuming operations, and returning bounded evidence with provenance. |
+| Maintainer provider | Proposing semantic Markdown updates through Knowl's validated write path. |
 
-Knowl is not:
+See the [source-to-wiki showcase](examples/source-to-wiki/README.md) for a
+checked-in example of raw engineering documents becoming a structured,
+queryable Markdown wiki.
 
-- session memory;
-- user-fact or temporal memory;
-- workflow orchestration;
-- the primary final-answer generator.
+## Quick start: stable sidecar
 
-Knowl does not own Slack, Telegram, Jira, GitHub, or other source connectors.
-The host already knows which events should become durable and submits those
-events through `knowl_ingest`. Knowl does not answer the user itself.
+This path runs the published `v0.3.1` image against the checked-in engineering
+source. It requires Docker Compose, `curl`, an OpenAI API key, and a model
+available to that key.
 
-The intended shape is:
-
-```text
-sources -> Knowl -> grounded evidence -> host agent -> final answer
-```
-
-See the [source-to-wiki showcase](examples/source-to-wiki/README.md)
-for a concrete demonstration of turning raw engineering documents into a
-structured, queryable Markdown wiki using the one-shot run workflow.
-
-## Knowl's self-generated wiki
-
-This repository uses Knowl itself to maintain the checked-in
-[project wiki](knowledge/wiki/index.md). The single `knowl-docs` filesystem
-source reads every non-hidden Markdown file below `docs/` through the
-`docs/**/*.md` include in [.config/knowl/config.yaml](.config/knowl/config.yaml).
-Generated output cannot feed back into that source. The operator-owned
-[self-wiki policy](knowledge/schema.md) guides the maintainer's taxonomy and
-synthesis as untrusted Markdown; Knowl's Go validation still enforces workspace
-safety, OKF, provenance, and link invariants.
-
-From the repository root, refresh and validate the wiki with:
+Set the provider and local operator credentials:
 
 ```bash
-task wiki:generate
-task wiki:validate
+export OPENAI_API_KEY='your-api-key'
+export OPENAI_MODEL='a-model-available-to-your-account'
+export KNOWL_OPERATOR_TOKEN='replace-with-a-local-secret'
 ```
 
-Generation requires the Go version declared in `go.mod`, Task, Node.js/npm for
-the pinned `acprun` invocation, and a usable Antigravity ACP session. The task
-resolves the pinned ACP binary, runs only the `knowl-docs` source, reconciles
-the hierarchy, and validates the result. `wiki:validate` is local-only and does
-not invoke the provider.
-
-Commit `knowledge/schema.md`, `knowledge/raw/**`, and `knowledge/wiki/**`.
-Treat `knowledge/.knowl/**` as rebuildable local operational state. Generated
-prose and organization are model-dependent, so regeneration is an explicit
-maintainer action rather than a CI requirement. Before committing a refresh,
-review the generated diff, its `knowl.source_refs`, and the append-only
-`knowledge/wiki/log.md`; do not accept a merely syntactically valid factual
-change without checking it against the cited raw revision.
-
-The default path is a sidecar service with SQLite. Connect agents over MCP;
-use HTTP for deterministic control and Fx only when a Go process needs the
-same runtime in-process.
-
-## When to use it
-
-Use Knowl when you want one durable project/domain knowledge layer that can:
-
-- optionally bootstrap an existing Markdown wiki, Obsidian vault, or OKF v0.2
-  bundle as raw evidence through the production source synchronization engine;
-- combine multiple named read-only filesystem sources into one deduplicated,
-  maintainer-owned semantic wiki;
-- ingest new text or URI sources through one canonical pipeline;
-- answer retrieval requests with bounded evidence and provenance;
-- run next to an agent as a sidecar service or inside a Go process through Fx.
-
-Typical examples:
-
-- “I already have an internal wiki and want an agent to read it safely.”
-- “I want new findings from chat, tickets, or URLs to become durable project
-  knowledge.”
-- “I need the same knowledge service to work for MCP agents, HTTP clients, and
-  Go embedding.”
-
-## Public product shape
-
-Knowl has one business contract with three operations.
-
-Primary agent-facing interface: MCP
-
-- `knowl_retrieve`
-- `knowl_ingest`
-- `knowl_operation`
-
-Equivalent deterministic HTTP/OpenAPI transport:
-
-- `GET /v1/retrieve`
-- `POST /v1/ingest`
-- `GET /v1/operations/{operation_id}`
-
-Operational endpoints:
-
-- `GET /healthz`
-- `GET /readyz`
-
-The business semantics are the same across MCP and HTTP:
-
-- retrieve bounded evidence;
-- ingest one source;
-- poll one durable operation.
-
-## Deployment modes
-
-Baseline: sidecar service
-
-- build the image from [Dockerfile](Dockerfile);
-- use [deploy/sidecar/knowl.yaml](deploy/sidecar/knowl.yaml) as the baseline
-  container config;
-- start from [deploy/sidecar/compose.yaml](deploy/sidecar/compose.yaml) for the
-  minimal local example;
-- mount persistent storage at `/var/lib/knowl`.
-
-See [docs/sidecar.md](docs/sidecar.md).
-
-Alternative: Go embedding with Fx
-
-- root `pkg/knowl` is the plain-Go host/runtime composition layer;
-- `pkg/knowlfx` is the Fx lifecycle wrapper over the same runtime;
-- both modes call the same application services and storage contracts.
-
-## Quick start
-
-Build the CLI:
+The values stay outside the checked-in
+[quick-start config](deploy/sidecar/quickstart.yaml). Start the service from the
+repository root:
 
 ```bash
-go build -o knowl ./cmd/knowl
-```
-
-Optionally bootstrap an existing wiki into a fresh workspace:
-
-```bash
-./knowl bootstrap wiki /path/to/existing/wiki
-# or preserve an existing Open Knowledge Format v0.2 bundle
-./knowl bootstrap okf /path/to/okf-bundle
-```
-
-Bootstrap is a freshness-guarded first sync, not a startup requirement. It
-creates the deterministic `bootstrap-wiki` source (or `bootstrap-obsidian` /
-`bootstrap-okf`), stores its exact documents under `raw/`, and queues durable
-maintenance operations. Source documents are never copied into `wiki/`.
-The generated local config includes a maintainer provider because every
-runnable host must be able to turn accepted text into semantic OKF pages.
-
-Or initialize an empty local workspace:
-
-```bash
-./knowl init
-./knowl validate
-```
-
-Start the service:
-
-```bash
-./knowl start
+docker compose -f deploy/sidecar/quickstart.compose.yaml up -d
 curl -sS http://127.0.0.1:8080/readyz
 ```
 
-The same listener exposes MCP Streamable HTTP at
-`http://127.0.0.1:8080/mcp`.
+`/readyz` proves that workspace recovery, storage, and projections are ready. It
+does not prove that provider authentication or semantic maintenance succeeded.
 
-Run one-shot local wrappers over the same KISS contract:
+The configured source synchronizes on start. Inspect it until maintenance shows
+no queued work, at least one committed operation, and no failure:
 
 ```bash
-./knowl retrieve "Why was Badger chosen?"
-./knowl ingest --input request.json
-./knowl operation op_01K...
-./knowl source list
-./knowl source sync engineering
-./knowl source status engineering
-./knowl source retry engineering --failure-class provider --dry-run
-./knowl run
-./knowl run --source engineering
+docker compose -f deploy/sidecar/quickstart.compose.yaml \
+  exec knowl knowl --config-dir /etc source status engineering
 ```
 
-These CLI commands are operator conveniences. They are not the primary product
-story for agent integration.
+Then retrieve evidence over the authenticated HTTP API:
 
-## Example ingest request
+```bash
+curl -sS --get \
+  -H "Authorization: Bearer ${KNOWL_OPERATOR_TOKEN}" \
+  --data-urlencode 'query=Engineering shared page' \
+  http://127.0.0.1:8080/v1/retrieve
+```
+
+First success is a non-empty `evidence` array with provenance such as
+`source_refs` or `source_documents`. If maintenance fails, inspect the bounded
+failure in `source status`; a ready service alone is not a successful knowledge
+generation check.
+
+Stop the example without deleting its persistent volume:
+
+```bash
+docker compose -f deploy/sidecar/quickstart.compose.yaml down
+```
+
+### Maintainer-provider boundary
+
+Semantic wiki updates require a maintainer provider. The quick start uses the
+runtime's hosted `openai` provider, so the stock image needs credentials and
+outbound network access but no provider executable.
+
+The config generated by `knowl init` and the general sidecar baseline select
+`opencode_acp`, which runs `opencode acp`. The stock Knowl image does not include
+OpenCode. To use that configuration, supply OpenCode in your own image/runtime
+environment and authenticate it, or replace the provider configuration with a
+supported hosted provider as the quick start does. Missing quick-start variables
+fail during Compose/config loading instead of silently producing a usable wiki.
+
+## Connect an agent
+
+MCP Streamable HTTP is the primary agent-facing interface. Adapt these
+transport-neutral connection fields to your MCP client:
 
 ```json
 {
-  "content": "Badger was chosen for session memory because ...",
-  "origin": "ticket-1234",
-  "idempotency_key": "ticket-1234"
+  "transport": "streamable_http",
+  "url": "http://127.0.0.1:8080/mcp",
+  "headers": {
+    "Authorization": "Bearer <operator-token>"
+  }
 }
 ```
 
-Or:
+Knowl exposes exactly three agent tools:
 
-```json
-{
-  "uri": "https://example.com/adr/session-memory-store"
-}
-```
+- `knowl_retrieve` retrieves bounded evidence;
+- `knowl_ingest` submits one durable source;
+- `knowl_operation` reads durable operation status.
 
-The public ingest request does not expose page IDs, Markdown paths, or raw
-workspace mutation.
+The equivalent deterministic HTTP/OpenAPI endpoints are:
 
-## Configuration shape
+- `GET /v1/retrieve`;
+- `POST /v1/ingest`;
+- `GET /v1/operations/{operation_id}`.
 
-Knowl config lives under the `knowl:` section and stays aligned with Balda's
-typed runtime/provider shape. A runnable host requires either an explicitly
-injected maintainer or a `knowl.provider` entry resolved from
-`runtime.providers`; invalid or absent provider configuration fails before
-readiness.
+`GET /healthz` and `GET /readyz` remain public. When `knowl.operator.token` is
+configured, all business HTTP and MCP requests require
+`Authorization: Bearer <token>`. See the
+[authoritative OpenAPI contract](api/openapi/knowl.yaml).
 
-Minimal SQLite example:
+## Core concepts
 
-```yaml
-runtime:
-  providers:
-    opencode:
-      type: opencode_acp
-      opencode_acp:
-        model: opencode/big-pickle
+### Sources and semantic knowledge
 
-knowl:
-  provider: opencode
-  workspace:
-    path: .
-  storage:
-    type: sqlite
-    sqlite:
-      path: .knowl/knowl.sqlite
-  operator:
-    token: replace-with-a-local-secret
-```
+The host can ingest individual content/URI requests, while configured
+filesystem sources synchronize Markdown, Obsidian, or OKF trees. Current `main`
+also supports inbound read-only Git sources. Knowl preserves accepted source
+revisions under `raw/`; the maintainer synthesizes semantic pages under `wiki/`
+rather than copying configured source files into it. Source documents are never
+copied into `wiki/`. Initial bootstrap and automatic `on_start` synchronization
+are both optional.
 
-Configure one or more sources alongside the required provider. Initial
-bootstrap and automatic `on_start` synchronization are both optional; sources
-can instead be synchronized explicitly with `knowl source sync`.
+Source IDs are part of lineage, so equal source-relative paths remain distinct.
+Complete scans may tombstone deleted documents, but immutable raw history and
+previously curated knowledge remain. See the
+[operations guide](docs/operations.md) for source configuration, Git
+authentication, scheduling, retry, and failure recovery.
 
-```yaml
-knowl:
-  provider: opencode
-  workspace:
-    path: .
-  sources:
-    - id: engineering
-      type: filesystem
-      filesystem:
-        root: /wikis/engineering
-        include: ["**/*.md"]
-        flavor: obsidian
-      sync:
-        on_start: false
-        interval: 5m
-    - id: operations
-      type: filesystem
-      filesystem:
-        root: /wikis/operations
-        include: ["**/*.md"]
-        flavor: markdown
-      sync:
-        on_start: false
-        interval: 5m
-    - id: catalog
-      type: filesystem
-      filesystem:
-        root: /knowledge/catalog
-        include: ["**/*"]
-        flavor: okf
-      sync:
-        on_start: false
-        interval: 5m
-    - id: handbook
-      type: git
-      git:
-        remote: https://github.com/example/handbook.git
-        ref: refs/heads/main
-        ref_kind: branch
-        include: ["docs/**/*.md"]
-        flavor: markdown
-        uri_base: https://github.com/example/handbook/blob
-        auth:
-          secret_env: HANDBOOK_GIT_TOKEN
-        max_transfer_bytes: 524288000
-        max_cache_bytes: 536870912
-      sync:
-        on_start: false
-        interval: 5m
-  storage:
-    type: sqlite
-    sqlite:
-      path: .knowl/knowl.sqlite
-```
+### Workspace
 
-Source IDs are part of document lineage. Equal paths such as `Shared.md` are
-stored as independent immutable revisions under `raw/`; the maintainer may
-synthesize their related facts into one semantic page carrying both source
-documents. Repeated syncs fetch no unchanged bytes. Complete scans tombstone
-deletions while raw history and previously curated knowledge remain.
-
-Remote Git sources are inbound and read-only. HTTPS tokens and SSH private
-keys are loaded from `auth.secret_env` or `auth.key_file`; never embed
-credentials in `remote`. SSH sources also require `known_hosts` entries.
-Each scan is pinned to one commit, rejects branch rewrites and moved tags by
-default, and stores its disposable mirror under `<workspace>/.knowl/cache/git`.
-Use `allow_rewrite: true` only to adopt rewritten branch history, and
-`rebind_ack: true` only for an intentional repository or moved-tag rebind.
-
-A successful source sync means raw acceptance plus durable maintenance
-reservation. LLM maintenance runs asynchronously; `source status` reports its
-bounded queued, retrying, replayed, committed, and failed counts and samples
-separately. Transient provider execution failures get at most three automatic
-attempts per cycle, starting with a 30-second durable delay and using bounded
-exponential jitter capped at five minutes.
-
-Historical terminal failures are never requeued automatically. Preview an exact,
-source-scoped recovery set before requeueing it:
-
-```bash
-./knowl source retry engineering --failure-class provider --dry-run
-./knowl source retry engineering --failure-class provider
-```
-
-The structured result includes matched, requeued, and rejected counts plus at
-most 100 operation IDs. See the [operations guide](docs/operations.md#recovering-failed-source-maintenance)
-for safe rollout and status interpretation.
-
-Container baseline example:
-
-```yaml
-knowl:
-  workspace:
-    path: /var/lib/knowl/knowledge
-  server:
-    listen_addr: 0.0.0.0:8080
-```
-
-Detailed config and service guidance live in [docs/operations.md](docs/operations.md).
-When an operator token is configured, business HTTP and MCP requests require an
-`Authorization: Bearer <token>` header; health probes remain public.
-
-## Repository layout
-
-Inside the workspace root:
+The canonical workspace is Git-reviewable:
 
 ```text
 workspace/
@@ -362,111 +186,99 @@ workspace/
 ├── wiki/
 │   ├── index.md
 │   ├── log.md
-│   ├── catalogs/**/index.md
-│   ├── entities/
-│   ├── concepts/
-│   └── syntheses/
+│   └── ... semantic pages and catalogs
 └── .knowl/
     ├── staging/
     ├── recovery/
     └── knowl.sqlite
 ```
 
-`raw/` and `wiki/` are canonical knowledge artifacts. SQL state and projections
-remain rebuildable operational state.
+`schema.md`, `raw/`, and `wiki/` are durable knowledge artifacts. `.knowl/` and
+the SQL projection are operational state; the default SQLite path is
+`.knowl/knowl.sqlite` relative to the workspace. `wiki/` is a portable Open
+Knowledge Format v0.2 bundle; generated pages retain source references, while
+reserved indexes and logs are excluded from retrieval evidence.
 
-`wiki/` itself is a portable Open Knowledge Format v0.2 bundle. Its root
-`index.md` declares `okf_version: "0.2"`; ordinary Markdown concepts retain
-standard OKF metadata and unknown extension fields. Retrieval exposes that
-metadata as a structured `okf` object over CLI, HTTP, and MCP. Reserved
-`index.md` and `log.md` files are control documents, not search evidence.
-The rebuildable lexical projection searches only semantic title, OKF tags,
-OKF description, and user-authored body, weighted in that order. Filesystem
-paths, extensions, provenance envelopes, source references, and other technical
-metadata do not affect ranking or snippets.
-Configured source files are not part of this portable bundle. On the next
-successful reconciliation, legacy derived `wiki/sources/<source_id>/**`
-content is removed through the staged recovery mechanism without changing raw
-history or curated pages.
+See [workspace semantics](docs/workspace.md) for page metadata, provenance,
+links, hierarchy reconciliation, recovery, backup, and the explicit
+`knowl migrate okf-v0.2` procedure. Legacy workspaces are never rewritten by
+startup or read-only commands.
 
-An existing valid flat semantic wiki remains readable and is never reorganized
-by startup, bootstrap, validation, retrieval, source status, or source listing.
-To explicitly build or refresh source-independent nested catalogs, stop other
-writers and run:
+### Durable operations
+
+Ingest and source synchronization reserve durable maintenance work. Model-backed
+updates may complete asynchronously, and operation/source status separates
+queued, committed, retrying, and failed outcomes. See
+[operations and recovery](docs/operations.md) before retrying failures or
+changing a production workspace.
+
+## Deployment choices
+
+### Sidecar service
+
+The baseline deployment uses SQLite and persistent storage at `/var/lib/knowl`.
+Build from [Dockerfile](Dockerfile), start from the checked-in
+[Compose baseline](deploy/sidecar/compose.yaml), and review the
+[sidecar runbook](docs/sidecar.md). The baseline deliberately leaves provider
+packaging/authentication to the deployment; the dedicated quick start above is
+the complete hosted-provider example.
+
+### Build current `main`
+
+Use the Go version declared in `go.mod`:
 
 ```bash
+go build -o knowl ./cmd/knowl
+./knowl --help
+```
+
+Current `main` adds the development-only commands and Git sources identified in
+the release-status table. Common local workflows include:
+
+```bash
+./knowl init
+./knowl validate
+./knowl source list
+./knowl source sync engineering
+./knowl run --source engineering
 ./knowl hierarchy reconcile
-./knowl validate
 ```
 
-The command invokes the configured maintainer once through a bounded structured
-hierarchy plan, owns only `wiki/index.md` and `wiki/catalogs/**/index.md`, and
-prints the durable operation ID, status, changed flag, generation, and affected
-files as JSON. It does not start HTTP, scheduled work, or `sync.on_start`.
-Re-running a converged hierarchy reports `"changed":false` without changing
-canonical bytes. Ordinary pages and immutable `raw/` revisions are never
-hierarchy targets.
+Review the generated `.config/knowl/config.yaml` provider before starting:
+`opencode_acp` requires `opencode acp` on `PATH` and a usable OpenCode session.
 
-The generic hierarchy contract is subject-first: document kind and technology
-are supporting signals, broad heterogeneous subjects are recursively decomposed,
-and secondary catalog membership is used sparingly for genuinely cross-cutting
-pages. The maintainer is asked to retain suitable current paths and memberships
-for stability, but semantic quality remains provider-dependent. Its single call
-receives bounded page metadata and excerpts plus the schema digest, not schema
-content, raw sources, provenance, or source-native paths. Application validation
-rejects empty generated non-root catalogs and incomplete or unsafe graphs before
-staging; an empty root is valid only for an empty wiki.
-This contract uses planner identity `hierarchy-v3`; existing catalogs change only
-after an explicit reconcile under that identity.
+### Embed in Go
 
-Legacy workspaces are never rewritten implicitly. Back them up and run:
+- `pkg/knowl/types` provides transport-neutral domain types.
+- `pkg/knowl` provides plain-Go host/runtime composition.
+- `pkg/knowlfx` wraps the same runtime with Fx lifecycle management.
+- `pkg/knowl/mcp` provides the three-tool MCP adapter.
 
-```bash
-./knowl migrate okf-v0.2
-./knowl validate
-```
+Embedding changes composition, not the business contract. See the
+[product design](docs/design.md) for architecture and ownership boundaries.
 
-The migration is journaled, interruption-safe, idempotent, preserves legacy
-content and logs, and rebuilds the configured SQL projection. Attested
-Computation fields are stored and returned only as inert metadata; Knowl never
-executes computations, executors, attesters, or referenced resources.
+## Documentation
 
-Operational-store migration to generic source/hierarchy operations is additive
-for SQLite and PostgreSQL. Older binaries remain safe only while no hierarchy
-operation rows have been created; after the first reconcile, roll back by
-restoring the pre-upgrade operational database or keep the newer binary. The
-Markdown wiki remains canonical and portable in either case.
+- [Sidecar deployment](docs/sidecar.md)
+- [Configuration, operations, and recovery](docs/operations.md)
+- [Workspace and OKF semantics](docs/workspace.md)
+- [Product design and architecture](docs/design.md)
+- [HTTP/OpenAPI contract](api/openapi/knowl.yaml)
+- [Source-to-wiki showcase](examples/source-to-wiki/README.md)
+- [Latest stable release notes](docs/releases/v0.3.1.md)
+- [Contributing and self-wiki maintenance](CONTRIBUTING.md)
 
-## Public packages
-
-- `pkg/knowl/types` — transport-neutral domain types
-- `pkg/knowl` — plain-Go host/runtime composition
-- `pkg/knowlfx` — Fx lifecycle wrapper over `pkg/knowl`
-- `pkg/knowl/mcp` — the three-tool MCP adapter
-
-## Where to look next
-
-- sidecar/service runbook: [docs/sidecar.md](docs/sidecar.md)
-- v0.3.1 legacy-provenance patch and upgrade notes: [docs/releases/v0.3.1.md](docs/releases/v0.3.1.md)
-- v0.3.0 semantic-wiki release and upgrade notes: [docs/releases/v0.3.0.md](docs/releases/v0.3.0.md)
-- v0.2.0 multi-source release and migration notes: [docs/releases/v0.2.0.md](docs/releases/v0.2.0.md)
-- v0.1.0 release and rollback notes: [docs/releases/v0.1.0.md](docs/releases/v0.1.0.md)
-- service config and HTTP contract: [docs/operations.md](docs/operations.md)
-- product design, boundaries, and architecture: [docs/design.md](docs/design.md)
-- workspace semantics: [docs/workspace.md](docs/workspace.md)
-- authoritative HTTP contract: [api/openapi/knowl.yaml](api/openapi/knowl.yaml)
+`docs/releases/v0.2.0.md` is an unpublished, superseded historical note, not a
+published Knowl release.
 
 ## Development
 
-Regenerate checked-in HTTP bindings after contract changes:
-
-```bash
-go tool oapi-codegen -config api/openapi/oapi-codegen.yaml api/openapi/knowl.yaml
-```
-
-Primary repository checks:
+Before opening a pull request, run:
 
 ```bash
 go test ./...
 go tool golangci-lint run ./...
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for module verification, integration
+coverage, generated bindings, and project-wiki maintenance.

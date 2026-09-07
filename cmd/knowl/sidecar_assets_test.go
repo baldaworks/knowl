@@ -11,6 +11,8 @@ import (
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 )
 
+const quickstartProviderID = "openai"
+
 func TestSidecarConfigLoadsThroughProductionTypes(t *testing.T) {
 	repoRoot := testRepoRoot(t)
 	workingDir := t.TempDir()
@@ -56,6 +58,77 @@ func TestSidecarConfigLoadsThroughProductionTypes(t *testing.T) {
 		if !source.Enabled || !source.Sync.OnStart || source.Sync.Interval != 5*time.Minute || source.Sync.RetryMaximum != time.Minute {
 			t.Fatalf("sidecar source policy = %#v", source)
 		}
+	}
+}
+
+func TestQuickstartConfigLoadsThroughProductionTypes(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	configRoot := t.TempDir()
+	configDir := filepath.Join(configRoot, appName)
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(repoRoot, "deploy", "sidecar", "quickstart.yaml"))
+	if err != nil {
+		t.Fatalf("read quick-start config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), content, 0o600); err != nil {
+		t.Fatalf("write quick-start config copy: %v", err)
+	}
+
+	clearKnowlEnv(t)
+	for _, key := range []string{"OPENAI_API_KEY", "OPENAI_MODEL"} {
+		value, present := os.LookupEnv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+		t.Cleanup(func() {
+			if present {
+				_ = os.Setenv(key, value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		})
+	}
+	if _, loadErr := loadConfig(context.Background(), configRoot, ""); loadErr == nil ||
+		!strings.Contains(loadErr.Error(), "OPENAI_API_KEY") || !strings.Contains(loadErr.Error(), "OPENAI_MODEL") {
+		t.Fatalf("load quick-start config without provider environment = %v", loadErr)
+	}
+	t.Setenv("OPENAI_API_KEY", "test-api-key")
+	t.Setenv("OPENAI_MODEL", "test-model")
+	t.Setenv(operatorTokenEnvName, "test-operator-token")
+	t.Chdir(t.TempDir())
+	ctx, err := loadConfig(context.Background(), configRoot, "")
+	if err != nil {
+		t.Fatalf("load quick-start config: %v", err)
+	}
+	loaded, err := configFromContext(ctx)
+	if err != nil {
+		t.Fatalf("configFromContext() error: %v", err)
+	}
+	provider, ok := loaded.Document.Runtime.Providers[quickstartProviderID]
+	if !ok || provider.Type != quickstartProviderID || provider.OpenAI == nil {
+		t.Fatalf("quick-start runtime provider = %#v", provider)
+	}
+	if provider.OpenAI.APIKey != "test-api-key" || provider.OpenAI.Model != "test-model" {
+		t.Fatalf("quick-start hosted provider = %#v", provider.OpenAI)
+	}
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatalf("hostConfig() error: %v", err)
+	}
+	if loaded.Document.Knowl.Provider != quickstartProviderID || config.OperatorToken != "test-operator-token" {
+		t.Fatalf("quick-start provider/token selection = %q/%q", loaded.Document.Knowl.Provider, config.OperatorToken)
+	}
+	if config.Workspace != "/var/lib/knowl/knowledge" || config.ListenAddr != "0.0.0.0:8080" ||
+		config.StorePath != "/var/lib/knowl/knowledge/.knowl/knowl.sqlite" {
+		t.Fatalf("quick-start host config = %#v", config)
+	}
+	if len(config.Sources) != 1 || config.Sources[0].ID != commandEngineeringSourceID ||
+		config.Sources[0].Config.Filesystem == nil || config.Sources[0].Config.Filesystem.Root != "/sources/engineering" ||
+		!config.Sources[0].Sync.OnStart {
+		t.Fatalf("quick-start source config = %#v", config.Sources)
 	}
 }
 
@@ -172,6 +245,29 @@ func TestSidecarAssetsMentionCanonicalRuntimePaths(t *testing.T) {
 				"/sources/engineering:ro",
 				"/sources/operations:ro",
 				"/readyz",
+			},
+		},
+		{
+			path: filepath.Join(repoRoot, "deploy", "sidecar", "quickstart.yaml"),
+			want: []string{
+				"type: openai",
+				"api_key: ${OPENAI_API_KEY}",
+				"model: ${OPENAI_MODEL}",
+				"token: ${KNOWL_OPERATOR_TOKEN}",
+				"/sources/engineering",
+				"on_start: true",
+			},
+		},
+		{
+			path: filepath.Join(repoRoot, "deploy", "sidecar", "quickstart.compose.yaml"),
+			want: []string{
+				"ghcr.io/baldaworks/knowl:v0.3.1",
+				"127.0.0.1:8080:8080",
+				"./quickstart.yaml:/etc/knowl/config.yaml:ro",
+				"./sources/engineering:/sources/engineering:ro",
+				"knowl-quickstart-data:/var/lib/knowl",
+				"OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}",
+				"KNOWL_OPERATOR_TOKEN: ${KNOWL_OPERATOR_TOKEN:?set KNOWL_OPERATOR_TOKEN}",
 			},
 		},
 		{

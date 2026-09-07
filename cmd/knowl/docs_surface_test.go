@@ -6,18 +6,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestPublicDocumentationSurface(t *testing.T) {
 	repoRoot := testRepoRoot(t)
 	canonicalFiles := []string{
 		readmeRelativePath,
+		"CONTRIBUTING.md",
 		filepath.Join("docs", "design.md"),
 		filepath.Join("docs", "operations.md"),
 		filepath.Join("docs", "workspace.md"),
 		filepath.Join("docs", "sidecar.md"),
 		filepath.Join("docs", "releases", "v0.1.0.md"),
 		filepath.Join("api", "openapi", "knowl.yaml"),
+		filepath.Join("deploy", "sidecar", "quickstart.yaml"),
+		filepath.Join("deploy", "sidecar", "quickstart.compose.yaml"),
 		filepath.Join("examples", "source-to-wiki", "README.md"),
 		filepath.Join("examples", "source-to-wiki", "run.sh"),
 		filepath.Join("examples", "source-to-wiki", "sources", "architecture-overview.md"),
@@ -136,4 +141,115 @@ func TestPublicDocumentationSurface(t *testing.T) {
 			t.Errorf("OpenAPI schema does not define path %q", path)
 		}
 	}
+}
+
+func TestREADMEReleaseAndQuickStartContracts(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	readme, err := os.ReadFile(filepath.Join(repoRoot, readmeRelativePath))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	readmeText := string(readme)
+	normalized := strings.Join(strings.Fields(readmeText), " ")
+
+	orderedHeadings := []string{
+		"## Release status",
+		"## When to use Knowl",
+		"## Quick start: stable sidecar",
+		"## Core concepts",
+		"## Development",
+	}
+	previous := -1
+	for _, heading := range orderedHeadings {
+		position := strings.Index(readmeText, heading)
+		if position < 0 {
+			t.Fatalf("README does not contain required heading %q", heading)
+		}
+		if position <= previous {
+			t.Fatalf("README heading %q is not in the required user-first order", heading)
+		}
+		previous = position
+	}
+
+	for _, marker := range []string{
+		"This README documents the current `main` branch",
+		"https://github.com/baldaworks/knowl/releases/tag/v0.3.1",
+		"deploy/sidecar/quickstart.yaml",
+		"deploy/sidecar/quickstart.compose.yaml",
+		"OPENAI_API_KEY",
+		"OPENAI_MODEL",
+		"KNOWL_OPERATOR_TOKEN",
+		"stock Knowl image does not include OpenCode",
+		"`opencode acp`",
+		"non-empty `evidence` array",
+		"Engineering shared page",
+		"http://127.0.0.1:8080/mcp",
+		`"Authorization": "Bearer <operator-token>"`,
+	} {
+		if !strings.Contains(normalized, marker) {
+			t.Errorf("README does not preserve release or quick-start contract %q", marker)
+		}
+	}
+
+	if !strings.Contains(normalized, "v0.2.0.md` is an unpublished, superseded historical note, not a published Knowl release") {
+		t.Error("README does not identify the v0.2.0 note as unpublished and superseded")
+	}
+	for _, forbidden := range []string{
+		"v0.2.0 multi-source release",
+		"latest published release is [v0.2.0",
+	} {
+		if strings.Contains(normalized, forbidden) {
+			t.Errorf("README incorrectly presents v0.2.0 as published: found %q", forbidden)
+		}
+	}
+}
+
+func TestREADMELabelsCurrentOnlyCommands(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	readme, err := os.ReadFile(filepath.Join(repoRoot, readmeRelativePath))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	readmeText := string(readme)
+	releaseStart := strings.Index(readmeText, "## Release status")
+	releaseEnd := strings.Index(readmeText, "## When to use Knowl")
+	if releaseStart < 0 || releaseEnd <= releaseStart {
+		t.Fatal("README does not have a bounded release-status section")
+	}
+	releaseSection := readmeText[releaseStart:releaseEnd]
+
+	currentOnly := []struct {
+		command string
+		present bool
+	}{
+		{command: "knowl run", present: hasCommandPath(newRootCommand(), runCommandName)},
+		{command: "knowl hierarchy reconcile", present: hasCommandPath(newRootCommand(), hierarchyCommandName, hierarchyReconcileCommandName)},
+		{command: "knowl source retry", present: hasCommandPath(newRootCommand(), sourceCommandName, sourceRetryCommandName)},
+	}
+	for _, item := range currentOnly {
+		if !item.present {
+			t.Fatalf("documented current-only command %q is absent from the current command tree", item.command)
+		}
+		row := "| `" + item.command + "` | No | Yes |"
+		if !strings.Contains(releaseSection, row) {
+			t.Errorf("README release table does not label %q unavailable in v0.3.1 and available on main", item.command)
+		}
+	}
+}
+
+func hasCommandPath(command *cobra.Command, path ...string) bool {
+	for _, name := range path {
+		found := false
+		for _, child := range command.Commands() {
+			if child.Name() == name {
+				command = child
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

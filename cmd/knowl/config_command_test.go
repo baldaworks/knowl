@@ -145,7 +145,7 @@ func TestOperatorDocsDoNotExposeRemovedIngestPolicyConfig(t *testing.T) {
 		{
 			name: "readme",
 			path: filepath.Join(repoRoot, readmeRelativePath),
-			want: []string{"storage:", ".knowl/knowl.sqlite"},
+			want: []string{"SQLite", ".knowl/knowl.sqlite"},
 		},
 		{
 			name: commandOperationsSourceID,
@@ -325,7 +325,7 @@ knowl:
 
 func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testing.T) {
 	providerConfig := agentconfig.Config{
-		Type:   "openai",
+		Type:   quickstartProviderID,
 		OpenAI: &agentconfig.LocalAPIConfig{Model: "test-model"},
 	}
 	for _, test := range []struct {
