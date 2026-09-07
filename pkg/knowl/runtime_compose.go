@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	httpserver "github.com/baldaworks/knowl/internal/httpapi/server"
 	"github.com/baldaworks/knowl/internal/mcphttp"
 	sourcefilesystem "github.com/baldaworks/knowl/internal/source/filesystem"
+	sourcegit "github.com/baldaworks/knowl/internal/source/git"
 	"github.com/baldaworks/knowl/internal/source/reconcile"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
@@ -54,7 +56,7 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	adapters, err := composeSourceAdapters(options.SourceAdapters)
+	adapters, err := composeSourceAdapters(config.Workspace, options.SourceAdapters)
 	if err != nil {
 		if maintainerCloser != nil {
 			_ = maintainerCloser.Close()
@@ -259,8 +261,11 @@ func newHost(runtime composedRuntime) (*Host, error) {
 	return host, nil
 }
 
-func composeSourceAdapters(overrides map[domain.SourceType]app.SourceAdapter) (map[domain.SourceType]app.SourceAdapter, error) {
-	adapters := map[domain.SourceType]app.SourceAdapter{domain.SourceTypeFilesystem: sourcefilesystem.NewDefault()}
+func composeSourceAdapters(workspace string, overrides map[domain.SourceType]app.SourceAdapter) (map[domain.SourceType]app.SourceAdapter, error) {
+	adapters := map[domain.SourceType]app.SourceAdapter{
+		domain.SourceTypeFilesystem: sourcefilesystem.NewDefault(),
+		domain.SourceTypeGit:        sourcegit.NewDefaultAdapter(sourcegit.NewCacheManager(filepath.Join(workspace, ".knowl", "cache", "git"), nil)),
+	}
 	types := make([]domain.SourceType, 0, len(overrides))
 	for sourceType, adapter := range overrides {
 		if strings.TrimSpace(string(sourceType)) == "" || nilSourceAdapter(adapter) {

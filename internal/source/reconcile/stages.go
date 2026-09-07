@@ -7,24 +7,27 @@ import (
 	"strings"
 	"time"
 
+	sourcegit "github.com/baldaworks/knowl/internal/source/git"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // Stable scan and saga failure classes extending the shared vocabulary.
 const (
-	classAdapter     = "adapter"
-	classScan        = "scan_invalid"
-	classFetch       = "fetch"
-	classRaw         = "raw"
-	classMaintenance = "maintenance_reservation"
-	classNormalize   = "normalize"
-	classProjection  = "projection"
+	classAdapter                    = "adapter"
+	classScan                       = "scan_invalid"
+	classFetch                      = "fetch"
+	classRaw                        = "raw"
+	classMaintenance                = "maintenance_reservation"
+	classNormalize                  = "normalize"
+	classProjection                 = "projection"
+	classRepositoryIdentityMismatch = "repository_identity_mismatch"
 
 	// pageDocumentCeiling mirrors the bounded descriptor page contract.
 	pageDocumentCeiling = 1000
 
 	filesystemAdapterName = "wiki-filesystem"
+	gitAdapterName        = "git"
 )
 
 // stageError pairs a fixed redacted failure class with a retained cause for
@@ -51,6 +54,12 @@ func failStage(class string, cause error) *stageError {
 	if cause == nil {
 		cause = errors.New(class)
 	}
+	var classified interface{ FailureClass() string }
+	if errors.As(cause, &classified) {
+		if c := classified.FailureClass(); c != "" {
+			class = c
+		}
+	}
 	return &stageError{class: class, cause: cause}
 }
 
@@ -65,6 +74,12 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 	if err != nil {
 		return Result{}, err
 	}
+	previousCheckpoint := ""
+	if status, statusErr := service.state.SourceStatus(ctx, scope, source.ID); statusErr == nil {
+		previousCheckpoint = status.Checkpoint
+	} else if !errors.Is(statusErr, app.ErrSourceNotFound) {
+		return Result{}, failStage(classState, statusErr)
+	}
 	resumed, err := service.beginOrResumeScan(ctx, scope, source, configDigest)
 	if err != nil {
 		return Result{}, err
@@ -76,12 +91,22 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 		}
 		return service.finalizeSaga(ctx, scope, source.ID, input)
 	}
-	catalog, err := service.listCatalog(ctx, scope, adapter, source, resumed.run, resumed.refs)
+	initialToken := resumed.run.NextPageToken
+	checkpoint := ""
+	if preparer, ok := adapter.(app.SnapshotSourceAdapter); ok && len(resumed.refs) == 0 && initialToken == "" {
+		prepared, prepareErr := preparer.PrepareSnapshot(ctx, source, previousCheckpoint)
+		if prepareErr != nil {
+			failure := service.failScanSafe(ctx, resumed.run, failStage(classAdapter, prepareErr))
+			return Result{Run: service.refreshRun(ctx, scope, resumed.run)}, failure
+		}
+		initialToken, checkpoint = prepared.PageToken, prepared.Checkpoint
+	}
+	catalog, err := service.listCatalog(ctx, scope, adapter, source, resumed.run, resumed.refs, initialToken, checkpoint)
 	if err != nil {
 		failure := service.failScanSafe(ctx, resumed.run, err)
 		return Result{Run: service.refreshRun(ctx, scope, resumed.run)}, failure
 	}
-	input, err := service.classifyAndPrepare(ctx, scope, adapter, source, resumed.run, catalog.refs)
+	input, err := service.classifyAndPrepare(ctx, scope, adapter, source, resumed.run, catalog.refs, catalog.checkpoint)
 	if err != nil {
 		failure := service.failScanSafe(ctx, resumed.run, err)
 		return Result{Run: service.refreshRun(ctx, scope, resumed.run)}, failure
@@ -153,7 +178,7 @@ func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.Scope
 			ID: service.options.NewRunID(), Scope: scope, SourceID: source.ID, ConfigDigest: configDigest,
 			Status: knowl.SyncStatusScanning, StartedAt: now, UpdatedAt: now,
 		},
-		Type: knowl.SourceTypeFilesystem,
+		Type: source.Type, RepositoryIdentity: sourceRepositoryIdentity(source), AllowRebind: sourceAllowsRebind(source),
 	})
 	if err != nil {
 		return scanResume{}, failStage(classState, err)
@@ -173,9 +198,10 @@ func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.Scope
 
 // listCatalog performs the bounded paged listing with atomic ordinal progress;
 // absence is only authorized after the terminal page is durably recorded.
-func (service *Service) listCatalog(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, refs []knowl.DocumentRef) (catalogState, error) {
-	state := catalogState{refs: refs}
-	token := run.NextPageToken
+func (service *Service) listCatalog(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, refs []knowl.DocumentRef, initialToken, checkpoint string) (catalogState, error) {
+	state := catalogState{refs: refs, checkpoint: checkpoint}
+	token := initialToken
+	expectedToken := run.NextPageToken
 	seen := make(map[knowl.DocumentID]struct{}, len(state.refs))
 	for _, ref := range state.refs {
 		seen[ref.ExternalID] = struct{}{}
@@ -208,7 +234,7 @@ func (service *Service) listCatalog(ctx context.Context, scope knowl.ScopeRef, a
 		}
 		recorded, err := service.state.RecordScanPage(ctx, app.ScanPageRecord{
 			RunID: run.ID, Scope: scope, SourceID: source.ID,
-			ExpectedPageToken: token, NextPageToken: page.NextPageToken,
+			ExpectedPageToken: expectedToken, NextPageToken: page.NextPageToken,
 			Documents: page.Documents, RecordedAt: service.options.Clock(),
 		})
 		if err != nil {
@@ -217,6 +243,7 @@ func (service *Service) listCatalog(ctx context.Context, scope knowl.ScopeRef, a
 		state.pages = append(state.pages, pageRecord{next: recorded.NextPageToken, documents: page.Documents})
 		state.refs = append(state.refs, page.Documents...)
 		token = recorded.NextPageToken
+		expectedToken = recorded.NextPageToken
 		if token == "" {
 			state.complete = true
 			return state, nil
@@ -230,9 +257,21 @@ type pageRecord struct {
 }
 
 type catalogState struct {
-	refs     []knowl.DocumentRef
-	pages    []pageRecord
-	complete bool
+	refs       []knowl.DocumentRef
+	pages      []pageRecord
+	complete   bool
+	checkpoint string
+}
+
+func sourceRepositoryIdentity(source knowl.Source) string {
+	if source.Type == knowl.SourceTypeGit && source.Config.Git != nil {
+		return sourcegit.RepositoryIdentity(*source.Config.Git)
+	}
+	return ""
+}
+
+func sourceAllowsRebind(source knowl.Source) bool {
+	return source.Type == knowl.SourceTypeGit && source.Config.Git != nil && source.Config.Git.RebindAck
 }
 
 // failRunDetached records a stable terminal failure on a nonterminal run using
@@ -258,6 +297,12 @@ func (service *Service) failScanSafe(ctx context.Context, run knowl.SyncRun, err
 }
 
 func classFromError(err error) string {
+	var classified interface{ FailureClass() string }
+	if errors.As(err, &classified) {
+		if c := classified.FailureClass(); c != "" {
+			return c
+		}
+	}
 	var staged *stageError
 	switch {
 	case errors.As(err, &staged):
@@ -266,6 +311,8 @@ func classFromError(err error) string {
 		return classCanceled
 	case errors.Is(err, app.ErrSourceInvalid):
 		return classInvalid
+	case errors.Is(err, app.ErrSourceLineageConflict):
+		return classRepositoryIdentityMismatch
 	case errors.Is(err, app.ErrSyncConflict), errors.Is(err, app.ErrSyncStateTransition):
 		return classState
 	default:

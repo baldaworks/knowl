@@ -82,9 +82,11 @@ The detailed filesystem contract is in [workspace.md](workspace.md).
 
 An ingest-side connector may translate text, a URI, origin, and idempotency
 hints into one public ingest request. Separately, the built-in read-only
-filesystem source adapter lists and fetches configured wiki documents for the
-source reconciler. Neither may write the workspace or SQL directly, select an
-arbitrary trusted scope, or submit ready-made canonical changesets.
+filesystem and remote Git source adapters list and fetch configured documents
+for the source reconciler. Git scans resolve a branch or tag once, consume only
+regular blobs from that immutable commit, and never execute repository content
+or modify the remote. Neither adapter may write the workspace or SQL directly,
+select an arbitrary trusted scope, or submit ready-made canonical changesets.
 
 The host owns session and user context, final-answer generation, tool
 orchestration, and the mapping to the trusted Knowl scope. Public callers

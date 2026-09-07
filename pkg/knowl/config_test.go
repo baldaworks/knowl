@@ -164,6 +164,92 @@ func filesystemSource(id domain.SourceID, root string, include []string) domain.
 	}
 }
 
+func gitSource(id domain.SourceID, remote, ref string, include []string) domain.Source {
+	return domain.Source{
+		ID: id, Type: domain.SourceTypeGit, Enabled: true,
+		Config: domain.SourceConfig{
+			Git: &domain.GitSourceConfig{
+				Remote: remote, Ref: ref, Include: include,
+			},
+		},
+	}
+}
+
+func TestNormalizeGitSourcesAcceptsValidConfigs(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	tests := []struct {
+		name     string
+		remote   string
+		ref      string
+		refKind  string
+		wantRef  string
+		wantKind string
+	}{
+		{name: "https default branch", remote: "https://github.com/org/repo.git", ref: "main", wantRef: "refs/heads/main", wantKind: domain.GitRefKindBranch},
+		{name: "https explicit branch ref", remote: "https://github.com/org/repo", ref: "refs/heads/feature/docs", wantRef: "refs/heads/feature/docs", wantKind: domain.GitRefKindBranch},
+		{name: "ssh git user", remote: "git@github.com:org/repo.git", ref: "v1.2.0", refKind: domain.GitRefKindTag, wantRef: "refs/tags/v1.2.0", wantKind: domain.GitRefKindTag},
+		{name: "ssh url scheme", remote: "ssh://git@github.com/org/repo.git", ref: "refs/tags/release-1.0", wantRef: "refs/tags/release-1.0", wantKind: domain.GitRefKindTag},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := gitSource("git-source", tc.remote, tc.ref, nil)
+			s.Config.Git.RefKind = tc.refKind
+			if strings.HasPrefix(tc.remote, "ssh://") || strings.Contains(tc.remote, "@") {
+				s.Config.Git.Auth.SecretEnv = "TEST_GIT_SSH_KEY"
+				s.Config.Git.KnownHosts = []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEexample"}
+			}
+			normalized, err := NormalizeSources(workspace, root, []domain.Source{s})
+			if err != nil {
+				t.Fatalf("NormalizeSources() error: %v", err)
+			}
+			if len(normalized) != 1 {
+				t.Fatalf("expected 1 normalized source, got %d", len(normalized))
+			}
+			git := normalized[0].Config.Git
+			if git.Ref != tc.wantRef || git.RefKind != tc.wantKind {
+				t.Errorf("ref = %q, kind = %q; want %q, %q", git.Ref, git.RefKind, tc.wantRef, tc.wantKind)
+			}
+			if normalized[0].ConfigDigest == "" {
+				t.Errorf("expected non-empty config digest")
+			}
+		})
+	}
+}
+
+func TestNormalizeGitSourcesRejectsInvalidConfigs(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	tests := []struct {
+		name   string
+		source domain.Source
+	}{
+		{name: "file transport", source: gitSource("git-src", "file:///path/to/repo", "main", nil)},
+		{name: "local relative path", source: gitSource("git-src", "./relative/repo", "main", nil)},
+		{name: "local absolute path", source: gitSource("git-src", "/absolute/repo", "main", nil)},
+		{name: "unencrypted http", source: gitSource("git-src", "http://github.com/org/repo", "main", nil)},
+		{name: "credentials in https url", source: gitSource("git-src", "https://token:secret@github.com/org/repo", "main", nil)},
+		{name: "ext transport helper", source: gitSource("git-src", "ext::sh -c evil", "main", nil)},
+		{name: "commit sha 40 hex", source: gitSource("git-src", "https://github.com/org/repo", "0123456789abcdef0123456789abcdef01234567", nil)},
+		{name: "commit sha 64 hex", source: gitSource("git-src", "https://github.com/org/repo", "0123456789abcdef0123456789abcdef012345670123456789abcdef01234567", nil)},
+		{name: "invalid ref traversal", source: gitSource("git-src", "https://github.com/org/repo", "refs/heads/../evil", nil)},
+		{name: "missing remote", source: gitSource("git-src", "", "main", nil)},
+		{name: "missing ref", source: gitSource("git-src", "https://github.com/org/repo", "", nil)},
+		{name: "ref kind mismatch", source: func() domain.Source {
+			s := gitSource("git-src", "https://github.com/org/repo", "refs/heads/main", nil)
+			s.Config.Git.RefKind = "tag"
+			return s
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NormalizeSources(workspace, root, []domain.Source{tc.source}); err == nil {
+				t.Fatalf("NormalizeSources() expected error for %s, got nil", tc.name)
+			}
+		})
+	}
+}
+
 func sourceWithSync(root string, syncPolicy domain.SourceSyncPolicy) domain.Source {
 	source := filesystemSource("wiki", filepath.Join(root, "source"), nil)
 	source.Sync = syncPolicy

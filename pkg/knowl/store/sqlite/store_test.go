@@ -250,6 +250,35 @@ func TestSourceStateSurvivesReopen(t *testing.T) {
 	}
 }
 
+func TestSQLiteBeginSyncGitSource(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := Open(ctx, t.TempDir()+"/knowl.sqlite")
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	run := knowl.SyncRun{
+		ID:           "git-run-1",
+		Scope:        testLocalScope,
+		SourceID:     "git-docs",
+		ConfigDigest: strings.Repeat("a", 64),
+		Status:       knowl.SyncStatusScanning,
+		StartedAt:    time.Now().UTC(),
+	}
+	created, replay, err := store.BeginSync(ctx, app.BeginSyncRequest{Run: run, Type: knowl.SourceTypeGit, RepositoryIdentity: strings.Repeat("b", 64)})
+	if err != nil || replay {
+		t.Fatalf("BeginSync(git) = %#v, %v, %v", created, replay, err)
+	}
+	status, err := store.SourceStatus(ctx, testLocalScope, "git-docs")
+	if err != nil {
+		t.Fatalf("SourceStatus() = %v", err)
+	}
+	if status.Type != knowl.SourceTypeGit {
+		t.Fatalf("status.Type = %q, want %q", status.Type, knowl.SourceTypeGit)
+	}
+}
+
 func sqliteSourceRun(id knowl.SyncRunID, at time.Time) knowl.SyncRun {
 	return knowl.SyncRun{ID: id, Scope: "reopen", SourceID: testSourceID, ConfigDigest: strings.Repeat("a", 64), Status: knowl.SyncStatusScanning, StartedAt: at, UpdatedAt: at}
 }

@@ -39,6 +39,7 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 		changed    = "changed"
 	)
 	base := time.Unix(100, 0).UTC()
+	runGitLineageContract(t, ctx, harness.Store, scope, base.Add(-40*time.Second))
 	if harness.OpenPeer != nil {
 		runConcurrentBeginContract(t, ctx, harness, scope, base.Add(-20*time.Second))
 	}
@@ -216,6 +217,42 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 	resumable, err := harness.Store.ResumableSyncRuns(ctx, scope, 100)
 	if err != nil || len(resumable) != 0 {
 		t.Fatalf("ResumableSyncRuns() = %#v, %v", resumable, err)
+	}
+}
+
+func runGitLineageContract(t *testing.T, ctx context.Context, store app.SourceStateStore, scope knowl.ScopeRef, at time.Time) {
+	t.Helper()
+	const sourceID = knowl.SourceID("git-lineage")
+	firstIdentity := strings.Repeat("a", 64)
+	secondIdentity := strings.Repeat("b", 64)
+
+	first := newContractRun(scope, sourceID, "git-lineage-1", at)
+	if _, _, err := store.BeginSync(ctx, app.BeginSyncRequest{
+		Run: first, Type: knowl.SourceTypeGit, RepositoryIdentity: firstIdentity,
+	}); err != nil {
+		t.Fatalf("BeginSync() initial Git lineage = %v", err)
+	}
+	if _, err := store.FailSync(ctx, scope, first.ID, "test_failure", at.Add(time.Second)); err != nil {
+		t.Fatalf("FailSync() initial Git lineage = %v", err)
+	}
+
+	changed := newContractRun(scope, sourceID, "git-lineage-2", at.Add(2*time.Second))
+	if _, _, err := store.BeginSync(ctx, app.BeginSyncRequest{
+		Run: changed, Type: knowl.SourceTypeGit, RepositoryIdentity: secondIdentity,
+	}); !errors.Is(err, app.ErrSourceLineageConflict) {
+		t.Fatalf("BeginSync() changed Git lineage = %v, want lineage conflict", err)
+	}
+	if _, _, err := store.BeginSync(ctx, app.BeginSyncRequest{
+		Run: changed, Type: knowl.SourceTypeGit, RepositoryIdentity: secondIdentity, AllowRebind: true,
+	}); err != nil {
+		t.Fatalf("BeginSync() authorized Git rebind = %v", err)
+	}
+	status, err := store.SourceStatus(ctx, scope, sourceID)
+	if err != nil || status.RepositoryIdentity != secondIdentity {
+		t.Fatalf("SourceStatus() rebound Git lineage = %#v, %v", status, err)
+	}
+	if _, err := store.FailSync(ctx, scope, changed.ID, "test_failure", at.Add(3*time.Second)); err != nil {
+		t.Fatalf("FailSync() rebound Git lineage = %v", err)
 	}
 }
 

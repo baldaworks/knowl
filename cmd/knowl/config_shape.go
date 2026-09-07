@@ -115,6 +115,7 @@ type SourceConfig struct {
 	Type       knowltypes.SourceType   `mapstructure:"type"`
 	Enabled    *bool                   `mapstructure:"enabled"`
 	Filesystem *FilesystemSourceConfig `mapstructure:"filesystem"`
+	Git        *GitSourceConfig        `mapstructure:"git"`
 	Sync       SourceSyncConfig        `mapstructure:"sync"`
 }
 
@@ -124,6 +125,27 @@ type FilesystemSourceConfig struct {
 	Include []string `mapstructure:"include"`
 	Flavor  string   `mapstructure:"flavor"`
 	URIBase string   `mapstructure:"uri_base"`
+}
+
+// GitSourceConfig configures a remote Git repository source.
+type GitSourceConfig struct {
+	Remote       string        `mapstructure:"remote"`
+	Ref          string        `mapstructure:"ref"`
+	RefKind      string        `mapstructure:"ref_kind"`
+	Include      []string      `mapstructure:"include"`
+	Flavor       string        `mapstructure:"flavor"`
+	URIBase      string        `mapstructure:"uri_base"`
+	Auth         GitAuthConfig `mapstructure:"auth"`
+	AllowRewrite bool          `mapstructure:"allow_rewrite"`
+	RebindAck    bool          `mapstructure:"rebind_ack"`
+	KnownHosts   []string      `mapstructure:"known_hosts"`
+	RepositoryID string        `mapstructure:"repository_id"`
+}
+
+// GitAuthConfig configures credentials for Git source authentication.
+type GitAuthConfig struct {
+	SecretEnv string `mapstructure:"secret_env"`
+	KeyFile   string `mapstructure:"key_file"`
 }
 
 // SourceSyncConfig controls on-start, periodic, and bounded retry scheduling.

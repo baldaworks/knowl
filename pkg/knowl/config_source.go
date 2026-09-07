@@ -1,11 +1,14 @@
 package knowl
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +26,13 @@ const (
 	maximumSources            = 128
 	maximumSourceIncludes     = 128
 	maximumIncludePattern     = 1024
+)
+
+var (
+	gitSCPPattern        = regexp.MustCompile(`^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[a-zA-Z0-9_./~-]+$`)
+	gitCommitSHAPattern  = regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`)
+	envVarPattern        = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	gitRefInvalidPattern = regexp.MustCompile(`[\s\x00-\x1f\x7f~^:?*\[\\@{]|//|\.\.|\.lock$`)
 )
 
 // NormalizeSources validates and canonicalizes configured sources without
@@ -61,45 +71,58 @@ func normalizeSources(workspace, baseDir string, sources []domain.Source) ([]dom
 			return nil, fmt.Errorf("source id %q is duplicated", source.ID)
 		}
 		seen[source.ID] = struct{}{}
-		if source.Type != domain.SourceTypeFilesystem || source.Config.Filesystem == nil {
-			return nil, fmt.Errorf("source %q must use the supported filesystem config", source.ID)
-		}
-
-		filesystem := *source.Config.Filesystem
-		root := strings.TrimSpace(filesystem.Root)
-		if root == "" {
-			return nil, fmt.Errorf("source %q filesystem root is required", source.ID)
-		}
-		if !filepath.IsAbs(root) {
-			root = filepath.Join(baseDir, root)
-		}
-		root, err = canonicalPath(root)
-		if err != nil {
-			return nil, fmt.Errorf("resolve source %q root: %w", source.ID, err)
-		}
-		if pathsOverlap(workspacePath, root) {
-			return nil, fmt.Errorf("source %q root %q overlaps workspace %q", source.ID, root, workspacePath)
-		}
-		filesystem.Root = root
-		filesystem.Include, err = normalizeInclude(filesystem.Include)
-		if err != nil {
-			return nil, fmt.Errorf("source %q include: %w", source.ID, err)
-		}
-		filesystem.Flavor = strings.ToLower(strings.TrimSpace(filesystem.Flavor))
-		if filesystem.Flavor == "" {
-			filesystem.Flavor = domain.SourceFlavorMarkdown
-		}
-		if filesystem.Flavor != domain.SourceFlavorMarkdown && filesystem.Flavor != domain.SourceFlavorObsidian && filesystem.Flavor != domain.SourceFlavorOKF {
-			return nil, fmt.Errorf("source %q has unsupported flavor %q", source.ID, filesystem.Flavor)
-		}
-		filesystem.URIBase, err = normalizeURIBase(filesystem.URIBase)
-		if err != nil {
-			return nil, fmt.Errorf("source %q uri_base: %w", source.ID, err)
+		switch source.Type {
+		case domain.SourceTypeFilesystem:
+			if source.Config.Filesystem == nil || source.Config.Git != nil {
+				return nil, fmt.Errorf("source %q must use the supported filesystem config", source.ID)
+			}
+			filesystem := *source.Config.Filesystem
+			root := strings.TrimSpace(filesystem.Root)
+			if root == "" {
+				return nil, fmt.Errorf("source %q filesystem root is required", source.ID)
+			}
+			if !filepath.IsAbs(root) {
+				root = filepath.Join(baseDir, root)
+			}
+			root, err = canonicalPath(root)
+			if err != nil {
+				return nil, fmt.Errorf("resolve source %q root: %w", source.ID, err)
+			}
+			if pathsOverlap(workspacePath, root) {
+				return nil, fmt.Errorf("source %q root %q overlaps workspace %q", source.ID, root, workspacePath)
+			}
+			filesystem.Root = root
+			filesystem.Include, err = normalizeInclude(filesystem.Include)
+			if err != nil {
+				return nil, fmt.Errorf("source %q include: %w", source.ID, err)
+			}
+			filesystem.Flavor = strings.ToLower(strings.TrimSpace(filesystem.Flavor))
+			if filesystem.Flavor == "" {
+				filesystem.Flavor = domain.SourceFlavorMarkdown
+			}
+			if filesystem.Flavor != domain.SourceFlavorMarkdown && filesystem.Flavor != domain.SourceFlavorObsidian && filesystem.Flavor != domain.SourceFlavorOKF {
+				return nil, fmt.Errorf("source %q has unsupported flavor %q", source.ID, filesystem.Flavor)
+			}
+			filesystem.URIBase, err = normalizeURIBase(filesystem.URIBase)
+			if err != nil {
+				return nil, fmt.Errorf("source %q uri_base: %w", source.ID, err)
+			}
+			source.Config.Filesystem = &filesystem
+		case domain.SourceTypeGit:
+			if source.Config.Git == nil || source.Config.Filesystem != nil {
+				return nil, fmt.Errorf("source %q must use the supported git config", source.ID)
+			}
+			git, err := normalizeGitSource(source.ID, baseDir, *source.Config.Git)
+			if err != nil {
+				return nil, err
+			}
+			source.Config.Git = git
+		default:
+			return nil, fmt.Errorf("source %q has unsupported type %q", source.ID, source.Type)
 		}
 		if err := normalizeSyncPolicy(&source.Sync); err != nil {
 			return nil, fmt.Errorf("source %q sync: %w", source.ID, err)
 		}
-		source.Config.Filesystem = &filesystem
 		source.ConfigDigest, err = app.SourceConfigDigest(source)
 		if err != nil {
 			return nil, fmt.Errorf("digest source %q config: %w", source.ID, err)
@@ -219,4 +242,175 @@ func pathsOverlap(left, right string) bool {
 	}
 	relative, err = filepath.Rel(right, left)
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func normalizeGitSource(sourceID domain.SourceID, baseDir string, raw domain.GitSourceConfig) (*domain.GitSourceConfig, error) {
+	git := raw
+	remote := strings.TrimSpace(git.Remote)
+	if remote == "" {
+		return nil, fmt.Errorf("source %q git remote is required", sourceID)
+	}
+	canonicalRemote, err := validateAndCanonicalizeGitRemote(remote)
+	if err != nil {
+		return nil, fmt.Errorf("source %q remote: %w", sourceID, err)
+	}
+	git.Remote = canonicalRemote
+
+	ref := strings.TrimSpace(git.Ref)
+	if ref == "" {
+		return nil, fmt.Errorf("source %q git ref is required", sourceID)
+	}
+	normalizedRef, kind, err := validateAndNormalizeGitRef(ref, git.RefKind)
+	if err != nil {
+		return nil, fmt.Errorf("source %q ref: %w", sourceID, err)
+	}
+	git.Ref = normalizedRef
+	git.RefKind = kind
+
+	git.Include, err = normalizeInclude(git.Include)
+	if err != nil {
+		return nil, fmt.Errorf("source %q include: %w", sourceID, err)
+	}
+	git.Flavor = strings.ToLower(strings.TrimSpace(git.Flavor))
+	if git.Flavor == "" {
+		git.Flavor = domain.SourceFlavorMarkdown
+	}
+	if git.Flavor != domain.SourceFlavorMarkdown && git.Flavor != domain.SourceFlavorObsidian && git.Flavor != domain.SourceFlavorOKF {
+		return nil, fmt.Errorf("source %q has unsupported flavor %q", sourceID, git.Flavor)
+	}
+	git.URIBase, err = normalizeURIBase(git.URIBase)
+	if err != nil {
+		return nil, fmt.Errorf("source %q uri_base: %w", sourceID, err)
+	}
+	git.Auth, err = normalizeGitAuth(baseDir, git.Auth)
+	if err != nil {
+		return nil, fmt.Errorf("source %q auth: %w", sourceID, err)
+	}
+	git.KnownHosts = normalizeKnownHosts(git.KnownHosts)
+	if strings.HasPrefix(git.Remote, "ssh://") || gitSCPPattern.MatchString(git.Remote) {
+		if (git.Auth.SecretEnv == "" && git.Auth.KeyFile == "") || len(git.KnownHosts) == 0 {
+			return nil, fmt.Errorf("source %q SSH remote requires external key authentication and known_hosts trust", sourceID)
+		}
+	}
+	repositoryIdentity := strings.TrimSpace(git.RepositoryID)
+	if repositoryIdentity == "" {
+		repositoryIdentity = canonicalRemote
+	}
+	digest := sha256.Sum256([]byte(repositoryIdentity))
+	git.RepositoryID = hex.EncodeToString(digest[:])
+	return &git, nil
+}
+
+func validateAndCanonicalizeGitRemote(remote string) (string, error) {
+	if strings.HasPrefix(remote, "file:") || strings.HasPrefix(remote, "/") || strings.HasPrefix(remote, "./") || strings.HasPrefix(remote, "../") || strings.HasPrefix(remote, "~") {
+		return "", fmt.Errorf("local filesystem paths and file transport are not permitted")
+	}
+	if strings.HasPrefix(remote, "ext::") || strings.Contains(remote, "--") {
+		return "", fmt.Errorf("transport helper and command options are not permitted")
+	}
+	if strings.HasPrefix(remote, "http://") {
+		return "", fmt.Errorf("unencrypted HTTP transport is not permitted; use HTTPS or SSH")
+	}
+	if strings.HasPrefix(remote, "https://") {
+		parsed, err := url.Parse(remote)
+		if err != nil || parsed.Host == "" {
+			return "", fmt.Errorf("invalid HTTPS remote URL")
+		}
+		if parsed.User != nil {
+			return "", fmt.Errorf("credentials are not permitted in HTTPS remote URL")
+		}
+		if parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", fmt.Errorf("query parameters and fragments are not permitted in remote URL")
+		}
+		return strings.TrimRight(parsed.String(), "/"), nil
+	}
+	if strings.HasPrefix(remote, "ssh://") {
+		parsed, err := url.Parse(remote)
+		if err != nil || parsed.Host == "" {
+			return "", fmt.Errorf("invalid SSH remote URL")
+		}
+		if parsed.User != nil {
+			if _, present := parsed.User.Password(); present {
+				return "", fmt.Errorf("credentials are not permitted in SSH remote URL")
+			}
+		}
+		if parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", fmt.Errorf("query parameters and fragments are not permitted in remote URL")
+		}
+		return strings.TrimRight(parsed.String(), "/"), nil
+	}
+	if gitSCPPattern.MatchString(remote) {
+		return remote, nil
+	}
+	return "", fmt.Errorf("unsupported remote transport scheme; only HTTPS and SSH are supported")
+}
+
+func validateAndNormalizeGitRef(ref, refKind string) (string, string, error) {
+	if gitCommitSHAPattern.MatchString(ref) {
+		return "", "", fmt.Errorf("arbitrary commit hashes are not supported as tracked ref")
+	}
+	if gitRefInvalidPattern.MatchString(ref) || strings.Contains(ref, "/.") || strings.HasPrefix(ref, "/") || strings.HasSuffix(ref, "/") || strings.HasPrefix(ref, ".") {
+		return "", "", fmt.Errorf("invalid git ref %q", ref)
+	}
+	refKind = strings.ToLower(strings.TrimSpace(refKind))
+	if refKind != "" && refKind != domain.GitRefKindBranch && refKind != domain.GitRefKindTag {
+		return "", "", fmt.Errorf("ref_kind %q must be \"branch\" or \"tag\"", refKind)
+	}
+	if strings.HasPrefix(ref, "refs/heads/") {
+		if refKind != "" && refKind != domain.GitRefKindBranch {
+			return "", "", fmt.Errorf("ref %q conflicts with ref_kind %q", ref, refKind)
+		}
+		return ref, domain.GitRefKindBranch, nil
+	}
+	if strings.HasPrefix(ref, "refs/tags/") {
+		if refKind != "" && refKind != domain.GitRefKindTag {
+			return "", "", fmt.Errorf("ref %q conflicts with ref_kind %q", ref, refKind)
+		}
+		return ref, domain.GitRefKindTag, nil
+	}
+	if refKind == domain.GitRefKindTag {
+		return "refs/tags/" + ref, domain.GitRefKindTag, nil
+	}
+	return "refs/heads/" + ref, domain.GitRefKindBranch, nil
+}
+
+func normalizeGitAuth(baseDir string, auth domain.GitAuthConfig) (domain.GitAuthConfig, error) {
+	auth.SecretEnv = strings.TrimSpace(auth.SecretEnv)
+	if auth.SecretEnv != "" && !envVarPattern.MatchString(auth.SecretEnv) {
+		return domain.GitAuthConfig{}, fmt.Errorf("secret_env %q is not a valid environment variable name", auth.SecretEnv)
+	}
+	auth.KeyFile = strings.TrimSpace(auth.KeyFile)
+	if auth.KeyFile != "" {
+		if !filepath.IsAbs(auth.KeyFile) {
+			auth.KeyFile = filepath.Join(baseDir, auth.KeyFile)
+		}
+		keyPath, err := canonicalPath(auth.KeyFile)
+		if err != nil {
+			return domain.GitAuthConfig{}, fmt.Errorf("key_file %q: %w", auth.KeyFile, err)
+		}
+		auth.KeyFile = keyPath
+	}
+	return auth, nil
+}
+
+func normalizeKnownHosts(hosts []string) []string {
+	if len(hosts) == 0 {
+		return nil
+	}
+	unique := make(map[string]struct{}, len(hosts))
+	for _, host := range hosts {
+		host = strings.TrimSpace(host)
+		if host != "" {
+			unique[host] = struct{}{}
+		}
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(unique))
+	for host := range unique {
+		normalized = append(normalized, host)
+	}
+	sort.Strings(normalized)
+	return normalized
 }

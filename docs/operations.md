@@ -122,6 +122,20 @@ knowl:
       sync:
         on_start: false
         interval: 5m
+    - id: handbook
+      type: git
+      git:
+        remote: https://github.com/example/handbook.git
+        ref: refs/heads/main
+        ref_kind: branch
+        include: ["docs/**/*.md"]
+        flavor: markdown
+        uri_base: https://github.com/example/handbook/blob
+        auth:
+          secret_env: HANDBOOK_GIT_TOKEN
+      sync:
+        on_start: false
+        interval: 5m
 ```
 
 Notes:
@@ -137,6 +151,22 @@ Notes:
   `Authorization: Bearer <token>` header. Health and readiness probes remain
   unauthenticated. Keep tokenless deployments on a trusted, loopback-only
   network boundary.
+
+Git sources use the same `source list`, `source sync`, `source status`,
+scheduling, retry, and maintenance lifecycle as filesystem sources. They only
+read HTTPS or SSH remotes and pin a complete scan to one immutable commit.
+Credentials must be external: `auth.secret_env` supplies an HTTPS token or SSH
+private key, while `auth.key_file` supplies an SSH key file. SSH configuration
+must also provide host-bound public keys in `known_hosts`. Do not place secrets
+in `remote`, `uri_base`, or `repository_id`.
+
+The default policy rejects non-fast-forward branch changes and moved tags while
+preserving the last successful checkpoint and active catalog. Set
+`allow_rewrite: true` to explicitly permit rewritten branch history. Set
+`rebind_ack: true` only for the synchronization that intentionally adopts a new
+repository identity or moved tag, then remove the acknowledgement. Git mirrors
+under `<workspace>/.knowl/cache/git/<source-id>` are rebuildable cache, not
+canonical evidence, and can be removed while Knowl is stopped.
 
 Common `KNOWL_*` overrides include:
 

@@ -183,6 +183,12 @@ func cloneSource(source domain.Source) domain.Source {
 		filesystem.Include = append([]string(nil), filesystem.Include...)
 		source.Config.Filesystem = &filesystem
 	}
+	if source.Config.Git != nil {
+		git := *source.Config.Git
+		git.Include = append([]string(nil), git.Include...)
+		git.KnownHosts = append([]string(nil), git.KnownHosts...)
+		source.Config.Git = &git
+	}
 	return source
 }
 
