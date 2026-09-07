@@ -93,9 +93,25 @@ func hostConfig(ctx context.Context) (knowl.Config, error) {
 				Flavor: configured.Filesystem.Flavor, URIBase: configured.Filesystem.URIBase,
 			}
 		}
+		var git *types.GitSourceConfig
+		if configured.Git != nil {
+			git = &types.GitSourceConfig{
+				Remote: configured.Git.Remote, Ref: configured.Git.Ref,
+				RefKind: configured.Git.RefKind, Include: configured.Git.Include,
+				Flavor: configured.Git.Flavor, URIBase: configured.Git.URIBase,
+				Auth: types.GitAuthConfig{
+					SecretEnv: configured.Git.Auth.SecretEnv,
+					KeyFile:   configured.Git.Auth.KeyFile,
+				},
+				AllowRewrite: configured.Git.AllowRewrite,
+				RebindAck:    configured.Git.RebindAck,
+				KnownHosts:   configured.Git.KnownHosts,
+				RepositoryID: configured.Git.RepositoryID,
+			}
+		}
 		sources = append(sources, types.Source{
 			ID: configured.ID, Type: configured.Type, Enabled: enabled,
-			Config: types.SourceConfig{Filesystem: filesystem},
+			Config: types.SourceConfig{Filesystem: filesystem, Git: git},
 			Sync: types.SourceSyncPolicy{
 				OnStart: configured.Sync.OnStart, Interval: configured.Sync.Interval,
 				RetryInitial: configured.Sync.RetryInitial, RetryMaximum: configured.Sync.RetryMaximum,

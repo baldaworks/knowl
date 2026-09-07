@@ -282,6 +282,20 @@ knowl:
       sync:
         on_start: false
         interval: 5m
+    - id: handbook
+      type: git
+      git:
+        remote: https://github.com/example/handbook.git
+        ref: refs/heads/main
+        ref_kind: branch
+        include: ["docs/**/*.md"]
+        flavor: markdown
+        uri_base: https://github.com/example/handbook/blob
+        auth:
+          secret_env: HANDBOOK_GIT_TOKEN
+      sync:
+        on_start: false
+        interval: 5m
   storage:
     type: sqlite
     sqlite:
@@ -293,6 +307,14 @@ stored as independent immutable revisions under `raw/`; the maintainer may
 synthesize their related facts into one semantic page carrying both source
 documents. Repeated syncs fetch no unchanged bytes. Complete scans tombstone
 deletions while raw history and previously curated knowledge remain.
+
+Remote Git sources are inbound and read-only. HTTPS tokens and SSH private
+keys are loaded from `auth.secret_env` or `auth.key_file`; never embed
+credentials in `remote`. SSH sources also require `known_hosts` entries.
+Each scan is pinned to one commit, rejects branch rewrites and moved tags by
+default, and stores its disposable mirror under `<workspace>/.knowl/cache/git`.
+Use `allow_rewrite: true` only to adopt rewritten branch history, and
+`rebind_ack: true` only for an intentional repository or moved-tag rebind.
 
 A successful source sync means raw acceptance plus durable maintenance
 reservation. LLM maintenance runs asynchronously; `source status` reports its

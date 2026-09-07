@@ -24,6 +24,9 @@ const (
 	preparedDigestMediaType    = "text/markdown"
 	preparedDigestBaseRevision = "revision-1"
 	preparedDigestOperationID  = "operation-1"
+	testDocsGlob               = "docs/*.md"
+	testGitRemote              = "https://github.com/org/repo.git"
+	testGitRefMain             = "refs/heads/main"
 )
 
 func TestSourceIdentityValidation(t *testing.T) {
@@ -57,9 +60,9 @@ func TestSourceIdentityValidation(t *testing.T) {
 func TestSourceConfigDigestIsDeterministicAndOneWay(t *testing.T) {
 	t.Parallel()
 	first := fixtureSource()
-	first.Config.Filesystem.Include = []string{testMarkdownGlob, "docs/*.md"}
+	first.Config.Filesystem.Include = []string{testMarkdownGlob, testDocsGlob}
 	second := fixtureSource()
-	second.Config.Filesystem.Include = []string{"docs/*.md", testMarkdownGlob}
+	second.Config.Filesystem.Include = []string{testDocsGlob, testMarkdownGlob}
 	firstDigest, err := app.SourceConfigDigest(first)
 	if err != nil {
 		t.Fatalf("first digest: %v", err)
@@ -73,6 +76,103 @@ func TestSourceConfigDigestIsDeterministicAndOneWay(t *testing.T) {
 	}
 	if len(firstDigest) != 64 || strings.Contains(firstDigest, first.Config.Filesystem.Root) {
 		t.Fatalf("digest is not a redacted SHA-256 value: %q", firstDigest)
+	}
+}
+
+func TestValidateSourceGitAndFilesystem(t *testing.T) {
+	t.Parallel()
+	validFs := fixtureSource()
+	if err := app.ValidateSource(validFs); err != nil {
+		t.Fatalf("valid filesystem source: %v", err)
+	}
+	validGit := knowl.Source{
+		ID:      testSourceID,
+		Type:    knowl.SourceTypeGit,
+		Enabled: true,
+		Config: knowl.SourceConfig{
+			Git: &knowl.GitSourceConfig{
+				Remote:  testGitRemote,
+				Ref:     testGitRefMain,
+				Include: []string{testMarkdownGlob},
+			},
+		},
+	}
+	if err := app.ValidateSource(validGit); err != nil {
+		t.Fatalf("valid git source: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		source knowl.Source
+	}{
+		{name: "empty id", source: knowl.Source{ID: "", Type: knowl.SourceTypeGit, Config: validGit.Config}},
+		{name: "unsupported type", source: knowl.Source{ID: testSourceID, Type: "svn", Config: validGit.Config}},
+		{name: "git type with filesystem config", source: knowl.Source{ID: testSourceID, Type: knowl.SourceTypeGit, Config: validFs.Config}},
+		{name: "filesystem type with git config", source: knowl.Source{ID: testSourceID, Type: knowl.SourceTypeFilesystem, Config: validGit.Config}},
+		{name: "both configs present", source: knowl.Source{
+			ID:   testSourceID,
+			Type: knowl.SourceTypeGit,
+			Config: knowl.SourceConfig{
+				Filesystem: validFs.Config.Filesystem,
+				Git:        validGit.Config.Git,
+			},
+		}},
+		{name: "invalid config digest", source: func() knowl.Source {
+			s := validGit
+			s.ConfigDigest = "not-a-valid-sha256"
+			return s
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := app.ValidateSource(test.source); !errors.Is(err, app.ErrSourceInvalid) {
+				t.Fatalf("ValidateSource(%s) = %v, want ErrSourceInvalid", test.name, err)
+			}
+		})
+	}
+}
+
+func TestSourceConfigDigestGitIsDeterministic(t *testing.T) {
+	t.Parallel()
+	first := knowl.Source{
+		ID:      testSourceID,
+		Type:    knowl.SourceTypeGit,
+		Enabled: true,
+		Config: knowl.SourceConfig{
+			Git: &knowl.GitSourceConfig{
+				Remote:     testGitRemote,
+				Ref:        testGitRefMain,
+				Include:    []string{testDocsGlob, testMarkdownGlob},
+				KnownHosts: []string{"host2", "host1"},
+			},
+		},
+	}
+	second := knowl.Source{
+		ID:      testSourceID,
+		Type:    knowl.SourceTypeGit,
+		Enabled: true,
+		Config: knowl.SourceConfig{
+			Git: &knowl.GitSourceConfig{
+				Remote:     testGitRemote,
+				Ref:        testGitRefMain,
+				Include:    []string{testMarkdownGlob, testDocsGlob},
+				KnownHosts: []string{"host1", "host2"},
+			},
+		},
+	}
+	firstDigest, err := app.SourceConfigDigest(first)
+	if err != nil {
+		t.Fatalf("first digest: %v", err)
+	}
+	secondDigest, err := app.SourceConfigDigest(second)
+	if err != nil {
+		t.Fatalf("second digest: %v", err)
+	}
+	if firstDigest != secondDigest {
+		t.Fatalf("digests differ: %q != %q", firstDigest, secondDigest)
+	}
+	if len(firstDigest) != 64 {
+		t.Fatalf("digest is not a valid SHA-256 hex string: %q", firstDigest)
 	}
 }
 

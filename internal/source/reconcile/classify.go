@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"mime"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	filesystem "github.com/baldaworks/knowl/internal/source/filesystem"
+	sourcegit "github.com/baldaworks/knowl/internal/source/git"
 )
 
 // sagaInput is the prepared hand-off from the scan stage to the saga tail.
@@ -45,7 +47,7 @@ func (service *Service) reconstructPrepared(ctx context.Context, scope knowl.Sco
 // classifyAndPrepare accepts exact raw revisions, reserves textual maintenance,
 // and prepares source state plus bounded legacy-mirror cleanup. It never renders
 // configured-source bytes into the semantic wiki.
-func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, refs []knowl.DocumentRef) (sagaInput, error) {
+func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, refs []knowl.DocumentRef, snapshotCheckpoint string) (sagaInput, error) {
 	heads, err := service.state.DocumentStates(ctx, scope, source.ID, app.DocumentListOptions{
 		IncludeDeleted: true, Limit: service.options.MaxScanDocuments,
 	})
@@ -139,7 +141,7 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 		return candidates[left].State.DocumentID < candidates[right].State.DocumentID
 	})
 	sort.Slice(mutations, func(left, right int) bool { return mutations[left].Path < mutations[right].Path })
-	checkpoint := scanCheckpoint(sorted)
+	checkpoint := sourceCheckpoint(source, sorted, snapshotCheckpoint)
 	prepared := app.PreparedSyncState{
 		RunID: run.ID, Scope: scope, SourceID: source.ID, CompleteScan: true,
 		Checkpoint: checkpoint, Counts: counts, Documents: candidates, PreparedAt: service.options.Clock(),
@@ -203,7 +205,7 @@ func (service *Service) fetchAcceptCandidate(ctx context.Context, adapter app.So
 	}
 	envelope := knowl.SourceEnvelope{
 		Scope:     run.Scope,
-		Source:    knowl.SourceRef{Adapter: filesystemAdapterName, ID: string(source.ID) + "/" + string(document.ExternalID)},
+		Source:    knowl.SourceRef{Adapter: sourceAdapterName(source.Type), ID: string(source.ID) + "/" + string(document.ExternalID)},
 		Version:   knowl.SourceVersion{Version: document.Revision, Digest: contentDigest(document.Content)},
 		MediaType: document.MediaType,
 		SourceDocument: knowl.SourceDocument{
@@ -221,10 +223,9 @@ func (service *Service) fetchAcceptCandidate(ctx context.Context, adapter app.So
 }
 
 func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef, accepted knowl.AcceptedSource, previous *knowl.DocumentState) (app.PreparedDocumentState, bool, error) {
-	config := *source.Config.Filesystem
 	fallback := knowl.SourceDocument{
 		SourceID: source.ID, DocumentID: ref.ExternalID, Revision: ref.Revision,
-		URI: filesystem.DocumentURI(config, ref.Path),
+		URI: sourceDocumentURI(source, ref),
 	}
 	if accepted.SourceDocument == (knowl.SourceDocument{}) {
 		content, readErr := service.content.ReadSource(ctx, accepted, knowl.ReadLimits{Bytes: service.options.MaxRawBytes})
@@ -309,4 +310,41 @@ func scanCheckpoint(refs []knowl.DocumentRef) string {
 func contentDigest(content []byte) string {
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
+}
+
+func sourceAdapterName(sourceType knowl.SourceType) string {
+	if sourceType == knowl.SourceTypeGit {
+		return gitAdapterName
+	}
+	return filesystemAdapterName
+}
+
+func sourceDocumentURI(source knowl.Source, ref knowl.DocumentRef) string {
+	switch source.Type {
+	case knowl.SourceTypeGit:
+		uriBase := ""
+		if source.Config.Git != nil {
+			uriBase = source.Config.Git.URIBase
+		}
+		return sourcegit.DocumentURI(source.ID, uriBase, ref.Metadata["snapshot"], ref.Path)
+	case knowl.SourceTypeFilesystem:
+		if source.Config.Filesystem != nil {
+			return filesystem.DocumentURI(*source.Config.Filesystem, ref.Path)
+		}
+	}
+	return fmt.Sprintf("knowl://sources/%s/%s", source.ID, ref.Path)
+}
+
+func sourceCheckpoint(source knowl.Source, sorted []knowl.DocumentRef, prepared string) string {
+	if source.Type == knowl.SourceTypeGit {
+		if prepared != "" {
+			return prepared
+		}
+		for _, ref := range sorted {
+			if snap := ref.Metadata["snapshot"]; snap != "" {
+				return snap
+			}
+		}
+	}
+	return scanCheckpoint(sorted)
 }

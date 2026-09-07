@@ -14,7 +14,10 @@ import (
 )
 
 func (store *Store) BeginSync(ctx context.Context, request app.BeginSyncRequest) (knowl.SyncRun, bool, error) {
-	if request.Type != knowl.SourceTypeFilesystem || request.Run.Status != knowl.SyncStatusScanning || request.Run.StartedAt.IsZero() || request.Run.CompleteScan || request.Run.Counts != (knowl.SyncCounts{}) || request.Run.FailureClass != "" || request.Run.ContentGeneration != "" || !request.Run.CompletedAt.IsZero() || app.ValidateSyncRun(request.Run) != nil {
+	if (request.Type != knowl.SourceTypeFilesystem && request.Type != knowl.SourceTypeGit) || request.Run.Status != knowl.SyncStatusScanning || request.Run.StartedAt.IsZero() || request.Run.CompleteScan || request.Run.Counts != (knowl.SyncCounts{}) || request.Run.FailureClass != "" || request.Run.ContentGeneration != "" || !request.Run.CompletedAt.IsZero() || app.ValidateSyncRun(request.Run) != nil {
+		return knowl.SyncRun{}, false, app.ErrSourceInvalid
+	}
+	if (request.Type == knowl.SourceTypeGit) != (app.ValidateRepositoryIdentity(request.RepositoryIdentity) == nil) || (request.Type != knowl.SourceTypeGit && request.AllowRebind) {
 		return knowl.SyncRun{}, false, app.ErrSourceInvalid
 	}
 	store.mu.Lock()
@@ -39,13 +42,21 @@ func (store *Store) BeginSync(ctx context.Context, request app.BeginSyncRequest)
 		now = request.Run.StartedAt.UTC()
 	}
 	started := request.Run.StartedAt.UTC()
+	var previousIdentity string
+	identityErr := tx.QueryRowContext(ctx, `SELECT repository_identity FROM knowl_sources WHERE scope = ? AND source_id = ?`, request.Run.Scope, request.Run.SourceID).Scan(&previousIdentity)
+	if identityErr != nil && !errors.Is(identityErr, sql.ErrNoRows) {
+		return knowl.SyncRun{}, false, fmt.Errorf("read source repository identity: %w", identityErr)
+	}
+	if previousIdentity != "" && previousIdentity != request.RepositoryIdentity && !request.AllowRebind {
+		return knowl.SyncRun{}, false, app.ErrSourceLineageConflict
+	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO knowl_sources (scope, source_id, source_type, config_digest, last_attempt_run_id, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(scope, source_id) DO UPDATE SET
-			source_type = excluded.source_type, config_digest = excluded.config_digest,
-			last_attempt_run_id = excluded.last_attempt_run_id, status = excluded.status, updated_at = excluded.updated_at`,
-		request.Run.Scope, request.Run.SourceID, request.Type, request.Run.ConfigDigest, request.Run.ID,
+			INSERT INTO knowl_sources (scope, source_id, source_type, config_digest, repository_identity, last_attempt_run_id, status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope, source_id) DO UPDATE SET
+				source_type = excluded.source_type, config_digest = excluded.config_digest, repository_identity = excluded.repository_identity,
+				last_attempt_run_id = excluded.last_attempt_run_id, status = excluded.status, updated_at = excluded.updated_at`,
+		request.Run.Scope, request.Run.SourceID, request.Type, request.Run.ConfigDigest, request.RepositoryIdentity, request.Run.ID,
 		request.Run.Status, formatTime(started), formatTime(now))
 	if err != nil {
 		return knowl.SyncRun{}, false, fmt.Errorf("upsert sync source: %w", err)
@@ -510,7 +521,7 @@ func (store *Store) SourceStatus(ctx context.Context, scope knowl.ScopeRef, sour
 	var status knowl.SourceStatus
 	var sourceType, syncStatus, createdAt, updatedAt, lastAttemptAt, lastSuccessfulAt string
 	err := store.db.QueryRowContext(ctx, `
-		SELECT source.source_type, source.config_digest, source.checkpoint,
+			SELECT source.source_type, source.config_digest, source.repository_identity, source.checkpoint,
 			source.last_attempt_run_id, source.last_success_run_id, source.status,
 			attempt.added, attempt.updated, attempt.unchanged, attempt.deleted, attempt.failed,
 			source.created_at, COALESCE(NULLIF(attempt.completed_at, ''), attempt.updated_at),
@@ -519,7 +530,7 @@ func (store *Store) SourceStatus(ctx context.Context, scope knowl.ScopeRef, sour
 		JOIN knowl_sync_runs AS attempt ON attempt.run_id = source.last_attempt_run_id
 		LEFT JOIN knowl_sync_runs AS success ON success.run_id = NULLIF(source.last_success_run_id, '')
 		WHERE source.scope = ? AND source.source_id = ?`, scope, sourceID).Scan(
-		&sourceType, &status.ConfigDigest, &status.Checkpoint, &status.LastAttemptRunID,
+		&sourceType, &status.ConfigDigest, &status.RepositoryIdentity, &status.Checkpoint, &status.LastAttemptRunID,
 		&status.LastSuccessfulRunID, &syncStatus, &status.Counts.Added, &status.Counts.Updated,
 		&status.Counts.Unchanged, &status.Counts.Deleted, &status.Counts.Failed, &createdAt,
 		&lastAttemptAt, &lastSuccessfulAt, &updatedAt,

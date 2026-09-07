@@ -51,6 +51,7 @@ var (
 	ErrSourceMutationInvalid = errors.New("invalid Knowl source mutation")
 	ErrSourceMutationLimit   = errors.New("knowl source mutation exceeds a limit")
 	ErrSourceRetryConflict   = errors.New("knowl source maintenance retry conflicts")
+	ErrSourceLineageConflict = errors.New("knowl source repository identity conflicts")
 
 	sourceIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	failurePattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
@@ -60,6 +61,18 @@ var (
 type SourceAdapter interface {
 	List(ctx context.Context, source knowl.Source, pageToken string) (knowl.DocumentPage, error)
 	Fetch(ctx context.Context, source knowl.Source, ref knowl.DocumentRef) (knowl.Document, error)
+}
+
+// SnapshotPreparation pins one source scan to an immutable adapter checkpoint.
+type SnapshotPreparation struct {
+	PageToken  string
+	Checkpoint string
+}
+
+// SnapshotSourceAdapter prepares an immutable scan before descriptor paging.
+// Reconciliation uses this optional capability for moving remote sources.
+type SnapshotSourceAdapter interface {
+	PrepareSnapshot(ctx context.Context, source knowl.Source, previousCheckpoint string) (SnapshotPreparation, error)
 }
 
 // SourceNormalizationInput requests deterministic normalization of one fetched
@@ -103,8 +116,10 @@ type SourceDigestEntry struct {
 
 // BeginSyncRequest begins or idempotently replays one durable run.
 type BeginSyncRequest struct {
-	Run  knowl.SyncRun
-	Type knowl.SourceType
+	Run                knowl.SyncRun
+	Type               knowl.SourceType
+	RepositoryIdentity string
+	AllowRebind        bool
 }
 
 // ScanPageRecord atomically records one listed descriptor page and next token.
@@ -273,7 +288,16 @@ func ValidateSource(source knowl.Source) error {
 	if err := ValidateSourceID(source.ID); err != nil {
 		return err
 	}
-	if source.Type != knowl.SourceTypeFilesystem || source.Config.Filesystem == nil {
+	switch source.Type {
+	case knowl.SourceTypeFilesystem:
+		if source.Config.Filesystem == nil || source.Config.Git != nil {
+			return ErrSourceInvalid
+		}
+	case knowl.SourceTypeGit:
+		if source.Config.Git == nil || source.Config.Filesystem != nil {
+			return ErrSourceInvalid
+		}
+	default:
 		return ErrSourceInvalid
 	}
 	if source.ConfigDigest != "" && !validSHA256(source.ConfigDigest) {
@@ -499,6 +523,9 @@ func SourceConfigDigest(source knowl.Source) (string, error) {
 	if clone.Config.Filesystem != nil {
 		clone.Config.Filesystem = cloneFilesystemConfig(*clone.Config.Filesystem)
 	}
+	if clone.Config.Git != nil {
+		clone.Config.Git = cloneGitConfig(*clone.Config.Git)
+	}
 	encoded, err := json.Marshal(clone)
 	if err != nil {
 		return "", fmt.Errorf("encode source config: %w", err)
@@ -511,6 +538,27 @@ func cloneFilesystemConfig(config knowl.FilesystemSourceConfig) *knowl.Filesyste
 	config.Include = append([]string(nil), config.Include...)
 	sort.Strings(config.Include)
 	return &config
+}
+
+func cloneGitConfig(config knowl.GitSourceConfig) *knowl.GitSourceConfig {
+	config.Include = append([]string(nil), config.Include...)
+	sort.Strings(config.Include)
+	config.KnownHosts = append([]string(nil), config.KnownHosts...)
+	sort.Strings(config.KnownHosts)
+	// Credential selection and SSH trust material are deployment bindings, not
+	// source-content identity. Rotating either must not replay the source.
+	config.Auth = knowl.GitAuthConfig{}
+	config.KnownHosts = nil
+	return &config
+}
+
+// ValidateRepositoryIdentity accepts the bounded SHA-256 lineage binding used
+// by durable source state without exposing the repository URL.
+func ValidateRepositoryIdentity(identity string) error {
+	if !validSHA256(identity) {
+		return ErrSourceInvalid
+	}
+	return nil
 }
 
 func validMetadata(metadata map[string]string) bool {

@@ -17,17 +17,24 @@ type SourceType string
 const (
 	// SourceTypeFilesystem selects the built-in filesystem source contract.
 	SourceTypeFilesystem SourceType = "filesystem"
+	// SourceTypeGit selects the remote Git source contract.
+	SourceTypeGit SourceType = "git"
 	// SourceFlavorMarkdown preserves ordinary Markdown references.
 	SourceFlavorMarkdown = "markdown"
 	// SourceFlavorObsidian enables Obsidian reference normalization.
 	SourceFlavorObsidian = "obsidian"
 	// SourceFlavorOKF preserves validated Open Knowledge Format semantics.
 	SourceFlavorOKF = "okf"
+	// GitRefKindBranch identifies branch ref tracking.
+	GitRefKindBranch = "branch"
+	// GitRefKindTag identifies tag ref tracking.
+	GitRefKindTag = "tag"
 )
 
 // SourceConfig is the typed configuration union for one source.
 type SourceConfig struct {
 	Filesystem *FilesystemSourceConfig `json:"filesystem,omitempty"`
+	Git        *GitSourceConfig        `json:"git,omitempty"`
 }
 
 // FilesystemSourceConfig configures a filesystem-backed source.
@@ -36,6 +43,27 @@ type FilesystemSourceConfig struct {
 	Include []string `json:"include,omitempty"`
 	Flavor  string   `json:"flavor,omitempty"`
 	URIBase string   `json:"uri_base,omitempty"`
+}
+
+// GitSourceConfig configures a remote Git repository source.
+type GitSourceConfig struct {
+	Remote       string        `json:"remote"`
+	Ref          string        `json:"ref"`
+	RefKind      string        `json:"ref_kind,omitempty"`
+	Include      []string      `json:"include,omitempty"`
+	Flavor       string        `json:"flavor,omitempty"`
+	URIBase      string        `json:"uri_base,omitempty"`
+	Auth         GitAuthConfig `json:"auth,omitempty"`
+	AllowRewrite bool          `json:"allow_rewrite,omitempty"`
+	RebindAck    bool          `json:"rebind_ack,omitempty"`
+	KnownHosts   []string      `json:"known_hosts,omitempty"`
+	RepositoryID string        `json:"repository_id,omitempty"`
+}
+
+// GitAuthConfig configures credentials for Git source authentication.
+type GitAuthConfig struct {
+	SecretEnv string `json:"secret_env,omitempty"`
+	KeyFile   string `json:"key_file,omitempty"`
 }
 
 // SourceSyncPolicy controls on-start, periodic, and bounded retry scheduling.
@@ -197,6 +225,9 @@ type SourceStatus struct {
 	LastAttemptAt       time.Time               `json:"last_attempt_at,omitempty"`
 	LastSuccessfulAt    time.Time               `json:"last_successful_at,omitempty"`
 	UpdatedAt           time.Time               `json:"updated_at"`
+	// RepositoryIdentity is an internal credential-free lineage binding. It is
+	// intentionally excluded from operator-facing status serialization.
+	RepositoryIdentity string `json:"-"`
 }
 
 // MaintenanceCounts summarizes the asynchronous operations reserved by the

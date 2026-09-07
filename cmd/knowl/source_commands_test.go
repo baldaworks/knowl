@@ -22,6 +22,7 @@ const (
 	commandEngineeringSourceID = "engineering"
 	failureClassFlag           = "--failure-class"
 	providerFailureClass       = "provider"
+	dryRunFlag                 = "--dry-run"
 )
 
 func TestSourceCommandsValidateBeforeSessionAndEmitRedactedJSON(t *testing.T) {
@@ -159,7 +160,7 @@ func TestSourceRetryCommandValidatesBeforeSessionAndEmitsStructuredResult(t *tes
 	var output bytes.Buffer
 	command := newSourceRetryCommand()
 	command.SetOut(&output)
-	command.SetArgs([]string{commandEngineeringSourceID, failureClassFlag, providerFailureClass, failureClassFlag, providerFailureClass, "--dry-run"})
+	command.SetArgs([]string{commandEngineeringSourceID, failureClassFlag, providerFailureClass, failureClassFlag, providerFailureClass, dryRunFlag})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("source retry: %v", err)
 	}
@@ -262,7 +263,7 @@ func TestSourceCommandsUseRealHostWithMaintainer(t *testing.T) {
 	output.Reset()
 	previewCommand := newSourceRetryCommand()
 	previewCommand.SetOut(&output)
-	previewCommand.SetArgs([]string{commandEngineeringSourceID, failureClassFlag, providerFailureClass, "--dry-run"})
+	previewCommand.SetArgs([]string{commandEngineeringSourceID, failureClassFlag, providerFailureClass, dryRunFlag})
 	if err := previewCommand.Execute(); err != nil {
 		t.Fatalf("source retry preview: %v", err)
 	}
@@ -299,8 +300,113 @@ func TestSourceCommandsUseRealHostWithMaintainer(t *testing.T) {
 	}
 }
 
+func TestSourceCommandsWithGitSource(t *testing.T) {
+	original := newLocalSourceSession
+	t.Cleanup(func() { newLocalSourceSession = original })
+
+	const gitSourceID = domain.SourceID("git-docs")
+	const testGitCheckpoint = "1111111111111111111111111111111111111111"
+	const secretToken = "secret-token-abcdef"
+
+	gitSource := domain.Source{
+		ID:      gitSourceID,
+		Type:    domain.SourceTypeGit,
+		Enabled: true,
+		Config: domain.SourceConfig{
+			Git: &domain.GitSourceConfig{
+				Remote:  "https://github.com/org/docs.git",
+				Ref:     "main",
+				RefKind: domain.GitRefKindBranch,
+				Auth: domain.GitAuthConfig{
+					SecretEnv: secretToken,
+				},
+			},
+		},
+		Sync: domain.SourceSyncPolicy{OnStart: true, Interval: 5 * time.Minute},
+	}
+
+	host := &stubLocalSourceHost{
+		sources: []domain.Source{gitSource},
+		sourceStatus: domain.SourceStatus{
+			SourceID:   gitSourceID,
+			Type:       domain.SourceTypeGit,
+			Checkpoint: testGitCheckpoint,
+			Status:     domain.SyncStatusSucceeded,
+			Maintenance: domain.SourceMaintenanceStatus{
+				Counts: domain.MaintenanceCounts{Queued: 1},
+			},
+		},
+	}
+	newLocalSourceSession = func(context.Context) (localSourceSession, error) {
+		return localSourceSession{Host: host, ShutdownTimeout: time.Second}, nil
+	}
+
+	// 1. knowl source list emits git source and redacts secrets
+	var listOut bytes.Buffer
+	listCmd := newSourceListCommand()
+	listCmd.SetOut(&listOut)
+	if err := listCmd.Execute(); err != nil {
+		t.Fatalf("source list error: %v", err)
+	}
+	listJSON := listOut.String()
+	if !strings.Contains(listJSON, `"id":"git-docs"`) || !strings.Contains(listJSON, `"type":"git"`) {
+		t.Fatalf("source list JSON missing git source: %s", listJSON)
+	}
+	if strings.Contains(listJSON, secretToken) {
+		t.Fatalf("source list JSON leaked secret: %s", listJSON)
+	}
+
+	// 2. knowl source status returns git checkpoint and status
+	host.statusID = ""
+	var statusOut bytes.Buffer
+	statusCmd := newSourceStatusCommand()
+	statusCmd.SetOut(&statusOut)
+	statusCmd.SetArgs([]string{string(gitSourceID)})
+	if err := statusCmd.Execute(); err != nil {
+		t.Fatalf("source status error: %v", err)
+	}
+	statusJSON := statusOut.String()
+	if host.statusID != gitSourceID {
+		t.Fatalf("expected status called for %s, got %s", gitSourceID, host.statusID)
+	}
+	if !strings.Contains(statusJSON, `"checkpoint":"`+testGitCheckpoint+`"`) || !strings.Contains(statusJSON, `"type":"git"`) {
+		t.Fatalf("source status JSON missing git fields: %s", statusJSON)
+	}
+
+	// 3. knowl source sync executes for git source
+	var syncOut bytes.Buffer
+	syncCmd := newSourceSyncCommand()
+	syncCmd.SetOut(&syncOut)
+	syncCmd.SetArgs([]string{string(gitSourceID)})
+	if err := syncCmd.Execute(); err != nil {
+		t.Fatalf("source sync error: %v", err)
+	}
+	if host.syncID != gitSourceID {
+		t.Fatalf("expected sync called for %s, got %s", gitSourceID, host.syncID)
+	}
+
+	// 4. knowl source retry executes for git source
+	host.retryResult = app.SourceMaintenanceRetryResult{
+		SourceID:     gitSourceID,
+		DryRun:       true,
+		Matched:      1,
+		OperationIDs: []domain.OperationID{"op-git-1"},
+	}
+	var retryOut bytes.Buffer
+	retryCmd := newSourceRetryCommand()
+	retryCmd.SetOut(&retryOut)
+	retryCmd.SetArgs([]string{string(gitSourceID), failureClassFlag, providerFailureClass, dryRunFlag})
+	if err := retryCmd.Execute(); err != nil {
+		t.Fatalf("source retry error: %v", err)
+	}
+	if host.retryID != gitSourceID {
+		t.Fatalf("expected retry called for %s, got %s", gitSourceID, host.retryID)
+	}
+}
+
 type stubLocalSourceHost struct {
 	sources      []domain.Source
+	sourceStatus domain.SourceStatus
 	syncID       domain.SourceID
 	statusID     domain.SourceID
 	syncAllCalls int
@@ -328,6 +434,9 @@ func (host *stubLocalSourceHost) SyncAll(context.Context) (knowl.SourceSyncAllRe
 
 func (host *stubLocalSourceHost) SourceStatus(_ context.Context, id domain.SourceID) (domain.SourceStatus, error) {
 	host.statusID = id
+	if host.sourceStatus.SourceID != "" {
+		return host.sourceStatus, nil
+	}
 	return domain.SourceStatus{
 		SourceID: id, Status: domain.SyncStatusSucceeded,
 		Maintenance: domain.SourceMaintenanceStatus{

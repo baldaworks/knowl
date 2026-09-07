@@ -66,7 +66,7 @@ func TestNewServiceValidatesDependenciesAndOptions(t *testing.T) {
 		"empty adapters":    {Adapters: map[knowl.SourceType]app.SourceAdapter{}},
 		"nil adapter value": {Adapters: map[knowl.SourceType]app.SourceAdapter{knowl.SourceTypeFilesystem: nil}},
 		"missing filesystem": {
-			Adapters: map[knowl.SourceType]app.SourceAdapter{"git": stubAdapter{}},
+			Adapters: map[knowl.SourceType]app.SourceAdapter{knowl.SourceTypeGit: stubAdapter{}},
 			State:    &stubState{}, Content: &stubContent{}, SourceContent: &stubSourceContent{}, Search: &stubSearch{}, Maintenance: stubMaintenanceQueue{},
 		},
 	} {
