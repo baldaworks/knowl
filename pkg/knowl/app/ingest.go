@@ -24,7 +24,7 @@ var (
 const (
 	defaultReadPages      = 20
 	defaultReadBytes      = 4 << 20
-	defaultReadCharacters = 32 << 10
+	defaultReadCharacters = 256 << 10
 	defaultReadDepth      = 8
 	rootCatalogPath       = "wiki/index.md"
 	defaultLeaseDuration  = 5 * time.Minute

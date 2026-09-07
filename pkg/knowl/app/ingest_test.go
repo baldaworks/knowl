@@ -18,6 +18,18 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+func TestDefaultReadLimitsAllowLargeWikiDocuments(t *testing.T) {
+	const reportedLargeDocumentCharacters = 108_416
+
+	limits := app.DefaultReadLimits()
+	if limits.Characters != 256<<10 {
+		t.Fatalf("default character limit = %d, want %d", limits.Characters, 256<<10)
+	}
+	if limits.Characters <= reportedLargeDocumentCharacters {
+		t.Fatalf("default character limit = %d, must exceed reported document size %d", limits.Characters, reportedLargeDocumentCharacters)
+	}
+}
+
 func TestProviderFreeIngestFailsBeforeDurableMutation(t *testing.T) {
 	ctx := context.Background()
 	workspace, store, _, _ := newWorkflow(t, false, nil)
