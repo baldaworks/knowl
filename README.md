@@ -1,98 +1,73 @@
 # Knowl
 
+[![test](https://github.com/baldaworks/knowl/actions/workflows/test.yml/badge.svg)](https://github.com/baldaworks/knowl/actions/workflows/test.yml)
+[![lint](https://github.com/baldaworks/knowl/actions/workflows/lint.yml/badge.svg)](https://github.com/baldaworks/knowl/actions/workflows/lint.yml)
+[![release](https://img.shields.io/github/v/release/baldaworks/knowl)](https://github.com/baldaworks/knowl/releases/latest)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Durable project knowledge for agents.**
 
 Knowl is a self-hosted knowledge sidecar for agentic applications. It turns
 durable sources into an inspectable Markdown knowledge base and returns
 bounded, provenance-backed evidence.
 
-```text
-sources → Knowl → grounded evidence → host agent → final answer
-```
+[Quickstart](#minimal-sidecar-quickstart) ·
+[Connect an agent](#connect-an-agent) ·
+[Documentation](#documentation-by-goal) ·
+[GitHub](https://github.com/baldaworks/knowl)
 
-## Release status
+## What Users Get
 
-This README documents the current `main` branch. The latest published release is
-[v0.3.1](https://github.com/baldaworks/knowl/releases/tag/v0.3.1). Use an image
-tag or immutable digest in production; do not assume every `main` command exists
-in the latest release.
-
-| Capability | v0.3.1 | Current `main` |
-| --- | --- | --- |
-| MCP and HTTP retrieve, ingest, and operation status | Yes | Yes |
-| Filesystem sources and SQLite/PostgreSQL storage | Yes | Yes |
-| Remote Git sources | No | Yes |
-| `knowl run` | No | Yes |
-| `knowl hierarchy reconcile` | No | Yes |
-| `knowl source retry` | No | Yes |
-
-## When to use Knowl
-
-Use Knowl when an agent or application needs a durable project or domain
-knowledge layer that can:
-
-- accept selected text, URI references, or read-only source trees;
-- maintain a human-inspectable Markdown wiki from immutable raw evidence;
-- retrieve bounded evidence with source references;
-- survive process restarts and resume durable operations;
-- run beside an agent over MCP/HTTP or inside a Go process.
-
-Typical uses include grounding an engineering agent in internal documentation,
-turning accepted findings into durable project knowledge, and sharing one
-knowledge service across several agent hosts.
-
-Knowl is not session memory, user-fact or temporal memory, workflow
-orchestration, a connector for Slack/Jira/GitHub, or the primary final-answer
-generator. The host chooses what becomes durable and generates the user-facing
-answer. Knowl does not answer the user itself.
-
-The ownership boundary is deliberate:
-
-| Component | Owns |
+| Capability | Result |
 | --- | --- |
-| Host agent or application | Selecting durable events, assigning immutable source revisions, orchestrating tools, and generating the final answer. |
-| Knowl | Accepting sources, maintaining raw and Markdown artifacts, resuming operations, and returning bounded evidence with provenance. |
-| Maintainer provider | Proposing semantic Markdown updates through Knowl's validated write path. |
+| Durable ingestion | Accepted source revisions survive restarts and remain traceable |
+| Inspectable knowledge | Semantic pages live in a portable, Git-reviewable Markdown workspace |
+| Grounded retrieval | Every response is bounded evidence with source provenance |
+| Agent integration | The same contract is available over MCP, HTTP, or embedded Go |
 
-See the [source-to-wiki showcase](examples/source-to-wiki/README.md) for a
-checked-in example of raw engineering documents becoming a structured,
-queryable Markdown wiki.
+## Why Knowl
 
-## Quick start: stable sidecar
+- **Built for durable knowledge:** keep accepted project knowledge beyond one
+  chat or agent run.
+- **Human-inspectable:** review the generated Markdown instead of hiding
+  knowledge in an opaque memory store.
+- **Clear ownership:** the host selects durable inputs and writes the final
+  answer; Knowl maintains knowledge and retrieves evidence.
+- **Self-hosted:** run it beside an agent with your own storage and maintainer
+  provider.
+- **Recoverable:** durable operations and local state resume safely after
+  process restarts.
 
-This path runs the published `v0.3.1` image against the checked-in engineering
-source. It requires Docker Compose, `curl`, an OpenAI API key, and a model
-available to that key.
+Knowl is not session memory, a workflow orchestrator, or the primary
+final-answer generator. Knowl does not answer the user itself.
 
-Set the provider and local operator credentials:
+## Minimal Sidecar Quickstart
+
+The quickstart runs the published
+[v0.3.1](https://github.com/baldaworks/knowl/releases/tag/v0.3.1) image with a
+checked-in example source. It requires Git, Docker Compose, `curl`, an OpenAI
+API key, and a model available to that key.
 
 ```bash
+git clone https://github.com/baldaworks/knowl.git
+cd knowl
+
 export OPENAI_API_KEY='your-api-key'
 export OPENAI_MODEL='a-model-available-to-your-account'
 export KNOWL_OPERATOR_TOKEN='replace-with-a-local-secret'
-```
 
-The values stay outside the checked-in
-[quick-start config](deploy/sidecar/quickstart.yaml). Start the service from the
-repository root:
-
-```bash
 docker compose -f deploy/sidecar/quickstart.compose.yaml up -d
 curl -sS http://127.0.0.1:8080/readyz
 ```
 
-`/readyz` proves that workspace recovery, storage, and projections are ready. It
-does not prove that provider authentication or semantic maintenance succeeded.
-
-The configured source synchronizes on start. Inspect it until maintenance shows
-no queued work, at least one committed operation, and no failure:
+The configured source synchronizes on startup. Check maintenance status:
 
 ```bash
 docker compose -f deploy/sidecar/quickstart.compose.yaml \
   exec knowl knowl --config-dir /etc source status engineering
 ```
 
-Then retrieve evidence over the authenticated HTTP API:
+Then retrieve grounded evidence:
 
 ```bash
 curl -sS --get \
@@ -101,10 +76,9 @@ curl -sS --get \
   http://127.0.0.1:8080/v1/retrieve
 ```
 
-First success is a non-empty `evidence` array with provenance such as
-`source_refs` or `source_documents`. If maintenance fails, inspect the bounded
-failure in `source status`; a ready service alone is not a successful knowledge
-generation check.
+A successful response contains a non-empty `evidence` array with source
+provenance. `/readyz` confirms that the service and storage are ready; use
+`source status` to confirm that model-backed maintenance completed.
 
 Stop the example without deleting its persistent volume:
 
@@ -112,23 +86,16 @@ Stop the example without deleting its persistent volume:
 docker compose -f deploy/sidecar/quickstart.compose.yaml down
 ```
 
-### Maintainer-provider boundary
+The quickstart uses the hosted `openai` maintainer provider. Other
+configurations may use `opencode_acp`, which requires `opencode acp` on `PATH`
+and an authenticated OpenCode session. See
+[configuration and operations](docs/operations.md) for provider and source
+settings.
 
-Semantic wiki updates require a maintainer provider. The quick start uses the
-runtime's hosted `openai` provider, so the stock image needs credentials and
-outbound network access but no provider executable.
+## Connect an Agent
 
-The config generated by `knowl init` and the general sidecar baseline select
-`opencode_acp`, which runs `opencode acp`. The stock Knowl image does not include
-OpenCode. To use that configuration, supply OpenCode in your own image/runtime
-environment and authenticate it, or replace the provider configuration with a
-supported hosted provider as the quick start does. Missing quick-start variables
-fail during Compose/config loading instead of silently producing a usable wiki.
-
-## Connect an agent
-
-MCP Streamable HTTP is the primary agent-facing interface. Adapt these
-transport-neutral connection fields to your MCP client:
+MCP Streamable HTTP is the primary agent-facing interface. Adapt these fields
+to your MCP client:
 
 ```json
 {
@@ -140,44 +107,33 @@ transport-neutral connection fields to your MCP client:
 }
 ```
 
-Knowl exposes exactly three agent tools:
+Knowl exposes three MCP tools:
 
-- `knowl_retrieve` retrieves bounded evidence;
-- `knowl_ingest` submits one durable source;
-- `knowl_operation` reads durable operation status.
+- `knowl_retrieve` returns bounded evidence;
+- `knowl_ingest` submits durable content or a source reference;
+- `knowl_operation` reports durable operation status.
 
-The equivalent deterministic HTTP/OpenAPI endpoints are:
+The equivalent HTTP endpoints are `GET /v1/retrieve`, `POST /v1/ingest`, and
+`GET /v1/operations/{operation_id}`. See the
+[OpenAPI contract](api/openapi/knowl.yaml) for request and response schemas.
 
-- `GET /v1/retrieve`;
-- `POST /v1/ingest`;
-- `GET /v1/operations/{operation_id}`.
+## How It Works
 
-`GET /healthz` and `GET /readyz` remain public. When `knowl.operator.token` is
-configured, all business HTTP and MCP requests require
-`Authorization: Bearer <token>`. See the
-[authoritative OpenAPI contract](api/openapi/knowl.yaml).
+```text
+sources → Knowl → grounded evidence → host agent → final answer
+```
 
-## Core concepts
+| Component | Owns |
+| --- | --- |
+| Host agent or application | Selecting durable inputs, orchestrating tools, and generating the final answer |
+| Knowl | Preserving source revisions, maintaining Markdown knowledge, and retrieving evidence |
+| Maintainer provider | Proposing semantic updates through Knowl's validated write path |
 
-### Sources and semantic knowledge
-
-The host can ingest individual content/URI requests, while configured
-filesystem sources synchronize Markdown, Obsidian, or OKF trees. Current `main`
-also supports inbound read-only Git sources. Knowl preserves accepted source
-revisions under `raw/`; the maintainer synthesizes semantic pages under `wiki/`
-rather than copying configured source files into it. Source documents are never
-copied into `wiki/`. Initial bootstrap and automatic `on_start` synchronization
-are both optional.
-
-Source IDs are part of lineage, so equal source-relative paths remain distinct.
-Complete scans may tombstone deleted documents, but immutable raw history and
-previously curated knowledge remain. See the
-[operations guide](docs/operations.md) for source configuration, Git
-authentication, scheduling, retry, and failure recovery.
-
-### Workspace
-
-The canonical workspace is Git-reviewable:
+Knowl stores immutable accepted source revisions under `raw/` and semantic
+knowledge under `wiki/`. Source documents are never copied into `wiki/`.
+Initial bootstrap and automatic `on_start` synchronization are both optional.
+The workspace remains inspectable and portable, with SQLite at
+`.knowl/knowl.sqlite` providing the default local operational store:
 
 ```text
 workspace/
@@ -185,100 +141,50 @@ workspace/
 ├── raw/
 ├── wiki/
 │   ├── index.md
-│   ├── log.md
-│   └── ... semantic pages and catalogs
+│   └── ... semantic pages
 └── .knowl/
-    ├── staging/
-    ├── recovery/
     └── knowl.sqlite
 ```
 
-`schema.md`, `raw/`, and `wiki/` are durable knowledge artifacts. `.knowl/` and
-the SQL projection are operational state; the default SQLite path is
-`.knowl/knowl.sqlite` relative to the workspace. `wiki/` is a portable Open
-Knowledge Format v0.2 bundle; generated pages retain source references, while
-reserved indexes and logs are excluded from retrieval evidence.
+See the [source-to-wiki showcase](examples/source-to-wiki/README.md) for a
+complete checked-in example.
 
-See [workspace semantics](docs/workspace.md) for page metadata, provenance,
-links, hierarchy reconciliation, recovery, backup, and the explicit
-`knowl migrate okf-v0.2` procedure. Legacy workspaces are never rewritten by
-startup or read-only commands.
+## Run Knowl Your Way
 
-### Durable operations
+### Sidecar
 
-Ingest and source synchronization reserve durable maintenance work. Model-backed
-updates may complete asynchronously, and operation/source status separates
-queued, committed, retrying, and failed outcomes. See
-[operations and recovery](docs/operations.md) before retrying failures or
-changing a production workspace.
+Use the published container for a standalone MCP/HTTP service. Persist
+`/var/lib/knowl`, keep source mounts read-only, and pin an immutable image
+digest in production. The [sidecar guide](docs/sidecar.md) covers deployment,
+storage, authentication, and health checks.
 
-## Deployment choices
+### Go library
 
-### Sidecar service
-
-The baseline deployment uses SQLite and persistent storage at `/var/lib/knowl`.
-Build from [Dockerfile](Dockerfile), start from the checked-in
-[Compose baseline](deploy/sidecar/compose.yaml), and review the
-[sidecar runbook](docs/sidecar.md). The baseline deliberately leaves provider
-packaging/authentication to the deployment; the dedicated quick start above is
-the complete hosted-provider example.
-
-### Build current `main`
-
-Use the Go version declared in `go.mod`:
-
-```bash
-go build -o knowl ./cmd/knowl
-./knowl --help
-```
-
-Current `main` adds the development-only commands and Git sources identified in
-the release-status table. Common local workflows include:
-
-```bash
-./knowl init
-./knowl validate
-./knowl source list
-./knowl source sync engineering
-./knowl run --source engineering
-./knowl hierarchy reconcile
-```
-
-Review the generated `.config/knowl/config.yaml` provider before starting:
-`opencode_acp` requires `opencode acp` on `PATH` and a usable OpenCode session.
-
-### Embed in Go
-
-- `pkg/knowl/types` provides transport-neutral domain types.
-- `pkg/knowl` provides plain-Go host/runtime composition.
-- `pkg/knowlfx` wraps the same runtime with Fx lifecycle management.
-- `pkg/knowl/mcp` provides the three-tool MCP adapter.
+- `pkg/knowl` provides plain-Go runtime composition;
+- `pkg/knowlfx` adds Fx lifecycle integration;
+- `pkg/knowl/mcp` provides the MCP adapter;
+- `pkg/knowl/types` contains transport-neutral domain types.
 
 Embedding changes composition, not the business contract. See the
 [product design](docs/design.md) for architecture and ownership boundaries.
 
-## Documentation
+## Documentation By Goal
 
-- [Sidecar deployment](docs/sidecar.md)
-- [Configuration, operations, and recovery](docs/operations.md)
-- [Workspace and OKF semantics](docs/workspace.md)
-- [Product design and architecture](docs/design.md)
-- [HTTP/OpenAPI contract](api/openapi/knowl.yaml)
-- [Source-to-wiki showcase](examples/source-to-wiki/README.md)
-- [Latest stable release notes](docs/releases/v0.3.1.md)
-- [Contributing and self-wiki maintenance](CONTRIBUTING.md)
+| Goal | Start here |
+| --- | --- |
+| Deploy the sidecar | [Sidecar deployment](docs/sidecar.md) |
+| Configure providers, sources, and recovery | [Operations guide](docs/operations.md) |
+| Understand workspace and provenance semantics | [Workspace guide](docs/workspace.md) |
+| Understand the architecture | [Product design](docs/design.md) |
+| Integrate over HTTP | [OpenAPI contract](api/openapi/knowl.yaml) |
+| See source documents become a wiki | [Source-to-wiki showcase](examples/source-to-wiki/README.md) |
+| Review the latest release | [v0.3.1 release notes](docs/releases/v0.3.1.md) |
 
-`docs/releases/v0.2.0.md` is an unpublished, superseded historical note, not a
-published Knowl release.
+## Contributing
 
-## Development
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for
+local setup, verification commands, and repository conventions.
 
-Before opening a pull request, run:
+## License
 
-```bash
-go test ./...
-go tool golangci-lint run ./...
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for module verification, integration
-coverage, generated bindings, and project-wiki maintenance.
+Knowl is released under the [MIT License](LICENSE).
