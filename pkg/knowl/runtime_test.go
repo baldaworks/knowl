@@ -940,7 +940,7 @@ func TestHostRunOnce(t *testing.T) {
 			Config: domain.SourceConfig{
 				Filesystem: &domain.FilesystemSourceConfig{
 					Root:    sourceDir,
-					Include: []string{"**/*.md"},
+					Include: []string{gitTestMarkdown},
 					Flavor:  domain.SourceFlavorMarkdown,
 				},
 			},
@@ -976,4 +976,3 @@ func TestHostRunOnce(t *testing.T) {
 		t.Fatalf("committed wiki page missing: %v", err)
 	}
 }
-

@@ -32,6 +32,7 @@ const (
 	gitTestDocGuide  = "docs/guide.md"
 	gitTestDocNew    = "docs/new.md"
 	gitTestBranchRef = "refs/heads/main"
+	gitTestMarkdown  = "**/*.md"
 )
 
 type stubGitRemoteLister struct {
@@ -193,7 +194,7 @@ func TestGitSourceRuntime_EndToEndReconciliation(t *testing.T) {
 				Remote:  gitTestRemoteURL,
 				Ref:     "main",
 				RefKind: domain.GitRefKindBranch,
-				Include: []string{"**/*.md"},
+				Include: []string{gitTestMarkdown},
 			},
 		},
 		Sync: domain.SourceSyncPolicy{OnStart: false},
@@ -401,9 +402,35 @@ func TestGitSourceRuntime_EndToEndReconciliation(t *testing.T) {
 	if rewritten.Run.FailureClass != sourcegit.ClassRejectedHistoryRewrite {
 		t.Fatalf("history rewrite failure_class = %q, want %q", rewritten.Run.FailureClass, sourcegit.ClassRejectedHistoryRewrite)
 	}
+	if rewritten.Run.Checkpoint != divergentHash.String() {
+		t.Fatalf("rejected attempt checkpoint = %q, want %q", rewritten.Run.Checkpoint, divergentHash)
+	}
 	statusAfterRewrite, statusErr := host.SourceStatus(ctx, sourceID)
-	if statusErr != nil || statusAfterRewrite.Checkpoint != snapshot2SHA {
+	if statusErr != nil || statusAfterRewrite.Checkpoint != snapshot2SHA || statusAfterRewrite.AttemptCheckpoint != divergentHash.String() {
 		t.Fatalf("status after history rewrite = %#v, %v", statusAfterRewrite, statusErr)
+	}
+
+	// 6. Explicit branch rewrite policy adopts only the future checkpoint.
+	if err := host.Stop(ctx); err != nil {
+		t.Fatalf("stop default-policy host: %v", err)
+	}
+	rewriteSource := gitSource
+	rewriteConfig := *gitSource.Config.Git
+	rewriteConfig.AllowRewrite = true
+	rewriteSource.Config.Git = &rewriteConfig
+	rewriteHostConfig := config
+	rewriteHostConfig.Sources = []domain.Source{rewriteSource}
+	rewriteHost, err := knowl.New(ctx, knowl.Options{
+		Config: rewriteHostConfig, Maintainer: provider.Fixture{},
+		SourceAdapters: map[domain.SourceType]app.SourceAdapter{domain.SourceTypeGit: adapter},
+	})
+	if err != nil {
+		t.Fatalf("create rewrite-policy host: %v", err)
+	}
+	defer func() { _ = rewriteHost.Stop(context.Background()) }()
+	adopted, err := rewriteHost.SyncSource(ctx, sourceID)
+	if err != nil || adopted.Run.Checkpoint != divergentHash.String() || adopted.Run.Status != domain.SyncStatusSucceeded {
+		t.Fatalf("allow_rewrite sync = %#v, %v", adopted, err)
 	}
 }
 
@@ -479,5 +506,86 @@ func TestGitSourceRuntime_CacheRecovery(t *testing.T) {
 	}
 	if _, err := os.Stat(sourceCacheDir); os.IsNotExist(err) {
 		t.Fatalf("cache directory %s was not recreated", sourceCacheDir)
+	}
+}
+
+func TestGitSourceRuntime_TagMovePolicy(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	storer := memory.NewStorage()
+	repo, err := gogit.Init(storer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyTree := storeMemTree(t, storer, &object.Tree{})
+	firstCommit := storeMemCommit(t, storer, emptyTree)
+	secondCommit := storeMemCommit(t, storer, emptyTree, firstCommit)
+	lister := &stubGitRemoteLister{}
+	lister.setRef("refs/tags/v1", firstCommit)
+	adapter, err := sourcegit.NewAdapter(sourcegit.DefaultLimits(), sourcegit.NewRefResolver(lister), &stubGitRepoOpener{repo: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := domain.Source{
+		ID: "git-release", Type: domain.SourceTypeGit, Enabled: true,
+		Config: domain.SourceConfig{Git: &domain.GitSourceConfig{
+			Remote: gitTestRemoteURL, Ref: "v1", RefKind: domain.GitRefKindTag, Include: []string{gitTestMarkdown},
+		}},
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.Sources = []domain.Source{source}
+	newHost := func(source domain.Source) *knowl.Host {
+		t.Helper()
+		config.Sources = []domain.Source{source}
+		host, hostErr := knowl.New(ctx, knowl.Options{
+			Config: config, Maintainer: provider.Fixture{},
+			SourceAdapters: map[domain.SourceType]app.SourceAdapter{domain.SourceTypeGit: adapter},
+		})
+		if hostErr != nil {
+			t.Fatal(hostErr)
+		}
+		return host
+	}
+
+	host := newHost(source)
+	initial, err := host.SyncSource(ctx, source.ID)
+	if err != nil || initial.Run.Checkpoint != firstCommit.String() {
+		t.Fatalf("initial tag sync = %#v, %v", initial, err)
+	}
+	if err := host.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	lister.setRef("refs/tags/v1", secondCommit)
+	host = newHost(source)
+	rejected, err := host.SyncSource(ctx, source.ID)
+	if err == nil || rejected.Run.FailureClass != sourcegit.ClassMovedTag || rejected.Run.Checkpoint != secondCommit.String() {
+		t.Fatalf("moved tag rejection = %#v, %v", rejected, err)
+	}
+	status, statusErr := host.SourceStatus(ctx, source.ID)
+	if statusErr != nil || status.Checkpoint != firstCommit.String() || status.AttemptCheckpoint != secondCommit.String() {
+		t.Fatalf("moved tag status = %#v, %v", status, statusErr)
+	}
+	if err := host.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rebound := source
+	reboundGit := *source.Config.Git
+	reboundGit.RebindAck = true
+	rebound.Config.Git = &reboundGit
+	host = newHost(rebound)
+	t.Cleanup(func() { _ = host.Stop(context.Background()) })
+	adopted, err := host.SyncSource(ctx, source.ID)
+	if err != nil || adopted.Run.Status != domain.SyncStatusSucceeded || adopted.Run.Checkpoint != secondCommit.String() {
+		t.Fatalf("acknowledged tag move = %#v, %v", adopted, err)
 	}
 }

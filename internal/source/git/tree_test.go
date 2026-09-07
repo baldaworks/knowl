@@ -119,6 +119,19 @@ func TestTreeWalker(t *testing.T) {
 		}
 	})
 
+	t.Run("directory entries consume visited bound", func(t *testing.T) {
+		t.Parallel()
+		limits := git.DefaultLimits()
+		// Root README plus docs directory exhaust the budget before docs/guide.
+		limits.MaxVisited = 2
+		walker := git.NewTreeWalker(limits)
+		matchers, _ := git.CompileMatchers([]string{"docs/*.md"})
+		_, err := walker.Walk(context.Background(), storer, commitHash, matchers)
+		if git.ClassOfError(err) != git.ClassResourceLimit {
+			t.Fatalf("Walk() directory-bound error = %v, want resource limit", err)
+		}
+	})
+
 	t.Run("max documents limit exceeded", func(t *testing.T) {
 		t.Parallel()
 		limits := git.DefaultLimits()

@@ -293,6 +293,8 @@ knowl:
         uri_base: https://github.com/example/handbook/blob
         auth:
           secret_env: HANDBOOK_GIT_TOKEN
+        max_transfer_bytes: 524288000
+        max_cache_bytes: 536870912
       sync:
         on_start: false
         interval: 5m

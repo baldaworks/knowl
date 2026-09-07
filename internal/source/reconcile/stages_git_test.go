@@ -2,9 +2,12 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	sourcegit "github.com/baldaworks/knowl/internal/source/git"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -15,6 +18,7 @@ const (
 	testGitDoc2Path  = "docs/architecture.md"
 	metaSnapshot     = "snapshot"
 	metaBlobSHA      = "blob_sha"
+	testGitMain      = "main"
 )
 
 func TestGitSourceReconciliation_CheckpointAndIncremental(t *testing.T) {
@@ -29,7 +33,7 @@ func TestGitSourceReconciliation_CheckpointAndIncremental(t *testing.T) {
 		Config: knowl.SourceConfig{
 			Git: &knowl.GitSourceConfig{
 				Remote:  "https://github.com/org/team-docs.git",
-				Ref:     "main",
+				Ref:     testGitMain,
 				RefKind: knowl.GitRefKindBranch,
 				Include: []string{"**/*.md"},
 			},
@@ -139,6 +143,67 @@ func (a *failListAdapter) Fetch(context.Context, knowl.Source, knowl.DocumentRef
 	return knowl.Document{}, a.err
 }
 
+type resumeSnapshotAdapter struct {
+	prepareCalls int
+	listTokens   []string
+}
+
+func (a *resumeSnapshotAdapter) PrepareSnapshot(context.Context, knowl.Source, string) (app.SnapshotPreparation, error) {
+	a.prepareCalls++
+	return app.SnapshotPreparation{}, errors.New("snapshot must not be resolved again")
+}
+
+func (a *resumeSnapshotAdapter) List(_ context.Context, _ knowl.Source, token string) (knowl.DocumentPage, error) {
+	a.listTokens = append(a.listTokens, token)
+	return knowl.DocumentPage{}, nil
+}
+
+func (a *resumeSnapshotAdapter) Fetch(context.Context, knowl.Source, knowl.DocumentRef) (knowl.Document, error) {
+	return knowl.Document{}, errors.New("unexpected fetch")
+}
+
+func TestGitSourceReconciliation_ResumesDurableSnapshot(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	ctx := context.Background()
+	adapter := &resumeSnapshotAdapter{}
+	harness.service.adapters[knowl.SourceTypeGit] = adapter
+	source := knowl.Source{
+		ID: "git-resume-source", Type: knowl.SourceTypeGit, Enabled: true,
+		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: "https://github.com/org/resume.git", Ref: testGitMain, RefKind: knowl.GitRefKindBranch,
+		}},
+	}
+	digest, err := effectiveConfigDigest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := harness.state.BeginSync(ctx, app.BeginSyncRequest{Run: knowl.SyncRun{
+		ID: "crashed-git-run", Scope: stageScope, SourceID: source.ID, ConfigDigest: digest,
+		Status: knowl.SyncStatusScanning, StartedAt: time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(100, 0).UTC(),
+	}, Type: source.Type, RepositoryIdentity: sourcegit.RepositoryIdentity(*source.Config.Git)})
+	if err != nil {
+		t.Fatalf("BeginSync() error = %v", err)
+	}
+	const token = "durable-snapshot-token"
+	if _, err := harness.state.RecordScanPage(ctx, app.ScanPageRecord{
+		RunID: run.ID, Scope: stageScope, SourceID: source.ID, NextPageToken: token,
+		AttemptCheckpoint: testGitSnapshot1, RecordedAt: time.Unix(101, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("RecordScanPage() error = %v", err)
+	}
+
+	result, err := harness.service.SyncSource(ctx, stageScope, source)
+	if err != nil {
+		t.Fatalf("SyncSource() error = %v", err)
+	}
+	if adapter.prepareCalls != 0 || len(adapter.listTokens) != 1 || adapter.listTokens[0] != token {
+		t.Fatalf("resume calls: prepare=%d tokens=%v", adapter.prepareCalls, adapter.listTokens)
+	}
+	if result.Run.ID != run.ID || result.Run.Checkpoint != testGitSnapshot1 || result.Run.Status != knowl.SyncStatusSucceeded {
+		t.Fatalf("resumed run = %#v", result.Run)
+	}
+}
+
 func TestGitSourceReconciliation_FailureClass(t *testing.T) {
 	harness := newStageHarness(t, nil)
 	ctx := context.Background()
@@ -150,7 +215,7 @@ func TestGitSourceReconciliation_FailureClass(t *testing.T) {
 		Config: knowl.SourceConfig{
 			Git: &knowl.GitSourceConfig{
 				Remote:  "https://github.com/org/fail.git",
-				Ref:     "main",
+				Ref:     testGitMain,
 				RefKind: knowl.GitRefKindBranch,
 			},
 		},

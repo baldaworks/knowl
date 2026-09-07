@@ -168,7 +168,7 @@ func (a *Adapter) PrepareSnapshot(ctx context.Context, source knowl.Source, prev
 		return app.SnapshotPreparation{}, err
 	}
 	if err := a.resolver.ValidateHistory(repo.Storer, config, previousCheckpoint, resolved.Hash); err != nil {
-		return app.SnapshotPreparation{}, err
+		return app.SnapshotPreparation{Checkpoint: resolved.Hash.String()}, err
 	}
 	token, err := encodePageToken(pageCursor{Version: pageTokenVersion, Snapshot: resolved.Hash.String()})
 	if err != nil {

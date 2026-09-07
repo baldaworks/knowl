@@ -306,6 +306,7 @@ func TestSourceCommandsWithGitSource(t *testing.T) {
 
 	const gitSourceID = domain.SourceID("git-docs")
 	const testGitCheckpoint = "1111111111111111111111111111111111111111"
+	const testGitAttemptCheckpoint = "2222222222222222222222222222222222222222"
 	const secretToken = "secret-token-abcdef"
 
 	gitSource := domain.Source{
@@ -328,10 +329,11 @@ func TestSourceCommandsWithGitSource(t *testing.T) {
 	host := &stubLocalSourceHost{
 		sources: []domain.Source{gitSource},
 		sourceStatus: domain.SourceStatus{
-			SourceID:   gitSourceID,
-			Type:       domain.SourceTypeGit,
-			Checkpoint: testGitCheckpoint,
-			Status:     domain.SyncStatusSucceeded,
+			SourceID:          gitSourceID,
+			Type:              domain.SourceTypeGit,
+			Checkpoint:        testGitCheckpoint,
+			AttemptCheckpoint: testGitAttemptCheckpoint,
+			Status:            domain.SyncStatusSucceeded,
 			Maintenance: domain.SourceMaintenanceStatus{
 				Counts: domain.MaintenanceCounts{Queued: 1},
 			},
@@ -369,7 +371,7 @@ func TestSourceCommandsWithGitSource(t *testing.T) {
 	if host.statusID != gitSourceID {
 		t.Fatalf("expected status called for %s, got %s", gitSourceID, host.statusID)
 	}
-	if !strings.Contains(statusJSON, `"checkpoint":"`+testGitCheckpoint+`"`) || !strings.Contains(statusJSON, `"type":"git"`) {
+	if !strings.Contains(statusJSON, `"checkpoint":"`+testGitCheckpoint+`"`) || !strings.Contains(statusJSON, `"attempt_checkpoint":"`+testGitAttemptCheckpoint+`"`) || !strings.Contains(statusJSON, `"type":"git"`) {
 		t.Fatalf("source status JSON missing git fields: %s", statusJSON)
 	}
 

@@ -130,6 +130,7 @@ type ScanPageRecord struct {
 	ExpectedPageToken string
 	NextPageToken     string
 	Documents         []knowl.DocumentRef
+	AttemptCheckpoint string
 	RecordedAt        time.Time
 }
 

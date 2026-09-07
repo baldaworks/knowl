@@ -247,11 +247,18 @@ func runGitLineageContract(t *testing.T, ctx context.Context, store app.SourceSt
 	}); err != nil {
 		t.Fatalf("BeginSync() authorized Git rebind = %v", err)
 	}
+	const attemptCheckpoint = "2222222222222222222222222222222222222222"
+	if run, err := store.RecordScanPage(ctx, app.ScanPageRecord{
+		RunID: changed.ID, Scope: scope, SourceID: sourceID,
+		AttemptCheckpoint: attemptCheckpoint, RecordedAt: at.Add(3 * time.Second),
+	}); err != nil || run.Checkpoint != attemptCheckpoint {
+		t.Fatalf("RecordScanPage() attempt checkpoint = %#v, %v", run, err)
+	}
 	status, err := store.SourceStatus(ctx, scope, sourceID)
-	if err != nil || status.RepositoryIdentity != secondIdentity {
+	if err != nil || status.RepositoryIdentity != secondIdentity || status.AttemptCheckpoint != attemptCheckpoint || status.Checkpoint != "" {
 		t.Fatalf("SourceStatus() rebound Git lineage = %#v, %v", status, err)
 	}
-	if _, err := store.FailSync(ctx, scope, changed.ID, "test_failure", at.Add(3*time.Second)); err != nil {
+	if _, err := store.FailSync(ctx, scope, changed.ID, "test_failure", at.Add(4*time.Second)); err != nil {
 		t.Fatalf("FailSync() rebound Git lineage = %v", err)
 	}
 }
