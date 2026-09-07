@@ -48,6 +48,43 @@ Ownership is intentionally split:
   preview, atomic commit, and interruption recovery. They are not knowledge
   content. The SQLite file is also rebuildable operational state.
 
+## Export for publication
+
+Export the canonical `wiki/` directory as a standalone OKF v0.2 bundle:
+
+```bash
+knowl export okf --output ./public
+```
+
+The output directory must not already exist. Its root contains `index.md`,
+`log.md`, catalogs, pages, and bundle assets; it does not contain `schema.md`,
+`raw/`, `.knowl/`, configuration, or database files. There is no separate
+`export wiki` alias because `wiki/` is already the OKF bundle, and this command
+does not create an archive.
+
+Generate an [llms.txt](https://llmstxt.org/) navigation file beside those
+pages:
+
+```bash
+knowl export llms-txt --output ./public/llms.txt
+```
+
+Without `--output`, the command writes only the Markdown document to stdout.
+Links are bundle-relative by default, so the two commands above produce a
+directory that can be published as one unit. Use `--base-url` when the final
+public URL is already known:
+
+```bash
+knowl export llms-txt \
+  --base-url https://docs.example.com/knowledge/ \
+  --output ./llms.txt
+```
+
+`--title` overrides the root catalog title and `--summary` adds a blockquote
+summary. Rendering follows the evolving llms.txt v2 open proposal rather than
+claiming a formal standard. Knowl creates these files but does not upload,
+serve, compress, or otherwise publish them.
+
 `knowl init` creates the required directories and starter `schema.md`,
 `wiki/index.md`, and `wiki/log.md` without replacing existing files. The root
 index declares `okf_version: "0.2"`.
