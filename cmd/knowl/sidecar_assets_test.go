@@ -261,7 +261,7 @@ func TestSidecarAssetsMentionCanonicalRuntimePaths(t *testing.T) {
 		{
 			path: filepath.Join(repoRoot, "deploy", "sidecar", "quickstart.compose.yaml"),
 			want: []string{
-				"ghcr.io/baldaworks/knowl:v0.3.1",
+				"ghcr.io/baldaworks/knowl:v0.4.0",
 				"127.0.0.1:8080:8080",
 				"./quickstart.yaml:/etc/knowl/config.yaml:ro",
 				"./sources/engineering:/sources/engineering:ro",

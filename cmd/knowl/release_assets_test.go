@@ -76,6 +76,29 @@ func TestV030ReleaseNotesDescribeSemanticWikiContract(t *testing.T) {
 	}
 }
 
+func TestV040ReleaseNotesDescribeConnectedPublishingContract(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "releases", "v0.4.0.md"))
+	if err != nil {
+		t.Fatalf("read v0.4.0 release notes: %v", err)
+	}
+	notes := strings.Join(strings.Fields(string(content)), " ")
+	for _, required := range []string{
+		"Connected Sources and Publishable Wikis",
+		"remote Git sources",
+		"`knowl run`",
+		"`knowl hierarchy reconcile`",
+		"`knowl export okf`",
+		"`knowl export llms-txt`",
+		"262,144 characters",
+		"ghcr.io/baldaworks/knowl:v0.4.0",
+	} {
+		if !strings.Contains(notes, required) {
+			t.Errorf("v0.4.0 release notes missing %q", required)
+		}
+	}
+}
+
 func TestReleaseNotesPreserveDistributionContract(t *testing.T) {
 	repoRoot := testRepoRoot(t)
 	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "releases", "v0.1.0.md"))
