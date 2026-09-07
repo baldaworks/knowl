@@ -125,13 +125,13 @@ func TestCheckedInSelfWikiContract(t *testing.T) {
 			t.Errorf("required self-wiki artifact %s: %v", artifact, err)
 		}
 	}
-	readme, err := os.ReadFile(filepath.Join(repoRoot, "README.md"))
+	contributing, err := os.ReadFile(filepath.Join(repoRoot, "CONTRIBUTING.md"))
 	if err != nil {
-		t.Fatalf("read README: %v", err)
+		t.Fatalf("read CONTRIBUTING: %v", err)
 	}
 	for _, required := range []string{"knowledge/wiki/index.md", "knowledge/schema.md", "docs/**/*.md", "task wiki:generate", "task wiki:validate", "knowledge/.knowl/**", "model-dependent", "knowl.source_refs"} {
-		if !strings.Contains(string(readme), required) {
-			t.Errorf("README missing self-wiki contract %q", required)
+		if !strings.Contains(string(contributing), required) {
+			t.Errorf("CONTRIBUTING missing self-wiki contract %q", required)
 		}
 	}
 	assertDocumentationSchemaContract(t, repoRoot)

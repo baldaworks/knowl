@@ -1,0 +1,31 @@
+runtime:
+  providers:
+    openai:
+      type: openai
+      openai:
+        api_key: ${OPENAI_API_KEY}
+        model: ${OPENAI_MODEL}
+
+knowl:
+  provider: openai
+  workspace:
+    path: /var/lib/knowl/knowledge
+  sources:
+    - id: engineering
+      type: filesystem
+      filesystem:
+        root: /sources/engineering
+        include: ["**/*.md"]
+        flavor: markdown
+      sync:
+        on_start: true
+        interval: 5m
+  storage:
+    type: sqlite
+    sqlite:
+      path: .knowl/knowl.sqlite
+  scope: local
+  server:
+    listen_addr: 0.0.0.0:8080
+  operator:
+    token: ${KNOWL_OPERATOR_TOKEN}

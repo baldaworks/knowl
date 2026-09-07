@@ -1,0 +1,22 @@
+services:
+  knowl:
+    image: ${KNOWL_IMAGE:-ghcr.io/baldaworks/knowl:v0.3.1}
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:?set OPENAI_MODEL}
+      KNOWL_OPERATOR_TOKEN: ${KNOWL_OPERATOR_TOKEN:?set KNOWL_OPERATOR_TOKEN}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - knowl-quickstart-data:/var/lib/knowl
+      - ./quickstart.yaml:/etc/knowl/config.yaml:ro
+      - ./sources/engineering:/sources/engineering:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  knowl-quickstart-data: {}
