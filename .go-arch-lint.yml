@@ -21,6 +21,8 @@ components:
     in: pkg/knowl/okf
   wiki:
     in: pkg/knowl/wiki
+  llmstxt:
+    in: pkg/knowl/llmstxt
   content:
     in: pkg/knowl/content/**
   store:
@@ -49,6 +51,11 @@ deps:
     mayDependOn:
       - okf
   app:
+    mayDependOn:
+      - types
+      - wiki
+      - okf
+  llmstxt:
     mayDependOn:
       - types
       - wiki
@@ -115,6 +122,7 @@ deps:
       - types
       - httpapi
       - okf
+      - llmstxt
   testsupport:
     mayDependOn:
       - app

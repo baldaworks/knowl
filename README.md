@@ -175,6 +175,7 @@ Embedding changes composition, not the business contract. See the
 | Deploy the sidecar | [Sidecar deployment](docs/sidecar.md) |
 | Configure providers, sources, and recovery | [Operations guide](docs/operations.md) |
 | Understand workspace and provenance semantics | [Workspace guide](docs/workspace.md) |
+| Export the wiki for publishing or agents | [OKF and llms.txt export](docs/workspace.md#export-for-publication) |
 | Understand the architecture | [Product design](docs/design.md) |
 | Integrate over HTTP | [OpenAPI contract](api/openapi/knowl.yaml) |
 | See source documents become a wiki | [Source-to-wiki showcase](examples/source-to-wiki/README.md) |

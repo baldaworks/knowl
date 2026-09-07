@@ -21,6 +21,9 @@
 
 ## Code Style
 
+- Always follow KISS and YAGNI: implement the simplest design that satisfies
+  current verified requirements, and do not add speculative abstractions or
+  future-facing machinery.
 - Keep public docs and config examples aligned with the checked-in Go types.
 - Prefer small, reviewable changes over broad refactors.
 - Preserve deterministic tests and bounded local defaults.

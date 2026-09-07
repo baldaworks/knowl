@@ -19,6 +19,9 @@ const (
 	bootstrapWikiName             = "wiki"
 	bootstrapObsidianName         = "obsidian"
 	bootstrapOKFName              = "okf"
+	exportCommandName             = "export"
+	exportOKFName                 = "okf"
+	exportLLMsTxtName             = "llms-txt"
 	startCommandName              = "start"
 	ingestCommandName             = "ingest"
 	retrieveCommandName           = "retrieve"
@@ -97,6 +100,7 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 		newMigrateCommand(),
 		newHierarchyCommand(),
 		newBootstrapCommand(),
+		newExportCommand(),
 		newStartCommand(),
 		newRunCommand(),
 		newIngestCommand(),

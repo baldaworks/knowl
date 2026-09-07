@@ -33,6 +33,7 @@ type Workspace struct {
 	root           string
 	maxSourceBytes int
 	commitFault    func(point string, index int) error
+	exportFault    func(point string) error
 	now            func() time.Time
 	mu             sync.Mutex
 }
