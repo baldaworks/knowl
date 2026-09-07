@@ -363,6 +363,46 @@ func TestWorkspaceReadsAcceptedSourceWithBoundedDigest(t *testing.T) {
 	}
 }
 
+func TestWorkspaceReadsAcceptedSourceAtCharacterBoundary(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("new workspace: %v", err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatalf("init workspace: %v", err)
+	}
+	for _, test := range []struct {
+		name       string
+		characters int
+		wantErr    bool
+	}{
+		{name: "reported large document", characters: 108_416},
+		{name: "at limit", characters: app.DefaultReadLimits().Characters},
+		{name: "over limit", characters: app.DefaultReadLimits().Characters + 1, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := []byte(strings.Repeat("я", test.characters))
+			digestValue := sha256.Sum256(content)
+			accepted, acceptErr := workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
+				Scope:   testScope,
+				Source:  knowl.SourceRef{Adapter: "fixture", ID: fmt.Sprintf("character-boundary-%d", test.characters)},
+				Version: knowl.SourceVersion{Version: "1", Digest: hex.EncodeToString(digestValue[:])},
+				Content: content,
+			})
+			if acceptErr != nil {
+				t.Fatalf("accept source: %v", acceptErr)
+			}
+			_, readErr := workspace.ReadSource(context.Background(), accepted, app.DefaultReadLimits())
+			if test.wantErr && !errors.Is(readErr, ErrInvalidSource) {
+				t.Fatalf("over character limit error = %v, want invalid source", readErr)
+			}
+			if !test.wantErr && readErr != nil {
+				t.Fatalf("read source at character limit: %v", readErr)
+			}
+		})
+	}
+}
+
 func TestWorkspacePersistsConfiguredSourceProvenance(t *testing.T) {
 	workspace, err := New(t.TempDir())
 	if err != nil {
