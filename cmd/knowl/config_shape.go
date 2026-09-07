@@ -129,17 +129,19 @@ type FilesystemSourceConfig struct {
 
 // GitSourceConfig configures a remote Git repository source.
 type GitSourceConfig struct {
-	Remote       string        `mapstructure:"remote"`
-	Ref          string        `mapstructure:"ref"`
-	RefKind      string        `mapstructure:"ref_kind"`
-	Include      []string      `mapstructure:"include"`
-	Flavor       string        `mapstructure:"flavor"`
-	URIBase      string        `mapstructure:"uri_base"`
-	Auth         GitAuthConfig `mapstructure:"auth"`
-	AllowRewrite bool          `mapstructure:"allow_rewrite"`
-	RebindAck    bool          `mapstructure:"rebind_ack"`
-	KnownHosts   []string      `mapstructure:"known_hosts"`
-	RepositoryID string        `mapstructure:"repository_id"`
+	Remote           string        `mapstructure:"remote"`
+	Ref              string        `mapstructure:"ref"`
+	RefKind          string        `mapstructure:"ref_kind"`
+	Include          []string      `mapstructure:"include"`
+	Flavor           string        `mapstructure:"flavor"`
+	URIBase          string        `mapstructure:"uri_base"`
+	Auth             GitAuthConfig `mapstructure:"auth"`
+	AllowRewrite     bool          `mapstructure:"allow_rewrite"`
+	RebindAck        bool          `mapstructure:"rebind_ack"`
+	KnownHosts       []string      `mapstructure:"known_hosts"`
+	RepositoryID     string        `mapstructure:"repository_id"`
+	MaxTransferBytes int64         `mapstructure:"max_transfer_bytes"`
+	MaxCacheBytes    int64         `mapstructure:"max_cache_bytes"`
 }
 
 // GitAuthConfig configures credentials for Git source authentication.

@@ -47,17 +47,19 @@ type FilesystemSourceConfig struct {
 
 // GitSourceConfig configures a remote Git repository source.
 type GitSourceConfig struct {
-	Remote       string        `json:"remote"`
-	Ref          string        `json:"ref"`
-	RefKind      string        `json:"ref_kind,omitempty"`
-	Include      []string      `json:"include,omitempty"`
-	Flavor       string        `json:"flavor,omitempty"`
-	URIBase      string        `json:"uri_base,omitempty"`
-	Auth         GitAuthConfig `json:"auth,omitempty"`
-	AllowRewrite bool          `json:"allow_rewrite,omitempty"`
-	RebindAck    bool          `json:"rebind_ack,omitempty"`
-	KnownHosts   []string      `json:"known_hosts,omitempty"`
-	RepositoryID string        `json:"repository_id,omitempty"`
+	Remote           string        `json:"remote"`
+	Ref              string        `json:"ref"`
+	RefKind          string        `json:"ref_kind,omitempty"`
+	Include          []string      `json:"include,omitempty"`
+	Flavor           string        `json:"flavor,omitempty"`
+	URIBase          string        `json:"uri_base,omitempty"`
+	Auth             GitAuthConfig `json:"auth,omitempty"`
+	AllowRewrite     bool          `json:"allow_rewrite,omitempty"`
+	RebindAck        bool          `json:"rebind_ack,omitempty"`
+	KnownHosts       []string      `json:"known_hosts,omitempty"`
+	RepositoryID     string        `json:"repository_id,omitempty"`
+	MaxTransferBytes int64         `json:"max_transfer_bytes,omitempty"`
+	MaxCacheBytes    int64         `json:"max_cache_bytes,omitempty"`
 }
 
 // GitAuthConfig configures credentials for Git source authentication.
@@ -216,6 +218,7 @@ type SourceStatus struct {
 	Type                SourceType              `json:"type"`
 	ConfigDigest        string                  `json:"config_digest"`
 	Checkpoint          string                  `json:"checkpoint,omitempty"`
+	AttemptCheckpoint   string                  `json:"attempt_checkpoint,omitempty"`
 	LastAttemptRunID    SyncRunID               `json:"last_attempt_run_id,omitempty"`
 	LastSuccessfulRunID SyncRunID               `json:"last_successful_run_id,omitempty"`
 	Status              SyncStatus              `json:"status,omitempty"`

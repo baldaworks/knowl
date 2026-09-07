@@ -103,10 +103,12 @@ func hostConfig(ctx context.Context) (knowl.Config, error) {
 					SecretEnv: configured.Git.Auth.SecretEnv,
 					KeyFile:   configured.Git.Auth.KeyFile,
 				},
-				AllowRewrite: configured.Git.AllowRewrite,
-				RebindAck:    configured.Git.RebindAck,
-				KnownHosts:   configured.Git.KnownHosts,
-				RepositoryID: configured.Git.RepositoryID,
+				AllowRewrite:     configured.Git.AllowRewrite,
+				RebindAck:        configured.Git.RebindAck,
+				KnownHosts:       configured.Git.KnownHosts,
+				RepositoryID:     configured.Git.RepositoryID,
+				MaxTransferBytes: configured.Git.MaxTransferBytes,
+				MaxCacheBytes:    configured.Git.MaxCacheBytes,
 			}
 		}
 		sources = append(sources, types.Source{

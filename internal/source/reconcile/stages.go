@@ -92,14 +92,27 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 		return service.finalizeSaga(ctx, scope, source.ID, input)
 	}
 	initialToken := resumed.run.NextPageToken
-	checkpoint := ""
+	checkpoint := resumed.run.Checkpoint
 	if preparer, ok := adapter.(app.SnapshotSourceAdapter); ok && len(resumed.refs) == 0 && initialToken == "" {
 		prepared, prepareErr := preparer.PrepareSnapshot(ctx, source, previousCheckpoint)
+		if prepared.Checkpoint != "" {
+			recorded, recordErr := service.state.RecordScanPage(ctx, app.ScanPageRecord{
+				RunID: resumed.run.ID, Scope: scope, SourceID: source.ID,
+				ExpectedPageToken: initialToken, NextPageToken: prepared.PageToken,
+				AttemptCheckpoint: prepared.Checkpoint, RecordedAt: service.options.Clock(),
+			})
+			if recordErr != nil {
+				failure := service.failScanSafe(ctx, resumed.run, failStage(classState, recordErr))
+				return Result{Run: service.refreshRun(ctx, scope, resumed.run)}, failure
+			}
+			resumed.run = recorded
+			checkpoint = prepared.Checkpoint
+		}
 		if prepareErr != nil {
 			failure := service.failScanSafe(ctx, resumed.run, failStage(classAdapter, prepareErr))
 			return Result{Run: service.refreshRun(ctx, scope, resumed.run)}, failure
 		}
-		initialToken, checkpoint = prepared.PageToken, prepared.Checkpoint
+		initialToken = prepared.PageToken
 	}
 	catalog, err := service.listCatalog(ctx, scope, adapter, source, resumed.run, resumed.refs, initialToken, checkpoint)
 	if err != nil {

@@ -133,6 +133,8 @@ knowl:
         uri_base: https://github.com/example/handbook/blob
         auth:
           secret_env: HANDBOOK_GIT_TOKEN
+        max_transfer_bytes: 524288000
+        max_cache_bytes: 536870912
       sync:
         on_start: false
         interval: 5m
@@ -167,6 +169,9 @@ preserving the last successful checkpoint and active catalog. Set
 repository identity or moved tag, then remove the acknowledgement. Git mirrors
 under `<workspace>/.knowl/cache/git/<source-id>` are rebuildable cache, not
 canonical evidence, and can be removed while Knowl is stopped.
+The defaults cap one pack transfer at 500 MiB and one source cache at 512 MiB;
+override `max_transfer_bytes` and `max_cache_bytes` within the documented 8 GiB
+maximum when repository size requires it.
 
 Common `KNOWL_*` overrides include:
 

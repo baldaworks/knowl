@@ -213,6 +213,9 @@ func TestNormalizeGitSourcesAcceptsValidConfigs(t *testing.T) {
 			if normalized[0].ConfigDigest == "" {
 				t.Errorf("expected non-empty config digest")
 			}
+			if git.MaxTransferBytes != 500<<20 || git.MaxCacheBytes != 512<<20 {
+				t.Errorf("resource defaults = %d/%d, want 500MiB/512MiB", git.MaxTransferBytes, git.MaxCacheBytes)
+			}
 		})
 	}
 }
@@ -235,6 +238,16 @@ func TestNormalizeGitSourcesRejectsInvalidConfigs(t *testing.T) {
 		{name: "invalid ref traversal", source: gitSource("git-src", "https://github.com/org/repo", "refs/heads/../evil", nil)},
 		{name: "missing remote", source: gitSource("git-src", "", "main", nil)},
 		{name: "missing ref", source: gitSource("git-src", "https://github.com/org/repo", "", nil)},
+		{name: "negative transfer limit", source: func() domain.Source {
+			s := gitSource("git-src", "https://github.com/org/repo", "main", nil)
+			s.Config.Git.MaxTransferBytes = -1
+			return s
+		}()},
+		{name: "oversized cache limit", source: func() domain.Source {
+			s := gitSource("git-src", "https://github.com/org/repo", "main", nil)
+			s.Config.Git.MaxCacheBytes = 8<<30 + 1
+			return s
+		}()},
 		{name: "ref kind mismatch", source: func() domain.Source {
 			s := gitSource("git-src", "https://github.com/org/repo", "refs/heads/main", nil)
 			s.Config.Git.RefKind = "tag"

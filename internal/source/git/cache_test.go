@@ -129,6 +129,61 @@ func TestCacheManagerRejectsUnsafeSourceID(t *testing.T) {
 	}
 }
 
+func TestCacheManagerEnforcesTransferAndDiskLimits(t *testing.T) {
+	t.Parallel()
+
+	originDir := t.TempDir()
+	originRepo, err := gogit.PlainInit(originDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobHash := storeDiskBlob(t, originRepo, make([]byte, 64<<10))
+	treeHash := storeDiskTree(t, originRepo, &object.Tree{Entries: []object.TreeEntry{{Name: "large.md", Mode: filemode.Regular, Hash: blobHash}}})
+	commitHash := storeDiskCommit(t, originRepo, treeHash)
+	refName := plumbing.ReferenceName("refs/heads/main")
+	if err := originRepo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)); err != nil {
+		t.Fatal(err)
+	}
+	if err := originRepo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, refName)); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("pack transfer", func(t *testing.T) {
+		cacheRoot := t.TempDir()
+		source := knowl.Source{ID: "transfer-limited", Type: knowl.SourceTypeGit, Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: originDir, MaxTransferBytes: 1, MaxCacheBytes: 1 << 20,
+		}}}
+		_, err := git.NewCacheManager(cacheRoot, nil).OpenOrClone(context.Background(), source)
+		if git.ClassOfError(err) != git.ClassResourceLimit {
+			t.Fatalf("OpenOrClone() transfer error = %v, want resource limit", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(cacheRoot, string(source.ID))); !os.IsNotExist(statErr) {
+			t.Fatalf("partial cache remains after transfer limit: %v", statErr)
+		}
+	})
+
+	t.Run("existing cache disk usage", func(t *testing.T) {
+		cacheRoot := t.TempDir()
+		source := knowl.Source{ID: "disk-limited", Type: knowl.SourceTypeGit, Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: originDir, MaxTransferBytes: 1 << 20, MaxCacheBytes: 8,
+		}}}
+		cacheDir := filepath.Join(cacheRoot, string(source.ID))
+		if err := os.MkdirAll(cacheDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cacheDir, "oversized"), []byte("0123456789"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := git.NewCacheManager(cacheRoot, nil).OpenOrClone(context.Background(), source)
+		if git.ClassOfError(err) != git.ClassResourceLimit {
+			t.Fatalf("OpenOrClone() disk error = %v, want resource limit", err)
+		}
+		if _, statErr := os.Stat(cacheDir); !os.IsNotExist(statErr) {
+			t.Fatalf("oversized cache remains after rejection: %v", statErr)
+		}
+	})
+}
+
 func storeDiskBlob(t *testing.T, repo *gogit.Repository, data []byte) plumbing.Hash {
 	t.Helper()
 	obj := repo.Storer.NewEncodedObject()

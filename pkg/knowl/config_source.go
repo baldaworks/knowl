@@ -26,6 +26,9 @@ const (
 	maximumSources            = 128
 	maximumSourceIncludes     = 128
 	maximumIncludePattern     = 1024
+	defaultGitTransferBytes   = int64(500 << 20)
+	defaultGitCacheBytes      = int64(512 << 20)
+	maximumGitResourceBytes   = int64(8 << 30)
 )
 
 var (
@@ -291,6 +294,18 @@ func normalizeGitSource(sourceID domain.SourceID, baseDir string, raw domain.Git
 		if (git.Auth.SecretEnv == "" && git.Auth.KeyFile == "") || len(git.KnownHosts) == 0 {
 			return nil, fmt.Errorf("source %q SSH remote requires external key authentication and known_hosts trust", sourceID)
 		}
+	}
+	if git.MaxTransferBytes == 0 {
+		git.MaxTransferBytes = defaultGitTransferBytes
+	}
+	if git.MaxCacheBytes == 0 {
+		git.MaxCacheBytes = defaultGitCacheBytes
+	}
+	if git.MaxTransferBytes < 0 || git.MaxTransferBytes > maximumGitResourceBytes {
+		return nil, fmt.Errorf("source %q max_transfer_bytes must be between 1 and %d", sourceID, maximumGitResourceBytes)
+	}
+	if git.MaxCacheBytes < 0 || git.MaxCacheBytes > maximumGitResourceBytes {
+		return nil, fmt.Errorf("source %q max_cache_bytes must be between 1 and %d", sourceID, maximumGitResourceBytes)
 	}
 	repositoryIdentity := strings.TrimSpace(git.RepositoryID)
 	if repositoryIdentity == "" {

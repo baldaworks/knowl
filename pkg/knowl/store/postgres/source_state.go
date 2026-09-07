@@ -116,7 +116,7 @@ func (store *Store) ScanDocuments(ctx context.Context, scope knowl.ScopeRef, id 
 }
 
 func (store *Store) RecordScanPage(ctx context.Context, record app.ScanPageRecord) (knowl.SyncRun, error) {
-	if strings.TrimSpace(string(record.Scope)) == "" || app.ValidateSourceID(record.SourceID) != nil || record.RunID == "" || record.RecordedAt.IsZero() || !validBounded(record.ExpectedPageToken, 4096, true) || app.ValidateDocumentPage(knowl.DocumentPage{Documents: record.Documents, NextPageToken: record.NextPageToken}, 1000) != nil {
+	if strings.TrimSpace(string(record.Scope)) == "" || app.ValidateSourceID(record.SourceID) != nil || record.RunID == "" || record.RecordedAt.IsZero() || !validBounded(record.ExpectedPageToken, 4096, true) || !validBounded(record.AttemptCheckpoint, 4096, true) || app.ValidateDocumentPage(knowl.DocumentPage{Documents: record.Documents, NextPageToken: record.NextPageToken}, 1000) != nil {
 		return knowl.SyncRun{}, app.ErrSourceInvalid
 	}
 	store.mu.Lock()
@@ -163,13 +163,16 @@ func (store *Store) RecordScanPage(ctx context.Context, record app.ScanPageRecor
 		}
 	}
 	updated := record.RecordedAt.UTC()
-	if _, err := sourceExec(ctx, tx, `UPDATE knowl_sync_runs SET next_page_token = ?, updated_at = ? WHERE run_id = ?`, record.NextPageToken, formatTime(updated), record.RunID); err != nil {
+	if _, err := sourceExec(ctx, tx, `UPDATE knowl_sync_runs SET next_page_token = ?, checkpoint = CASE WHEN ? = '' THEN checkpoint ELSE ? END, updated_at = ? WHERE run_id = ?`, record.NextPageToken, record.AttemptCheckpoint, record.AttemptCheckpoint, formatTime(updated), record.RunID); err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("advance scan page: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("commit scan page: %w", err)
 	}
 	run.NextPageToken, run.UpdatedAt = record.NextPageToken, updated
+	if record.AttemptCheckpoint != "" {
+		run.Checkpoint = record.AttemptCheckpoint
+	}
 	return run, nil
 }
 
@@ -526,7 +529,7 @@ func (store *Store) SourceStatus(ctx context.Context, scope knowl.ScopeRef, sour
 	var createdAt, updatedAt, lastAttemptAt time.Time
 	var lastSuccessfulAt sql.NullTime
 	err := sourceQueryRow(ctx, store.db, `
-			SELECT source.source_type, source.config_digest, source.repository_identity, source.checkpoint,
+			SELECT source.source_type, source.config_digest, source.repository_identity, source.checkpoint, attempt.checkpoint,
 			source.last_attempt_run_id, source.last_success_run_id, source.status,
 			attempt.added, attempt.updated, attempt.unchanged, attempt.deleted, attempt.failed,
 			source.created_at, COALESCE(attempt.completed_at, attempt.updated_at),
@@ -535,7 +538,7 @@ func (store *Store) SourceStatus(ctx context.Context, scope knowl.ScopeRef, sour
 		JOIN knowl_sync_runs AS attempt ON attempt.run_id = source.last_attempt_run_id
 		LEFT JOIN knowl_sync_runs AS success ON success.run_id = NULLIF(source.last_success_run_id, '')
 		WHERE source.scope = ? AND source.source_id = ?`, scope, sourceID).Scan(
-		&sourceType, &status.ConfigDigest, &status.RepositoryIdentity, &status.Checkpoint, &status.LastAttemptRunID,
+		&sourceType, &status.ConfigDigest, &status.RepositoryIdentity, &status.Checkpoint, &status.AttemptCheckpoint, &status.LastAttemptRunID,
 		&status.LastSuccessfulRunID, &syncStatus, &status.Counts.Added, &status.Counts.Updated,
 		&status.Counts.Unchanged, &status.Counts.Deleted, &status.Counts.Failed, &createdAt,
 		&lastAttemptAt, &lastSuccessfulAt, &updatedAt,

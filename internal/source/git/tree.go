@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 	"sort"
 	"strings"
 
@@ -185,60 +186,57 @@ func (w *TreeWalker) Walk(ctx context.Context, storer storage.Storer, snapshotHa
 		return nil, WrapClassified(ClassScanInvalid, err, fmt.Sprintf("tree for snapshot %s not found", snapshotHash.String()))
 	}
 
-	files := tree.Files()
-	defer files.Close()
-
 	visited := 0
 	var documents []knowl.DocumentRef
 	snapshotSHA := snapshotHash.String()
+	type pendingTree struct {
+		tree   *object.Tree
+		prefix string
+	}
+	pending := []pendingTree{{tree: tree}}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		for _, entry := range current.tree.Entries {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			visited++
+			if visited > w.limits.MaxVisited {
+				return nil, WrapClassified(ClassResourceLimit, ErrLimit,
+					fmt.Sprintf("visited tree entries exceeded limit of %d", w.limits.MaxVisited))
+			}
 
-	err = files.ForEach(func(f *object.File) error {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			entryPath := path.Join(current.prefix, entry.Name)
+			if entry.Mode == filemode.Dir {
+				child, childErr := object.GetTree(storer, entry.Hash)
+				if childErr != nil {
+					return nil, WrapClassified(ClassScanInvalid, childErr, fmt.Sprintf("tree entry %s is unavailable", entryPath))
+				}
+				pending = append(pending, pendingTree{tree: child, prefix: entryPath})
+				continue
+			}
+			if !entry.Mode.IsFile() || entry.Mode == filemode.Symlink || entry.Mode == filemode.Submodule || !matchesAny(matchers, entryPath) {
+				continue
+			}
+			blob, blobErr := object.GetBlob(storer, entry.Hash)
+			if blobErr != nil {
+				return nil, WrapClassified(ClassScanInvalid, blobErr, fmt.Sprintf("blob entry %s is unavailable", entryPath))
+			}
+			file := object.NewFile(entryPath, entry.Mode, blob)
+			if isLFSPointer(file) {
+				continue
+			}
+			if len(documents)+1 > w.limits.MaxDocuments {
+				return nil, WrapClassified(ClassResourceLimit, ErrLimit,
+					fmt.Sprintf("matched documents exceeded limit of %d", w.limits.MaxDocuments))
+			}
+			blobSHA := entry.Hash.String()
+			documents = append(documents, knowl.DocumentRef{
+				ExternalID: knowl.DocumentID(entryPath), Path: entryPath, Revision: blobSHA,
+				Metadata: map[string]string{"snapshot": snapshotSHA, "blob_sha": blobSHA},
+			})
 		}
-
-		visited++
-		if visited > w.limits.MaxVisited {
-			return WrapClassified(ClassResourceLimit, ErrLimit,
-				fmt.Sprintf("visited tree entries exceeded limit of %d", w.limits.MaxVisited))
-		}
-
-		// Mode check: skip non-regular entries (symlinks, submodules)
-		if !f.Mode.IsFile() || f.Mode == filemode.Symlink || f.Mode == filemode.Submodule {
-			return nil
-		}
-
-		// Check LFS pointer file
-		if isLFSPointer(f) {
-			return nil
-		}
-
-		// Match glob filters
-		if !matchesAny(matchers, f.Name) {
-			return nil
-		}
-
-		if len(documents)+1 > w.limits.MaxDocuments {
-			return WrapClassified(ClassResourceLimit, ErrLimit,
-				fmt.Sprintf("matched documents exceeded limit of %d", w.limits.MaxDocuments))
-		}
-
-		blobSHA := f.Hash.String()
-		doc := knowl.DocumentRef{
-			ExternalID: knowl.DocumentID(f.Name),
-			Path:       f.Name,
-			Revision:   blobSHA,
-			Metadata: map[string]string{
-				"snapshot": snapshotSHA,
-				"blob_sha": blobSHA,
-			},
-		}
-		documents = append(documents, doc)
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
 	}
 
 	// Deterministic lexicographical sorting by path

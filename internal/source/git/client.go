@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	gitclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
@@ -28,7 +31,14 @@ type RemoteClient struct {
 	httpClient *http.Client
 }
 
-var installHTTPSClient sync.Once
+var installGitTransports sync.Once
+
+type transferBudgetKey struct{}
+
+type transferBudget struct {
+	mu        sync.Mutex
+	remaining int64
+}
 
 // NewRemoteClient constructs a RemoteClient with bounded network timeouts and SSRF controls.
 func NewRemoteClient() *RemoteClient {
@@ -48,7 +58,7 @@ func NewRemoteClient() *RemoteClient {
 			MinVersion: tls.VersionTLS12,
 		},
 	}
-	return &RemoteClient{
+	client := &RemoteClient{
 		httpClient: &http.Client{
 			Transport: transport,
 			Timeout:   DefaultNetworkTimeout,
@@ -63,6 +73,16 @@ func NewRemoteClient() *RemoteClient {
 			},
 		},
 	}
+	installGitTransports.Do(func() {
+		httpsTransport := githttp.NewClient(client.httpClient)
+		gitclient.InstallProtocol("https", limitingTransport{base: httpsTransport})
+		for _, protocol := range []string{"ssh", "file"} {
+			if base := gitclient.Protocols[protocol]; base != nil {
+				gitclient.InstallProtocol(protocol, limitingTransport{base: base})
+			}
+		}
+	})
+	return client
 }
 
 // ListRemoteRefs queries remote repository references over HTTPS or SSH.
@@ -81,20 +101,71 @@ func (c *RemoteClient) ListRemoteRefs(ctx context.Context, config knowl.GitSourc
 		Auth: auth,
 	}
 
-	// For HTTPS, configure custom client
-	if strings.HasPrefix(config.Remote, "https://") && c.httpClient != nil {
-		customTransport := githttp.NewClient(c.httpClient)
-		installHTTPSClient.Do(func() {
-			githttp.DefaultClient = customTransport
-			gitclient.InstallProtocol("https", customTransport)
-		})
-	}
-
 	refs, err := rem.ListContext(ctx, listOpts)
 	if err != nil {
 		return nil, c.classifyTransportError(err, config.Remote)
 	}
 	return refs, nil
+}
+
+func withTransferLimit(ctx context.Context, limit int64) context.Context {
+	return context.WithValue(ctx, transferBudgetKey{}, &transferBudget{remaining: limit})
+}
+
+type limitingTransport struct {
+	base transport.Transport
+}
+
+func (t limitingTransport) NewUploadPackSession(endpoint *transport.Endpoint, auth transport.AuthMethod) (transport.UploadPackSession, error) {
+	session, err := t.base.NewUploadPackSession(endpoint, auth)
+	if err != nil {
+		return nil, err
+	}
+	return limitingUploadPackSession{UploadPackSession: session}, nil
+}
+
+func (t limitingTransport) NewReceivePackSession(endpoint *transport.Endpoint, auth transport.AuthMethod) (transport.ReceivePackSession, error) {
+	return t.base.NewReceivePackSession(endpoint, auth)
+}
+
+type limitingUploadPackSession struct {
+	transport.UploadPackSession
+}
+
+func (s limitingUploadPackSession) UploadPack(ctx context.Context, request *packp.UploadPackRequest) (*packp.UploadPackResponse, error) {
+	response, err := s.UploadPackSession.UploadPack(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	budget, _ := ctx.Value(transferBudgetKey{}).(*transferBudget)
+	if budget == nil {
+		return response, nil
+	}
+	return packp.NewUploadPackResponseWithPackfile(request, &limitedPackReader{ReadCloser: response, budget: budget}), nil
+}
+
+type limitedPackReader struct {
+	io.ReadCloser
+	budget *transferBudget
+}
+
+func (reader *limitedPackReader) Read(buffer []byte) (int, error) {
+	reader.budget.mu.Lock()
+	defer reader.budget.mu.Unlock()
+	if reader.budget.remaining <= 0 {
+		var probe [1]byte
+		count, err := reader.ReadCloser.Read(probe[:])
+		if count == 0 && errors.Is(err, io.EOF) {
+			return 0, io.EOF
+		}
+		return 0, WrapClassified(ClassResourceLimit, ErrLimit, "Git pack transfer exceeded configured byte limit")
+	}
+	if int64(len(buffer)) > reader.budget.remaining {
+		buffer = buffer[:reader.budget.remaining]
+	}
+	count, err := reader.ReadCloser.Read(buffer)
+	reader.budget.remaining -= int64(count)
+	return count, err
 }
 
 func (c *RemoteClient) classifyTransportError(err error, remote string) error {
