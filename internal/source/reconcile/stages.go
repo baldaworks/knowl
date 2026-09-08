@@ -82,7 +82,7 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 	} else if !errors.Is(statusErr, app.ErrSourceNotFound) {
 		return Result{}, failStage(classState, statusErr)
 	}
-	if sourceAllowsRebind(source) && previousRepositoryIdentity != sourceRepositoryIdentity(source) {
+	if previousRepositoryIdentity != sourceRepositoryIdentity(source) {
 		previousCheckpoint = ""
 	}
 	resumed, err := service.beginOrResumeScan(ctx, scope, source, configDigest)

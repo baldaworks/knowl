@@ -277,6 +277,26 @@ func TestGitSourceReconciliation_AcknowledgedRebindWithUnknownIdentityDoesNotReu
 	}
 }
 
+func TestGitSourceReconciliation_GitMigrationDoesNotReuseUnknownLineageCheckpoint(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	harness.seedFinalized(t, []seededDoc{{path: "docs/legacy.md", body: "# Legacy\n"}})
+	adapter := &checkpointSnapshotAdapter{targets: []string{testGitSnapshot1}}
+	harness.service.adapters[knowl.SourceTypeGit] = adapter
+	source := knowl.Source{ID: harness.sourceID, Type: knowl.SourceTypeGit, Enabled: true}
+	source.Config.Git = &knowl.GitSourceConfig{
+		Remote:  testGitRemoteA,
+		Ref:     testGitMain,
+		RefKind: knowl.GitRefKindBranch,
+	}
+
+	if _, err := harness.service.SyncSource(context.Background(), stageScope, source); err != nil {
+		t.Fatalf("migrated SyncSource() error = %v", err)
+	}
+	if len(adapter.previous) != 1 || adapter.previous[0] != "" {
+		t.Fatalf("PrepareSnapshot() previous checkpoints = %v", adapter.previous)
+	}
+}
+
 func TestGitSourceReconciliation_FailedRebindRetryDoesNotReusePriorCheckpoint(t *testing.T) {
 	harness := newStageHarness(t, nil)
 	ctx := context.Background()
