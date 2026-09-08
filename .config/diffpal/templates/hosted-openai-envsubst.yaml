@@ -1,0 +1,9 @@
+# Copy the relevant fields into config.yaml when you want envsubst-backed hosted config.
+# Config loading expands $VAR and ${VAR} before YAML parsing; missing vars fail config load.
+runtime:
+  providers:
+    openai-fast:
+      type: openai
+      openai:
+        model: "${DIFFPAL_OPENAI_MODEL}"
+        api_key: "${OPENAI_API_KEY}"

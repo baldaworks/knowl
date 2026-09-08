@@ -1,0 +1,6 @@
+# Copy profiles into config.yaml when you need scenario-specific overrides.
+profiles:
+  ci:
+    diffpal:
+      gate:
+        block_on: high
