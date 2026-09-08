@@ -16,7 +16,7 @@ diffpal:
     block_on: high
   review:
     language: en
-    timeout: 15m
+    timeout: 30m
     instructions: |
       Prefer actionable findings that are directly supported by the diff.
 

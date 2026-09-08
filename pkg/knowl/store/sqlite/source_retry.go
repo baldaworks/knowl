@@ -235,15 +235,26 @@ func (store *Store) retrySourceMaintenanceGeneration(ctx context.Context, reques
 		key := candidate.key
 		key.MaintenanceGeneration = request.MaintenanceGeneration
 		newID, _ := app.SourceOperationID(key)
-		inserted, insertErr := tx.ExecContext(ctx, `INSERT INTO knowl_operations (operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest, status, created_at, updated_at, accepted_media_type, source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at, work_kind, maintenance_generation, manual_retry_count) SELECT ?, scope, source_adapter, source_id, source_version, source_digest, ?, ?, ?, ?, accepted_media_type, source_manifest_ref, accepted_source_document, ?, ?, ?, work_kind, ?, manual_retry_count + 1 FROM knowl_operations WHERE operation_id = ? ON CONFLICT(scope, source_adapter, source_id, source_version, maintenance_generation) DO NOTHING`, newID, request.Schema.Digest, knowl.StatusReceived, now, now, request.Schema.Version, request.Schema.Content, now, request.MaintenanceGeneration, candidate.operationID)
+		_, insertErr := tx.ExecContext(ctx, `INSERT INTO knowl_operations (operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest, status, created_at, updated_at, accepted_media_type, source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at, work_kind, maintenance_generation, manual_retry_count) SELECT ?, scope, source_adapter, source_id, source_version, source_digest, ?, ?, ?, ?, accepted_media_type, source_manifest_ref, accepted_source_document, ?, ?, ?, work_kind, ?, manual_retry_count + 1 FROM knowl_operations WHERE operation_id = ? ON CONFLICT(scope, source_adapter, source_id, source_version, maintenance_generation) DO NOTHING`, newID, request.Schema.Digest, knowl.StatusReceived, now, now, request.Schema.Version, request.Schema.Content, now, request.MaintenanceGeneration, candidate.operationID)
 		if insertErr != nil {
 			return result, insertErr
 		}
-		changed, _ := inserted.RowsAffected()
-		if _, updateErr := tx.ExecContext(ctx, `UPDATE knowl_source_documents SET maintenance_operation_id = ?, maintenance_generation = ?, updated_at = ? WHERE scope = ? AND source_id = ? AND maintenance_operation_id = ?`, newID, request.MaintenanceGeneration, now, request.Scope, request.SourceID, candidate.operationID); updateErr != nil {
+		var targetExists int
+		if queryErr := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM knowl_operations WHERE operation_id = ? AND scope = ? AND source_adapter = ? AND source_id = ? AND source_version = ? AND source_digest = ? AND maintenance_generation = ? AND work_kind = ?`, newID, candidate.key.Scope, candidate.key.Source.Adapter, candidate.key.Source.ID, candidate.key.Version.Version, candidate.key.Version.Digest, request.MaintenanceGeneration, knowl.WorkSourceMaintenance).Scan(&targetExists); queryErr != nil {
+			return result, queryErr
+		}
+		if targetExists != 1 {
+			return result, app.ErrSourceRetryConflict
+		}
+		updated, updateErr := tx.ExecContext(ctx, `UPDATE knowl_source_documents SET maintenance_operation_id = ?, maintenance_generation = ?, updated_at = ? WHERE scope = ? AND source_id = ? AND maintenance_operation_id = ?`, newID, request.MaintenanceGeneration, now, request.Scope, request.SourceID, candidate.operationID)
+		if updateErr != nil {
 			return result, updateErr
 		}
-		result.Requeued += changed
+		changed, _ := updated.RowsAffected()
+		if changed == 0 {
+			return result, app.ErrSourceRetryConflict
+		}
+		result.Requeued++
 	}
 	if result.Requeued != result.Matched {
 		return result, app.ErrSourceRetryConflict

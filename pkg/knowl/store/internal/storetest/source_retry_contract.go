@@ -52,6 +52,7 @@ type SourceRetryFixture struct {
 	WorkToken             string
 	ApplyToken            string
 	LeasesExpired         bool
+	OperationOnly         bool
 }
 
 // SourceRetryAudit exposes only operational cleanup fields needed by the contract.
@@ -185,6 +186,15 @@ func RunSourceRetryContract(t *testing.T, harness SourceRetryHarness) {
 			currentIDs = append(currentIDs, currentID)
 		}
 		harness.Seed(t, scope, sourceID, fixtures)
+		preexisting := fixtures[0]
+		preexisting.OperationID = currentIDs[0]
+		preexisting.MaintenanceGeneration = currentGeneration
+		preexisting.Status = knowl.StatusReceived
+		preexisting.FailureClass = ""
+		preexisting.FailureReason = ""
+		preexisting.ManualRetryCount = 3
+		preexisting.OperationOnly = true
+		harness.Seed(t, scope, sourceID, []SourceRetryFixture{preexisting})
 
 		request := app.SourceMaintenanceRetryRequest{
 			Scope: scope, SourceID: sourceID, FailureClasses: classes, DryRun: true,

@@ -302,6 +302,9 @@ func runStoreContract(t *testing.T, dsn string) {
 					fixture.MaintenanceGeneration, fixture.AcceptedMediaType, fixture.SourceManifestRef, fixture.SchemaVersion, fixture.SchemaSnapshot); err != nil {
 					t.Fatal(err)
 				}
+				if fixture.OperationOnly {
+					continue
+				}
 				if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_source_documents (
 					scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id,
 					maintenance_generation, last_seen_run_id, created_at, updated_at
