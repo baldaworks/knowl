@@ -44,7 +44,7 @@ final-answer generator. Knowl does not answer the user itself.
 ## Minimal Sidecar Quickstart
 
 The quickstart runs the published
-[v0.4.0](https://github.com/baldaworks/knowl/releases/tag/v0.4.0) image with a
+[v0.5.0](https://github.com/baldaworks/knowl/releases/tag/v0.5.0) image with a
 checked-in example source. It requires Git, Docker Compose, `curl`, an OpenAI
 API key, and a model available to that key.
 
@@ -179,7 +179,7 @@ Embedding changes composition, not the business contract. See the
 | Understand the architecture | [Product design](docs/design.md) |
 | Integrate over HTTP | [OpenAPI contract](api/openapi/knowl.yaml) |
 | See source documents become a wiki | [Source-to-wiki showcase](examples/source-to-wiki/README.md) |
-| Review the latest release | [v0.4.0 release notes](docs/releases/v0.4.0.md) |
+| Review the latest release | [v0.5.0 release notes](docs/releases/v0.5.0.md) |
 
 ## Contributing
 

@@ -1,6 +1,6 @@
 services:
   knowl:
-    image: ${KNOWL_IMAGE:-ghcr.io/baldaworks/knowl:v0.4.0}
+    image: ${KNOWL_IMAGE:-ghcr.io/baldaworks/knowl:v0.5.0}
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:?set OPENAI_MODEL}
