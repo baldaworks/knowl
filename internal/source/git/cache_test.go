@@ -17,6 +17,11 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+const (
+	testRepositoryA = "repository-a"
+	testRepositoryB = "repository-b"
+)
+
 func TestCacheManager(t *testing.T) {
 	t.Parallel()
 
@@ -232,7 +237,7 @@ func TestCacheManagerRepositoryIDRebindReplacesFullCache(t *testing.T) {
 	source := knowl.Source{
 		ID: "identity-rebound-source", Type: knowl.SourceTypeGit,
 		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
-			Remote: remote, RepositoryID: "repository-a", Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+			Remote: remote, RepositoryID: testRepositoryA, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
 		}},
 	}
 	cachedA, err := manager.OpenOrClone(context.Background(), source)
@@ -244,7 +249,7 @@ func TestCacheManagerRepositoryIDRebindReplacesFullCache(t *testing.T) {
 	cacheBytes := directoryFileBytes(t, filepath.Join(cacheRoot, string(source.ID)))
 	rebound := source
 	rebound.Config.Git = &knowl.GitSourceConfig{
-		Remote: remote, RepositoryID: "repository-b", Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		Remote: remote, RepositoryID: testRepositoryB, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
 		MaxCacheBytes: cacheBytes,
 	}
 	if _, err := manager.OpenOrClone(context.Background(), rebound); git.ClassOfError(err) != git.ClassRepositoryIdentityMismatch {
@@ -272,6 +277,7 @@ func TestCacheManagerRecoversMalformedRepositoryIdentity(t *testing.T) {
 			Remote: remote, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
 		}},
 	}
+	source.Config.Git.RepositoryID = git.RepositoryIdentity(*source.Config.Git)
 	cached, err := manager.OpenOrClone(context.Background(), source)
 	if err != nil {
 		t.Fatalf("initial clone: %v", err)
@@ -290,6 +296,40 @@ func TestCacheManagerRecoversMalformedRepositoryIdentity(t *testing.T) {
 	}
 }
 
+func TestCacheManagerOpenCachedRejectsDifferentLineage(t *testing.T) {
+	t.Parallel()
+
+	remoteA, _ := newCacheTestRemote(t, "# Remote A")
+	remoteB, _ := newCacheTestRemote(t, "# Remote B")
+	cacheRoot := t.TempDir()
+	manager := git.NewCacheManager(cacheRoot, nil)
+	source := knowl.Source{
+		ID: "cached-lineage-source", Type: knowl.SourceTypeGit,
+		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: remoteA, RepositoryID: testRepositoryA, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		}},
+	}
+	if _, err := manager.OpenOrClone(context.Background(), source); err != nil {
+		t.Fatalf("initial clone: %v", err)
+	}
+
+	changedRemote := source
+	changedRemote.Config.Git = &knowl.GitSourceConfig{
+		Remote: remoteB, RepositoryID: testRepositoryA, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+	}
+	if _, err := manager.OpenCached(context.Background(), changedRemote); git.ClassOfError(err) != git.ClassRepositoryIdentityMismatch {
+		t.Fatalf("changed remote error = %v, want identity mismatch", err)
+	}
+
+	changedIdentity := source
+	changedIdentity.Config.Git = &knowl.GitSourceConfig{
+		Remote: remoteA, RepositoryID: testRepositoryB, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+	}
+	if _, err := manager.OpenCached(context.Background(), changedIdentity); git.ClassOfError(err) != git.ClassRepositoryIdentityMismatch {
+		t.Fatalf("changed repository ID error = %v, want identity mismatch", err)
+	}
+}
+
 func TestCacheManagerMalformedRepositoryIdentityRequiresExplicitRebindAck(t *testing.T) {
 	t.Parallel()
 
@@ -299,7 +339,7 @@ func TestCacheManagerMalformedRepositoryIdentityRequiresExplicitRebindAck(t *tes
 	source := knowl.Source{
 		ID: "corrupt-explicit-identity-source", Type: knowl.SourceTypeGit,
 		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
-			Remote: remote, RepositoryID: "repository-a", Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+			Remote: remote, RepositoryID: testRepositoryA, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
 		}},
 	}
 	cached, err := manager.OpenOrClone(context.Background(), source)
@@ -314,7 +354,7 @@ func TestCacheManagerMalformedRepositoryIdentityRequiresExplicitRebindAck(t *tes
 
 	rebound := source
 	rebound.Config.Git = &knowl.GitSourceConfig{
-		Remote: remote, RepositoryID: "repository-b", Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		Remote: remote, RepositoryID: testRepositoryB, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
 	}
 	if _, err := manager.OpenOrClone(context.Background(), rebound); git.ClassOfError(err) != git.ClassRepositoryIdentityMismatch {
 		t.Fatalf("unacknowledged recovery error = %v, want identity mismatch", err)

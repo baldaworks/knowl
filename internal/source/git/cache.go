@@ -55,9 +55,13 @@ func (m *CacheManager) OpenCached(ctx context.Context, source knowl.Source) (*go
 	if source.Type != knowl.SourceTypeGit || source.Config.Git == nil || app.ValidateSourceID(source.ID) != nil {
 		return nil, app.ErrSourceInvalid
 	}
-	repo, err := gogit.PlainOpen(filepath.Join(m.baseDir, string(source.ID)))
+	dir := filepath.Join(m.baseDir, string(source.ID))
+	repo, err := gogit.PlainOpen(dir)
 	if err != nil {
 		return nil, WrapClassified(ClassScanInvalid, err, "Git cache is unavailable")
+	}
+	if err := validateCacheIdentity(repo, dir, *source.Config.Git); err != nil {
+		return nil, err
 	}
 	return repo, nil
 }
@@ -103,7 +107,7 @@ func (m *CacheManager) OpenOrClone(ctx context.Context, source knowl.Source) (*g
 			} else {
 				cachedIdentity, identityErr := readCacheIdentity(dir, urls[0])
 				if identityErr != nil {
-					if gitCfg.RepositoryID != "" && !gitCfg.RebindAck {
+					if hasExplicitRepositoryIdentity(gitCfg) && !gitCfg.RebindAck {
 						return nil, WrapClassified(ClassRepositoryIdentityMismatch, ErrRepositoryIdentityMismatch,
 							fmt.Sprintf("cached Git repository identity cannot be verified for configured remote %s", RedactURL(gitCfg.Remote)))
 					}
@@ -203,6 +207,37 @@ func (m *CacheManager) OpenOrClone(ctx context.Context, source knowl.Source) (*g
 	}
 
 	return repo, nil
+}
+
+func validateCacheIdentity(repo *gogit.Repository, dir string, config knowl.GitSourceConfig) error {
+	origin, err := repo.Remote("origin")
+	if err != nil {
+		return WrapClassified(ClassScanInvalid, err, "Git cache origin is unavailable")
+	}
+	urls := origin.Config().URLs
+	if len(urls) != 1 {
+		return WrapClassified(ClassScanInvalid, ErrScanInvalid, "Git cache origin is invalid")
+	}
+	if urls[0] != config.Remote {
+		return WrapClassified(ClassRepositoryIdentityMismatch, ErrRepositoryIdentityMismatch,
+			fmt.Sprintf("cached Git repository identity does not match configured remote %s", RedactURL(config.Remote)))
+	}
+	cachedIdentity, err := readCacheIdentity(dir, urls[0])
+	if err != nil {
+		return err
+	}
+	if cachedIdentity != RepositoryIdentity(config) {
+		return WrapClassified(ClassRepositoryIdentityMismatch, ErrRepositoryIdentityMismatch,
+			fmt.Sprintf("cached Git repository identity does not match configured remote %s", RedactURL(config.Remote)))
+	}
+	return nil
+}
+
+func hasExplicitRepositoryIdentity(config knowl.GitSourceConfig) bool {
+	if strings.TrimSpace(config.RepositoryID) == "" {
+		return false
+	}
+	return RepositoryIdentity(config) != RepositoryIdentity(knowl.GitSourceConfig{Remote: config.Remote})
 }
 
 func readCacheIdentity(dir, remote string) (string, error) {
