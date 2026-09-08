@@ -294,7 +294,7 @@ func (service *IngestService) CurrentMaintenancePolicy(ctx context.Context, scop
 func (service *IngestService) decidePreviousMaintenance(ctx context.Context, scope knowl.ScopeRef, request AcceptedMaintenanceRequest, generation string) (MaintenanceReservation, bool, error) {
 	previous, err := service.operations.Operation(ctx, scope, request.PreviousOperationID)
 	if errors.Is(err, ErrOperationNotFound) {
-		return MaintenanceReservation{OperationID: request.PreviousOperationID, Generation: request.PreviousGeneration, PolicyGeneration: generation, Outcome: MaintenanceManualGate}, true, nil
+		return MaintenanceReservation{}, false, nil
 	}
 	if err != nil {
 		return MaintenanceReservation{}, false, fmt.Errorf("read previous maintenance operation: %w", err)

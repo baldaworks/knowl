@@ -1066,6 +1066,44 @@ func TestReserveAcceptedReturnsReservationFailureWithoutRawReplay(t *testing.T) 
 	}
 }
 
+func TestReserveAcceptedRecoversMissingPreviousOperation(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, _, maintainer := newWorkflow(t, false, nil)
+	envelope := sourceEnvelope([]byte("missing previous operation"))
+	accepted, err := workspace.AcceptSource(ctx, envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := knowl.SourceDocument{
+		SourceID: testConfiguredSourceID, DocumentID: "docs/missing-operation.md", Revision: accepted.Version.Version,
+		URI: "file:///srv/wiki/docs/missing-operation.md",
+	}
+	missingID := knowl.OperationID("missing-operation")
+	operations := &missingOperationStore{OperationStore: store, missingID: missingID}
+	content := &rejectingAcceptStore{Workspace: workspace}
+	queue, err := app.NewIngestService(content, operations, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := app.AcceptedMaintenanceRequest{
+		Source: accepted, SourceDocument: document, ContentType: accepted.MediaType,
+		PreviousMaintenanceRevision: accepted.Version.Version,
+		PreviousOperationID:         missingID,
+		PreviousGeneration:          strings.Repeat("a", 64),
+	}
+	first, err := queue.ReserveAccepted(ctx, request)
+	if err != nil || first.Outcome != app.MaintenanceQueued || first.Replayed || first.OperationID == missingID {
+		t.Fatalf("missing operation recovery = %#v, err = %v", first, err)
+	}
+	replay, err := queue.ReserveAccepted(ctx, request)
+	if err != nil || replay.Outcome != app.MaintenanceReplayed || !replay.Replayed || replay.OperationID != first.OperationID {
+		t.Fatalf("missing operation replay = %#v, err = %v", replay, err)
+	}
+	if content.acceptCalls != 0 {
+		t.Fatalf("raw source accept calls = %d, want 0", content.acceptCalls)
+	}
+}
+
 func TestExecutePassesBoundedSourceSummaryToContextSelection(t *testing.T) {
 	ctx := context.Background()
 	index := &recordingContextIndex{}
@@ -1162,6 +1200,18 @@ type failingReservationStore struct {
 	app.OperationStore
 	err          error
 	reserveCalls int
+}
+
+type missingOperationStore struct {
+	app.OperationStore
+	missingID knowl.OperationID
+}
+
+func (store *missingOperationStore) Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error) {
+	if id == store.missingID {
+		return knowl.Operation{}, app.ErrOperationNotFound
+	}
+	return store.OperationStore.Operation(ctx, scope, id)
 }
 
 func (store *failingReservationStore) Reserve(context.Context, knowl.OperationKey, knowl.OperationMeta) (app.OperationReservation, error) {
