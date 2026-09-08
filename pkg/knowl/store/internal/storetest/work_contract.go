@@ -182,7 +182,7 @@ func RunWorkContract(t *testing.T, harness WorkHarness) {
 		}
 	})
 
-	t.Run("legacy_empty_diagnostics_finalize_commit", func(t *testing.T) {
+	t.Run("legacy_empty_diagnostics_replay_and_finalize_commit", func(t *testing.T) {
 		ctx := context.Background()
 		scope := childScope(harness.Scope, "legacy-empty-diagnostics")
 		key, meta := Fixture(scope, "legacy-empty-diagnostics", time.Unix(10, 0).UTC())
@@ -190,13 +190,25 @@ func RunWorkContract(t *testing.T, harness WorkHarness) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := harness.Store.SavePlan(ctx, reserved.ID, knowl.PlanSummary{OperationID: string(reserved.ID), Digest: strings.Repeat("d", 64)}); err != nil {
-			t.Fatal(err)
-		}
-		if err := harness.Store.MarkApplying(ctx, reserved.ID, knowl.Lease{Token: "legacy-empty-apply", ExpiresAt: time.Now().UTC().Add(time.Minute)}); err != nil {
+		summary := knowl.PlanSummary{OperationID: string(reserved.ID), Digest: strings.Repeat("d", 64)}
+		if err := harness.Store.SavePlan(ctx, reserved.ID, summary); err != nil {
 			t.Fatal(err)
 		}
 		harness.CorruptDiagnostics(t, reserved.ID, "")
+		if err := harness.Store.SavePlan(ctx, reserved.ID, summary); err != nil {
+			t.Fatalf("replay plan with legacy empty diagnostics: %v", err)
+		}
+		if err := harness.Store.SavePlan(ctx, reserved.ID, knowl.PlanSummary{OperationID: string(reserved.ID), Digest: strings.Repeat("x", 64)}); !harness.IsConflict(err) {
+			t.Fatalf("replay plan with different digest error = %v", err)
+		}
+		harness.CorruptDiagnostics(t, reserved.ID, "invalid")
+		if err := harness.Store.SavePlan(ctx, reserved.ID, summary); !harness.IsConflict(err) {
+			t.Fatalf("replay plan with malformed diagnostics error = %v", err)
+		}
+		harness.CorruptDiagnostics(t, reserved.ID, "")
+		if err := harness.Store.MarkApplying(ctx, reserved.ID, knowl.Lease{Token: "legacy-empty-apply", ExpiresAt: time.Now().UTC().Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
 		if err := harness.Store.CommitOutcome(ctx, reserved.ID, knowl.ContentCommit{OperationID: string(reserved.ID), Generation: "legacy-empty-generation"}); err != nil {
 			t.Fatalf("commit legacy empty diagnostics: %v", err)
 		}

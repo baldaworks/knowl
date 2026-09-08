@@ -181,7 +181,8 @@ func (store *Store) SavePlan(ctx context.Context, id knowl.OperationID, summary 
 	}
 	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
 		if current.status == knowl.StatusPlanned {
-			if current.planDigest == summary.Digest && current.maintenanceDiagnostics == diagnostics {
+			if current.planDigest == summary.Digest &&
+				(current.maintenanceDiagnostics == diagnostics || current.maintenanceDiagnostics == "" && diagnostics == "[]") {
 				return nil
 			}
 			return fmt.Errorf("plan digest differs: %w", ErrConflict)
