@@ -59,6 +59,10 @@ func (store *Store) BeginSync(ctx context.Context, request app.BeginSyncRequest)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(scope, source_id) DO UPDATE SET
 				source_type = excluded.source_type, config_digest = excluded.config_digest, repository_identity = excluded.repository_identity,
+				checkpoint = CASE
+					WHEN knowl_sources.repository_identity <> excluded.repository_identity THEN ''
+					ELSE knowl_sources.checkpoint
+				END,
 				last_attempt_run_id = excluded.last_attempt_run_id, status = excluded.status, updated_at = excluded.updated_at`,
 		request.Run.Scope, request.Run.SourceID, request.Type, request.Run.ConfigDigest, request.RepositoryIdentity, request.Run.ID,
 		request.Run.Status, formatTime(started), formatTime(now))

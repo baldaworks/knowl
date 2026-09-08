@@ -56,7 +56,7 @@ func TestCacheManager(t *testing.T) {
 		Config: knowl.SourceConfig{
 			Git: &knowl.GitSourceConfig{
 				Remote:  originDir,
-				Ref:     "main",
+				Ref:     testRefBranchMain,
 				RefKind: knowl.GitRefKindBranch,
 			},
 		},
@@ -77,6 +77,9 @@ func TestCacheManager(t *testing.T) {
 	if _, err := os.Stat(cachedPath); os.IsNotExist(err) {
 		t.Fatalf("expected cache dir %s to exist", cachedPath)
 	}
+	if cachedRepo, err := mgr.OpenCached(ctx, source); err != nil || cachedRepo == nil {
+		t.Fatalf("OpenCached() = %#v, %v", cachedRepo, err)
+	}
 
 	// 2. Open existing cache (idempotent / incremental)
 	repo2, err := mgr.OpenOrClone(ctx, source)
@@ -90,6 +93,12 @@ func TestCacheManager(t *testing.T) {
 	// 3. Delete cache directory -> transparent recovery
 	if err := os.RemoveAll(cachedPath); err != nil {
 		t.Fatalf("delete cache dir: %v", err)
+	}
+	if _, err := mgr.OpenCached(ctx, source); git.ClassOfError(err) != git.ClassScanInvalid {
+		t.Fatalf("OpenCached() missing cache error = %v, want scan invalid", err)
+	}
+	if _, err := os.Stat(cachedPath); !os.IsNotExist(err) {
+		t.Fatalf("OpenCached() recreated missing cache: %v", err)
 	}
 
 	repo3, err := mgr.OpenOrClone(ctx, source)
@@ -127,6 +136,242 @@ func TestCacheManagerRejectsUnsafeSourceID(t *testing.T) {
 	if _, err := mgr.OpenOrClone(context.Background(), source); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("OpenOrClone() unsafe source ID = %v, want invalid source", err)
 	}
+	if _, err := mgr.OpenCached(context.Background(), source); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("OpenCached() unsafe source ID = %v, want invalid source", err)
+	}
+}
+
+func TestCacheManagerHonorsRemoteRebind(t *testing.T) {
+	t.Parallel()
+
+	remoteA, commitA := newCacheTestRemote(t, "# Remote A")
+	remoteB, commitB := newCacheTestRemote(t, "# Remote B")
+	cacheRoot := t.TempDir()
+	manager := git.NewCacheManager(cacheRoot, nil)
+	source := knowl.Source{
+		ID: "rebound-source", Type: knowl.SourceTypeGit,
+		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: remoteA, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		}},
+	}
+	if _, err := manager.OpenOrClone(context.Background(), source); err != nil {
+		t.Fatalf("clone remote A: %v", err)
+	}
+
+	rebound := source
+	rebound.Config.Git = &knowl.GitSourceConfig{
+		Remote: remoteB, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+	}
+	if _, err := manager.OpenOrClone(context.Background(), rebound); git.ClassOfError(err) != git.ClassRepositoryIdentityMismatch {
+		t.Fatalf("unacknowledged rebind error = %v, want identity mismatch", err)
+	}
+	cachedA, err := manager.OpenCached(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originA, err := cachedA.Remote("origin")
+	if err != nil || len(originA.Config().URLs) != 1 || originA.Config().URLs[0] != remoteA {
+		t.Fatalf("cache changed after rejected rebind: %#v, %v", originA, err)
+	}
+
+	rebound.Config.Git.RebindAck = true
+	cachedB, err := manager.OpenOrClone(context.Background(), rebound)
+	if err != nil {
+		t.Fatalf("acknowledged rebind: %v", err)
+	}
+	originB, err := cachedB.Remote("origin")
+	if err != nil || len(originB.Config().URLs) != 1 || originB.Config().URLs[0] != remoteB {
+		t.Fatalf("rebound origin = %#v, %v", originB, err)
+	}
+	if _, err := cachedB.CommitObject(commitB); err != nil {
+		t.Fatalf("remote B commit unavailable: %v", err)
+	}
+	if _, err := cachedB.CommitObject(commitA); err == nil {
+		t.Fatal("remote A commit remained in replaced cache")
+	}
+}
+
+func TestCacheManagerRebindReplacesFullCache(t *testing.T) {
+	t.Parallel()
+
+	remoteA, _ := newCacheTestRemote(t, "# Remote A")
+	remoteB, commitB := newCacheTestRemote(t, "# Remote B")
+	cacheRoot := t.TempDir()
+	manager := git.NewCacheManager(cacheRoot, nil)
+	source := knowl.Source{
+		ID: "full-rebound-source", Type: knowl.SourceTypeGit,
+		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: remoteA, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		}},
+	}
+	if _, err := manager.OpenOrClone(context.Background(), source); err != nil {
+		t.Fatalf("clone remote A: %v", err)
+	}
+
+	cacheBytes := directoryFileBytes(t, filepath.Join(cacheRoot, string(source.ID)))
+	rebound := source
+	rebound.Config.Git = &knowl.GitSourceConfig{
+		Remote: remoteB, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		RebindAck: true, MaxCacheBytes: cacheBytes,
+	}
+	cachedB, err := manager.OpenOrClone(context.Background(), rebound)
+	if err != nil {
+		t.Fatalf("acknowledged rebind at full capacity: %v", err)
+	}
+	if _, err := cachedB.CommitObject(commitB); err != nil {
+		t.Fatalf("remote B commit unavailable: %v", err)
+	}
+}
+
+func TestCacheManagerRepositoryIDRebindReplacesFullCache(t *testing.T) {
+	t.Parallel()
+
+	remote, _ := newCacheTestRemote(t, "# Shared remote")
+	cacheRoot := t.TempDir()
+	manager := git.NewCacheManager(cacheRoot, nil)
+	source := knowl.Source{
+		ID: "identity-rebound-source", Type: knowl.SourceTypeGit,
+		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: remote, RepositoryID: "repository-a", Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		}},
+	}
+	cachedA, err := manager.OpenOrClone(context.Background(), source)
+	if err != nil {
+		t.Fatalf("clone repository A identity: %v", err)
+	}
+	staleBlob := storeDiskBlob(t, cachedA, []byte("stale cache object"))
+
+	cacheBytes := directoryFileBytes(t, filepath.Join(cacheRoot, string(source.ID)))
+	rebound := source
+	rebound.Config.Git = &knowl.GitSourceConfig{
+		Remote: remote, RepositoryID: "repository-b", Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		MaxCacheBytes: cacheBytes,
+	}
+	if _, err := manager.OpenOrClone(context.Background(), rebound); git.ClassOfError(err) != git.ClassRepositoryIdentityMismatch {
+		t.Fatalf("unacknowledged repository ID rebind error = %v, want identity mismatch", err)
+	}
+	rebound.Config.Git.RebindAck = true
+	cachedB, err := manager.OpenOrClone(context.Background(), rebound)
+	if err != nil {
+		t.Fatalf("acknowledged repository ID rebind at full capacity: %v", err)
+	}
+	if _, err := cachedB.BlobObject(staleBlob); err == nil {
+		t.Fatal("stale object remained after repository ID rebind")
+	}
+}
+
+func TestCacheManagerRecoversMalformedRepositoryIdentity(t *testing.T) {
+	t.Parallel()
+
+	remote, _ := newCacheTestRemote(t, "# Recover metadata")
+	cacheRoot := t.TempDir()
+	manager := git.NewCacheManager(cacheRoot, nil)
+	source := knowl.Source{
+		ID: "corrupt-identity-source", Type: knowl.SourceTypeGit,
+		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: remote, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		}},
+	}
+	cached, err := manager.OpenOrClone(context.Background(), source)
+	if err != nil {
+		t.Fatalf("initial clone: %v", err)
+	}
+	staleBlob := storeDiskBlob(t, cached, []byte("stale cache object"))
+	cacheDir := filepath.Join(cacheRoot, string(source.ID))
+	if err := os.WriteFile(filepath.Join(cacheDir, "knowl.repository-identity"), []byte("partial"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := manager.OpenOrClone(context.Background(), source)
+	if err != nil {
+		t.Fatalf("recover malformed repository identity: %v", err)
+	}
+	if _, err := recovered.BlobObject(staleBlob); err == nil {
+		t.Fatal("stale object remained after malformed metadata recovery")
+	}
+}
+
+func TestCacheManagerMalformedRepositoryIdentityRequiresExplicitRebindAck(t *testing.T) {
+	t.Parallel()
+
+	remote, _ := newCacheTestRemote(t, "# Protected metadata")
+	cacheRoot := t.TempDir()
+	manager := git.NewCacheManager(cacheRoot, nil)
+	source := knowl.Source{
+		ID: "corrupt-explicit-identity-source", Type: knowl.SourceTypeGit,
+		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: remote, RepositoryID: "repository-a", Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+		}},
+	}
+	cached, err := manager.OpenOrClone(context.Background(), source)
+	if err != nil {
+		t.Fatalf("initial clone: %v", err)
+	}
+	staleBlob := storeDiskBlob(t, cached, []byte("stale cache object"))
+	cacheDir := filepath.Join(cacheRoot, string(source.ID))
+	if err := os.WriteFile(filepath.Join(cacheDir, "knowl.repository-identity"), []byte("partial"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	rebound := source
+	rebound.Config.Git = &knowl.GitSourceConfig{
+		Remote: remote, RepositoryID: "repository-b", Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+	}
+	if _, err := manager.OpenOrClone(context.Background(), rebound); git.ClassOfError(err) != git.ClassRepositoryIdentityMismatch {
+		t.Fatalf("unacknowledged recovery error = %v, want identity mismatch", err)
+	}
+	if _, err := cached.BlobObject(staleBlob); err != nil {
+		t.Fatalf("cache changed after rejected recovery: %v", err)
+	}
+
+	rebound.Config.Git.RebindAck = true
+	recovered, err := manager.OpenOrClone(context.Background(), rebound)
+	if err != nil {
+		t.Fatalf("acknowledged recovery: %v", err)
+	}
+	if _, err := recovered.BlobObject(staleBlob); err == nil {
+		t.Fatal("stale object remained after acknowledged recovery")
+	}
+}
+
+func directoryFileBytes(t *testing.T, root string) int64 {
+	t.Helper()
+	var total int64
+	if err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	}); err != nil {
+		t.Fatalf("measure cache: %v", err)
+	}
+	return total
+}
+
+func newCacheTestRemote(t *testing.T, content string) (string, plumbing.Hash) {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobHash := storeDiskBlob(t, repo, []byte(content))
+	treeHash := storeDiskTree(t, repo, &object.Tree{Entries: []object.TreeEntry{
+		{Name: "README.md", Mode: filemode.Regular, Hash: blobHash},
+	}})
+	commitHash := storeDiskCommit(t, repo, treeHash)
+	refName := plumbing.ReferenceName("refs/heads/main")
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, refName)); err != nil {
+		t.Fatal(err)
+	}
+	return dir, commitHash
 }
 
 func TestCacheManagerEnforcesTransferAndDiskLimits(t *testing.T) {

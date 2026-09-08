@@ -232,11 +232,28 @@ func runGitLineageContract(t *testing.T, ctx context.Context, store app.SourceSt
 	}); err != nil {
 		t.Fatalf("BeginSync() initial Git lineage = %v", err)
 	}
-	if _, err := store.FailSync(ctx, scope, first.ID, "test_failure", at.Add(time.Second)); err != nil {
-		t.Fatalf("FailSync() initial Git lineage = %v", err)
+	const previousCheckpoint = "1111111111111111111111111111111111111111"
+	prepared := contractPreparedState(t, first.ID, scope, sourceID, previousCheckpoint, knowl.SyncCounts{}, nil, at.Add(time.Second))
+	if _, err := store.PrepareSync(ctx, prepared); err != nil {
+		t.Fatalf("PrepareSync() initial Git lineage = %v", err)
+	}
+	transition := app.SyncGeneration{
+		RunID: first.ID, Scope: scope, SourceID: sourceID, Generation: "git-lineage-generation", UpdatedAt: at.Add(2 * time.Second),
+	}
+	if _, err := store.MarkContentCommitted(ctx, transition); err != nil {
+		t.Fatalf("MarkContentCommitted() initial Git lineage = %v", err)
+	}
+	if _, err := store.MarkProjected(ctx, transition); err != nil {
+		t.Fatalf("MarkProjected() initial Git lineage = %v", err)
+	}
+	if _, err := store.FinalizeSync(ctx, app.SyncFinalization{
+		RunID: first.ID, Scope: scope, SourceID: sourceID, CandidateDigest: prepared.CandidateDigest,
+		Generation: transition.Generation, Checkpoint: previousCheckpoint, FinalizedAt: at.Add(3 * time.Second),
+	}); err != nil {
+		t.Fatalf("FinalizeSync() initial Git lineage = %v", err)
 	}
 
-	changed := newContractRun(scope, sourceID, "git-lineage-2", at.Add(2*time.Second))
+	changed := newContractRun(scope, sourceID, "git-lineage-2", at.Add(4*time.Second))
 	if _, _, err := store.BeginSync(ctx, app.BeginSyncRequest{
 		Run: changed, Type: knowl.SourceTypeGit, RepositoryIdentity: secondIdentity,
 	}); !errors.Is(err, app.ErrSourceLineageConflict) {
@@ -250,7 +267,7 @@ func runGitLineageContract(t *testing.T, ctx context.Context, store app.SourceSt
 	const attemptCheckpoint = "2222222222222222222222222222222222222222"
 	if run, err := store.RecordScanPage(ctx, app.ScanPageRecord{
 		RunID: changed.ID, Scope: scope, SourceID: sourceID,
-		AttemptCheckpoint: attemptCheckpoint, RecordedAt: at.Add(3 * time.Second),
+		AttemptCheckpoint: attemptCheckpoint, RecordedAt: at.Add(5 * time.Second),
 	}); err != nil || run.Checkpoint != attemptCheckpoint {
 		t.Fatalf("RecordScanPage() attempt checkpoint = %#v, %v", run, err)
 	}
@@ -258,7 +275,7 @@ func runGitLineageContract(t *testing.T, ctx context.Context, store app.SourceSt
 	if err != nil || status.RepositoryIdentity != secondIdentity || status.AttemptCheckpoint != attemptCheckpoint || status.Checkpoint != "" {
 		t.Fatalf("SourceStatus() rebound Git lineage = %#v, %v", status, err)
 	}
-	if _, err := store.FailSync(ctx, scope, changed.ID, "test_failure", at.Add(4*time.Second)); err != nil {
+	if _, err := store.FailSync(ctx, scope, changed.ID, "test_failure", at.Add(6*time.Second)); err != nil {
 		t.Fatalf("FailSync() rebound Git lineage = %v", err)
 	}
 }

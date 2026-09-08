@@ -20,6 +20,7 @@ import (
 // RepositoryOpener provides access to a local Git repository for a configured source.
 type RepositoryOpener interface {
 	OpenOrClone(ctx context.Context, source knowl.Source) (*gogit.Repository, error)
+	OpenCached(ctx context.Context, source knowl.Source) (*gogit.Repository, error)
 }
 
 // Adapter implements app.SourceAdapter for remote Git sources.
@@ -68,6 +69,7 @@ func (a *Adapter) List(ctx context.Context, source knowl.Source, pageToken strin
 	}
 	gitCfg := *source.Config.Git
 
+	resuming := pageToken != ""
 	cursor, err := decodePageToken(pageToken)
 	if err != nil {
 		return knowl.DocumentPage{}, err
@@ -95,9 +97,15 @@ func (a *Adapter) List(ctx context.Context, source knowl.Source, pageToken strin
 		return knowl.DocumentPage{}, WrapClassified(ClassScanInvalid, ErrScanInvalid, "repository store not configured")
 	}
 
-	repo, err := a.repoStore.OpenOrClone(ctx, source)
+	repo, err := a.repoStore.OpenCached(ctx, source)
 	if err != nil {
-		return knowl.DocumentPage{}, err
+		if !resuming || ctx.Err() != nil {
+			return knowl.DocumentPage{}, err
+		}
+		repo, err = a.repoStore.OpenOrClone(ctx, source)
+		if err != nil {
+			return knowl.DocumentPage{}, err
+		}
 	}
 
 	matchers, err := CompileMatchers(gitCfg.Include)
@@ -185,7 +193,7 @@ func (a *Adapter) Fetch(ctx context.Context, source knowl.Source, ref knowl.Docu
 	if a.repoStore == nil {
 		return knowl.Document{}, WrapClassified(ClassScanInvalid, ErrScanInvalid, "repository store not configured")
 	}
-	repo, err := a.repoStore.OpenOrClone(ctx, source)
+	repo, err := a.repoStore.OpenCached(ctx, source)
 	if err != nil {
 		return knowl.Document{}, err
 	}

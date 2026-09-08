@@ -5,8 +5,10 @@ runtime:
     codex-acp:
       type: codex_acp
       codex_acp:
-        model: gpt-6-astra
-        reasoning_effort: low
+        model: gpt-5.6-luna
+        reasoning_effort: xhigh
+        extra_args:
+          - --debug
 
 diffpal:
   provider: codex-acp
@@ -14,6 +16,7 @@ diffpal:
     block_on: high
   review:
     language: en
+    timeout: 15m
     instructions: |
       Prefer actionable findings that are directly supported by the diff.
 

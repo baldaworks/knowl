@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/internal/source/reconcile"
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
@@ -31,6 +32,7 @@ const hostFailedStatus = "failed"
 const hostMCPClientName = "knowl-test-client"
 const hostMCPClientVersion = "1.0.0"
 const hostSourceContent = "source text"
+const hostRootIndexPath = "wiki/index.md"
 const hostSourceOrigin = "source-1"
 const hostSourceIdempotencyKey = "1"
 const hostSourceContentKey = "content"
@@ -974,5 +976,85 @@ func TestHostRunOnce(t *testing.T) {
 	pagePath := filepath.Join(workspace.Root(), runtimeSharedAtlasPagePath)
 	if _, err := os.Stat(pagePath); err != nil {
 		t.Fatalf("committed wiki page missing: %v", err)
+	}
+}
+
+type runtimeRunOnceMaintainer struct {
+	hierarchyCalls int
+}
+
+func (*runtimeRunOnceMaintainer) Plan(ctx context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+	return (runtimeSharedAtlasMaintainer{}).Plan(ctx, input)
+}
+
+func (maintainer *runtimeRunOnceMaintainer) PlanHierarchy(_ context.Context, input domain.HierarchyInput) (domain.HierarchyModelPlan, error) {
+	maintainer.hierarchyCalls++
+	children := make([]string, 0, len(input.Pages))
+	for _, page := range input.Pages {
+		children = append(children, page.Path)
+	}
+	title := "Knowl"
+	for _, catalog := range input.Catalogs {
+		if catalog.Path == hostRootIndexPath {
+			title = catalog.Title
+			break
+		}
+	}
+	return domain.HierarchyModelPlan{
+		SchemaDigest:   input.SchemaDigest,
+		SnapshotDigest: input.SnapshotDigest,
+		Catalogs: []domain.HierarchyCatalogSpec{{
+			Path: hostRootIndexPath, Title: title, Children: children,
+		}},
+	}, nil
+}
+
+func TestHostRunOnceReturnsPartialSyncAfterLaterPhases(t *testing.T) {
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	goodRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(goodRoot, "doc.md"), []byte("# Good\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.Sources = []domain.Source{
+		runtimeFilesystemSource("good-source", goodRoot, true),
+		runtimeFilesystemSource("bad-source", filepath.Join(t.TempDir(), "missing"), true),
+	}
+	maintainer := &runtimeRunOnceMaintainer{}
+	host, err := knowl.NewHost(context.Background(), config, maintainer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownHost(t, host)
+
+	result, err := host.RunOnce(context.Background(), knowl.RunOnceOptions{
+		SyncSources: true, DrainOperations: true, ReconcileHierarchy: true,
+	})
+	if !errors.Is(err, reconcile.ErrSyncPartial) {
+		t.Fatalf("RunOnce() error = %v, want partial sync", err)
+	}
+	if len(result.Sources) != 2 {
+		t.Fatalf("source results = %#v", result.Sources)
+	}
+	bySource := make(map[domain.SourceID]knowl.SourceSyncResult, len(result.Sources))
+	for _, sourceResult := range result.Sources {
+		bySource[sourceResult.SourceID] = sourceResult
+	}
+	if bySource["bad-source"].FailureClass == "" || bySource["good-source"].FailureClass != "" {
+		t.Fatalf("source outcomes = %#v", bySource)
+	}
+	if result.Operations.Total != 1 || result.Operations.Completed != 1 {
+		t.Fatalf("drain result = %#v", result.Operations)
+	}
+	if maintainer.hierarchyCalls != 1 || result.Hierarchy == nil {
+		t.Fatalf("hierarchy calls/result = %d/%#v", maintainer.hierarchyCalls, result.Hierarchy)
 	}
 }
