@@ -17,12 +17,13 @@ const fixtureSchema = "schema"
 const fixtureSourceID = "source"
 const fixtureSourceRef = "fixture:source-1@1"
 const fixtureSchemaDigest = "schema-digest"
+const fixtureOperationSourceID = "source-1"
 
 func TestValidatePlanSortsEditsAndPreservesSourceCitation(t *testing.T) {
 	input := knowl.MaintenanceInput{
 		Scope:  fixtureScope,
 		Schema: knowl.SchemaDocument{Digest: fixtureSchemaDigest},
-		Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
+		Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: fixtureOperationSourceID}, Version: knowl.SourceVersion{Version: "1"}},
 	}
 	plan, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{
 		SchemaDigest: fixtureSchemaDigest,
@@ -50,7 +51,7 @@ func TestValidatePlanAcceptsNoOp(t *testing.T) {
 	input := knowl.MaintenanceInput{
 		Scope:  fixtureScope,
 		Schema: knowl.SchemaDocument{Digest: fixtureSchemaDigest},
-		Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
+		Source: knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: fixtureOperationSourceID}, Version: knowl.SourceVersion{Version: "1"}},
 	}
 	plan, err := ValidatePlan(context.Background(), input, knowl.ModelEditPlan{
 		SchemaDigest: fixtureSchemaDigest,

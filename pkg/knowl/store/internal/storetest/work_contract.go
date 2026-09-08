@@ -17,23 +17,29 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+const (
+	testFixtureValue      = "fixture"
+	testMarkdownMediaType = "text/markdown"
+)
+
 // WorkHarness supplies engine-specific lifecycle and fault controls to the
 // shared resumable-work contract.
 type WorkHarness struct {
-	Store        app.OperationStore
-	OpenPeer     func(t *testing.T) app.OperationStore
-	Expire       func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID)
-	ReadyNow     func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID)
-	WorkAttempts func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID) int
-	IsConflict   func(error) bool
-	Scope        knowl.ScopeRef
+	Store              app.OperationStore
+	OpenPeer           func(t *testing.T) app.OperationStore
+	Expire             func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID)
+	ReadyNow           func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID)
+	WorkAttempts       func(t *testing.T, scope knowl.ScopeRef, id knowl.OperationID) int
+	CorruptDiagnostics func(t *testing.T, id knowl.OperationID, payload string)
+	IsConflict         func(error) bool
+	Scope              knowl.ScopeRef
 }
 
 // RunWorkContract verifies the observable resumable-work behavior shared by
 // SQLite and PostgreSQL without depending on either engine's SQL details.
 func RunWorkContract(t *testing.T, harness WorkHarness) {
 	t.Helper()
-	if harness.Store == nil || harness.OpenPeer == nil || harness.Expire == nil || harness.ReadyNow == nil || harness.WorkAttempts == nil || harness.IsConflict == nil || harness.Scope == "" {
+	if harness.Store == nil || harness.OpenPeer == nil || harness.Expire == nil || harness.ReadyNow == nil || harness.WorkAttempts == nil || harness.CorruptDiagnostics == nil || harness.IsConflict == nil || harness.Scope == "" {
 		t.Fatal("resumable-work harness is incomplete")
 	}
 
@@ -90,6 +96,89 @@ func RunWorkContract(t *testing.T, harness WorkHarness) {
 		afterConflict, err := harness.Store.Execution(ctx, scope, first.ID)
 		if err != nil || !reflect.DeepEqual(afterConflict, first.Descriptor) {
 			t.Fatalf("descriptor after conflict = %#v, err = %v", afterConflict, err)
+		}
+	})
+
+	t.Run("maintenance_generation_is_durable_and_unique", func(t *testing.T) {
+		ctx := context.Background()
+		scope := childScope(harness.Scope, "generation")
+		firstKey, firstMeta := Fixture(scope, "decision", time.Unix(10, 0).UTC())
+		firstKey.MaintenanceGeneration = strings.Repeat("b", 64)
+		firstMeta.Key = firstKey
+		firstMeta.MaintenanceGeneration = firstKey.MaintenanceGeneration
+		first, err := harness.Store.Reserve(ctx, firstKey, firstMeta)
+		if err != nil {
+			t.Fatalf("reserve first generation: %v", err)
+		}
+
+		secondKey := firstKey
+		secondKey.MaintenanceGeneration = strings.Repeat("c", 64)
+		secondMeta := firstMeta
+		secondMeta.Key = secondKey
+		secondMeta.MaintenanceGeneration = secondKey.MaintenanceGeneration
+		secondMeta.CreatedAt = time.Unix(20, 0).UTC()
+		second, err := harness.Store.Reserve(ctx, secondKey, secondMeta)
+		if err != nil {
+			t.Fatalf("reserve second generation: %v", err)
+		}
+		if !first.New || !second.New || first.ID == second.ID {
+			t.Fatalf("generation reservations = %#v / %#v", first, second)
+		}
+
+		peer := harness.OpenPeer(t)
+		for _, reservation := range []app.OperationReservation{first, second} {
+			operation, operationErr := peer.Operation(ctx, scope, reservation.ID)
+			descriptor, descriptorErr := peer.Execution(ctx, scope, reservation.ID)
+			if operationErr != nil || descriptorErr != nil ||
+				operation.Key.MaintenanceGeneration != reservation.Key.MaintenanceGeneration ||
+				descriptor.MaintenanceGeneration != reservation.Key.MaintenanceGeneration {
+				t.Fatalf("durable generation for %q = %#v / %#v, errors %v / %v", reservation.ID, operation, descriptor, operationErr, descriptorErr)
+			}
+		}
+	})
+
+	t.Run("maintenance_diagnostics_are_durable_and_commit_bound", func(t *testing.T) {
+		ctx := context.Background()
+		scope := childScope(harness.Scope, "diagnostics")
+		key, meta := Fixture(scope, "diagnostics", time.Unix(10, 0).UTC())
+		reserved, err := harness.Store.Reserve(ctx, key, meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		diagnostics := []knowl.MaintenanceDiagnostic{
+			{Code: knowl.DiagnosticOriginalLinkUnresolved, Path: "wiki/entities/two.md", Target: "entities/missing"},
+			{Code: knowl.DiagnosticCitationUnknownSource, Path: "wiki/entities/one.md"},
+			{Code: knowl.DiagnosticCitationUnknownSource, Path: "wiki/entities/one.md"},
+		}
+		want, err := app.NormalizeMaintenanceDiagnostics(diagnostics)
+		if err != nil {
+			t.Fatal(err)
+		}
+		summary := knowl.PlanSummary{OperationID: string(reserved.ID), Digest: strings.Repeat("d", 64), Diagnostics: diagnostics}
+		if err := harness.Store.SavePlan(ctx, reserved.ID, summary); err != nil {
+			t.Fatalf("save diagnostic plan: %v", err)
+		}
+		peer := harness.OpenPeer(t)
+		planned, err := peer.Operation(ctx, scope, reserved.ID)
+		if err != nil || !reflect.DeepEqual(planned.Diagnostics, want) {
+			t.Fatalf("durable diagnostics = %#v, err = %v", planned.Diagnostics, err)
+		}
+		if err := peer.MarkApplying(ctx, reserved.ID, knowl.Lease{Token: "diagnostic-apply", ExpiresAt: time.Now().UTC().Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := peer.CommitOutcome(ctx, reserved.ID, knowl.ContentCommit{OperationID: string(reserved.ID), Generation: "diagnostic-generation", Diagnostics: want[1:]}); !harness.IsConflict(err) {
+			t.Fatalf("mismatched diagnostic commit error = %v", err)
+		}
+		if err := peer.CommitOutcome(ctx, reserved.ID, knowl.ContentCommit{OperationID: string(reserved.ID), Generation: "diagnostic-generation", Diagnostics: diagnostics}); err != nil {
+			t.Fatalf("commit diagnostics: %v", err)
+		}
+		committed, err := harness.Store.Operation(ctx, scope, reserved.ID)
+		if err != nil || committed.Status != knowl.StatusCommitted || !reflect.DeepEqual(committed.Diagnostics, want) {
+			t.Fatalf("committed diagnostics = %#v, err = %v", committed, err)
+		}
+		harness.CorruptDiagnostics(t, reserved.ID, `[{"code":"citation.unknown_source","path":"../secret"}]`)
+		if _, err := harness.Store.Operation(ctx, scope, reserved.ID); !errors.Is(err, app.ErrMaintenanceDiagnosticInvalid) {
+			t.Fatalf("corrupt durable diagnostics error = %v", err)
 		}
 	})
 
@@ -366,7 +455,7 @@ func RunWorkContract(t *testing.T, harness WorkHarness) {
 		if err := harness.Store.ReleaseClaim(ctx, scope, reserved.ID, owner); err != nil {
 			t.Fatalf("release concurrent owner: %v", err)
 		}
-		if err := harness.Store.Fail(ctx, reserved.ID, knowl.Failure{Class: "fixture", OperationID: string(reserved.ID)}); err != nil {
+		if err := harness.Store.Fail(ctx, reserved.ID, knowl.Failure{Class: testFixtureValue, OperationID: string(reserved.ID)}); err != nil {
 			t.Fatalf("mark terminal: %v", err)
 		}
 		ready, err := harness.Store.ResumeReady(ctx, scope, 10)
@@ -404,14 +493,14 @@ func Fixture(scope knowl.ScopeRef, id string, createdAt time.Time) (knowl.Operat
 	schemaDigest := digest(schema)
 	key := knowl.OperationKey{
 		Scope:   scope,
-		Source:  knowl.SourceRef{Adapter: "fixture", ID: id},
+		Source:  knowl.SourceRef{Adapter: testFixtureValue, ID: id},
 		Version: knowl.SourceVersion{Version: "1", Digest: strings.Repeat("a", 64)},
 	}
 	return key, knowl.OperationMeta{
 		Key: key,
 		AcceptedSource: knowl.AcceptedSource{
 			Scope: scope, Source: key.Source, Version: key.Version,
-			MediaType: "text/markdown",
+			MediaType: testMarkdownMediaType,
 			SourceDocument: knowl.SourceDocument{
 				SourceID: "configured-wiki", DocumentID: knowl.DocumentID(id + ".md"), Revision: "1",
 				URI: "file:///srv/wiki/" + id + ".md",

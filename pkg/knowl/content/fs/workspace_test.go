@@ -27,6 +27,11 @@ const (
 	testWikiSourceAdapter  = "wiki-filesystem"
 	testSourceRevision     = "revision-1"
 	testPageOnePath        = "wiki/entities/one.md"
+	testGoodPagePath       = "wiki/entities/good.md"
+	testRejectedPagePath   = "wiki/entities/rejected.md"
+	testBadPagePath        = "wiki/entities/bad.md"
+	testParentCatalogPath  = "wiki/parent/index.md"
+	testUnsafeCatalogPath  = "wiki/unsafe/index.md"
 	testIndexPath          = "wiki/index.md"
 )
 
@@ -606,10 +611,14 @@ func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
 		Edits:        []knowl.FileEdit{{Path: "wiki/entities/recovered.md", Content: validWorkspacePage("entities/recovered", "Recovered", testWorkspaceSourceRef, "")}},
+		Diagnostics:  []knowl.MaintenanceDiagnostic{{Code: knowl.DiagnosticCitationUnknownSource, Path: testRejectedPagePath}},
 	}
 	staged, err := workspace.StagePlan(context.Background(), plan)
 	if err != nil {
 		t.Fatalf("stage plan: %v", err)
+	}
+	if !slices.Equal(staged.Diagnostics, plan.Diagnostics) {
+		t.Fatalf("staged diagnostics = %#v, want %#v", staged.Diagnostics, plan.Diagnostics)
 	}
 	logPath := filepath.Join(workspace.Root(), "wiki", "log.md")
 	originalLog, err := os.ReadFile(logPath)
@@ -634,6 +643,7 @@ func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing
 	journaling := recoveryJournal{
 		OperationID: plan.OperationID,
 		State:       recoveryPrepared,
+		Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...),
 		Entries: []recoveryEntry{
 			{Target: "wiki/entities/recovered.md", HadOld: false},
 			{Target: canonicalLogPath, Backup: logBackup, HadOld: true},
@@ -668,7 +678,7 @@ func TestWorkspaceRecoveryRollsBackPreparedGenerationAndCommitReplays(t *testing
 	if err != nil {
 		t.Fatalf("replay commit: %v", err)
 	}
-	if firstCommit.Generation != secondCommit.Generation || len(secondCommit.Files) != 2 {
+	if firstCommit.Generation != secondCommit.Generation || len(secondCommit.Files) != 2 || !slices.Equal(firstCommit.Diagnostics, plan.Diagnostics) || !slices.Equal(secondCommit.Diagnostics, plan.Diagnostics) {
 		t.Fatalf("replayed commits differ: %#v != %#v", firstCommit, secondCommit)
 	}
 }
@@ -687,6 +697,7 @@ func TestWorkspaceStagePlanRejectsInvalidProspectiveContentWithoutCanonicalMutat
 		{name: "id mismatch", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/two", "One", testWorkspaceSourceRef, "")}}},
 		{name: "unknown source ref", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", "fixture:missing@1", "")}}},
 		{name: "malformed link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[broken")}}},
+		{name: "escaping link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[../escape]]")}}},
 		{name: "missing link target", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/missing]]")}}},
 		{name: "broken index target", edits: []knowl.FileEdit{{Path: testIndexPath, Content: []byte(rootIndexContent + "\n* [Missing](entities/missing.md)\n")}}},
 	}
@@ -728,6 +739,186 @@ func TestWorkspaceStagePlanRejectsInvalidProspectiveContentWithoutCanonicalMutat
 			}
 			assertCanonicalState(t, workspace, before)
 		})
+	}
+}
+
+func TestWorkspaceStagePlanPreservesUnresolvedOriginalLinks(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	boundaryTarget := "entities/" + strings.Repeat("x", 2048-len("entities/"))
+	sourceContent := []byte("[[entities/z-missing]] [[entities/a-missing]] [[" + boundaryTarget + "]]\n")
+	accepted, err := workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
+		Scope: testScope, Source: knowl.SourceRef{Adapter: testFixtureAdapter, ID: "original-links"},
+		Version: knowl.SourceVersion{Version: "1", Digest: digestBytes(sourceContent)}, MediaType: testMarkdownMediaType, Content: sourceContent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceRef := sourceRefKey(accepted)
+	writeRootCatalogTargets(t, workspace, "entities/one.md")
+	schema, err := workspace.Schema(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "[[entities/z-missing]] [[entities/a-missing]] [[entities/a-missing]] [[" + boundaryTarget + "]]"
+	plan := knowl.ValidatedEditPlan{
+		OperationID: "original-links", Scope: testScope, SchemaDigest: schema.Digest,
+		RequiredSourceRef: sourceRef, SourceRefs: []string{sourceRef},
+		Edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", sourceRef, body)}},
+	}
+	want := []knowl.MaintenanceDiagnostic{
+		{Code: knowl.DiagnosticOriginalLinkUnresolved, Path: testPageOnePath, Target: "entities/a-missing"},
+		{Code: knowl.DiagnosticOriginalLinkUnresolved, Path: testPageOnePath, Target: boundaryTarget},
+		{Code: knowl.DiagnosticOriginalLinkUnresolved, Path: testPageOnePath, Target: "entities/z-missing"},
+	}
+	staged, err := workspace.StagePlan(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("stage original links: %v", err)
+	}
+	if !slices.Equal(staged.Diagnostics, want) {
+		t.Fatalf("staged diagnostics = %#v, want %#v", staged.Diagnostics, want)
+	}
+	replayed, err := workspace.StagePlan(context.Background(), plan)
+	if err != nil || !slices.Equal(replayed.Diagnostics, want) || replayed.Digest != staged.Digest {
+		t.Fatalf("replayed stage = %#v, error = %v", replayed, err)
+	}
+	commit, err := workspace.Commit(context.Background(), staged)
+	if err != nil || !slices.Equal(commit.Diagnostics, want) {
+		t.Fatalf("commit diagnostics = %#v, error = %v", commit.Diagnostics, err)
+	}
+}
+
+func TestWorkspaceStagePlanIsolatesInvalidDocument(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	acceptWorkspaceSource(t, workspace)
+	writeRootCatalogTargets(t, workspace, "entities/good.md", "entities/rejected.md")
+	goodBefore := validWorkspacePage("entities/good", "Good", testWorkspaceSourceRef, "old good")
+	rejectedBefore := validWorkspacePage("entities/rejected", "Rejected", testWorkspaceSourceRef, "preserved canonical content")
+	for target, content := range map[string][]byte{
+		testGoodPagePath: goodBefore, testRejectedPagePath: rejectedBefore,
+	} {
+		if err := os.WriteFile(filepath.Join(workspace.Root(), filepath.FromSlash(target)), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema, err := workspace.Schema(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := knowl.ValidatedEditPlan{
+		OperationID: "mixed-documents", Scope: testScope, SchemaDigest: schema.Digest,
+		RequiredSourceRef: testWorkspaceSourceRef, SourceRefs: []string{testWorkspaceSourceRef, "fixture:missing@1"},
+		Edits: []knowl.FileEdit{
+			{Path: testRejectedPagePath, ExpectedDigest: digestBytes(rejectedBefore), Content: validWorkspacePage("entities/rejected", "Rejected", "fixture:missing@1", "must not publish")},
+			{Path: testGoodPagePath, ExpectedDigest: digestBytes(goodBefore), Content: validWorkspacePage("entities/good", "Good", testWorkspaceSourceRef, "new good")},
+		},
+	}
+	staged, err := workspace.StagePlan(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("stage mixed plan: %v", err)
+	}
+	if want := []string{testGoodPagePath}; !slices.Equal(staged.Files, want) {
+		t.Fatalf("staged files = %v, want %v", staged.Files, want)
+	}
+	wantDiagnostics := []knowl.MaintenanceDiagnostic{{Code: knowl.DiagnosticCitationUnknownSource, Path: testRejectedPagePath}}
+	if !slices.Equal(staged.Diagnostics, wantDiagnostics) {
+		t.Fatalf("staged diagnostics = %#v, want %#v", staged.Diagnostics, wantDiagnostics)
+	}
+	replayed, err := workspace.StagePlan(context.Background(), plan)
+	if err != nil || replayed.Digest != staged.Digest || !slices.Equal(replayed.Files, staged.Files) || !slices.Equal(replayed.Diagnostics, staged.Diagnostics) {
+		t.Fatalf("replayed mixed stage = %#v, error = %v", replayed, err)
+	}
+	commit, err := workspace.Commit(context.Background(), staged)
+	if err != nil || !slices.Equal(commit.Diagnostics, wantDiagnostics) {
+		t.Fatalf("commit = %#v, error = %v", commit, err)
+	}
+	goodAfter, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "entities", "good.md"))
+	if err != nil || !strings.Contains(string(goodAfter), "new good") {
+		t.Fatalf("good content = %q, error = %v", goodAfter, err)
+	}
+	rejectedAfter, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "entities", "rejected.md"))
+	if err != nil || !slices.Equal(rejectedAfter, rejectedBefore) {
+		t.Fatalf("rejected content = %q, error = %v", rejectedAfter, err)
+	}
+}
+
+func TestWorkspaceStagePlanWithholdsRejectedCatalogClosure(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	acceptWorkspaceSource(t, workspace)
+	writeRootCatalogTargets(t, workspace, "entities/good.md")
+	goodBefore := validWorkspacePage("entities/good", "Good", testWorkspaceSourceRef, "old")
+	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "good.md"), goodBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rootBefore, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := workspace.Schema(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := knowl.ValidatedEditPlan{
+		OperationID: "catalog-closure", Scope: testScope, SchemaDigest: schema.Digest,
+		RequiredSourceRef: testWorkspaceSourceRef, SourceRefs: []string{testWorkspaceSourceRef, "fixture:missing@1"},
+		Edits: []knowl.FileEdit{
+			{Path: testBadPagePath, Content: validWorkspacePage("entities/bad", "Bad", "fixture:missing@1", "rejected")},
+			{Path: testGoodPagePath, ExpectedDigest: digestBytes(goodBefore), Content: validWorkspacePage("entities/good", "Good", testWorkspaceSourceRef, "updated")},
+			{Path: testIndexPath, ExpectedDigest: digestBytes(rootBefore), Content: []byte(rootIndexContent + "\n* [Good](entities/good.md)\n* [Safe](safe/index.md)\n* [Parent](parent/index.md)\n")},
+			{Path: testParentCatalogPath, Content: []byte("# Parent\n\n* [Unsafe](../unsafe/index.md)\n")},
+			{Path: "wiki/safe/index.md", Content: []byte("# Safe\n\n* [Good](../entities/good.md)\n")},
+			{Path: testUnsafeCatalogPath, Content: []byte("# Unsafe\n\n* [Bad](../entities/bad.md)\n")},
+		},
+	}
+	staged, err := workspace.StagePlan(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("stage catalog closure: %v", err)
+	}
+	wantFiles := []string{testGoodPagePath, "wiki/safe/index.md"}
+	if !slices.Equal(staged.Files, wantFiles) {
+		t.Fatalf("staged files = %v, want %v", staged.Files, wantFiles)
+	}
+	wantDiagnostics := []knowl.MaintenanceDiagnostic{
+		{Code: knowl.DiagnosticCitationUnknownSource, Path: testBadPagePath},
+		{Code: knowl.DiagnosticCatalogDependencyReject, Path: testIndexPath, Target: "parent/index.md"},
+		{Code: knowl.DiagnosticCatalogDependencyReject, Path: testParentCatalogPath, Target: "unsafe/index.md"},
+		{Code: knowl.DiagnosticCatalogDependencyReject, Path: testUnsafeCatalogPath, Target: "entities/bad.md"},
+	}
+	if !slices.Equal(staged.Diagnostics, wantDiagnostics) {
+		t.Fatalf("staged diagnostics = %#v, want %#v", staged.Diagnostics, wantDiagnostics)
+	}
+	commit, err := workspace.Commit(context.Background(), staged)
+	if err != nil || !slices.Equal(commit.Diagnostics, wantDiagnostics) {
+		t.Fatalf("commit catalog closure = %#v, error = %v", commit, err)
+	}
+	rootAfter, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "index.md"))
+	if err != nil || !slices.Equal(rootAfter, rootBefore) {
+		t.Fatalf("root catalog changed = %q, error = %v", rootAfter, err)
+	}
+	for _, withheld := range []string{testBadPagePath, testParentCatalogPath, testUnsafeCatalogPath} {
+		if _, err := os.Stat(filepath.Join(workspace.Root(), filepath.FromSlash(withheld))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("withheld path %q stat = %v", withheld, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace.Root(), "wiki", "safe", "index.md")); err != nil {
+		t.Fatalf("safe sibling missing: %v", err)
 	}
 }
 

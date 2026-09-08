@@ -314,10 +314,27 @@ A successful sync reports raw acceptance and maintenance reservation, not LLM
 completion. `source status` reports bounded maintenance counts and samples for
 queued, retrying, replayed, committed, and failed operations. Each sample
 correlates the source document/revision with its operation ID. It also reports
-`work_attempt`, `retry_attempt`, `manual_retry_count`, and, when applicable,
-`failure_class`, a stable safe `failure_reason`, and `next_retry_at`. Source
+the bounded `generation_prefix`, `work_attempt`, `retry_attempt`,
+`manual_retry_count`, and, when applicable, `failure_class`, a stable safe
+`failure_reason`, and `next_retry_at`. Source
 bodies, prompts, provider error text, credentials, and raw provider output are
 never included.
+
+The default per-document maintenance read ceiling is 262,144 characters, still
+bounded by the 4 MiB aggregate read limit. Changing that ceiling or another
+output-affecting maintenance rule changes the policy generation and makes an
+unchanged document eligible once under the new generation.
+
+Committed operations may include bounded `diagnostics` with only a stable
+`code`, canonical `path`, and optional normalized `target`. An unresolved wiki
+link is preserved only when the same normalized target exists in the accepted
+immutable source; it is reported as `link.original_unresolved`. A generated
+link without that source evidence remains invalid. If one generated document
+has invalid provenance, Knowl withholds that document and any candidate catalog
+closure that depends on it, records document-specific diagnostics, and may
+commit and index the remaining safe subset. If no safe edit remains, or a
+plan-wide/schema/path/bound/graph invariant fails, the operation fails without
+publishing canonical content.
 
 Transient provider build, transport, and execution failures are retried by the
 operation scheduler. Each automatic retry cycle is limited to three total work
@@ -337,8 +354,21 @@ remains terminal until an operator explicitly recovers the operation.
 ### Recovering failed source maintenance
 
 Deploy the corrected binary and let its additive store migration complete
-before recovering historical failures. Existing failed operations stay failed;
-Knowl does not automatically requeue them. Start with a class-filtered preview:
+before recovering historical failures. On each complete synchronization, Knowl
+compares the current bounded maintenance-policy generation with the generation
+stored for every unchanged document. An older committed operation or an older
+terminal `source` failure receives one new current-generation operation.
+`staging`, `provider`, unknown, and unrecognized failures remain unchanged until
+an operator explicitly retries their class. Repeating a sync under the same
+generation converges without creating work.
+
+Reconciliation logs use the bounded fields `maintenance_trigger`
+(`revision`, `policy`, or `unchanged`), `maintenance_outcome` (`queued`,
+`replayed`, `converged`, or `manual_gate`), and a 16-character
+`maintenance_generation`. They never include the policy payload, source body,
+prompt, provider output, or credentials.
+
+Start manual recovery with a class-filtered preview:
 
 ```bash
 ./knowl source status engineering
@@ -359,9 +389,11 @@ If the preview is expected, requeue exactly that failure class and observe it:
 ```
 
 Repeat `--failure-class` to select more than one class only after each class's
-root cause is fixed. The transition preserves operation identity and total work
-attempts, starts a fresh bounded retry cycle, increments `manual_retry_count`,
-and wakes the existing durable scheduler without starting source synchronization.
+root cause is fixed. A current-generation failure retries in place and preserves
+its total work attempts. An older-generation failure creates one distinct
+current-generation operation and leaves the historical failure unchanged. Both
+paths start a fresh bounded retry cycle, increment `manual_retry_count`, and
+wake the existing durable scheduler without starting source synchronization.
 The request fails atomically, with a non-zero exit, if any selected candidate is
 committed, stale, cross-scope, not source maintenance, or actively leased; no
 candidate is requeued in that case. The JSON result still reports the bounded
@@ -372,6 +404,10 @@ additional change.
 Recover `provider` failures first. Re-run a preview and inspect status before
 separately deciding whether corrected `source` or `staging` failures should be
 requeued. Never use a broad multi-class retry merely to clear a red status.
+
+For rollback, stop writers before reverting application binaries. The additive
+generation columns and historical operations are safe to retain; do not remove
+them while a newer writer may still create generation-bearing operations.
 
 The maintainer builds one root-reachable semantic OKF wiki. Related evidence
 from different sources may support the same page; retrieve returns all resolved

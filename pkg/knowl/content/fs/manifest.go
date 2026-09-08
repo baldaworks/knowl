@@ -50,18 +50,19 @@ type stageEntry struct {
 }
 
 type stageManifest struct {
-	OperationID       string       `yaml:"operation_id"`
-	Writer            string       `yaml:"writer,omitempty"`
-	SourceID          string       `yaml:"source_id,omitempty"`
-	Scope             string       `yaml:"scope,omitempty"`
-	SchemaDigest      string       `yaml:"schema_digest"`
-	SnapshotDigest    string       `yaml:"snapshot_digest,omitempty"`
-	RequiredSourceRef string       `yaml:"required_source_ref,omitempty"`
-	SourceRefs        []string     `yaml:"source_refs,omitempty"`
-	Entries           []stageEntry `yaml:"entries"`
-	LogExpectedDigest string       `yaml:"log_expected_digest,omitempty"`
-	LogDigest         string       `yaml:"log_digest,omitempty"`
-	LogDate           string       `yaml:"log_date,omitempty"`
+	OperationID       string                        `yaml:"operation_id"`
+	Writer            string                        `yaml:"writer,omitempty"`
+	SourceID          string                        `yaml:"source_id,omitempty"`
+	Scope             string                        `yaml:"scope,omitempty"`
+	SchemaDigest      string                        `yaml:"schema_digest"`
+	SnapshotDigest    string                        `yaml:"snapshot_digest,omitempty"`
+	RequiredSourceRef string                        `yaml:"required_source_ref,omitempty"`
+	SourceRefs        []string                      `yaml:"source_refs,omitempty"`
+	Diagnostics       []knowl.MaintenanceDiagnostic `yaml:"diagnostics,omitempty"`
+	Entries           []stageEntry                  `yaml:"entries"`
+	LogExpectedDigest string                        `yaml:"log_expected_digest,omitempty"`
+	LogDigest         string                        `yaml:"log_digest,omitempty"`
+	LogDate           string                        `yaml:"log_date,omitempty"`
 }
 
 const (
@@ -95,14 +96,15 @@ type recoveryEntry struct {
 }
 
 type recoveryJournal struct {
-	OperationID string          `yaml:"operation_id"`
-	Writer      string          `yaml:"writer,omitempty"`
-	SourceID    string          `yaml:"source_id,omitempty"`
-	Scope       string          `yaml:"scope,omitempty"`
-	State       string          `yaml:"state"`
-	Entries     []recoveryEntry `yaml:"entries"`
-	Generation  string          `yaml:"generation,omitempty"`
-	Files       []string        `yaml:"files,omitempty"`
+	OperationID string                        `yaml:"operation_id"`
+	Writer      string                        `yaml:"writer,omitempty"`
+	SourceID    string                        `yaml:"source_id,omitempty"`
+	Scope       string                        `yaml:"scope,omitempty"`
+	State       string                        `yaml:"state"`
+	Entries     []recoveryEntry               `yaml:"entries"`
+	Generation  string                        `yaml:"generation,omitempty"`
+	Files       []string                      `yaml:"files,omitempty"`
+	Diagnostics []knowl.MaintenanceDiagnostic `yaml:"diagnostics,omitempty"`
 }
 
 type commitReceipt struct {

@@ -87,7 +87,7 @@ func TestSourceDomainJSONRoundTrip(t *testing.T) {
 			Status: knowl.SyncStatusFailed, Counts: knowl.SyncCounts{Failed: 1}, CreatedAt: createdAt,
 			Maintenance: knowl.SourceMaintenanceStatus{
 				Counts:    knowl.MaintenanceCounts{Queued: 1, Replayed: 2, Committed: 3, Failed: 4},
-				Samples:   []knowl.MaintenanceSample{{DocumentID: ref.ExternalID, Revision: ref.Revision, OperationID: "operation-1", Status: knowl.StatusFailed, Replayed: true, FailureClass: "provider"}},
+				Samples:   []knowl.MaintenanceSample{{DocumentID: ref.ExternalID, Revision: ref.Revision, OperationID: "operation-1", GenerationPrefix: "0123456789abcdef", Status: knowl.StatusFailed, Replayed: true, FailureClass: "provider"}},
 				Truncated: true,
 			},
 			LastAttemptAt: completedAt, LastSuccessfulAt: updatedAt, UpdatedAt: completedAt,

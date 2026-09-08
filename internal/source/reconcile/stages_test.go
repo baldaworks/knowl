@@ -164,6 +164,29 @@ func newStageHarness(t *testing.T, mutate func(*Options)) *stageHarness {
 	}
 }
 
+func TestMaintenanceReconciliationTrigger(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name               string
+		previousRevision   string
+		currentRevision    string
+		previousGeneration string
+		currentGeneration  string
+		want               string
+	}{
+		{name: "new revision", previousRevision: "1", currentRevision: "2", previousGeneration: "a", currentGeneration: "a", want: maintenanceTriggerRevision},
+		{name: "policy change", previousRevision: "2", currentRevision: "2", previousGeneration: "a", currentGeneration: "b", want: maintenanceTriggerPolicy},
+		{name: maintenanceTriggerUnchanged, previousRevision: "2", currentRevision: "2", previousGeneration: "b", currentGeneration: "b", want: maintenanceTriggerUnchanged},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := maintenanceReconciliationTrigger(test.previousRevision, test.currentRevision, test.previousGeneration, test.currentGeneration); got != test.want {
+				t.Fatalf("maintenanceReconciliationTrigger() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 type recordingMaintenanceQueue struct {
 	requests []app.AcceptedMaintenanceRequest
 	seen     map[knowl.OperationID]struct{}
@@ -175,14 +198,23 @@ func newRecordingMaintenanceQueue() *recordingMaintenanceQueue {
 }
 
 func (queue *recordingMaintenanceQueue) ReserveAccepted(_ context.Context, request app.AcceptedMaintenanceRequest) (app.MaintenanceReservation, error) {
+	id := knowl.OperationID(app.SourceRefKey(request.Source))
+	if request.PreviousMaintenanceRevision == request.Source.Version.Version && request.PreviousOperationID == id {
+		return app.MaintenanceReservation{
+			OperationID: id, Generation: request.PreviousGeneration, Outcome: app.MaintenanceConverged,
+		}, nil
+	}
 	queue.requests = append(queue.requests, request)
 	if queue.err != nil {
 		return app.MaintenanceReservation{}, queue.err
 	}
-	id := knowl.OperationID(app.SourceRefKey(request.Source))
 	_, replayed := queue.seen[id]
 	queue.seen[id] = struct{}{}
-	return app.MaintenanceReservation{OperationID: id, Replayed: replayed}, nil
+	outcome := app.MaintenanceQueued
+	if replayed {
+		outcome = app.MaintenanceReplayed
+	}
+	return app.MaintenanceReservation{OperationID: id, Generation: strings.Repeat("f", 64), Outcome: outcome, Replayed: replayed}, nil
 }
 
 func (harness *stageHarness) source(flavor string) knowl.Source {

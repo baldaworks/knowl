@@ -202,6 +202,7 @@ type DocumentState struct {
 	AcceptedSource         AcceptedSource `json:"accepted_source,omitempty"`
 	MaintenanceRevision    string         `json:"maintenance_revision,omitempty"`
 	MaintenanceOperationID OperationID    `json:"maintenance_operation_id,omitempty"`
+	MaintenanceGeneration  string         `json:"maintenance_generation,omitempty"`
 	MirrorPath             string         `json:"mirror_path,omitempty"`
 	MirrorDigest           string         `json:"mirror_digest,omitempty"`
 	LastSeenRunID          SyncRunID      `json:"last_seen_run_id"`
@@ -249,6 +250,7 @@ type MaintenanceSample struct {
 	DocumentID       DocumentID      `json:"document_id"`
 	Revision         string          `json:"revision"`
 	OperationID      OperationID     `json:"operation_id"`
+	GenerationPrefix string          `json:"generation_prefix,omitempty"`
 	Status           OperationStatus `json:"status"`
 	Replayed         bool            `json:"replayed"`
 	WorkAttempt      int             `json:"work_attempt"`

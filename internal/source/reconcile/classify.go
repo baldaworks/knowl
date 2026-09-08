@@ -253,6 +253,7 @@ func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.
 	if previous != nil {
 		state.MaintenanceRevision = previous.MaintenanceRevision
 		state.MaintenanceOperationID = previous.MaintenanceOperationID
+		state.MaintenanceGeneration = previous.MaintenanceGeneration
 		state.CreatedAt = previous.CreatedAt
 	}
 	textual, err := textualMediaType(accepted.MediaType)
@@ -260,9 +261,12 @@ func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.
 		return app.PreparedDocumentState{}, false, failStage(classRaw, err)
 	}
 	reserved := false
-	if textual && (state.MaintenanceRevision != ref.Revision || state.MaintenanceOperationID == "") {
+	if textual {
 		reservation, reserveErr := service.maintenance.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{
 			Source: accepted, SourceDocument: document, ContentType: accepted.MediaType,
+			PreviousMaintenanceRevision: state.MaintenanceRevision,
+			PreviousOperationID:         state.MaintenanceOperationID,
+			PreviousGeneration:          state.MaintenanceGeneration,
 		})
 		if reserveErr != nil {
 			log.Warn().Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
@@ -270,19 +274,55 @@ func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.
 				Msg("knowl maintenance reservation failed")
 			return app.PreparedDocumentState{}, false, failStage(classMaintenance, reserveErr)
 		}
-		state.MaintenanceRevision = ref.Revision
-		state.MaintenanceOperationID = reservation.OperationID
-		outcome := "queued"
-		if reservation.Replayed {
-			outcome = "replayed"
+		outcome := reservation.Outcome
+		if outcome == "" {
+			outcome = app.MaintenanceQueued
+			if reservation.Replayed {
+				outcome = app.MaintenanceReplayed
+			}
+		}
+		policyGeneration := reservation.PolicyGeneration
+		if policyGeneration == "" {
+			policyGeneration = reservation.Generation
+		}
+		generationPrefix, prefixErr := app.MaintenanceGenerationPrefix(policyGeneration)
+		if prefixErr != nil {
+			return app.PreparedDocumentState{}, false, failStage(classMaintenance, app.ErrSourceInvalid)
+		}
+		trigger := maintenanceReconciliationTrigger(state.MaintenanceRevision, ref.Revision, state.MaintenanceGeneration, policyGeneration)
+		switch outcome {
+		case app.MaintenanceQueued, app.MaintenanceReplayed:
+			reserved = state.MaintenanceRevision != ref.Revision || state.MaintenanceOperationID != reservation.OperationID || state.MaintenanceGeneration != reservation.Generation
+			state.MaintenanceRevision = ref.Revision
+			state.MaintenanceOperationID = reservation.OperationID
+			state.MaintenanceGeneration = reservation.Generation
+		case app.MaintenanceConverged, app.MaintenanceManualGate:
+		default:
+			return app.PreparedDocumentState{}, false, failStage(classMaintenance, app.ErrSourceInvalid)
 		}
 		log.Info().Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
 			Str("revision", document.Revision).Str("operation_id", string(reservation.OperationID)).
-			Str("maintenance_outcome", outcome).Msg("knowl maintenance reserved")
-		reserved = true
+			Str("maintenance_trigger", trigger).Str("maintenance_outcome", string(outcome)).
+			Str("maintenance_generation", generationPrefix).Msg("knowl maintenance reconciled")
 	}
 	return app.PreparedDocumentState{Action: app.SyncDocumentActive, State: state}, reserved, nil
 }
+
+func maintenanceReconciliationTrigger(previousRevision, currentRevision, previousGeneration, currentGeneration string) string {
+	if previousRevision != currentRevision {
+		return maintenanceTriggerRevision
+	}
+	if previousGeneration != currentGeneration {
+		return maintenanceTriggerPolicy
+	}
+	return maintenanceTriggerUnchanged
+}
+
+const (
+	maintenanceTriggerRevision  = "revision"
+	maintenanceTriggerPolicy    = "policy"
+	maintenanceTriggerUnchanged = "unchanged"
+)
 
 func textualMediaType(value string) (bool, error) {
 	mediaType, _, err := mime.ParseMediaType(value)

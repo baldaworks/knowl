@@ -249,7 +249,7 @@ func (workspace *Workspace) validateProspectiveSourcePlanLocked(plan knowl.Sourc
 			return contentInvalidError(mutation.Path, string(okf.RulePathInvalid))
 		}
 		content := string(mutation.Content)
-		if err := validateOrdinaryPageEdit(mutation.Path, pageID, content, rawRefs, pageTargets); err != nil {
+		if _, err := validateOrdinaryPageEdit(mutation.Path, pageID, content, rawRefs, pageTargets, nil); err != nil {
 			return err
 		}
 		metadata, err := knowlwiki.ParseFrontmatter(content)

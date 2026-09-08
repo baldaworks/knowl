@@ -85,7 +85,10 @@ type OperationReservation struct {
 // ExecutionDescriptorFromMeta validates reservation inputs and builds the
 // bounded descriptor that operational stores persist atomically.
 func ExecutionDescriptorFromMeta(id knowl.OperationID, key knowl.OperationKey, meta knowl.OperationMeta) (knowl.ExecutionDescriptor, error) {
-	descriptor := knowl.ExecutionDescriptor{OperationID: id, Kind: knowl.WorkSourceMaintenance, Source: meta.AcceptedSource, Schema: meta.Schema}
+	descriptor := knowl.ExecutionDescriptor{
+		OperationID: id, Kind: knowl.WorkSourceMaintenance, Source: meta.AcceptedSource, Schema: meta.Schema,
+		MaintenanceGeneration: meta.MaintenanceGeneration,
+	}
 	if err := ValidateExecutionDescriptor(key, descriptor); err != nil {
 		return knowl.ExecutionDescriptor{}, err
 	}
@@ -95,6 +98,9 @@ func ExecutionDescriptorFromMeta(id knowl.OperationID, key knowl.OperationKey, m
 	if meta.SchemaDigest != "" && meta.SchemaDigest != descriptor.Schema.Digest {
 		return knowl.ExecutionDescriptor{}, fmt.Errorf("operation metadata schema digest differs: %w", ErrExecutionDescriptorUnavailable)
 	}
+	if meta.MaintenanceGeneration != key.MaintenanceGeneration {
+		return knowl.ExecutionDescriptor{}, fmt.Errorf("operation metadata maintenance generation differs: %w", ErrExecutionDescriptorUnavailable)
+	}
 	return descriptor, nil
 }
 
@@ -102,6 +108,10 @@ func ExecutionDescriptorFromMeta(id knowl.OperationID, key knowl.OperationKey, m
 // schema content without exposing descriptor data in errors.
 func ValidateExecutionDescriptor(key knowl.OperationKey, descriptor knowl.ExecutionDescriptor) error {
 	if descriptor.Kind != "" && descriptor.Kind != knowl.WorkSourceMaintenance || descriptor.Hierarchy != nil {
+		return ErrExecutionDescriptorUnavailable
+	}
+	wantID, err := SourceOperationID(key)
+	if err != nil || descriptor.OperationID != wantID {
 		return ErrExecutionDescriptorUnavailable
 	}
 	source := descriptor.Source
@@ -114,7 +124,8 @@ func ValidateExecutionDescriptor(key knowl.OperationKey, descriptor knowl.Execut
 		source.Scope != key.Scope || source.Source != key.Source || source.Version != key.Version ||
 		strings.TrimSpace(source.MediaType) == "" || !validManifestRef(source.ManifestRef) ||
 		schema.Scope != key.Scope || strings.TrimSpace(schema.Digest) == "" ||
-		len(schema.Content) == 0 || len(schema.Content) > maxExecutionSchemaBytes {
+		len(schema.Content) == 0 || len(schema.Content) > maxExecutionSchemaBytes ||
+		descriptor.MaintenanceGeneration != key.MaintenanceGeneration || !validOptionalGeneration(key.MaintenanceGeneration) {
 		return ErrExecutionDescriptorUnavailable
 	}
 	if source.SourceDocument != (knowl.SourceDocument{}) &&
@@ -126,6 +137,22 @@ func ValidateExecutionDescriptor(key knowl.OperationKey, descriptor knowl.Execut
 		return ErrExecutionDescriptorUnavailable
 	}
 	return nil
+}
+
+// SourceOperationID returns the historical source ID for a legacy empty
+// generation and a generation-discriminated ID for current maintenance work.
+func SourceOperationID(key knowl.OperationKey) (knowl.OperationID, error) {
+	if strings.TrimSpace(string(key.Scope)) == "" || strings.TrimSpace(key.Source.Adapter) == "" ||
+		strings.TrimSpace(key.Source.ID) == "" || strings.TrimSpace(key.Version.Version) == "" ||
+		strings.TrimSpace(key.Version.Digest) == "" || !validOptionalGeneration(key.MaintenanceGeneration) {
+		return "", ErrExecutionDescriptorUnavailable
+	}
+	id := fmt.Sprintf("%s:%s:%s@%s#%s", key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version,
+		key.Version.Digest[:min(len(key.Version.Digest), 16)])
+	if key.MaintenanceGeneration != "" {
+		id += "~" + key.MaintenanceGeneration[:16]
+	}
+	return knowl.OperationID(id), nil
 }
 
 // OperationIDForIdentity returns the deterministic ID used by non-legacy
@@ -148,7 +175,8 @@ func ValidateOperationDescriptor(identity knowl.OperationIdentity, descriptor kn
 		return err
 	}
 	wantID, err := OperationIDForIdentity(identity)
-	if err != nil || descriptor.OperationID != wantID || descriptor.Kind != identity.Kind || !validExecutionSchema(identity.Scope, descriptor.Schema) {
+	if err != nil || descriptor.OperationID != wantID || descriptor.Kind != identity.Kind ||
+		descriptor.MaintenanceGeneration != "" || !validExecutionSchema(identity.Scope, descriptor.Schema) {
 		return ErrExecutionDescriptorUnavailable
 	}
 	switch identity.Kind {
@@ -170,7 +198,7 @@ func ValidateOperationDescriptor(identity knowl.OperationIdentity, descriptor kn
 // storage when its original identity fields are no longer needed by callers.
 func ValidateGenericExecutionDescriptor(scope knowl.ScopeRef, descriptor knowl.ExecutionDescriptor) error {
 	if descriptor.Kind != knowl.WorkHierarchy || descriptor.Hierarchy == nil || descriptor.Source != (knowl.AcceptedSource{}) ||
-		strings.TrimSpace(string(descriptor.OperationID)) == "" || !validExecutionSchema(scope, descriptor.Schema) ||
+		descriptor.MaintenanceGeneration != "" || strings.TrimSpace(string(descriptor.OperationID)) == "" || !validExecutionSchema(scope, descriptor.Schema) ||
 		!validExecutionDigest(descriptor.Hierarchy.SnapshotDigest) || !validStoredText(descriptor.Hierarchy.PlannerVersion, maxPlannerVersionBytes, false) {
 		return ErrExecutionDescriptorUnavailable
 	}
@@ -202,12 +230,25 @@ func validExecutionSchema(scope knowl.ScopeRef, schema knowl.SchemaDocument) boo
 	return strings.EqualFold(schema.Digest, hex.EncodeToString(digest[:]))
 }
 
+// ValidateExecutionSchema verifies that a schema snapshot is safe to persist
+// as a durable execution input.
+func ValidateExecutionSchema(scope knowl.ScopeRef, schema knowl.SchemaDocument) error {
+	if !validExecutionSchema(scope, schema) {
+		return ErrExecutionDescriptorUnavailable
+	}
+	return nil
+}
+
 func validExecutionDigest(value string) bool {
 	if len(value) != sha256.Size*2 {
 		return false
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func validOptionalGeneration(value string) bool {
+	return value == "" || (value == strings.ToLower(value) && validExecutionDigest(value))
 }
 
 func validManifestRef(ref string) bool {

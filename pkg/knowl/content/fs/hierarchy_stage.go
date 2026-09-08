@@ -213,7 +213,7 @@ func (workspace *Workspace) stageHierarchyMutationsLocked(stageDir string, mutat
 func validHierarchyStageManifest(manifest stageManifest) bool {
 	limits := app.DefaultHierarchyLimits()
 	if manifestWriter(manifest) != stageWriterHierarchy || strings.TrimSpace(manifest.OperationID) == "" || strings.TrimSpace(manifest.Scope) == "" ||
-		manifest.SourceID != "" || manifest.RequiredSourceRef != "" || len(manifest.SourceRefs) != 0 ||
+		manifest.SourceID != "" || manifest.RequiredSourceRef != "" || len(manifest.SourceRefs) != 0 || len(manifest.Diagnostics) != 0 ||
 		!validSHA256(manifest.SchemaDigest) || !validSHA256(manifest.SnapshotDigest) ||
 		!validSHA256(manifest.LogExpectedDigest) || !validSHA256(manifest.LogDigest) || len(manifest.Entries) == 0 || len(manifest.Entries) > limits.MaxEdits {
 		return false

@@ -665,6 +665,10 @@ func TestPreparedSyncDigestIsCanonicalAndDeterministic(t *testing.T) {
 			in.Documents[0].State.MaintenanceOperationID = preparedDigestOperationID
 			return in
 		},
+		"maintenance generation": func(in app.PreparedSyncState) app.PreparedSyncState {
+			in.Documents[0].State.MaintenanceGeneration = strings.Repeat("f", 64)
+			return in
+		},
 		"deleted time": func(in app.PreparedSyncState) app.PreparedSyncState {
 			in.Documents[2].State.DeletedAt = time.Unix(91, 0).UTC()
 			return in
@@ -735,6 +739,10 @@ func TestPreparedSyncDigestRejectsInvalidPayloads(t *testing.T) {
 		{"maintenance revision mismatch", func(in app.PreparedSyncState) app.PreparedSyncState {
 			in.Documents[0].State.MaintenanceRevision = "other-revision"
 			in.Documents[0].State.MaintenanceOperationID = preparedDigestOperationID
+			return in
+		}},
+		{"invalid maintenance generation", func(in app.PreparedSyncState) app.PreparedSyncState {
+			in.Documents[0].State.MaintenanceGeneration = "not-a-generation"
 			return in
 		}},
 		{"wrong last seen run", func(in app.PreparedSyncState) app.PreparedSyncState {

@@ -87,31 +87,48 @@ type FileEdit struct {
 	Content        []byte `json:"content"`
 }
 
+// MaintenanceDiagnostic is bounded redacted metadata for a preserved warning
+// or a document-local rejection.
+type MaintenanceDiagnostic struct {
+	Code   string `json:"code" yaml:"code"`
+	Path   string `json:"path" yaml:"path"`
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+}
+
+const (
+	DiagnosticCitationUnknownSource   = "citation.unknown_source"
+	DiagnosticOriginalLinkUnresolved  = "link.original_unresolved"
+	DiagnosticCatalogDependencyReject = "catalog.dependency_rejected"
+)
+
 // ValidatedEditPlan is an application-validated model plan ready to stage.
 type ValidatedEditPlan struct {
-	OperationID       string     `json:"operation_id"`
-	Scope             ScopeRef   `json:"scope"`
-	SchemaDigest      string     `json:"schema_digest"`
-	RequiredSourceRef string     `json:"required_source_ref,omitempty"`
-	SourceRefs        []string   `json:"source_refs"`
-	Edits             []FileEdit `json:"edits"`
+	OperationID       string                  `json:"operation_id"`
+	Scope             ScopeRef                `json:"scope"`
+	SchemaDigest      string                  `json:"schema_digest"`
+	RequiredSourceRef string                  `json:"required_source_ref,omitempty"`
+	SourceRefs        []string                `json:"source_refs"`
+	Edits             []FileEdit              `json:"edits"`
+	Diagnostics       []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // StagedChange identifies a plan staged for review or apply.
 type StagedChange struct {
-	OperationID string    `json:"operation_id"`
-	Digest      string    `json:"digest"`
-	Files       []string  `json:"files"`
-	CreatedAt   time.Time `json:"created_at"`
+	OperationID string                  `json:"operation_id"`
+	Digest      string                  `json:"digest"`
+	Files       []string                `json:"files"`
+	CreatedAt   time.Time               `json:"created_at"`
+	Diagnostics []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // ContentCommit describes a canonical workspace commit.
 type ContentCommit struct {
-	OperationID string            `json:"operation_id"`
-	Generation  string            `json:"generation"`
-	Files       []string          `json:"files"`
-	Snapshot    WorkspaceSnapshot `json:"snapshot"`
-	CommittedAt time.Time         `json:"committed_at"`
+	OperationID string                  `json:"operation_id"`
+	Generation  string                  `json:"generation"`
+	Files       []string                `json:"files"`
+	Snapshot    WorkspaceSnapshot       `json:"snapshot"`
+	CommittedAt time.Time               `json:"committed_at"`
+	Diagnostics []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // RecoveryResult describes recovery of one interrupted content operation.
@@ -143,29 +160,32 @@ type OperationIdentity struct {
 
 // OperationKey is the idempotency identity for an immutable source revision.
 type OperationKey struct {
-	Scope   ScopeRef      `json:"scope"`
-	Source  SourceRef     `json:"source"`
-	Version SourceVersion `json:"version"`
+	Scope                 ScopeRef      `json:"scope"`
+	Source                SourceRef     `json:"source"`
+	Version               SourceVersion `json:"version"`
+	MaintenanceGeneration string        `json:"maintenance_generation,omitempty"`
 }
 
 // OperationMeta contains the bounded internal inputs persisted at reservation.
 type OperationMeta struct {
-	Key            OperationKey   `json:"key"`
-	AcceptedSource AcceptedSource `json:"accepted_source"`
-	Schema         SchemaDocument `json:"schema"`
-	SchemaDigest   string         `json:"schema_digest"`
-	CreatedAt      time.Time      `json:"created_at"`
+	Key                   OperationKey   `json:"key"`
+	AcceptedSource        AcceptedSource `json:"accepted_source"`
+	Schema                SchemaDocument `json:"schema"`
+	SchemaDigest          string         `json:"schema_digest"`
+	MaintenanceGeneration string         `json:"maintenance_generation,omitempty"`
+	CreatedAt             time.Time      `json:"created_at"`
 }
 
 // ExecutionDescriptor contains the bounded durable inputs needed to resume an
 // accepted operation. It is internal operational state, not a public operation
 // read model.
 type ExecutionDescriptor struct {
-	OperationID OperationID                   `json:"operation_id"`
-	Kind        WorkKind                      `json:"kind,omitempty"`
-	Source      AcceptedSource                `json:"source,omitzero"`
-	Hierarchy   *HierarchyExecutionDescriptor `json:"hierarchy,omitempty"`
-	Schema      SchemaDocument                `json:"schema"`
+	OperationID           OperationID                   `json:"operation_id"`
+	Kind                  WorkKind                      `json:"kind,omitempty"`
+	Source                AcceptedSource                `json:"source,omitzero"`
+	Hierarchy             *HierarchyExecutionDescriptor `json:"hierarchy,omitempty"`
+	Schema                SchemaDocument                `json:"schema"`
+	MaintenanceGeneration string                        `json:"maintenance_generation,omitempty"`
 }
 
 // HierarchyExecutionDescriptor is the bounded versioned payload needed to
@@ -203,25 +223,27 @@ const (
 
 // Operation is a redacted operation read model.
 type Operation struct {
-	ID               OperationID     `json:"id"`
-	Kind             WorkKind        `json:"kind,omitempty"`
-	Key              OperationKey    `json:"key,omitzero"`
-	Status           OperationStatus `json:"status"`
-	Attempt          int             `json:"attempt"`
-	WorkAttempt      int             `json:"work_attempt"`
-	RetryAttempt     int             `json:"retry_attempt"`
-	ManualRetryCount int             `json:"manual_retry_count"`
-	ReadyAt          time.Time       `json:"ready_at,omitempty"`
-	Failure          *Failure        `json:"failure,omitempty"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	ID               OperationID             `json:"id"`
+	Kind             WorkKind                `json:"kind,omitempty"`
+	Key              OperationKey            `json:"key,omitzero"`
+	Status           OperationStatus         `json:"status"`
+	Attempt          int                     `json:"attempt"`
+	WorkAttempt      int                     `json:"work_attempt"`
+	RetryAttempt     int                     `json:"retry_attempt"`
+	ManualRetryCount int                     `json:"manual_retry_count"`
+	ReadyAt          time.Time               `json:"ready_at,omitempty"`
+	Failure          *Failure                `json:"failure,omitempty"`
+	Diagnostics      []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
+	UpdatedAt        time.Time               `json:"updated_at"`
 }
 
 // PlanSummary is the durable redacted summary of a model plan.
 type PlanSummary struct {
-	OperationID string    `json:"operation_id"`
-	Digest      string    `json:"digest"`
-	FileCount   int       `json:"file_count"`
-	CreatedAt   time.Time `json:"created_at"`
+	OperationID string                  `json:"operation_id"`
+	Digest      string                  `json:"digest"`
+	FileCount   int                     `json:"file_count"`
+	CreatedAt   time.Time               `json:"created_at"`
+	Diagnostics []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // Lease prevents duplicate worker completion.

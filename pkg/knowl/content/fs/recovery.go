@@ -231,6 +231,13 @@ func validateRecoveryJournal(fileName string, journal recoveryJournal) (string, 
 		if strings.TrimSpace(journal.OperationID) == "" || journal.SourceID != "" {
 			return "", fmt.Errorf("invalid maintainer recovery identity: %w", ErrWorkspaceInvalid)
 		}
+		normalized, err := app.NormalizeMaintenanceDiagnostics(journal.Diagnostics)
+		if err != nil || !slices.Equal(normalized, journal.Diagnostics) {
+			return "", fmt.Errorf("invalid maintenance recovery diagnostics: %w", ErrWorkspaceInvalid)
+		}
+	}
+	if writer != stageWriterMaintainer && len(journal.Diagnostics) != 0 {
+		return "", fmt.Errorf("unexpected recovery diagnostics: %w", ErrWorkspaceInvalid)
 	}
 	if fileName != token(recoveryKey)+".yaml" {
 		return "", fmt.Errorf("recovery journal identity mismatch: %w", ErrWorkspaceInvalid)

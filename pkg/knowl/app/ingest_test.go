@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -165,7 +166,7 @@ func TestIngestReviewApplyReplayAndProject(t *testing.T) {
 	}
 }
 
-func TestSubmitReplayUsesDurableExecutionDescriptor(t *testing.T) {
+func TestSubmitPolicyChangeCreatesNewDurableExecutionDescriptor(t *testing.T) {
 	ctx := context.Background()
 	workspace, store, service, maintainer := newWorkflow(t, false, nil, func(schema knowl.SchemaDocument) knowl.ModelEditPlan {
 		return knowl.ModelEditPlan{
@@ -200,14 +201,14 @@ func TestSubmitReplayUsesDurableExecutionDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay submit: %v", err)
 	}
-	if replay.NeedsExecution() {
-		t.Fatal("replay unexpectedly reported newly created work")
+	if !replay.NeedsExecution() || replay.Operation.ID == first.Operation.ID {
+		t.Fatalf("policy-changed submission = %#v, want distinct new work", replay.Operation)
 	}
-	if _, err := service.Execute(ctx, replay); !errors.Is(err, contentfs.ErrPrecondition) {
-		t.Fatalf("execute replay error = %v, want stale durable schema precondition", err)
+	if _, err := service.Execute(ctx, replay); err != nil {
+		t.Fatalf("execute policy-changed submission: %v", err)
 	}
-	if got := maintainer.schemaDigest(); got != descriptor.Schema.Digest {
-		t.Fatalf("maintainer schema digest = %q, want durable %q", got, descriptor.Schema.Digest)
+	if got := maintainer.schemaDigest(); got == descriptor.Schema.Digest {
+		t.Fatalf("maintainer schema digest = %q, want current policy digest", got)
 	}
 }
 
@@ -286,19 +287,29 @@ func TestConcurrentReviewReplayConvergesToOneOperation(t *testing.T) {
 	ctx := context.Background()
 	_, store, service, maintainer := newWorkflow(t, false, nil)
 	envelope := sourceEnvelope([]byte("source text"))
-	results := make(chan error, 2)
+	type outcome struct {
+		result app.IngestResult
+		err    error
+	}
+	results := make(chan outcome, 2)
 	for range 2 {
 		go func() {
-			_, ingestErr := service.Ingest(ctx, envelope)
-			results <- ingestErr
+			result, ingestErr := service.Ingest(ctx, envelope)
+			results <- outcome{result: result, err: ingestErr}
 		}()
 	}
+	var operationID knowl.OperationID
 	for range 2 {
-		if err := <-results; err != nil {
-			t.Fatalf("concurrent ingest: %v", err)
+		outcome := <-results
+		if outcome.err != nil {
+			t.Fatalf("concurrent ingest: %v", outcome.err)
+		}
+		if operationID == "" {
+			operationID = outcome.result.Operation.ID
+		} else if outcome.result.Operation.ID != operationID {
+			t.Fatalf("concurrent operation IDs = %q and %q", operationID, outcome.result.Operation.ID)
 		}
 	}
-	operationID := knowl.OperationID("local:fixture:source-1@1#" + digest([]byte("source text"))[:16])
 	operation, err := store.Operation(ctx, "local", operationID)
 	if err != nil {
 		t.Fatalf("read converged operation: %v", err)
@@ -514,7 +525,7 @@ func TestRunToTerminalPreservesTransientClassifiedFailure(t *testing.T) {
 			ctx := context.Background()
 			workspace, store, _, _ := newWorkflow(t, false, nil)
 			service, err := app.NewIngestService(workspace, store, store, classifiedFailureMaintainer{
-				err: classifiedTestError{class: "provider", reason: "provider_run", retryable: test.retryable},
+				err: classifiedTestError{class: testProviderFailureClass, reason: "provider_run", retryable: test.retryable},
 			}, app.IngestOptions{AutoApply: true})
 			if err != nil {
 				t.Fatalf("new ingest service: %v", err)
@@ -538,7 +549,7 @@ func TestRunToTerminalPreservesTransientClassifiedFailure(t *testing.T) {
 				if operation.Failure != nil || result.Operation.Status == knowl.StatusFailed {
 					t.Fatalf("transient result = %#v, operation = %#v", result, operation)
 				}
-			} else if operation.Failure == nil || operation.Failure.Class != "provider" || operation.Failure.Reason != "provider_run" || result.Operation.Status != knowl.StatusFailed {
+			} else if operation.Failure == nil || operation.Failure.Class != testProviderFailureClass || operation.Failure.Reason != "provider_run" || result.Operation.Status != knowl.StatusFailed {
 				t.Fatalf("permanent result = %#v, operation = %#v", result, operation)
 			}
 		})
@@ -723,6 +734,60 @@ func TestAutoApplyIsExplicit(t *testing.T) {
 	}
 }
 
+func TestAutoApplyCommitsValidSubsetAndPersistsDiagnostics(t *testing.T) {
+	ctx := context.Background()
+	var goodBefore, rejectedBefore []byte
+	workspace, store, service, _ := newWorkflow(t, true, nil, func(schema knowl.SchemaDocument) knowl.ModelEditPlan {
+		return knowl.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{testSourceRef, "fixture:missing@1"},
+			Edits: []knowl.FileEdit{
+				{Path: testGoodPagePath, ExpectedDigest: digest(goodBefore), Content: []byte("---\nid: entities/good\ntitle: Good\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Good\n\nupdated\n")},
+				{Path: testRejectedPagePath, ExpectedDigest: digest(rejectedBefore), Content: []byte("---\nid: entities/rejected\ntitle: Rejected\ntype: entity\nsource_refs:\n  - fixture:missing@1\n---\n# Rejected\n\nmust not publish\n")},
+			},
+		}
+	})
+	goodBefore = []byte("---\nid: entities/good\ntitle: Good\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Good\n\nold\n")
+	rejectedBefore = []byte("---\nid: entities/rejected\ntitle: Rejected\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Rejected\n\npreserved\n")
+	for target, content := range map[string][]byte{
+		testGoodPagePath: goodBefore, testRejectedPagePath: rejectedBefore,
+	} {
+		if err := os.WriteFile(filepath.Join(workspace.Root(), filepath.FromSlash(target)), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	indexPath := filepath.Join(workspace.Root(), "wiki", "index.md")
+	indexContent, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexContent = append(indexContent, []byte("\n* [Good](entities/good.md)\n* [Rejected](entities/rejected.md)\n")...)
+	if err := os.WriteFile(indexPath, indexContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
+	if err != nil {
+		t.Fatalf("ingest mixed plan: %v", err)
+	}
+	wantDiagnostics := []knowl.MaintenanceDiagnostic{{Code: knowl.DiagnosticCitationUnknownSource, Path: testRejectedPagePath}}
+	if result.Operation.Status != knowl.StatusCommitted || result.Commit == nil || !slices.Equal(result.Operation.Diagnostics, wantDiagnostics) || !slices.Equal(result.Commit.Diagnostics, wantDiagnostics) {
+		t.Fatalf("mixed result = %#v", result)
+	}
+	durable, err := store.Operation(ctx, testSourceScope, result.Operation.ID)
+	if err != nil || !slices.Equal(durable.Diagnostics, wantDiagnostics) {
+		t.Fatalf("durable operation = %#v, error = %v", durable, err)
+	}
+	rejectedAfter, err := os.ReadFile(filepath.Join(workspace.Root(), "wiki", "entities", "rejected.md"))
+	if err != nil || !slices.Equal(rejectedAfter, rejectedBefore) {
+		t.Fatalf("rejected canonical content = %q, error = %v", rejectedAfter, err)
+	}
+	results, err := store.Search(ctx, testSourceScope, "updated", knowl.ReadLimits{Pages: 5, Characters: 1000}, nil)
+	if err != nil || len(results) != 1 || results[0].ID != "entities/good" {
+		t.Fatalf("projected valid subset = %#v, error = %v", results, err)
+	}
+}
+
 func TestSubmitReservesWithoutPlanningAndMarksReplay(t *testing.T) {
 	ctx := context.Background()
 	_, _, service, maintainer := newWorkflow(t, false, nil)
@@ -805,6 +870,120 @@ func TestReserveAcceptedUsesExistingRawAndDurableOperationIdentity(t *testing.T)
 	}
 	if len(inspection.RawSources) != 1 {
 		t.Fatalf("raw sources = %d, want exactly one immutable revision", len(inspection.RawSources))
+	}
+}
+
+func TestReserveAcceptedReconcilesMaintenanceGenerationSafely(t *testing.T) {
+	tests := []struct {
+		name        string
+		terminal    string
+		wantOutcome app.MaintenanceOutcome
+		wantNew     bool
+	}{
+		{name: string(knowl.StatusCommitted), terminal: string(knowl.StatusCommitted), wantOutcome: app.MaintenanceQueued, wantNew: true},
+		{name: "source failure", terminal: "source", wantOutcome: app.MaintenanceQueued, wantNew: true},
+		{name: "provider failure", terminal: testProviderFailureClass, wantOutcome: app.MaintenanceManualGate},
+		{name: "staging failure", terminal: "staging", wantOutcome: app.MaintenanceManualGate},
+		{name: "unknown failure", terminal: "unknown", wantOutcome: app.MaintenanceManualGate},
+		{name: "nonterminal", wantOutcome: app.MaintenanceManualGate},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			workspace, store, original, maintainer := newWorkflow(t, false, nil)
+			envelope := sourceEnvelope([]byte("generation reconciliation"))
+			accepted, err := workspace.AcceptSource(ctx, envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := knowl.SourceDocument{
+				SourceID: testConfiguredSourceID, DocumentID: "docs/generation.md", Revision: envelope.Version.Version,
+				URI: "file:///srv/wiki/docs/generation.md",
+			}
+			first, err := original.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{Source: accepted, SourceDocument: document, ContentType: accepted.MediaType})
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch test.terminal {
+			case string(knowl.StatusCommitted):
+				if err := store.SavePlan(ctx, first.OperationID, knowl.PlanSummary{Digest: strings.Repeat("d", 64)}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.MarkApplying(ctx, first.OperationID, knowl.Lease{Token: "generation-test", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.CommitOutcome(ctx, first.OperationID, knowl.ContentCommit{OperationID: string(first.OperationID), Generation: "commit-1"}); err != nil {
+					t.Fatal(err)
+				}
+			case "":
+			default:
+				if err := store.Fail(ctx, first.OperationID, knowl.Failure{Class: test.terminal, OperationID: string(first.OperationID)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			limits := app.DefaultReadLimits()
+			limits.Characters++
+			current, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{ReadLimits: limits})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := app.AcceptedMaintenanceRequest{
+				Source: accepted, SourceDocument: document, ContentType: accepted.MediaType,
+				PreviousMaintenanceRevision: accepted.Version.Version,
+				PreviousOperationID:         first.OperationID,
+				PreviousGeneration:          first.Generation,
+			}
+			decision, err := current.ReserveAccepted(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Outcome != test.wantOutcome {
+				t.Fatalf("decision = %#v, want outcome %q", decision, test.wantOutcome)
+			}
+			if test.wantNew {
+				if decision.OperationID == first.OperationID || decision.Generation == first.Generation {
+					t.Fatalf("new generation decision = %#v, previous %#v", decision, first)
+				}
+				replay, replayErr := current.ReserveAccepted(ctx, request)
+				if replayErr != nil || replay.OperationID != decision.OperationID || replay.Outcome != app.MaintenanceReplayed {
+					t.Fatalf("current generation replay = %#v, %v", replay, replayErr)
+				}
+			} else if decision.OperationID != first.OperationID || decision.Generation != first.Generation {
+				t.Fatalf("manual gate changed historical identity: %#v, previous %#v", decision, first)
+			}
+		})
+	}
+}
+
+func TestReserveAcceptedConvergesMatchingGeneration(t *testing.T) {
+	ctx := context.Background()
+	workspace, store, service, _ := newWorkflow(t, false, nil)
+	envelope := sourceEnvelope([]byte("matching generation"))
+	accepted, err := workspace.AcceptSource(ctx, envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := knowl.SourceDocument{SourceID: testConfiguredSourceID, DocumentID: "docs/converged.md", Revision: envelope.Version.Version, URI: "file:///srv/wiki/docs/converged.md"}
+	first, err := service.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{Source: accepted, SourceDocument: document, ContentType: accepted.MediaType})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SavePlan(ctx, first.OperationID, knowl.PlanSummary{Digest: strings.Repeat("d", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkApplying(ctx, first.OperationID, knowl.Lease{Token: "convergence-test", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitOutcome(ctx, first.OperationID, knowl.ContentCommit{OperationID: string(first.OperationID), Generation: "commit-1"}); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := service.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{
+		Source: accepted, SourceDocument: document, ContentType: accepted.MediaType,
+		PreviousMaintenanceRevision: accepted.Version.Version, PreviousOperationID: first.OperationID, PreviousGeneration: first.Generation,
+	})
+	if err != nil || decision.Outcome != app.MaintenanceConverged || decision.OperationID != first.OperationID {
+		t.Fatalf("matching generation decision = %#v, %v", decision, err)
 	}
 }
 
@@ -945,11 +1124,14 @@ func TestExecuteKeepsReadDeadlineOutOfMaintainerPlan(t *testing.T) {
 }
 
 const (
-	testSourceRef          = "fixture:source-1@1"
-	testSourceAdapter      = "fixture"
-	testPlainMediaType     = "text/plain"
-	testOperationsName     = "operations"
-	testConfiguredSourceID = "configured-wiki"
+	testSourceRef            = "fixture:source-1@1"
+	testSourceAdapter        = "fixture"
+	testPlainMediaType       = "text/plain"
+	testOperationsName       = "operations"
+	testConfiguredSourceID   = "configured-wiki"
+	testGoodPagePath         = "wiki/entities/good.md"
+	testRejectedPagePath     = "wiki/entities/rejected.md"
+	testProviderFailureClass = "provider"
 )
 
 var (

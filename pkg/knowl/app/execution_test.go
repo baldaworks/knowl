@@ -10,6 +10,11 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+const (
+	fixtureManifestRef       = "raw/source/version/manifest.yaml"
+	fixtureMarkdownMediaType = "text/markdown"
+)
+
 func TestExecutionDescriptorFromMeta(t *testing.T) {
 	t.Parallel()
 	schemaContent := []byte("# Schema\n")
@@ -23,18 +28,58 @@ func TestExecutionDescriptorFromMeta(t *testing.T) {
 		Key: key,
 		AcceptedSource: knowl.AcceptedSource{
 			Scope: key.Scope, Source: key.Source, Version: key.Version,
-			MediaType: "text/markdown", ManifestRef: "raw/source/version/manifest.yaml",
+			MediaType: fixtureMarkdownMediaType, ManifestRef: fixtureManifestRef,
 		},
 		Schema:       knowl.SchemaDocument{Scope: key.Scope, Digest: schemaDigest, Version: "1", Content: schemaContent},
 		SchemaDigest: schemaDigest,
 	}
+	id, err := SourceOperationID(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	descriptor, err := ExecutionDescriptorFromMeta(fixtureOperationID, key, meta)
+	descriptor, err := ExecutionDescriptorFromMeta(id, key, meta)
 	if err != nil {
 		t.Fatalf("ExecutionDescriptorFromMeta() error = %v", err)
 	}
-	if descriptor.OperationID != fixtureOperationID || descriptor.Source != meta.AcceptedSource || descriptor.Schema.Digest != schemaDigest {
+	if descriptor.OperationID != id || descriptor.Source != meta.AcceptedSource || descriptor.Schema.Digest != schemaDigest {
 		t.Fatalf("descriptor = %#v", descriptor)
+	}
+}
+
+func TestExecutionDescriptorCarriesAndValidatesMaintenanceGeneration(t *testing.T) {
+	t.Parallel()
+	schemaContent := []byte("# Schema\n")
+	schemaDigest := digestForTest(schemaContent)
+	generation := strings.Repeat("b", 64)
+	key := knowl.OperationKey{
+		Scope: fixtureScope, Source: knowl.SourceRef{Adapter: fixtureAdapter, ID: fixtureDecisionID},
+		Version:               knowl.SourceVersion{Version: "1", Digest: strings.Repeat("a", 64)},
+		MaintenanceGeneration: generation,
+	}
+	id, err := SourceOperationID(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := knowl.OperationMeta{
+		Key: key, MaintenanceGeneration: generation,
+		AcceptedSource: knowl.AcceptedSource{
+			Scope: key.Scope, Source: key.Source, Version: key.Version,
+			MediaType: fixtureMarkdownMediaType, ManifestRef: fixtureManifestRef,
+		},
+		Schema: knowl.SchemaDocument{Scope: key.Scope, Digest: schemaDigest, Content: schemaContent},
+	}
+	descriptor, err := ExecutionDescriptorFromMeta(id, key, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.MaintenanceGeneration != generation {
+		t.Fatalf("descriptor generation = %q", descriptor.MaintenanceGeneration)
+	}
+
+	meta.MaintenanceGeneration = strings.Repeat("c", 64)
+	if _, err := ExecutionDescriptorFromMeta(id, key, meta); !errors.Is(err, ErrExecutionDescriptorUnavailable) {
+		t.Fatalf("mismatched generation error = %v", err)
 	}
 }
 
@@ -47,13 +92,13 @@ func TestExecutionDescriptorValidationRejectsInvalidInputsWithoutDisclosure(t *t
 		Version: knowl.SourceVersion{Version: "1", Digest: strings.Repeat("a", 64)},
 	}
 	valid := knowl.ExecutionDescriptor{
-		OperationID: fixtureOperationID,
 		Source: knowl.AcceptedSource{
 			Scope: key.Scope, Source: key.Source, Version: key.Version,
-			MediaType: "text/markdown", ManifestRef: "raw/source/version/manifest.yaml",
+			MediaType: fixtureMarkdownMediaType, ManifestRef: fixtureManifestRef,
 		},
 		Schema: knowl.SchemaDocument{Scope: key.Scope, Digest: digestForTest(schemaContent), Content: schemaContent},
 	}
+	valid.OperationID, _ = SourceOperationID(key)
 
 	tests := []struct {
 		name string
@@ -66,6 +111,7 @@ func TestExecutionDescriptorValidationRejectsInvalidInputsWithoutDisclosure(t *t
 		{name: "schema digest mismatch", edit: func(value *knowl.ExecutionDescriptor) { value.Schema.Digest = strings.Repeat("b", 64) }},
 		{name: "empty schema", edit: func(value *knowl.ExecutionDescriptor) { value.Schema.Content = nil }},
 		{name: "oversized schema", edit: func(value *knowl.ExecutionDescriptor) { value.Schema.Content = make([]byte, maxExecutionSchemaBytes+1) }},
+		{name: "operation identity mismatch", edit: func(value *knowl.ExecutionDescriptor) { value.OperationID = fixtureOperationID }},
 	}
 
 	for _, test := range tests {
