@@ -86,6 +86,24 @@ func TestMaintenancePolicyGenerationChangesWithEffectivePolicy(t *testing.T) {
 	}
 }
 
+func TestMaintenancePolicyGenerationPreservesNoDeadlineSemantics(t *testing.T) {
+	t.Parallel()
+	policy := SourceMaintenancePolicy(strings.Repeat("a", 64), DefaultReadLimits(), DefaultPlanLimits())
+	policy.ReadLimits.Deadline = 0
+	want, err := MaintenancePolicyGeneration(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.ReadLimits.Deadline = -time.Second
+	got, err := MaintenancePolicyGeneration(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("equivalent no-deadline policies differ: %q != %q", got, want)
+	}
+}
+
 func TestMaintenancePolicyGenerationRejectsInvalidPolicy(t *testing.T) {
 	t.Parallel()
 	valid := SourceMaintenancePolicy(strings.Repeat("a", 64), DefaultReadLimits(), DefaultPlanLimits())

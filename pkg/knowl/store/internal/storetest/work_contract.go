@@ -182,6 +182,26 @@ func RunWorkContract(t *testing.T, harness WorkHarness) {
 		}
 	})
 
+	t.Run("legacy_empty_diagnostics_finalize_commit", func(t *testing.T) {
+		ctx := context.Background()
+		scope := childScope(harness.Scope, "legacy-empty-diagnostics")
+		key, meta := Fixture(scope, "legacy-empty-diagnostics", time.Unix(10, 0).UTC())
+		reserved, err := harness.Store.Reserve(ctx, key, meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := harness.Store.SavePlan(ctx, reserved.ID, knowl.PlanSummary{OperationID: string(reserved.ID), Digest: strings.Repeat("d", 64)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := harness.Store.MarkApplying(ctx, reserved.ID, knowl.Lease{Token: "legacy-empty-apply", ExpiresAt: time.Now().UTC().Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+		harness.CorruptDiagnostics(t, reserved.ID, "")
+		if err := harness.Store.CommitOutcome(ctx, reserved.ID, knowl.ContentCommit{OperationID: string(reserved.ID), Generation: "legacy-empty-generation"}); err != nil {
+			t.Fatalf("commit legacy empty diagnostics: %v", err)
+		}
+	})
+
 	t.Run("equal_readiness_tie_break_limit_and_non_mutation", func(t *testing.T) {
 		ctx := context.Background()
 		scope := childScope(harness.Scope, "ties")

@@ -226,7 +226,7 @@ func (store *Store) CommitOutcome(ctx context.Context, id knowl.OperationID, com
 		return fmt.Errorf("maintenance diagnostics are invalid: %w", ErrConflict)
 	}
 	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
-		if current.maintenanceDiagnostics != diagnostics {
+		if current.maintenanceDiagnostics != diagnostics && (current.maintenanceDiagnostics != "" || diagnostics != "[]") {
 			return fmt.Errorf("maintenance diagnostics differ: %w", ErrConflict)
 		}
 		if current.status == knowl.StatusCommitted {

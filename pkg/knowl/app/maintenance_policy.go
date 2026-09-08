@@ -104,9 +104,11 @@ func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayl
 	if planLimits == (PlanLimits{}) {
 		planLimits = DefaultPlanLimits()
 	}
+	if readLimits.Deadline <= 0 {
+		readLimits.Deadline = 0
+	}
 	if !validStoredText(contractVersion, maxPlannerVersionBytes, false) || !validExecutionDigest(schemaDigest) ||
 		readLimits.Pages <= 0 || readLimits.Bytes <= 0 || readLimits.Characters <= 0 || readLimits.Depth <= 0 ||
-		readLimits.Deadline <= 0 ||
 		planLimits.MaxFiles <= 0 || planLimits.MaxFileBytes <= 0 || planLimits.MaxSourceRefs <= 0 || planLimits.MaxRationaleSize <= 0 {
 		return maintenancePolicyPayload{}, fmt.Errorf("invalid maintenance policy: %w", ErrExecutionDescriptorUnavailable)
 	}
