@@ -214,10 +214,19 @@ func TestCacheManagerRebindReplacesFullCache(t *testing.T) {
 	}
 
 	cacheBytes := directoryFileBytes(t, filepath.Join(cacheRoot, string(source.ID)))
+	probeRoot := t.TempDir()
+	probeSource := source
+	probeSource.Config.Git = &knowl.GitSourceConfig{
+		Remote: remoteB, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
+	}
+	if _, err := git.NewCacheManager(probeRoot, nil).OpenOrClone(context.Background(), probeSource); err != nil {
+		t.Fatalf("measure remote B cache: %v", err)
+	}
+	cacheLimit := max(cacheBytes, directoryFileBytes(t, filepath.Join(probeRoot, string(source.ID))))
 	rebound := source
 	rebound.Config.Git = &knowl.GitSourceConfig{
 		Remote: remoteB, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch,
-		RebindAck: true, MaxCacheBytes: cacheBytes,
+		RebindAck: true, MaxCacheBytes: cacheLimit,
 	}
 	cachedB, err := manager.OpenOrClone(context.Background(), rebound)
 	if err != nil {
