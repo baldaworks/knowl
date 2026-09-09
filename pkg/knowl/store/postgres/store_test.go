@@ -117,6 +117,23 @@ func TestOperationRetryMigrationIsAdditive(t *testing.T) {
 	}
 }
 
+func TestMaintenanceGenerationMigrationReplacesOperationUniqueness(t *testing.T) {
+	content, err := migrationFiles.ReadFile("migrations/00013_maintenance_generation.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"knowl_operations ADD COLUMN maintenance_generation TEXT NOT NULL DEFAULT ''",
+		"UNIQUE(scope, source_adapter, source_id, source_version, maintenance_generation)",
+		"knowl_sync_candidates ADD COLUMN maintenance_generation TEXT NOT NULL DEFAULT ''",
+		"knowl_source_documents ADD COLUMN maintenance_generation TEXT NOT NULL DEFAULT ''",
+	} {
+		if !strings.Contains(string(content), required) {
+			t.Fatalf("maintenance generation migration missing %q", required)
+		}
+	}
+}
+
 func TestSourceMaintenanceMigrationIsAdditive(t *testing.T) {
 	content, err := migrationFiles.ReadFile("migrations/00006_source_maintenance.sql")
 	if err != nil {
@@ -230,11 +247,26 @@ func runStoreContract(t *testing.T, dsn string) {
 			}
 			return attempts
 		},
+		CorruptDiagnostics: func(t *testing.T, id knowl.OperationID, payload string) {
+			t.Helper()
+			if _, err := store.db.ExecContext(ctx, `UPDATE knowl_operations SET maintenance_diagnostics = $1 WHERE operation_id = $2`, payload, id); err != nil {
+				t.Fatalf("corrupt maintenance diagnostics: %v", err)
+			}
+		},
 		IsConflict: func(err error) bool { return errors.Is(err, ErrConflict) },
 		Scope:      knowl.ScopeRef(string(scope) + "_shared_contract"),
 	})
 	storetest.RunSourceRetryContract(t, storetest.SourceRetryHarness{
 		Store: store,
+		OpenPeer: func(t *testing.T) storetest.SourceRetryStore {
+			t.Helper()
+			peer, openErr := Open(ctx, dsn)
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			t.Cleanup(func() { _ = peer.Close() })
+			return peer
+		},
 		Seed: func(t *testing.T, fixtureScope knowl.ScopeRef, sourceID knowl.SourceID, fixtures []storetest.SourceRetryFixture) {
 			t.Helper()
 			now := time.Now().UTC()
@@ -242,6 +274,10 @@ func runStoreContract(t *testing.T, dsn string) {
 				t.Fatal(err)
 			}
 			for _, fixture := range fixtures {
+				schemaDigest := fixture.SchemaDigest
+				if schemaDigest == "" {
+					schemaDigest = testSchemaDigest
+				}
 				var workExpiry, applyExpiry any
 				leaseDelta := time.Hour
 				if fixture.LeasesExpired {
@@ -257,18 +293,23 @@ func runStoreContract(t *testing.T, dsn string) {
 					operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest,
 					status, plan_digest, failure_class, failure_reason, commit_generation, lease_token, lease_expires_at,
 					created_at, updated_at, work_attempt, work_lease_token, work_lease_expires_at, work_ready_at,
-					work_kind, retry_attempt, manual_retry_count
-				) VALUES ($1, $2, 'fixture', $1, '1', $3, $4, $5, 'planned-digest', $6, $7, 'commit-generation', $8, $9, $10, $10, $11, $12, $13, $10, $14, $15, $16)`,
-					fixture.OperationID, fixture.OperationScope, strings.Repeat("b", 64), testSchemaDigest,
+					work_kind, retry_attempt, manual_retry_count, maintenance_generation,
+					accepted_media_type, source_manifest_ref, schema_version, schema_snapshot
+				) VALUES ($1, $2, 'fixture', $3, $4, $5, $6, $7, 'planned-digest', $8, $9, 'commit-generation', $10, $11, $12, $12, $13, $14, $15, $12, $16, $17, $18, $19, $20, $21, $22, $23)`,
+					fixture.OperationID, fixture.OperationScope, fixture.OperationSourceID, fixture.Revision, fixture.SourceDigest, schemaDigest,
 					fixture.Status, fixture.FailureClass, fixture.FailureReason, fixture.ApplyToken, applyExpiry, now,
-					fixture.WorkAttempt, fixture.WorkToken, workExpiry, fixture.Kind, fixture.RetryAttempt, fixture.ManualRetryCount); err != nil {
+					fixture.WorkAttempt, fixture.WorkToken, workExpiry, fixture.Kind, fixture.RetryAttempt, fixture.ManualRetryCount,
+					fixture.MaintenanceGeneration, fixture.AcceptedMediaType, fixture.SourceManifestRef, fixture.SchemaVersion, fixture.SchemaSnapshot); err != nil {
 					t.Fatal(err)
+				}
+				if fixture.OperationOnly {
+					continue
 				}
 				if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_source_documents (
 					scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id,
-					last_seen_run_id, created_at, updated_at
-				) VALUES ($1, $2, $3, $4, '{}', $5, $6, 'retry-run', $7, $7)`,
-					fixtureScope, sourceID, fixture.DocumentID, fixture.Revision, fixture.MaintenanceRevision, fixture.OperationID, now); err != nil {
+					maintenance_generation, last_seen_run_id, created_at, updated_at
+				) VALUES ($1, $2, $3, $4, '{}', $5, $6, $7, 'retry-run', $8, $8)`,
+					fixtureScope, sourceID, fixture.DocumentID, fixture.Revision, fixture.MaintenanceRevision, fixture.OperationID, fixture.MaintenanceGeneration, now); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -281,6 +322,14 @@ func runStoreContract(t *testing.T, dsn string) {
 				t.Fatal(err)
 			}
 			return audit
+		},
+		MaintenanceStatus: func(t *testing.T, scope knowl.ScopeRef, sourceID knowl.SourceID) knowl.SourceMaintenanceStatus {
+			t.Helper()
+			status, statusErr := store.sourceMaintenanceStatus(ctx, scope, sourceID)
+			if statusErr != nil {
+				t.Fatal(statusErr)
+			}
+			return status
 		},
 		Scope: knowl.ScopeRef(string(scope) + "_retry_contract"),
 	})
@@ -538,7 +587,7 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	}
 	t.Cleanup(func() { _ = migrated.Close() })
 	committed, err := migrated.Operation(ctx, scope, committedID)
-	if err != nil || committed.Status != knowl.StatusCommitted || committed.Attempt != 2 {
+	if err != nil || committed.Status != knowl.StatusCommitted || committed.Attempt != 2 || len(committed.Diagnostics) != 0 {
 		t.Fatalf("migrated committed operation = %#v, err = %v", committed, err)
 	}
 	applying, err := migrated.Operation(ctx, scope, applyingID)
@@ -549,15 +598,15 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	if err != nil || failed.Status != knowl.StatusFailed || failed.Failure == nil || failed.Failure.Class != "provider" {
 		t.Fatalf("migrated failed operation = %#v, err = %v", failed, err)
 	}
-	var planDigest, generation, leaseToken string
+	var planDigest, generation, leaseToken, maintenanceDiagnostics string
 	var migratedLeaseExpiry, workReadyAt time.Time
-	if err := migrated.db.QueryRowContext(ctx, `SELECT plan_digest, commit_generation, lease_token, lease_expires_at, work_ready_at FROM knowl_operations WHERE operation_id = $1`, applyingID).Scan(
-		&planDigest, &generation, &leaseToken, &migratedLeaseExpiry, &workReadyAt,
+	if err := migrated.db.QueryRowContext(ctx, `SELECT plan_digest, commit_generation, lease_token, lease_expires_at, work_ready_at, maintenance_diagnostics FROM knowl_operations WHERE operation_id = $1`, applyingID).Scan(
+		&planDigest, &generation, &leaseToken, &migratedLeaseExpiry, &workReadyAt, &maintenanceDiagnostics,
 	); err != nil {
 		t.Fatalf("read preserved applying fields: %v", err)
 	}
-	if planDigest != "plan-applying" || generation != "" || leaseToken != "apply-owner" || !migratedLeaseExpiry.Equal(leaseExpiry) || !workReadyAt.Equal(createdAt) {
-		t.Fatalf("preserved applying fields = %q %q %q %s %s", planDigest, generation, leaseToken, migratedLeaseExpiry, workReadyAt)
+	if planDigest != "plan-applying" || generation != "" || leaseToken != "apply-owner" || !migratedLeaseExpiry.Equal(leaseExpiry) || !workReadyAt.Equal(createdAt) || maintenanceDiagnostics != "" {
+		t.Fatalf("preserved applying fields = %q %q %q %s %s diagnostics %q", planDigest, generation, leaseToken, migratedLeaseExpiry, workReadyAt, maintenanceDiagnostics)
 	}
 	var committedGeneration string
 	if err := migrated.db.QueryRowContext(ctx, `SELECT commit_generation FROM knowl_operations WHERE operation_id = $1`, committedID).Scan(&committedGeneration); err != nil {

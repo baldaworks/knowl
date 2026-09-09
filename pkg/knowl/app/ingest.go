@@ -72,16 +72,33 @@ func (submission IngestSubmission) NeedsExecution() bool { return submission.new
 // AcceptedMaintenanceRequest identifies one configured textual source revision
 // that has already been accepted into immutable raw storage.
 type AcceptedMaintenanceRequest struct {
-	Source         knowl.AcceptedSource `json:"source"`
-	SourceDocument knowl.SourceDocument `json:"source_document"`
-	ContentType    string               `json:"content_type"`
+	Source                      knowl.AcceptedSource `json:"source"`
+	SourceDocument              knowl.SourceDocument `json:"source_document"`
+	ContentType                 string               `json:"content_type"`
+	PreviousMaintenanceRevision string               `json:"previous_maintenance_revision,omitempty"`
+	PreviousOperationID         knowl.OperationID    `json:"previous_operation_id,omitempty"`
+	PreviousGeneration          string               `json:"previous_generation,omitempty"`
 }
+
+// MaintenanceOutcome is the bounded decision made while reconciling accepted
+// source work against its current effective maintenance policy.
+type MaintenanceOutcome string
+
+const (
+	MaintenanceQueued     MaintenanceOutcome = "queued"
+	MaintenanceReplayed   MaintenanceOutcome = "replayed"
+	MaintenanceConverged  MaintenanceOutcome = "converged"
+	MaintenanceManualGate MaintenanceOutcome = "manual_gate"
+)
 
 // MaintenanceReservation is the bounded durable handoff returned to source
 // reconciliation. Replayed reports that the operation already existed.
 type MaintenanceReservation struct {
-	OperationID knowl.OperationID `json:"operation_id"`
-	Replayed    bool              `json:"replayed"`
+	OperationID      knowl.OperationID  `json:"operation_id"`
+	Generation       string             `json:"generation,omitempty"`
+	PolicyGeneration string             `json:"-"`
+	Outcome          MaintenanceOutcome `json:"outcome,omitempty"`
+	Replayed         bool               `json:"replayed"`
 }
 
 // SourceMaintenanceQueue reserves already accepted source revisions for the
@@ -181,14 +198,37 @@ func (service *IngestService) ReserveAccepted(ctx context.Context, request Accep
 	if err != nil {
 		return MaintenanceReservation{}, err
 	}
-	submission, err := service.submitAccepted(ctx, accepted)
+	readCtx, cancel := service.boundedContext(ctx)
+	defer cancel()
+	schema, err := service.content.Schema(readCtx, accepted.Scope)
+	if err != nil {
+		return MaintenanceReservation{}, fmt.Errorf("read schema: %w", err)
+	}
+	generation, err := service.maintenanceGeneration(schema)
+	if err != nil {
+		return MaintenanceReservation{}, err
+	}
+	if request.PreviousMaintenanceRevision == accepted.Version.Version && request.PreviousOperationID != "" {
+		decision, decided, decisionErr := service.decidePreviousMaintenance(readCtx, accepted.Scope, request, generation)
+		if decisionErr != nil {
+			return MaintenanceReservation{}, decisionErr
+		}
+		if decided {
+			return decision, nil
+		}
+	}
+	submission, err := service.submitAcceptedWithSchema(readCtx, accepted, schema, generation)
 	if err != nil {
 		return MaintenanceReservation{}, err
 	}
 	if submission.accepted.SourceDocument != accepted.SourceDocument {
 		return MaintenanceReservation{}, ErrSourceInvalid
 	}
-	return MaintenanceReservation{OperationID: submission.Operation.ID, Replayed: !submission.NeedsExecution()}, nil
+	outcome := MaintenanceQueued
+	if !submission.NeedsExecution() {
+		outcome = MaintenanceReplayed
+	}
+	return MaintenanceReservation{OperationID: submission.Operation.ID, Generation: generation, PolicyGeneration: generation, Outcome: outcome, Replayed: !submission.NeedsExecution()}, nil
 }
 
 func (service *IngestService) submitAccepted(ctx context.Context, accepted knowl.AcceptedSource) (IngestSubmission, error) {
@@ -198,13 +238,22 @@ func (service *IngestService) submitAccepted(ctx context.Context, accepted knowl
 	if err != nil {
 		return IngestSubmission{}, fmt.Errorf("read schema: %w", err)
 	}
-	key := knowl.OperationKey{Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version}
-	reservation, err := service.operations.Reserve(readCtx, key, knowl.OperationMeta{
-		Key:            key,
-		AcceptedSource: accepted,
-		Schema:         schema,
-		SchemaDigest:   schema.Digest,
-		CreatedAt:      time.Now().UTC(),
+	generation, err := service.maintenanceGeneration(schema)
+	if err != nil {
+		return IngestSubmission{}, err
+	}
+	return service.submitAcceptedWithSchema(readCtx, accepted, schema, generation)
+}
+
+func (service *IngestService) submitAcceptedWithSchema(ctx context.Context, accepted knowl.AcceptedSource, schema knowl.SchemaDocument, generation string) (IngestSubmission, error) {
+	key := knowl.OperationKey{Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version, MaintenanceGeneration: generation}
+	reservation, err := service.operations.Reserve(ctx, key, knowl.OperationMeta{
+		Key:                   key,
+		AcceptedSource:        accepted,
+		Schema:                schema,
+		SchemaDigest:          schema.Digest,
+		MaintenanceGeneration: generation,
+		CreatedAt:             time.Now().UTC(),
 	})
 	if err != nil {
 		return IngestSubmission{}, fmt.Errorf("reserve operation: %w", err)
@@ -217,11 +266,70 @@ func (service *IngestService) submitAccepted(ctx context.Context, accepted knowl
 	}, nil
 }
 
+func (service *IngestService) maintenanceGeneration(schema knowl.SchemaDocument) (string, error) {
+	generation, err := MaintenancePolicyGeneration(SourceMaintenancePolicy(schema.Digest, service.readLimits, service.planLimits))
+	if err != nil {
+		return "", fmt.Errorf("compute maintenance policy generation: %w", err)
+	}
+	return generation, nil
+}
+
+// CurrentMaintenancePolicy returns the current schema snapshot and its
+// effective source-maintenance generation for an explicit manual transition.
+func (service *IngestService) CurrentMaintenancePolicy(ctx context.Context, scope knowl.ScopeRef) (knowl.SchemaDocument, string, error) {
+	ctx = nonNilContext(ctx)
+	if err := contextErr(ctx); err != nil {
+		return knowl.SchemaDocument{}, "", err
+	}
+	readCtx, cancel := service.boundedContext(ctx)
+	defer cancel()
+	schema, err := service.content.Schema(readCtx, scope)
+	if err != nil {
+		return knowl.SchemaDocument{}, "", fmt.Errorf("read schema: %w", err)
+	}
+	generation, err := service.maintenanceGeneration(schema)
+	return schema, generation, err
+}
+
+func (service *IngestService) decidePreviousMaintenance(ctx context.Context, scope knowl.ScopeRef, request AcceptedMaintenanceRequest, generation string) (MaintenanceReservation, bool, error) {
+	previous, err := service.operations.Operation(ctx, scope, request.PreviousOperationID)
+	if errors.Is(err, ErrOperationNotFound) {
+		return MaintenanceReservation{}, false, nil
+	}
+	if err != nil {
+		return MaintenanceReservation{}, false, fmt.Errorf("read previous maintenance operation: %w", err)
+	}
+	if previous.Key.Scope != request.Source.Scope || previous.Key.Source != request.Source.Source ||
+		previous.Key.Version != request.Source.Version || previous.Key.MaintenanceGeneration != request.PreviousGeneration {
+		return MaintenanceReservation{OperationID: previous.ID, Generation: request.PreviousGeneration, PolicyGeneration: generation, Outcome: MaintenanceManualGate}, true, nil
+	}
+	if request.PreviousGeneration == generation {
+		switch previous.Status {
+		case knowl.StatusCommitted:
+			return MaintenanceReservation{OperationID: previous.ID, Generation: generation, PolicyGeneration: generation, Outcome: MaintenanceConverged}, true, nil
+		case knowl.StatusFailed:
+			return MaintenanceReservation{OperationID: previous.ID, Generation: generation, PolicyGeneration: generation, Outcome: MaintenanceManualGate}, true, nil
+		default:
+			return MaintenanceReservation{OperationID: previous.ID, Generation: generation, PolicyGeneration: generation, Outcome: MaintenanceReplayed, Replayed: true}, true, nil
+		}
+	}
+	if previous.Status == knowl.StatusCommitted ||
+		(previous.Status == knowl.StatusFailed && previous.Failure != nil && previous.Failure.Class == "source") {
+		return MaintenanceReservation{}, false, nil
+	}
+	return MaintenanceReservation{OperationID: previous.ID, Generation: request.PreviousGeneration, PolicyGeneration: generation, Outcome: MaintenanceManualGate}, true, nil
+}
+
 func normalizeAcceptedMaintenanceRequest(request AcceptedMaintenanceRequest) (knowl.AcceptedSource, error) {
 	accepted := request.Source
 	contentType, _, err := mime.ParseMediaType(request.ContentType)
 	if err != nil || !strings.HasPrefix(strings.ToLower(contentType), "text/") || request.ContentType != accepted.MediaType ||
-		request.SourceDocument == (knowl.SourceDocument{}) {
+		request.SourceDocument == (knowl.SourceDocument{}) ||
+		(request.PreviousMaintenanceRevision == "") != (request.PreviousOperationID == "") ||
+		!validStoredText(request.PreviousMaintenanceRevision, maxRevisionBytes, true) ||
+		!validStoredText(string(request.PreviousOperationID), 4096, true) ||
+		!validOptionalGeneration(request.PreviousGeneration) ||
+		(request.PreviousOperationID == "" && request.PreviousGeneration != "") {
 		return knowl.AcceptedSource{}, ErrSourceInvalid
 	}
 	document, err := ResolveSourceDocument(request.SourceDocument.SourceID, accepted, request.SourceDocument)
@@ -476,7 +584,7 @@ func boundedCatalogs(catalogs []knowl.PageSnapshot, limits knowl.ReadLimits) ([]
 func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {
 	return service.operations.SavePlan(ctx, operation.ID, knowl.PlanSummary{
 		OperationID: string(operation.ID), Digest: staged.Digest,
-		FileCount: len(staged.Files), CreatedAt: time.Now().UTC(),
+		FileCount: len(staged.Files), CreatedAt: time.Now().UTC(), Diagnostics: staged.Diagnostics,
 	})
 }
 

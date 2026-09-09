@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/baldaworks/knowl/internal/source/reconcile"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -84,7 +83,7 @@ func (host *Host) RunOnce(ctx context.Context, options RunOnceOptions) (RunOnceR
 		} else {
 			syncAllRes, syncErr := host.SyncAll(ctx)
 			result.Sources = syncAllRes.Results
-			if syncErr != nil && !errors.Is(syncErr, reconcile.ErrSyncPartial) {
+			if syncErr != nil {
 				combinedErrs = append(combinedErrs, fmt.Errorf("sync sources: %w", syncErr))
 			}
 		}

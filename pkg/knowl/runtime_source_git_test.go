@@ -78,6 +78,15 @@ func (s *stubGitRepoOpener) OpenOrClone(_ context.Context, _ domain.Source) (*go
 	return s.repo, nil
 }
 
+func (s *stubGitRepoOpener) OpenCached(_ context.Context, _ domain.Source) (*gogit.Repository, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.repo, nil
+}
+
 func storeMemBlob(t *testing.T, storer storage.Storer, content []byte) plumbing.Hash {
 	t.Helper()
 	obj := storer.NewEncodedObject()

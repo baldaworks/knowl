@@ -19,6 +19,8 @@ const (
 	metaSnapshot     = "snapshot"
 	metaBlobSHA      = "blob_sha"
 	testGitMain      = "main"
+	testGitRemoteA   = "https://github.com/org/remote-a.git"
+	testGitRemoteB   = "https://github.com/org/remote-b.git"
 )
 
 func TestGitSourceReconciliation_CheckpointAndIncremental(t *testing.T) {
@@ -160,6 +162,166 @@ func (a *resumeSnapshotAdapter) List(_ context.Context, _ knowl.Source, token st
 
 func (a *resumeSnapshotAdapter) Fetch(context.Context, knowl.Source, knowl.DocumentRef) (knowl.Document, error) {
 	return knowl.Document{}, errors.New("unexpected fetch")
+}
+
+type checkpointSnapshotAdapter struct {
+	targets  []string
+	previous []string
+}
+
+type emptyRepositoryIdentityState struct {
+	app.SourceStateStore
+}
+
+func (state emptyRepositoryIdentityState) SourceStatus(
+	ctx context.Context,
+	scope knowl.ScopeRef,
+	sourceID knowl.SourceID,
+) (knowl.SourceStatus, error) {
+	status, err := state.SourceStateStore.SourceStatus(ctx, scope, sourceID)
+	status.RepositoryIdentity = ""
+	return status, err
+}
+
+func (a *checkpointSnapshotAdapter) PrepareSnapshot(_ context.Context, _ knowl.Source, previous string) (app.SnapshotPreparation, error) {
+	a.previous = append(a.previous, previous)
+	target := a.targets[0]
+	a.targets = a.targets[1:]
+	return app.SnapshotPreparation{Checkpoint: target}, nil
+}
+
+func (*checkpointSnapshotAdapter) List(context.Context, knowl.Source, string) (knowl.DocumentPage, error) {
+	return knowl.DocumentPage{}, nil
+}
+
+func (*checkpointSnapshotAdapter) Fetch(context.Context, knowl.Source, knowl.DocumentRef) (knowl.Document, error) {
+	return knowl.Document{}, errors.New("unexpected fetch")
+}
+
+type failedRebindSnapshotAdapter struct {
+	calls    int
+	previous []string
+}
+
+func (a *failedRebindSnapshotAdapter) PrepareSnapshot(_ context.Context, _ knowl.Source, previous string) (app.SnapshotPreparation, error) {
+	a.calls++
+	a.previous = append(a.previous, previous)
+	if a.calls == 2 {
+		return app.SnapshotPreparation{}, errors.New("temporary snapshot failure")
+	}
+	checkpoint := testGitSnapshot1
+	if a.calls > 2 {
+		checkpoint = testGitSnapshot2
+	}
+	return app.SnapshotPreparation{Checkpoint: checkpoint}, nil
+}
+
+func (*failedRebindSnapshotAdapter) List(context.Context, knowl.Source, string) (knowl.DocumentPage, error) {
+	return knowl.DocumentPage{}, nil
+}
+
+func (*failedRebindSnapshotAdapter) Fetch(context.Context, knowl.Source, knowl.DocumentRef) (knowl.Document, error) {
+	return knowl.Document{}, errors.New("unexpected fetch")
+}
+
+func TestGitSourceReconciliation_RebindDoesNotReusePriorCheckpoint(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	ctx := context.Background()
+	adapter := &checkpointSnapshotAdapter{targets: []string{testGitSnapshot1, testGitSnapshot2, testGitSnapshot2}}
+	harness.service.adapters[knowl.SourceTypeGit] = adapter
+	source := knowl.Source{ID: "git-rebind-source", Type: knowl.SourceTypeGit, Enabled: true}
+	source.Config.Git = &knowl.GitSourceConfig{
+		Remote:  testGitRemoteA,
+		Ref:     testGitMain,
+		RefKind: knowl.GitRefKindBranch,
+	}
+	if _, err := harness.service.SyncSource(ctx, stageScope, source); err != nil {
+		t.Fatalf("initial SyncSource() error = %v", err)
+	}
+	source.Config.Git.Remote = testGitRemoteB
+	source.Config.Git.RebindAck = true
+	if _, err := harness.service.SyncSource(ctx, stageScope, source); err != nil {
+		t.Fatalf("rebound SyncSource() error = %v", err)
+	}
+	if _, err := harness.service.SyncSource(ctx, stageScope, source); err != nil {
+		t.Fatalf("same-identity SyncSource() error = %v", err)
+	}
+	if len(adapter.previous) != 3 || adapter.previous[0] != "" || adapter.previous[1] != "" || adapter.previous[2] != testGitSnapshot2 {
+		t.Fatalf("PrepareSnapshot() previous checkpoints = %v", adapter.previous)
+	}
+}
+
+func TestGitSourceReconciliation_AcknowledgedRebindWithUnknownIdentityDoesNotReusePriorCheckpoint(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	ctx := context.Background()
+	adapter := &checkpointSnapshotAdapter{targets: []string{testGitSnapshot1, testGitSnapshot2}}
+	harness.service.adapters[knowl.SourceTypeGit] = adapter
+	source := knowl.Source{ID: "git-legacy-rebind-source", Type: knowl.SourceTypeGit, Enabled: true}
+	source.Config.Git = &knowl.GitSourceConfig{
+		Remote:  testGitRemoteA,
+		Ref:     testGitMain,
+		RefKind: knowl.GitRefKindBranch,
+	}
+	if _, err := harness.service.SyncSource(ctx, stageScope, source); err != nil {
+		t.Fatalf("initial SyncSource() error = %v", err)
+	}
+
+	harness.service.state = emptyRepositoryIdentityState{SourceStateStore: harness.state}
+	source.Config.Git.Remote = testGitRemoteB
+	source.Config.Git.RebindAck = true
+	if _, err := harness.service.SyncSource(ctx, stageScope, source); err != nil {
+		t.Fatalf("rebound SyncSource() error = %v", err)
+	}
+	if len(adapter.previous) != 2 || adapter.previous[0] != "" || adapter.previous[1] != "" {
+		t.Fatalf("PrepareSnapshot() previous checkpoints = %v", adapter.previous)
+	}
+}
+
+func TestGitSourceReconciliation_GitMigrationDoesNotReuseUnknownLineageCheckpoint(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	harness.seedFinalized(t, []seededDoc{{path: "docs/legacy.md", body: "# Legacy\n"}})
+	adapter := &checkpointSnapshotAdapter{targets: []string{testGitSnapshot1}}
+	harness.service.adapters[knowl.SourceTypeGit] = adapter
+	source := knowl.Source{ID: harness.sourceID, Type: knowl.SourceTypeGit, Enabled: true}
+	source.Config.Git = &knowl.GitSourceConfig{
+		Remote:  testGitRemoteA,
+		Ref:     testGitMain,
+		RefKind: knowl.GitRefKindBranch,
+	}
+
+	if _, err := harness.service.SyncSource(context.Background(), stageScope, source); err != nil {
+		t.Fatalf("migrated SyncSource() error = %v", err)
+	}
+	if len(adapter.previous) != 1 || adapter.previous[0] != "" {
+		t.Fatalf("PrepareSnapshot() previous checkpoints = %v", adapter.previous)
+	}
+}
+
+func TestGitSourceReconciliation_FailedRebindRetryDoesNotReusePriorCheckpoint(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	ctx := context.Background()
+	adapter := &failedRebindSnapshotAdapter{}
+	harness.service.adapters[knowl.SourceTypeGit] = adapter
+	source := knowl.Source{ID: "git-failed-rebind-source", Type: knowl.SourceTypeGit, Enabled: true}
+	source.Config.Git = &knowl.GitSourceConfig{
+		Remote:  testGitRemoteA,
+		Ref:     testGitMain,
+		RefKind: knowl.GitRefKindBranch,
+	}
+	if _, err := harness.service.SyncSource(ctx, stageScope, source); err != nil {
+		t.Fatalf("initial SyncSource() error = %v", err)
+	}
+	source.Config.Git.Remote = testGitRemoteB
+	source.Config.Git.RebindAck = true
+	if _, err := harness.service.SyncSource(ctx, stageScope, source); err == nil {
+		t.Fatal("rebound SyncSource() error = nil, want temporary failure")
+	}
+	if _, err := harness.service.SyncSource(ctx, stageScope, source); err != nil {
+		t.Fatalf("retry SyncSource() error = %v", err)
+	}
+	if len(adapter.previous) != 3 || adapter.previous[0] != "" || adapter.previous[1] != "" || adapter.previous[2] != "" {
+		t.Fatalf("PrepareSnapshot() previous checkpoints = %v", adapter.previous)
+	}
 }
 
 func TestGitSourceReconciliation_ResumesDurableSnapshot(t *testing.T) {

@@ -109,6 +109,12 @@ func TestResumableWorkContract(t *testing.T) {
 			}
 			return attempts
 		},
+		CorruptDiagnostics: func(t *testing.T, id knowl.OperationID, payload string) {
+			t.Helper()
+			if _, err := store.db.ExecContext(ctx, `UPDATE knowl_operations SET maintenance_diagnostics = ? WHERE operation_id = ?`, payload, id); err != nil {
+				t.Fatalf("corrupt maintenance diagnostics: %v", err)
+			}
+		},
 		IsConflict: func(err error) bool { return errors.Is(err, ErrConflict) },
 		Scope:      "sqlite_contract",
 	})
@@ -123,6 +129,15 @@ func TestSourceMaintenanceRetryContract(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	storetest.RunSourceRetryContract(t, storetest.SourceRetryHarness{
 		Store: store,
+		OpenPeer: func(t *testing.T) storetest.SourceRetryStore {
+			t.Helper()
+			peer, openErr := Open(ctx, store.Path())
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			t.Cleanup(func() { _ = peer.Close() })
+			return peer
+		},
 		Seed: func(t *testing.T, scope knowl.ScopeRef, sourceID knowl.SourceID, fixtures []storetest.SourceRetryFixture) {
 			t.Helper()
 			now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -130,6 +145,10 @@ func TestSourceMaintenanceRetryContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, fixture := range fixtures {
+				schemaDigest := fixture.SchemaDigest
+				if schemaDigest == "" {
+					schemaDigest = testSchemaDigest
+				}
 				workExpiry, applyExpiry := "", ""
 				leaseDelta := time.Hour
 				if fixture.LeasesExpired {
@@ -145,18 +164,23 @@ func TestSourceMaintenanceRetryContract(t *testing.T) {
 					operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest,
 					status, plan_digest, failure_class, failure_reason, commit_generation, lease_token, lease_expires_at,
 					created_at, updated_at, work_attempt, work_lease_token, work_lease_expires_at, work_ready_at,
-					work_kind, retry_attempt, manual_retry_count
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					fixture.OperationID, fixture.OperationScope, "fixture", fixture.OperationID, "1", strings.Repeat("b", 64), testSchemaDigest,
+					work_kind, retry_attempt, manual_retry_count, maintenance_generation,
+					accepted_media_type, source_manifest_ref, schema_version, schema_snapshot
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					fixture.OperationID, fixture.OperationScope, "fixture", fixture.OperationSourceID, fixture.Revision, fixture.SourceDigest, schemaDigest,
 					fixture.Status, "planned-digest", fixture.FailureClass, fixture.FailureReason, "commit-generation", fixture.ApplyToken, applyExpiry,
-					now, now, fixture.WorkAttempt, fixture.WorkToken, workExpiry, now, fixture.Kind, fixture.RetryAttempt, fixture.ManualRetryCount); err != nil {
+					now, now, fixture.WorkAttempt, fixture.WorkToken, workExpiry, now, fixture.Kind, fixture.RetryAttempt, fixture.ManualRetryCount,
+					fixture.MaintenanceGeneration, fixture.AcceptedMediaType, fixture.SourceManifestRef, fixture.SchemaVersion, fixture.SchemaSnapshot); err != nil {
 					t.Fatal(err)
+				}
+				if fixture.OperationOnly {
+					continue
 				}
 				if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_source_documents (
 					scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id,
-					last_seen_run_id, created_at, updated_at
-				) VALUES (?, ?, ?, ?, '{}', ?, ?, 'retry-run', ?, ?)`,
-					scope, sourceID, fixture.DocumentID, fixture.Revision, fixture.MaintenanceRevision, fixture.OperationID, now, now); err != nil {
+					maintenance_generation, last_seen_run_id, created_at, updated_at
+				) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, 'retry-run', ?, ?)`,
+					scope, sourceID, fixture.DocumentID, fixture.Revision, fixture.MaintenanceRevision, fixture.OperationID, fixture.MaintenanceGeneration, now, now); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -169,6 +193,14 @@ func TestSourceMaintenanceRetryContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			return audit
+		},
+		MaintenanceStatus: func(t *testing.T, scope knowl.ScopeRef, sourceID knowl.SourceID) knowl.SourceMaintenanceStatus {
+			t.Helper()
+			status, statusErr := store.sourceMaintenanceStatus(ctx, scope, sourceID)
+			if statusErr != nil {
+				t.Fatal(statusErr)
+			}
+			return status
 		},
 		Scope: "sqlite_retry_contract",
 	})
@@ -358,16 +390,16 @@ func TestSourceMigrationPreservesVersionTwoOperation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	operation, err := store.Operation(ctx, "legacy", "legacy-operation")
-	if err != nil || operation.ID != "legacy-operation" || operation.Kind != knowl.WorkSourceMaintenance {
+	if err != nil || operation.ID != "legacy-operation" || operation.Kind != knowl.WorkSourceMaintenance || len(operation.Diagnostics) != 0 {
 		t.Fatalf("preserved operation = %#v, %v", operation, err)
 	}
-	var acceptedSourceDocument, workKind, executionPayload string
-	if err := store.db.QueryRowContext(ctx, `SELECT accepted_source_document, work_kind, execution_payload FROM knowl_operations WHERE operation_id = ?`, operation.ID).
-		Scan(&acceptedSourceDocument, &workKind, &executionPayload); err != nil {
+	var acceptedSourceDocument, workKind, executionPayload, maintenanceGeneration, maintenanceDiagnostics string
+	if err := store.db.QueryRowContext(ctx, `SELECT accepted_source_document, work_kind, execution_payload, maintenance_generation, maintenance_diagnostics FROM knowl_operations WHERE operation_id = ?`, operation.ID).
+		Scan(&acceptedSourceDocument, &workKind, &executionPayload, &maintenanceGeneration, &maintenanceDiagnostics); err != nil {
 		t.Fatalf("read migrated operation provenance: %v", err)
 	}
-	if acceptedSourceDocument != "" || workKind != string(knowl.WorkSourceMaintenance) || executionPayload != "" {
-		t.Fatalf("legacy operation columns = provenance %q kind %q payload %q", acceptedSourceDocument, workKind, executionPayload)
+	if acceptedSourceDocument != "" || workKind != string(knowl.WorkSourceMaintenance) || executionPayload != "" || maintenanceGeneration != "" || maintenanceDiagnostics != "" {
+		t.Fatalf("legacy operation columns = provenance %q kind %q payload %q generation %q diagnostics %q", acceptedSourceDocument, workKind, executionPayload, maintenanceGeneration, maintenanceDiagnostics)
 	}
 	var title, body, digest, sourceRefs, sourceDocuments, format, description string
 	var sourceID, sourceDocument, metadata sql.NullString
@@ -389,6 +421,41 @@ func TestSourceMigrationPreservesVersionTwoOperation(t *testing.T) {
 	var syncRows int
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM knowl_sync_runs`).Scan(&syncRows); err != nil || syncRows != 0 {
 		t.Fatalf("sync rows = %d, %v", syncRows, err)
+	}
+}
+
+func TestMaintenanceGenerationMigrationDownPreservesRepresentableHistory(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", t.TempDir()+"/generation-down.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	directory, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(70, 0).UTC().Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_operations (operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest, status, created_at, updated_at, work_ready_at, maintenance_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"generation-operation", "generation-down", "fixture", "document", "1", strings.Repeat("a", 64), strings.Repeat("b", 64), knowl.StatusReceived, now, now, now, strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 12); err != nil {
+		t.Fatal(err)
+	}
+	var operationID string
+	if err := db.QueryRowContext(ctx, `SELECT operation_id FROM knowl_operations WHERE operation_id = ?`, "generation-operation").Scan(&operationID); err != nil || operationID != "generation-operation" {
+		t.Fatalf("operation after down migration = %q, %v", operationID, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT maintenance_generation FROM knowl_operations LIMIT 1`).Scan(new(string)); err == nil {
+		t.Fatal("down migration retained maintenance_generation")
 	}
 }
 

@@ -26,7 +26,7 @@ func (store *Store) Execution(ctx context.Context, scope knowl.ScopeRef, id know
 		return knowl.ExecutionDescriptor{}, err
 	}
 	descriptor, key, err := scanExecution(store.db.QueryRowContext(ctx, `
-			SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest,
+			SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest, maintenance_generation,
 			       accepted_media_type, source_manifest_ref, accepted_source_document, schema_digest, schema_version, schema_snapshot
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -116,7 +116,7 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	var id knowl.OperationID
 	rows, err := tx.QueryContext(ctx, `
-			SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest,
+			SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest, maintenance_generation,
 			       accepted_media_type, source_manifest_ref, accepted_source_document, schema_digest, schema_version, schema_snapshot
 		FROM knowl_operations
 		WHERE scope = ?
@@ -181,7 +181,7 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 		return knowl.WorkClaim{}, app.ErrWorkLeaseConflict
 	}
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
-		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
+		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation, maintenance_diagnostics,
 		       status, attempt, work_attempt, retry_attempt, manual_retry_count,
 		       failure_class, failure_reason, work_ready_at, updated_at
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id), scope)
@@ -217,7 +217,7 @@ func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	descriptor, key, err := scanExecution(tx.QueryRowContext(ctx, `
-		SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest,
+		SELECT operation_id, scope, work_kind, execution_payload, source_adapter, source_id, source_version, source_digest, maintenance_generation,
 		       accepted_media_type, source_manifest_ref, accepted_source_document, schema_digest, schema_version, schema_snapshot
 		FROM knowl_operations
 		WHERE scope = ? AND operation_id = ?
@@ -255,7 +255,7 @@ func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id
 		return knowl.WorkClaim{}, app.ErrWorkLeaseConflict
 	}
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
-		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
+		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation, maintenance_diagnostics,
 		       status, attempt, work_attempt, retry_attempt, manual_retry_count,
 		       failure_class, failure_reason, work_ready_at, updated_at
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id), scope)
@@ -419,7 +419,7 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 	var schemaSnapshot []byte
 	if err := scanner.Scan(
 		&descriptor.OperationID, &scope, &kindText, &payload, &key.Source.Adapter, &key.Source.ID,
-		&key.Version.Version, &key.Version.Digest, &descriptor.Source.MediaType,
+		&key.Version.Version, &key.Version.Digest, &key.MaintenanceGeneration, &descriptor.Source.MediaType,
 		&descriptor.Source.ManifestRef, &sourceDocument, &schemaDigest, &schemaVersion, &schemaSnapshot,
 	); err != nil {
 		return knowl.ExecutionDescriptor{}, knowl.OperationKey{}, err
@@ -430,6 +430,7 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 		return knowl.ExecutionDescriptor{}, knowl.OperationKey{}, app.ErrExecutionDescriptorUnavailable
 	}
 	descriptor.Kind = kind
+	descriptor.MaintenanceGeneration = key.MaintenanceGeneration
 	descriptor.Source.Scope = key.Scope
 	descriptor.Source.Source = key.Source
 	descriptor.Source.Version = key.Version
@@ -453,10 +454,11 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 
 func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Operation, error) {
 	var operation knowl.Operation
-	var kind, status, failureClass, failureReason, readyAt, updatedAt string
+	var kind, status, failureClass, failureReason, maintenanceDiagnostics, readyAt, updatedAt string
 	if err := scanner.Scan(
 		&operation.ID, &kind, &operation.Key.Source.Adapter, &operation.Key.Source.ID,
-		&operation.Key.Version.Version, &operation.Key.Version.Digest,
+		&operation.Key.Version.Version, &operation.Key.Version.Digest, &operation.Key.MaintenanceGeneration,
+		&maintenanceDiagnostics,
 		&status, &operation.Attempt, &operation.WorkAttempt, &operation.RetryAttempt,
 		&operation.ManualRetryCount, &failureClass, &failureReason, &readyAt, &updatedAt,
 	); err != nil {
@@ -481,6 +483,10 @@ func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Opera
 	}
 	if failureClass != "" {
 		operation.Failure = &knowl.Failure{Class: failureClass, Reason: failureReason, OperationID: string(operation.ID)}
+	}
+	operation.Diagnostics, err = app.DecodeMaintenanceDiagnostics(maintenanceDiagnostics)
+	if err != nil {
+		return knowl.Operation{}, fmt.Errorf("decode maintenance diagnostics: %w", err)
 	}
 	return operation, nil
 }

@@ -599,7 +599,7 @@ func (runtimeSharedAtlasMaintainer) Plan(_ context.Context, input domain.Mainten
 		return plan, nil
 	}
 	for _, catalog := range input.Catalogs {
-		if catalog.Path != "wiki/index.md" {
+		if catalog.Path != hostRootIndexPath {
 			continue
 		}
 		root := strings.TrimRight(catalog.Content, "\n") + "\n\n* [Project Atlas](entities/atlas-integration.md)\n"

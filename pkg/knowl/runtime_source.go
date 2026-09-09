@@ -123,8 +123,12 @@ func (host *Host) RetrySourceMaintenance(ctx context.Context, id domain.SourceID
 	if _, err := host.configuredSource(id); err != nil {
 		return app.SourceMaintenanceRetryResult{SourceID: id, DryRun: dryRun, OperationIDs: make([]domain.OperationID, 0)}, err
 	}
+	schema, generation, err := host.service.CurrentMaintenancePolicy(ctx, host.config.Scope)
+	if err != nil {
+		return app.SourceMaintenanceRetryResult{SourceID: id, DryRun: dryRun, OperationIDs: make([]domain.OperationID, 0)}, err
+	}
 	result, err := host.sourceState.RetrySourceMaintenance(ctx, app.SourceMaintenanceRetryRequest{
-		Scope: host.config.Scope, SourceID: id, FailureClasses: failureClasses, DryRun: dryRun,
+		Scope: host.config.Scope, SourceID: id, FailureClasses: failureClasses, MaintenanceGeneration: generation, Schema: schema, DryRun: dryRun,
 	})
 	if err == nil && result.Requeued != 0 {
 		host.scheduler.Wake("")

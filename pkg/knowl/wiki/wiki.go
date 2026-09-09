@@ -285,6 +285,11 @@ func MarkdownTargets(content string) ([]string, bool) {
 			offset = start + end + 2
 			continue
 		}
+		if target == ".." || strings.HasPrefix(target, "/") || strings.HasPrefix(target, "../") || strings.Contains(target, "/../") {
+			malformed = true
+			offset = start + end + 2
+			continue
+		}
 		target = NormalizePageTarget(target)
 		if target != "" {
 			targets = append(targets, target)

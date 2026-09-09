@@ -186,11 +186,13 @@ func (r *renderer) buildSections() ([]section, error) {
 			return nil, ErrInvalidGraph
 		}
 		sectionTitles[key] = true
-		pages, err := r.collect(child, 2, map[string]bool{}, seenCatalogs, emitted)
-		if err != nil || len(pages) == 0 {
+		pages, hasPage, err := r.collect(child, 2, map[string]bool{}, seenCatalogs, emitted)
+		if err != nil || !hasPage {
 			return nil, errorsOr(err, ErrInvalidGraph)
 		}
-		sections = append(sections, section{title, pages})
+		if len(pages) > 0 {
+			sections = append(sections, section{title, pages})
+		}
 	}
 	if len(direct) > 0 {
 		sections = append(sections, section{"Docs", direct})
@@ -201,38 +203,41 @@ func (r *renderer) buildSections() ([]section, error) {
 	return sections, nil
 }
 
-func (r *renderer) collect(catalog string, depth int, visiting, seenCatalogs, emitted map[string]bool) ([]knowl.PageSnapshot, error) {
+func (r *renderer) collect(catalog string, depth int, visiting, seenCatalogs, emitted map[string]bool) ([]knowl.PageSnapshot, bool, error) {
 	if err := r.ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if depth > r.limits.MaxDepth {
-		return nil, ErrLimitExceeded
+		return nil, false, ErrLimitExceeded
 	}
 	if visiting[catalog] {
-		return nil, ErrInvalidGraph
+		return nil, false, ErrInvalidGraph
 	}
 	visiting[catalog], seenCatalogs[catalog] = true, true
 	defer delete(visiting, catalog)
 	children, err := r.children(catalog)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	result := make([]knowl.PageSnapshot, 0)
+	hasPage := false
 	for _, child := range children {
 		if page, found := r.pages[child]; found {
+			hasPage = true
 			if !emitted[child] {
 				emitted[child] = true
 				result = append(result, page)
 			}
 			continue
 		}
-		pages, err := r.collect(child, depth+1, visiting, seenCatalogs, emitted)
+		pages, childHasPage, err := r.collect(child, depth+1, visiting, seenCatalogs, emitted)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		hasPage = hasPage || childHasPage
 		result = append(result, pages...)
 	}
-	return result, nil
+	return result, hasPage, nil
 }
 
 func (r *renderer) children(catalogPath string) ([]string, error) {

@@ -12,6 +12,7 @@ const (
 	lintTestSourceID = "source"
 	lintPageOneID    = "entities/one"
 	lintPageTwoID    = "entities/two"
+	lintPageOnePath  = "wiki/entities/one.md"
 	lintRelationWiki = "wiki"
 	lintRawAdapter   = "raw"
 )
@@ -67,7 +68,7 @@ func TestLintAcceptsRootReachableNestedCatalog(t *testing.T) {
 	}
 	sourceRef := SourceRefKey(accepted)
 	page := knowl.PageSnapshot{
-		ID: lintPageOneID, Path: "wiki/entities/one.md",
+		ID: lintPageOneID, Path: lintPageOnePath,
 		Content: "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + sourceRef + "\n---\n# One\n",
 	}
 	index := knowl.PageSnapshot{Path: rootCatalogPath, Content: "# Index\n\n* [Entities](entities/index.md)\n"}
@@ -88,8 +89,8 @@ func TestLintLogReadsOKFAuditComments(t *testing.T) {
 
 	inspection := knowl.WorkspaceInspection{
 		Snapshot: knowl.WorkspaceSnapshot{
-			SchemaDigest: "schema",
-			PageDigests:  map[string]string{"wiki/entities/one.md": "digest"},
+			SchemaDigest: fixtureSchema,
+			PageDigests:  map[string]string{lintPageOnePath: "digest"},
 		},
 		Log: knowl.PageSnapshot{Path: "wiki/log.md", Content: "# Knowl Update Log\n\n## 2026-08-25\n" +
 			"* **Update**: committed. <!-- knowl:{\"operation_id\":\"op\",\"generation\":\"generation\",\"schema_digest\":\"schema\",\"files\":[\"wiki/entities/one.md\"]} -->\n" +

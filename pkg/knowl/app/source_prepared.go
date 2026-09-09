@@ -97,6 +97,7 @@ func PreparedSyncDigest(prepared PreparedSyncState) (string, error) {
 			AcceptedSource:         state.AcceptedSource,
 			MaintenanceRevision:    state.MaintenanceRevision,
 			MaintenanceOperationID: state.MaintenanceOperationID,
+			MaintenanceGeneration:  state.MaintenanceGeneration,
 			MirrorPath:             state.MirrorPath,
 			MirrorDigest:           state.MirrorDigest,
 			LastSeenRunID:          state.LastSeenRunID,
@@ -127,6 +128,7 @@ type preparedDigestDocument struct {
 	AcceptedSource         knowl.AcceptedSource `json:"accepted_source"`
 	MaintenanceRevision    string               `json:"maintenance_revision,omitempty"`
 	MaintenanceOperationID knowl.OperationID    `json:"maintenance_operation_id,omitempty"`
+	MaintenanceGeneration  string               `json:"maintenance_generation,omitempty"`
 	MirrorPath             string               `json:"mirror_path,omitempty"`
 	MirrorDigest           string               `json:"mirror_digest,omitempty"`
 	LastSeenRunID          knowl.SyncRunID      `json:"last_seen_run_id"`
@@ -157,10 +159,12 @@ func validPreparedCandidate(document PreparedDocumentState, scope knowl.ScopeRef
 	}
 	maintenanceRevision := state.MaintenanceRevision
 	maintenanceOperationID := string(state.MaintenanceOperationID)
+	maintenanceGeneration := state.MaintenanceGeneration
 	if (maintenanceRevision == "") != (maintenanceOperationID == "") ||
 		(maintenanceRevision != "" && (maintenanceRevision != state.Revision ||
 			!validStoredText(maintenanceRevision, maxRevisionBytes, false) ||
-			!validStoredText(maintenanceOperationID, 4096, false))) {
+			!validStoredText(maintenanceOperationID, 4096, false))) ||
+		(maintenanceGeneration != "" && !validSHA256(maintenanceGeneration)) {
 		return false
 	}
 	if state.MirrorPath != "" && ValidateDocumentID(knowl.DocumentID(state.MirrorPath)) != nil {

@@ -210,10 +210,12 @@ type SourceStateStore interface {
 // SourceMaintenanceRetryRequest selects terminal current-revision maintenance
 // operations for explicit operator recovery.
 type SourceMaintenanceRetryRequest struct {
-	Scope          knowl.ScopeRef `json:"scope"`
-	SourceID       knowl.SourceID `json:"source_id"`
-	FailureClasses []string       `json:"failure_classes"`
-	DryRun         bool           `json:"dry_run"`
+	Scope                 knowl.ScopeRef       `json:"scope"`
+	SourceID              knowl.SourceID       `json:"source_id"`
+	FailureClasses        []string             `json:"failure_classes"`
+	MaintenanceGeneration string               `json:"maintenance_generation,omitempty"`
+	Schema                knowl.SchemaDocument `json:"-"`
+	DryRun                bool                 `json:"dry_run"`
 }
 
 // SourceMaintenanceRetryResult is bounded even when the selected source has

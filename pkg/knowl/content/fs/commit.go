@@ -33,6 +33,7 @@ type canonicalCommitRequest struct {
 	generation  string
 	files       []string
 	entries     []canonicalCommitEntry
+	diagnostics []knowl.MaintenanceDiagnostic
 }
 
 // Commit applies a staged maintainer plan through the common canonical writer.
@@ -54,7 +55,8 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 		return knowl.ContentCommit{}, fmt.Errorf("staged operation mismatch: %w", ErrPlanConflict)
 	}
 	generation := stageGeneration(manifest)
-	if (staged.Digest != "" && staged.Digest != generation) || (staged.Files != nil && !slices.Equal(staged.Files, entryTargets(manifest.Entries))) {
+	if (staged.Digest != "" && staged.Digest != generation) || (staged.Files != nil && !slices.Equal(staged.Files, entryTargets(manifest.Entries))) ||
+		(staged.Diagnostics != nil && !slices.Equal(staged.Diagnostics, manifest.Diagnostics)) {
 		return knowl.ContentCommit{}, ErrPlanConflict
 	}
 	if err := workspace.validateStageForCommitLocked(stageDir, manifest, ""); err != nil {
@@ -71,8 +73,18 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	if err != nil {
 		return knowl.ContentCommit{}, err
 	}
-	if err := workspace.validateProspectivePlanLocked(manifestScope(manifest), stagedEdits, manifest.RequiredSourceRef, manifest.SourceRefs); err != nil {
+	derivedDiagnostics, err := workspace.validateProspectivePlanLocked(manifestScope(manifest), stagedEdits, manifest.RequiredSourceRef, manifest.SourceRefs)
+	if err != nil {
 		return knowl.ContentCommit{}, err
+	}
+	persistedLinkDiagnostics := make([]knowl.MaintenanceDiagnostic, 0, len(derivedDiagnostics))
+	for _, diagnostic := range manifest.Diagnostics {
+		if diagnostic.Code == knowl.DiagnosticOriginalLinkUnresolved {
+			persistedLinkDiagnostics = append(persistedLinkDiagnostics, diagnostic)
+		}
+	}
+	if !slices.Equal(persistedLinkDiagnostics, derivedDiagnostics) {
+		return knowl.ContentCommit{}, ErrPlanConflict
 	}
 	logPath := filepath.Join(workspace.root, workspaceWikiDir, "log.md")
 	if err := rejectSymlinkPath(workspace.root, logPath); err != nil {
@@ -88,7 +100,7 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	}
 	if digestBytes(logBefore) != manifest.LogExpectedDigest {
 		if digestBytes(logBefore) == manifest.LogDigest && canonicalEntriesMatch(workspace.root, manifest.Entries) {
-			return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries)), nil
+			return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries), manifest.Diagnostics), nil
 		}
 		return knowl.ContentCommit{}, fmt.Errorf("canonical log changed after staging: %w", ErrPrecondition)
 	}
@@ -102,7 +114,7 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	entries = append(entries, canonicalCommitEntry{action: knowl.SourceMutationWrite, target: canonicalLogPath, expectedDigest: manifest.LogExpectedDigest, digest: manifest.LogDigest, content: logAfter})
 	return workspace.commitLocked(canonicalCommitRequest{
 		writer: stageWriterMaintainer, operationID: staged.OperationID, recoveryKey: staged.OperationID,
-		generation: generation, files: commitTargets(manifest.Entries), entries: entries,
+		generation: generation, files: commitTargets(manifest.Entries), entries: entries, diagnostics: manifest.Diagnostics,
 	})
 }
 
@@ -133,7 +145,7 @@ func (workspace *Workspace) CommitHierarchy(ctx context.Context, staged knowl.St
 	if replayed, replayErr := workspace.hierarchyCommitReplayed(manifest, generation); replayErr != nil {
 		return knowl.ContentCommit{}, replayErr
 	} else if replayed {
-		return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries)), nil
+		return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries), nil), nil
 	}
 	schema, err := os.ReadFile(filepath.Join(workspace.root, schemaFile))
 	if err != nil {
@@ -156,7 +168,7 @@ func (workspace *Workspace) CommitHierarchy(ctx context.Context, staged knowl.St
 			if err := workspace.writeCommitReceipt(receipt); err != nil {
 				return knowl.ContentCommit{}, err
 			}
-			return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries)), nil
+			return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries), nil), nil
 		}
 		return knowl.ContentCommit{}, fmt.Errorf("canonical log changed after hierarchy staging: %w", ErrPrecondition)
 	}
@@ -219,7 +231,7 @@ func (workspace *Workspace) CommitSource(ctx context.Context, staged knowl.Stage
 		return knowl.ContentCommit{}, err
 	}
 	if replayed {
-		return contentCommit(manifest.OperationID, generation, entryTargets(manifest.Entries)), nil
+		return contentCommit(manifest.OperationID, generation, entryTargets(manifest.Entries), nil), nil
 	}
 	plan, err := sourcePlanFromStage(stageDir, manifest)
 	if err != nil {
@@ -345,7 +357,8 @@ func (workspace *Workspace) commitLocked(request canonicalCommitRequest) (knowl.
 	journal := recoveryJournal{
 		OperationID: request.operationID, Writer: request.writer, SourceID: request.sourceID, Scope: request.scope,
 		State: recoveryPrepared, Entries: make([]recoveryEntry, 0, len(request.entries)), Generation: request.generation,
-		Files: append([]string(nil), request.files...),
+		Files:       append([]string(nil), request.files...),
+		Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), request.diagnostics...),
 	}
 	for index, entry := range request.entries {
 		preimage := preimages[index]
@@ -412,7 +425,7 @@ func (workspace *Workspace) commitLocked(request canonicalCommitRequest) (knowl.
 	if err := os.RemoveAll(journalDir); err != nil {
 		return knowl.ContentCommit{}, fmt.Errorf("remove recovery preimages: %w", err)
 	}
-	return contentCommit(request.operationID, request.generation, request.files), nil
+	return contentCommit(request.operationID, request.generation, request.files, request.diagnostics), nil
 }
 
 func (workspace *Workspace) injectCommitFault(point string, index int) error {
@@ -425,8 +438,8 @@ func (workspace *Workspace) injectCommitFault(point string, index int) error {
 	return nil
 }
 
-func contentCommit(operationID, generation string, files []string) knowl.ContentCommit {
-	return knowl.ContentCommit{OperationID: operationID, Generation: generation, Files: append([]string(nil), files...), CommittedAt: time.Now().UTC()}
+func contentCommit(operationID, generation string, files []string, diagnostics []knowl.MaintenanceDiagnostic) knowl.ContentCommit {
+	return knowl.ContentCommit{OperationID: operationID, Generation: generation, Files: append([]string(nil), files...), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), diagnostics...), CommittedAt: time.Now().UTC()}
 }
 
 func appendLogEntry(existing []byte, manifest stageManifest, generation string) ([]byte, error) {

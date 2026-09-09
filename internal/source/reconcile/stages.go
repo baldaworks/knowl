@@ -75,10 +75,15 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 		return Result{}, err
 	}
 	previousCheckpoint := ""
+	previousRepositoryIdentity := ""
 	if status, statusErr := service.state.SourceStatus(ctx, scope, source.ID); statusErr == nil {
 		previousCheckpoint = status.Checkpoint
+		previousRepositoryIdentity = status.RepositoryIdentity
 	} else if !errors.Is(statusErr, app.ErrSourceNotFound) {
 		return Result{}, failStage(classState, statusErr)
+	}
+	if previousRepositoryIdentity != sourceRepositoryIdentity(source) {
+		previousCheckpoint = ""
 	}
 	resumed, err := service.beginOrResumeScan(ctx, scope, source, configDigest)
 	if err != nil {

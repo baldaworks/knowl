@@ -2,8 +2,10 @@ package storetest
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
@@ -14,6 +16,8 @@ import (
 type SourceRetryStore interface {
 	RetrySourceMaintenance(ctx context.Context, request app.SourceMaintenanceRetryRequest) (app.SourceMaintenanceRetryResult, error)
 	Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error)
+	Execution(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.ExecutionDescriptor, error)
+	Fail(ctx context.Context, id knowl.OperationID, failure knowl.Failure) error
 }
 
 const (
@@ -25,21 +29,30 @@ const (
 
 // SourceRetryFixture describes one directly seeded recovery boundary row.
 type SourceRetryFixture struct {
-	OperationID         knowl.OperationID
-	DocumentID          knowl.DocumentID
-	Revision            string
-	MaintenanceRevision string
-	OperationScope      knowl.ScopeRef
-	Kind                knowl.WorkKind
-	Status              knowl.OperationStatus
-	FailureClass        string
-	FailureReason       string
-	WorkAttempt         int
-	RetryAttempt        int
-	ManualRetryCount    int
-	WorkToken           string
-	ApplyToken          string
-	LeasesExpired       bool
+	OperationID           knowl.OperationID
+	DocumentID            knowl.DocumentID
+	Revision              string
+	MaintenanceRevision   string
+	OperationScope        knowl.ScopeRef
+	Kind                  knowl.WorkKind
+	Status                knowl.OperationStatus
+	FailureClass          string
+	FailureReason         string
+	WorkAttempt           int
+	RetryAttempt          int
+	ManualRetryCount      int
+	MaintenanceGeneration string
+	OperationSourceID     string
+	SourceDigest          string
+	AcceptedMediaType     string
+	SourceManifestRef     string
+	SchemaDigest          string
+	SchemaVersion         string
+	SchemaSnapshot        []byte
+	WorkToken             string
+	ApplyToken            string
+	LeasesExpired         bool
+	OperationOnly         bool
 }
 
 // SourceRetryAudit exposes only operational cleanup fields needed by the contract.
@@ -52,17 +65,19 @@ type SourceRetryAudit struct {
 
 // SourceRetryHarness supplies backend-specific fixture insertion and audit reads.
 type SourceRetryHarness struct {
-	Store SourceRetryStore
-	Seed  func(t *testing.T, scope knowl.ScopeRef, sourceID knowl.SourceID, fixtures []SourceRetryFixture)
-	Audit func(t *testing.T, id knowl.OperationID) SourceRetryAudit
-	Scope knowl.ScopeRef
+	Store             SourceRetryStore
+	OpenPeer          func(t *testing.T) SourceRetryStore
+	Seed              func(t *testing.T, scope knowl.ScopeRef, sourceID knowl.SourceID, fixtures []SourceRetryFixture)
+	Audit             func(t *testing.T, id knowl.OperationID) SourceRetryAudit
+	MaintenanceStatus func(t *testing.T, scope knowl.ScopeRef, sourceID knowl.SourceID) knowl.SourceMaintenanceStatus
+	Scope             knowl.ScopeRef
 }
 
 // RunSourceRetryContract verifies atomic filtering, reset semantics,
 // idempotency, and bounded results for explicit recovery.
 func RunSourceRetryContract(t *testing.T, harness SourceRetryHarness) {
 	t.Helper()
-	if harness.Store == nil || harness.Seed == nil || harness.Audit == nil || harness.Scope == "" {
+	if harness.Store == nil || harness.OpenPeer == nil || harness.Seed == nil || harness.Audit == nil || harness.MaintenanceStatus == nil || harness.Scope == "" {
 		t.Fatal("source retry harness is incomplete")
 	}
 	ctx := context.Background()
@@ -124,6 +139,141 @@ func RunSourceRetryContract(t *testing.T, harness SourceRetryHarness) {
 		replay, err := harness.Store.RetrySourceMaintenance(ctx, request)
 		if err != nil || replay.Matched != 0 || replay.Requeued != 0 || len(replay.OperationIDs) != 0 {
 			t.Fatalf("retry replay = %#v, err = %v", replay, err)
+		}
+	})
+
+	t.Run("old_generation_creates_current_operation_and_preserves_history", func(t *testing.T) {
+		scope := knowl.ScopeRef(fmt.Sprintf("%s_generation", harness.Scope))
+		const sourceID = knowl.SourceID("retry-generation")
+		oldGeneration := strings.Repeat("a", 64)
+		currentGeneration := strings.Repeat("b", 64)
+		schemaContent := []byte("# Current schema\n")
+		schemaSum := sha256.Sum256(schemaContent)
+		schemaDigest := fmt.Sprintf("%x", schemaSum)
+		classes := []string{testProviderFailureClass, "staging", "unknown_failure"}
+		fixtures := make([]SourceRetryFixture, 0, len(classes))
+		oldIDs := make([]knowl.OperationID, 0, len(classes))
+		currentIDs := make([]knowl.OperationID, 0, len(classes))
+		for _, class := range classes {
+			key := knowl.OperationKey{
+				Scope:                 scope,
+				Source:                knowl.SourceRef{Adapter: testFixtureValue, ID: "generation-" + class},
+				Version:               knowl.SourceVersion{Version: testSourceRevision, Digest: strings.Repeat("c", 64)},
+				MaintenanceGeneration: oldGeneration,
+			}
+			oldID, err := app.SourceOperationID(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture := retryFixture(scope, string(oldID), class, class+"_run")
+			fixture.OperationID = oldID
+			fixture.OperationSourceID = key.Source.ID
+			fixture.SourceDigest = key.Version.Digest
+			fixture.MaintenanceGeneration = oldGeneration
+			fixture.ManualRetryCount = 2
+			fixture.AcceptedMediaType = testMarkdownMediaType
+			fixture.SourceManifestRef = "raw/" + class + "/manifest.yaml"
+			fixture.SchemaDigest = schemaDigest
+			fixture.SchemaVersion = "2"
+			fixture.SchemaSnapshot = schemaContent
+			fixtures = append(fixtures, fixture)
+			oldIDs = append(oldIDs, oldID)
+			key.MaintenanceGeneration = currentGeneration
+			currentID, err := app.SourceOperationID(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentIDs = append(currentIDs, currentID)
+		}
+		harness.Seed(t, scope, sourceID, fixtures)
+		preexisting := fixtures[0]
+		preexisting.OperationID = currentIDs[0]
+		preexisting.MaintenanceGeneration = currentGeneration
+		preexisting.Status = knowl.StatusReceived
+		preexisting.FailureClass = ""
+		preexisting.FailureReason = ""
+		preexisting.ManualRetryCount = 3
+		preexisting.OperationOnly = true
+		harness.Seed(t, scope, sourceID, []SourceRetryFixture{preexisting})
+
+		request := app.SourceMaintenanceRetryRequest{
+			Scope: scope, SourceID: sourceID, FailureClasses: classes, DryRun: true,
+			MaintenanceGeneration: currentGeneration,
+			Schema:                knowl.SchemaDocument{Scope: scope, Digest: schemaDigest, Version: "2", Content: schemaContent},
+		}
+		preview, err := harness.Store.RetrySourceMaintenance(ctx, request)
+		if err != nil || preview.Matched != int64(len(classes)) || preview.Requeued != 0 || len(preview.OperationIDs) != len(classes) {
+			t.Fatalf("generation retry preview = %#v, err = %v", preview, err)
+		}
+		previewIDs := make(map[knowl.OperationID]struct{}, len(preview.OperationIDs))
+		for _, id := range preview.OperationIDs {
+			previewIDs[id] = struct{}{}
+		}
+		for _, id := range currentIDs {
+			if _, exists := previewIDs[id]; !exists {
+				t.Fatalf("generation retry preview missing %q: %#v", id, preview)
+			}
+		}
+
+		request.DryRun = false
+		results := make(chan app.SourceMaintenanceRetryResult, 2)
+		errors := make(chan error, 2)
+		stores := []SourceRetryStore{harness.Store, harness.OpenPeer(t)}
+		for _, retryStore := range stores {
+			go func() {
+				result, retryErr := retryStore.RetrySourceMaintenance(ctx, request)
+				results <- result
+				errors <- retryErr
+			}()
+		}
+		var matched, requeued int64
+		for range 2 {
+			result := <-results
+			if retryErr := <-errors; retryErr != nil {
+				t.Fatalf("concurrent generation retry error = %v, result = %#v", retryErr, result)
+			}
+			matched += result.Matched
+			requeued += result.Requeued
+		}
+		if matched != int64(len(classes)) || requeued != int64(len(classes)) {
+			t.Fatalf("concurrent generation retry totals: matched=%d requeued=%d", matched, requeued)
+		}
+		for index, oldID := range oldIDs {
+			oldOperation, err := harness.Store.Operation(ctx, scope, oldID)
+			if err != nil || oldOperation.Status != knowl.StatusFailed || oldOperation.Failure == nil || oldOperation.ManualRetryCount != 2 {
+				t.Fatalf("historical operation = %#v, err = %v", oldOperation, err)
+			}
+			currentID := currentIDs[index]
+			currentOperation, err := harness.Store.Operation(ctx, scope, currentID)
+			if err != nil || currentOperation.Status != knowl.StatusReceived || currentOperation.Key.MaintenanceGeneration != currentGeneration || currentOperation.ManualRetryCount != 3 {
+				t.Fatalf("current operation = %#v, err = %v", currentOperation, err)
+			}
+			descriptor, err := harness.Store.Execution(ctx, scope, currentID)
+			if err != nil || descriptor.OperationID != currentID || descriptor.MaintenanceGeneration != currentGeneration || descriptor.Schema.Digest != schemaDigest || string(descriptor.Schema.Content) != string(schemaContent) {
+				t.Fatalf("current execution descriptor = %#v, err = %v", descriptor, err)
+			}
+		}
+		status := harness.MaintenanceStatus(t, scope, sourceID)
+		if len(status.Samples) != len(classes) {
+			t.Fatalf("generation-aware source status = %#v", status)
+		}
+		for _, sample := range status.Samples {
+			if sample.GenerationPrefix != currentGeneration[:16] {
+				t.Fatalf("maintenance sample generation prefix = %q", sample.GenerationPrefix)
+			}
+		}
+		currentID := currentIDs[0]
+		if err := harness.Store.Fail(ctx, currentID, knowl.Failure{Class: testProviderFailureClass, Reason: testProviderFailureReason, OperationID: string(currentID)}); err != nil {
+			t.Fatalf("fail current-generation operation: %v", err)
+		}
+		request.FailureClasses = []string{testProviderFailureClass}
+		retry, err := harness.Store.RetrySourceMaintenance(ctx, request)
+		if err != nil || retry.Matched != 1 || retry.Requeued != 1 || len(retry.OperationIDs) != 1 || retry.OperationIDs[0] != currentID {
+			t.Fatalf("current-generation retry = %#v, err = %v", retry, err)
+		}
+		currentOperation, err := harness.Store.Operation(ctx, scope, currentID)
+		if err != nil || currentOperation.Status != knowl.StatusReceived || currentOperation.ManualRetryCount != 4 {
+			t.Fatalf("current-generation operation after retry = %#v, err = %v", currentOperation, err)
 		}
 	})
 
@@ -206,5 +356,6 @@ func retryFixture(scope knowl.ScopeRef, id, class, reason string) SourceRetryFix
 		Revision: testSourceRevision, MaintenanceRevision: testSourceRevision, OperationScope: scope,
 		Kind: knowl.WorkSourceMaintenance, Status: knowl.StatusFailed, FailureClass: class, FailureReason: reason,
 		WorkAttempt: 1, RetryAttempt: 1,
+		OperationSourceID: id, SourceDigest: strings.Repeat("b", 64),
 	}
 }

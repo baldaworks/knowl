@@ -1,0 +1,15 @@
+# Copy a platform block into config.yaml when enabling host publishing.
+# These fields use envsubst values. Keep the placeholders quoted.
+diffpal:
+  platforms:
+    github:
+      auth:
+        token: "${GITHUB_TOKEN}"
+    gitlab:
+      auth:
+        job_token: "${CI_JOB_TOKEN}"
+        api_token: "${GITLAB_TOKEN}"
+    azure:
+      auth:
+        system_access_token: "${SYSTEM_ACCESSTOKEN}"
+        pat: "${AZURE_DEVOPS_EXT_PAT}"

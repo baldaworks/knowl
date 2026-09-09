@@ -99,6 +99,28 @@ func TestV040ReleaseNotesDescribeConnectedPublishingContract(t *testing.T) {
 	}
 }
 
+func TestV050ReleaseNotesDescribePolicyAwareMaintenance(t *testing.T) {
+	repoRoot := testRepoRoot(t)
+	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "releases", "v0.5.0.md"))
+	if err != nil {
+		t.Fatalf("read v0.5.0 release notes: %v", err)
+	}
+	notes := strings.Join(strings.Fields(string(content)), " ")
+	for _, required := range []string{
+		"Policy-Aware Maintenance and Isolated Validation",
+		"policy generation",
+		"262,144-character",
+		"unresolved original links",
+		"citation.unknown_source",
+		"SQLite and PostgreSQL",
+		"ghcr.io/baldaworks/knowl:v0.5.0",
+	} {
+		if !strings.Contains(notes, required) {
+			t.Errorf("v0.5.0 release notes missing %q", required)
+		}
+	}
+}
+
 func TestReleaseNotesPreserveDistributionContract(t *testing.T) {
 	repoRoot := testRepoRoot(t)
 	content, err := os.ReadFile(filepath.Join(repoRoot, "docs", "releases", "v0.1.0.md"))

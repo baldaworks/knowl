@@ -2,6 +2,7 @@ package git_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -15,12 +16,196 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 )
 
+const testIncludeMarkdown = "*.md"
+
 type mockRepoOpener struct {
-	repo *gogit.Repository
+	repo         *gogit.Repository
+	refreshCalls int
+	localCalls   int
+}
+
+type recoveringRepoOpener struct {
+	repo         *gogit.Repository
+	localErr     error
+	refreshCalls int
+	localCalls   int
+}
+
+func (o *recoveringRepoOpener) OpenOrClone(context.Context, knowl.Source) (*gogit.Repository, error) {
+	o.refreshCalls++
+	return o.repo, nil
+}
+
+func (o *recoveringRepoOpener) OpenCached(context.Context, knowl.Source) (*gogit.Repository, error) {
+	o.localCalls++
+	if o.localErr != nil {
+		err := o.localErr
+		o.localErr = nil
+		return nil, err
+	}
+	return o.repo, nil
 }
 
 func (m *mockRepoOpener) OpenOrClone(ctx context.Context, source knowl.Source) (*gogit.Repository, error) {
+	m.refreshCalls++
 	return m.repo, nil
+}
+
+func (m *mockRepoOpener) OpenCached(ctx context.Context, source knowl.Source) (*gogit.Repository, error) {
+	m.localCalls++
+	return m.repo, nil
+}
+
+type stubRemoteRefLister struct {
+	refs []*plumbing.Reference
+}
+
+func (s stubRemoteRefLister) ListRemoteRefs(context.Context, knowl.GitSourceConfig) ([]*plumbing.Reference, error) {
+	return s.refs, nil
+}
+
+func TestAdapterRefreshesOnceThenReadsLocally(t *testing.T) {
+	t.Parallel()
+
+	storer := memory.NewStorage()
+	repo, err := gogit.Init(storer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobHash := storeBlob(t, storer, []byte("# Pinned\n"))
+	treeHash := storeTree(t, storer, &object.Tree{Entries: []object.TreeEntry{{Name: "doc.md", Mode: filemode.Regular, Hash: blobHash}}})
+	commitHash := storeCommitWithTree(t, storer, treeHash)
+	opener := &mockRepoOpener{repo: repo}
+	resolver := git.NewRefResolver(stubRemoteRefLister{refs: []*plumbing.Reference{
+		plumbing.NewHashReference("refs/heads/main", commitHash),
+	}})
+	adapter, err := git.NewAdapter(git.DefaultLimits(), resolver, opener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := knowl.Source{ID: "prepared-source", Type: knowl.SourceTypeGit, Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+		Remote: testRemoteMain, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch, Include: []string{testIncludeMarkdown},
+	}}}
+
+	prepared, err := adapter.PrepareSnapshot(context.Background(), source, "")
+	if err != nil {
+		t.Fatalf("PrepareSnapshot() error = %v", err)
+	}
+	page, err := adapter.List(context.Background(), source, prepared.PageToken)
+	if err != nil || len(page.Documents) != 1 {
+		t.Fatalf("List() = %#v, %v", page, err)
+	}
+	for i := 0; i < 2; i++ {
+		doc, fetchErr := adapter.Fetch(context.Background(), source, page.Documents[0])
+		if fetchErr != nil || string(doc.Content) != "# Pinned\n" {
+			t.Fatalf("Fetch() = %#v, %v", doc, fetchErr)
+		}
+	}
+	if opener.refreshCalls != 1 || opener.localCalls != 3 {
+		t.Fatalf("repository calls = %d refresh, %d local; want 1, 3", opener.refreshCalls, opener.localCalls)
+	}
+}
+
+func TestAdapterResumedListRecoversCacheAndKeepsPinnedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	storer := memory.NewStorage()
+	repo, err := gogit.Init(storer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstBlob := storeBlob(t, storer, []byte("# First pinned\n"))
+	secondBlob := storeBlob(t, storer, []byte("# Second pinned\n"))
+	pinnedTree := storeTree(t, storer, &object.Tree{Entries: []object.TreeEntry{
+		{Name: "first.md", Mode: filemode.Regular, Hash: firstBlob},
+		{Name: "second.md", Mode: filemode.Regular, Hash: secondBlob},
+	}})
+	pinnedCommit := storeCommitWithTree(t, storer, pinnedTree)
+	currentBlob := storeBlob(t, storer, []byte("# Current\n"))
+	currentTree := storeTree(t, storer, &object.Tree{Entries: []object.TreeEntry{
+		{Name: "current.md", Mode: filemode.Regular, Hash: currentBlob},
+	}})
+	_ = storeCommitWithTree(t, storer, currentTree)
+
+	opener := &recoveringRepoOpener{repo: repo, localErr: errors.New("cache missing")}
+	limits := git.DefaultLimits()
+	limits.PageSize = 1
+	adapter, err := git.NewAdapter(limits, nil, opener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := knowl.Source{ID: "resumed-source", Type: knowl.SourceTypeGit, Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+		Remote: testRemoteMain, Include: []string{testIncludeMarkdown},
+	}}}
+	token, err := git.EncodePageTokenForTest(1, pinnedCommit.String(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstPage, err := adapter.List(context.Background(), source, token)
+	if err != nil {
+		t.Fatalf("List(first page) error = %v", err)
+	}
+	if len(firstPage.Documents) != 1 || firstPage.Documents[0].Path != "first.md" {
+		t.Fatalf("List(first page) documents = %#v, want pinned first.md", firstPage.Documents)
+	}
+	secondPage, err := adapter.List(context.Background(), source, firstPage.NextPageToken)
+	if err != nil {
+		t.Fatalf("List(second page) error = %v", err)
+	}
+	if len(secondPage.Documents) != 1 || secondPage.Documents[0].Path != "second.md" {
+		t.Fatalf("List(second page) documents = %#v, want pinned second.md", secondPage.Documents)
+	}
+	doc, err := adapter.Fetch(context.Background(), source, firstPage.Documents[0])
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if string(doc.Content) != "# First pinned\n" {
+		t.Fatalf("Fetch() content = %q, want pinned content", doc.Content)
+	}
+	if opener.refreshCalls != 1 || opener.localCalls != 3 {
+		t.Fatalf("repository calls = %d refresh, %d local; want 1, 3", opener.refreshCalls, opener.localCalls)
+	}
+}
+
+func TestAdapterResumedListFailsWhenRecoveredCacheLacksPinnedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	storer := memory.NewStorage()
+	repo, err := gogit.Init(storer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentBlob := storeBlob(t, storer, []byte("# Current\n"))
+	currentTree := storeTree(t, storer, &object.Tree{Entries: []object.TreeEntry{
+		{Name: "current.md", Mode: filemode.Regular, Hash: currentBlob},
+	}})
+	_ = storeCommitWithTree(t, storer, currentTree)
+
+	opener := &recoveringRepoOpener{repo: repo, localErr: errors.New("cache missing")}
+	adapter, err := git.NewAdapter(git.DefaultLimits(), nil, opener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := knowl.Source{ID: "resumed-source", Type: knowl.SourceTypeGit, Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+		Remote: testRemoteMain, Include: []string{testIncludeMarkdown},
+	}}}
+	missingSnapshot := plumbing.NewHash("1111111111111111111111111111111111111111")
+	token, err := git.EncodePageTokenForTest(1, missingSnapshot.String(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := adapter.List(context.Background(), source, token)
+	if err == nil {
+		t.Fatalf("List() = %#v, want pinned-snapshot error", page)
+	}
+	if git.ClassOfError(err) != git.ClassScanInvalid {
+		t.Fatalf("List() class = %q, want %q", git.ClassOfError(err), git.ClassScanInvalid)
+	}
+	if opener.refreshCalls != 1 || opener.localCalls != 1 {
+		t.Fatalf("repository calls = %d refresh, %d local; want 1, 1", opener.refreshCalls, opener.localCalls)
+	}
 }
 
 func TestAdapterListPagination(t *testing.T) {
@@ -81,9 +266,9 @@ func TestAdapterListPagination(t *testing.T) {
 		Config: knowl.SourceConfig{
 			Git: &knowl.GitSourceConfig{
 				Remote:  testRemoteMain,
-				Ref:     "main",
+				Ref:     testRefBranchMain,
 				RefKind: knowl.GitRefKindBranch,
-				Include: []string{"*.md"},
+				Include: []string{testIncludeMarkdown},
 			},
 		},
 	}

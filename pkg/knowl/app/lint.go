@@ -140,7 +140,7 @@ func lintPages(snapshot knowl.WorkspaceSnapshot, index knowl.PageSnapshot, catal
 			}
 			for _, sourceRef := range metadata.SourceRefs {
 				if _, exists := rawKeys[sourceRef]; !exists {
-					findings = append(findings, knowl.LintFinding{Code: "citation.unknown_source", Severity: lintError, Path: page.Path, PageID: page.ID, Message: "page cites a raw source that is not present in the workspace", SourceRefs: []string{sourceRef}})
+					findings = append(findings, knowl.LintFinding{Code: knowl.DiagnosticCitationUnknownSource, Severity: lintError, Path: page.Path, PageID: page.ID, Message: "page cites a raw source that is not present in the workspace", SourceRefs: []string{sourceRef}})
 				}
 			}
 		}

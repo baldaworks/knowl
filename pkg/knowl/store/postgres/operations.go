@@ -52,13 +52,14 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		INSERT INTO knowl_operations (
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
 			schema_digest, status, created_at, updated_at, accepted_media_type,
-			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $9)
-		ON CONFLICT (scope, source_adapter, source_id, source_version) DO NOTHING`,
+			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at,
+			maintenance_generation
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $9, $15)
+		ON CONFLICT (scope, source_adapter, source_id, source_version, maintenance_generation) DO NOTHING`,
 		operationIDValue, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version,
 		key.Version.Digest, meta.SchemaDigest, knowl.StatusReceived, now,
 		descriptor.Source.MediaType, descriptor.Source.ManifestRef, encodedSourceDocument, descriptor.Schema.Version,
-		nullBytes(descriptor.Schema.Content))
+		nullBytes(descriptor.Schema.Content), key.MaintenanceGeneration)
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
 	}
@@ -71,9 +72,9 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 	err = tx.QueryRowContext(ctx, `
 		SELECT operation_id, source_digest, accepted_source_document
 		FROM knowl_operations
-		WHERE scope = $1 AND source_adapter = $2 AND source_id = $3 AND source_version = $4
+		WHERE scope = $1 AND source_adapter = $2 AND source_id = $3 AND source_version = $4 AND maintenance_generation = $5
 		FOR UPDATE`,
-		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version).
+		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.MaintenanceGeneration).
 		Scan(&existingID, &existingDigest, &existingSourceDocument)
 	if errors.Is(err, sql.ErrNoRows) {
 		return app.OperationReservation{}, fmt.Errorf("reserved operation disappeared: %w", ErrNotFound)
@@ -174,9 +175,14 @@ func (store *Store) SavePlan(ctx context.Context, id knowl.OperationID, summary 
 	if strings.TrimSpace(summary.Digest) == "" {
 		return fmt.Errorf("plan digest is required: %w", ErrConflict)
 	}
+	diagnostics, err := app.EncodeMaintenanceDiagnostics(summary.Diagnostics)
+	if err != nil {
+		return fmt.Errorf("maintenance diagnostics are invalid: %w", ErrConflict)
+	}
 	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
 		if current.status == knowl.StatusPlanned {
-			if current.planDigest == summary.Digest {
+			if current.planDigest == summary.Digest &&
+				(current.maintenanceDiagnostics == diagnostics || current.maintenanceDiagnostics == "" && diagnostics == "[]") {
 				return nil
 			}
 			return fmt.Errorf("plan digest differs: %w", ErrConflict)
@@ -185,8 +191,8 @@ func (store *Store) SavePlan(ctx context.Context, id knowl.OperationID, summary 
 			return invalidTransition(current.status, knowl.StatusPlanned)
 		}
 		return updateOperationTx(ctx, tx, id,
-			"status = $1, plan_digest = $2, updated_at = $3",
-			knowl.StatusPlanned, summary.Digest, nowTime())
+			"status = $1, plan_digest = $2, maintenance_diagnostics = $3, updated_at = $4",
+			knowl.StatusPlanned, summary.Digest, diagnostics, nowTime())
 	})
 }
 
@@ -232,7 +238,14 @@ func (store *Store) CommitOutcome(ctx context.Context, id knowl.OperationID, com
 	if commit.OperationID != "" && knowl.OperationID(commit.OperationID) != id {
 		return fmt.Errorf("commit belongs to %q, want %q: %w", commit.OperationID, id, ErrConflict)
 	}
+	diagnostics, err := app.EncodeMaintenanceDiagnostics(commit.Diagnostics)
+	if err != nil {
+		return fmt.Errorf("maintenance diagnostics are invalid: %w", ErrConflict)
+	}
 	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
+		if current.maintenanceDiagnostics != diagnostics && (current.maintenanceDiagnostics != "" || diagnostics != "[]") {
+			return fmt.Errorf("maintenance diagnostics differ: %w", ErrConflict)
+		}
 		if current.status == knowl.StatusCommitted {
 			if current.commitGeneration == commit.Generation {
 				return nil
@@ -272,22 +285,23 @@ func (store *Store) Fail(ctx context.Context, id knowl.OperationID, failure know
 // Operation reads one operation within its scope.
 func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error) {
 	var (
-		operationIDValue                                        string
-		sourceAdapter, sourceID, sourceVersion, sourceDigest    string
-		kind, schemaDigest, status, failureClass, failureReason string
-		attempt, workAttempt, retryAttempt, manualRetryCount    int
-		updatedAt, readyAt                                      time.Time
+		operationIDValue                                                                string
+		sourceAdapter, sourceID, sourceVersion, sourceDigest                            string
+		maintenanceGeneration                                                           string
+		kind, schemaDigest, status, failureClass, failureReason, maintenanceDiagnostics string
+		attempt, workAttempt, retryAttempt, manualRetryCount                            int
+		updatedAt, readyAt                                                              time.Time
 	)
 	err := store.db.QueryRowContext(ctx, `
-		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest,
+		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation,
 		       schema_digest, status, attempt, work_attempt, retry_attempt, manual_retry_count,
-		       failure_class, failure_reason, work_ready_at, updated_at
+		       failure_class, failure_reason, maintenance_diagnostics, work_ready_at, updated_at
 		FROM knowl_operations
 		WHERE scope = $1 AND operation_id = $2`,
 		scope, id).Scan(
-		&operationIDValue, &kind, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest,
+		&operationIDValue, &kind, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest, &maintenanceGeneration,
 		&schemaDigest, &status, &attempt, &workAttempt, &retryAttempt, &manualRetryCount,
-		&failureClass, &failureReason, &readyAt, &updatedAt)
+		&failureClass, &failureReason, &maintenanceDiagnostics, &readyAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.Operation{}, ErrNotFound
 	}
@@ -298,9 +312,10 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 		ID:   knowl.OperationID(operationIDValue),
 		Kind: knowl.WorkKind(kind),
 		Key: knowl.OperationKey{
-			Scope:   scope,
-			Source:  knowl.SourceRef{Adapter: sourceAdapter, ID: sourceID},
-			Version: knowl.SourceVersion{Version: sourceVersion, Digest: sourceDigest},
+			Scope:                 scope,
+			Source:                knowl.SourceRef{Adapter: sourceAdapter, ID: sourceID},
+			Version:               knowl.SourceVersion{Version: sourceVersion, Digest: sourceDigest},
+			MaintenanceGeneration: maintenanceGeneration,
 		},
 		Status:           knowl.OperationStatus(status),
 		Attempt:          attempt,
@@ -318,17 +333,22 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	if failureClass != "" {
 		operation.Failure = &knowl.Failure{Class: failureClass, Reason: failureReason, OperationID: operationIDValue}
 	}
+	operation.Diagnostics, err = app.DecodeMaintenanceDiagnostics(maintenanceDiagnostics)
+	if err != nil {
+		return knowl.Operation{}, fmt.Errorf("decode maintenance diagnostics: %w", err)
+	}
 	_ = schemaDigest
 	return operation, nil
 }
 
 type operationRow struct {
-	status           knowl.OperationStatus
-	planDigest       string
-	commitGeneration string
-	failureClass     string
-	failureReason    string
-	leaseExpiresAt   sql.NullTime
+	status                 knowl.OperationStatus
+	planDigest             string
+	commitGeneration       string
+	failureClass           string
+	failureReason          string
+	leaseExpiresAt         sql.NullTime
+	maintenanceDiagnostics string
 }
 
 func (store *Store) transition(ctx context.Context, id knowl.OperationID, update func(*sql.Tx, operationRow) error) error {
@@ -343,11 +363,11 @@ func (store *Store) transition(ctx context.Context, id knowl.OperationID, update
 	var current operationRow
 	var status string
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, plan_digest, commit_generation, failure_class, failure_reason, lease_expires_at
+		SELECT status, plan_digest, commit_generation, failure_class, failure_reason, lease_expires_at, maintenance_diagnostics
 		FROM knowl_operations
 		WHERE operation_id = $1
 		FOR UPDATE`, id).
-		Scan(&status, &current.planDigest, &current.commitGeneration, &current.failureClass, &current.failureReason, &current.leaseExpiresAt)
+		Scan(&status, &current.planDigest, &current.commitGeneration, &current.failureClass, &current.failureReason, &current.leaseExpiresAt, &current.maintenanceDiagnostics)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -389,19 +409,13 @@ func invalidTransition(from, to knowl.OperationStatus) error {
 func nowTime() time.Time { return time.Now().UTC() }
 
 func validateOperationKey(key knowl.OperationKey) error {
-	if strings.TrimSpace(string(key.Scope)) == "" ||
-		strings.TrimSpace(key.Source.Adapter) == "" ||
-		strings.TrimSpace(key.Source.ID) == "" ||
-		strings.TrimSpace(key.Version.Version) == "" ||
-		strings.TrimSpace(key.Version.Digest) == "" {
+	if _, err := app.SourceOperationID(key); err != nil {
 		return fmt.Errorf("operation key is incomplete: %w", ErrConflict)
 	}
 	return nil
 }
 
 func operationID(key knowl.OperationKey) string {
-	digest := key.Version.Digest
-	return fmt.Sprintf("%s:%s:%s@%s#%s",
-		key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version,
-		digest[:minInt(len(digest), 16)])
+	id, _ := app.SourceOperationID(key)
+	return string(id)
 }

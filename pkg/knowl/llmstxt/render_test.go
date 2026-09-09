@@ -27,6 +27,41 @@ func TestRenderProjectsNestedCatalogsAndDirectPages(t *testing.T) {
 	}
 }
 
+func TestRenderAcceptsFullyOverlappingCatalog(t *testing.T) {
+	input := fixtureInput()
+	input.Catalogs[1].Content = "# Operations\n- [Secondary API](../../concepts/API%20%28v2%29.md)\n"
+	input.Pages = append(input.Pages[:2], input.Pages[3:]...)
+
+	got, err := llmstxt.Render(context.Background(), input, llmstxt.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	if strings.Count(text, "concepts/API%20%28v2%29.md") != 1 {
+		t.Fatalf("overlapping page emission = %q", text)
+	}
+	if strings.Contains(text, "## Operations") {
+		t.Fatalf("empty deduplicated section was emitted: %q", text)
+	}
+	again, err := llmstxt.Render(context.Background(), input, llmstxt.Options{})
+	if err != nil || string(again) != text {
+		t.Fatalf("second Render() = %q, %v", again, err)
+	}
+}
+
+func TestRenderRejectsStructurallyEmptyCatalog(t *testing.T) {
+	input := llmstxt.Input{
+		Index: catalog("wiki/index.md", "Empty child", "- [Empty](catalogs/empty/index.md)\n"),
+		Catalogs: []knowl.PageSnapshot{
+			catalog("wiki/catalogs/empty/index.md", "Empty", ""),
+		},
+	}
+	got, err := llmstxt.Render(context.Background(), input, llmstxt.Options{})
+	if !errors.Is(err, llmstxt.ErrInvalidGraph) || got != nil {
+		t.Fatalf("Render() = %q, %v", got, err)
+	}
+}
+
 func TestRenderUsesAbsoluteBasePathAndOverridesTitle(t *testing.T) {
 	got, err := llmstxt.Render(context.Background(), fixtureInput(), llmstxt.Options{Title: "Published", BaseURL: "https://docs.example.test/knowledge/"})
 	if err != nil {
