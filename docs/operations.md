@@ -166,9 +166,15 @@ The default policy rejects non-fast-forward branch changes and moved tags while
 preserving the last successful checkpoint and active catalog. Set
 `allow_rewrite: true` to explicitly permit rewritten branch history. Set
 `rebind_ack: true` only for the synchronization that intentionally adopts a new
-repository identity or moved tag, then remove the acknowledgement. Git mirrors
-under `<workspace>/.knowl/cache/git/<source-id>` are rebuildable cache, not
-canonical evidence, and can be removed while Knowl is stopped.
+repository identity or moved tag, then remove the acknowledgement. Git data
+under `<workspace>/.knowl/cache/git/<source-id>` is a scoped bare cache: Knowl
+fetches only the configured tracked ref, without unrelated branches or tags,
+while retaining the ref's complete history and objects. The `include` patterns
+filter document paths after that transfer; they do not provide partial-clone or
+path-level network filtering. These directories are rebuildable cache, not
+canonical evidence, and can be removed while Knowl is stopped. A cache created
+by an older Knowl version may retain previously mirrored objects until it is
+removed, but subsequent refreshes use the scoped tracked-ref fetch.
 The defaults cap one pack transfer at 500 MiB and one source cache at 512 MiB;
 override `max_transfer_bytes` and `max_cache_bytes` within the documented 8 GiB
 maximum when repository size requires it.

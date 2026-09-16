@@ -93,7 +93,7 @@ func (c *RemoteClient) ListRemoteRefs(ctx context.Context, config knowl.GitSourc
 	}
 
 	rem := gogit.NewRemote(memory.NewStorage(), &gogitconfig.RemoteConfig{
-		Name: "origin",
+		Name: gogit.DefaultRemoteName,
 		URLs: []string{config.Remote},
 	})
 

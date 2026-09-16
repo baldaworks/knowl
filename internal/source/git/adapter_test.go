@@ -22,6 +22,7 @@ type mockRepoOpener struct {
 	repo         *gogit.Repository
 	refreshCalls int
 	localCalls   int
+	resolved     []git.ResolvedRef
 }
 
 type recoveringRepoOpener struct {
@@ -29,10 +30,12 @@ type recoveringRepoOpener struct {
 	localErr     error
 	refreshCalls int
 	localCalls   int
+	resolved     []git.ResolvedRef
 }
 
-func (o *recoveringRepoOpener) OpenOrClone(context.Context, knowl.Source) (*gogit.Repository, error) {
+func (o *recoveringRepoOpener) Refresh(_ context.Context, _ knowl.Source, resolved git.ResolvedRef) (*gogit.Repository, error) {
 	o.refreshCalls++
+	o.resolved = append(o.resolved, resolved)
 	return o.repo, nil
 }
 
@@ -46,8 +49,9 @@ func (o *recoveringRepoOpener) OpenCached(context.Context, knowl.Source) (*gogit
 	return o.repo, nil
 }
 
-func (m *mockRepoOpener) OpenOrClone(ctx context.Context, source knowl.Source) (*gogit.Repository, error) {
+func (m *mockRepoOpener) Refresh(_ context.Context, _ knowl.Source, resolved git.ResolvedRef) (*gogit.Repository, error) {
 	m.refreshCalls++
+	m.resolved = append(m.resolved, resolved)
 	return m.repo, nil
 }
 
@@ -104,6 +108,9 @@ func TestAdapterRefreshesOnceThenReadsLocally(t *testing.T) {
 	if opener.refreshCalls != 1 || opener.localCalls != 3 {
 		t.Fatalf("repository calls = %d refresh, %d local; want 1, 3", opener.refreshCalls, opener.localCalls)
 	}
+	if len(opener.resolved) != 1 || opener.resolved[0].Name != testRefFullBranchMain || opener.resolved[0].Hash != commitHash {
+		t.Fatalf("resolved refresh = %#v, want %s at %s", opener.resolved, testRefFullBranchMain, commitHash)
+	}
 }
 
 func TestAdapterResumedListRecoversCacheAndKeepsPinnedSnapshot(t *testing.T) {
@@ -125,17 +132,20 @@ func TestAdapterResumedListRecoversCacheAndKeepsPinnedSnapshot(t *testing.T) {
 	currentTree := storeTree(t, storer, &object.Tree{Entries: []object.TreeEntry{
 		{Name: "current.md", Mode: filemode.Regular, Hash: currentBlob},
 	}})
-	_ = storeCommitWithTree(t, storer, currentTree)
+	currentCommit := storeCommitWithTree(t, storer, currentTree)
 
 	opener := &recoveringRepoOpener{repo: repo, localErr: errors.New("cache missing")}
 	limits := git.DefaultLimits()
 	limits.PageSize = 1
-	adapter, err := git.NewAdapter(limits, nil, opener)
+	resolver := git.NewRefResolver(stubRemoteRefLister{refs: []*plumbing.Reference{
+		plumbing.NewHashReference(testRefFullBranchMain, currentCommit),
+	}})
+	adapter, err := git.NewAdapter(limits, resolver, opener)
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := knowl.Source{ID: "resumed-source", Type: knowl.SourceTypeGit, Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
-		Remote: testRemoteMain, Include: []string{testIncludeMarkdown},
+		Remote: testRemoteMain, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch, Include: []string{testIncludeMarkdown},
 	}}}
 	token, err := git.EncodePageTokenForTest(1, pinnedCommit.String(), "")
 	if err != nil {
@@ -166,6 +176,9 @@ func TestAdapterResumedListRecoversCacheAndKeepsPinnedSnapshot(t *testing.T) {
 	if opener.refreshCalls != 1 || opener.localCalls != 3 {
 		t.Fatalf("repository calls = %d refresh, %d local; want 1, 3", opener.refreshCalls, opener.localCalls)
 	}
+	if len(opener.resolved) != 1 || opener.resolved[0].Hash != currentCommit {
+		t.Fatalf("recovery refresh = %#v, want current commit %s", opener.resolved, currentCommit)
+	}
 }
 
 func TestAdapterResumedListFailsWhenRecoveredCacheLacksPinnedSnapshot(t *testing.T) {
@@ -180,15 +193,18 @@ func TestAdapterResumedListFailsWhenRecoveredCacheLacksPinnedSnapshot(t *testing
 	currentTree := storeTree(t, storer, &object.Tree{Entries: []object.TreeEntry{
 		{Name: "current.md", Mode: filemode.Regular, Hash: currentBlob},
 	}})
-	_ = storeCommitWithTree(t, storer, currentTree)
+	currentCommit := storeCommitWithTree(t, storer, currentTree)
 
 	opener := &recoveringRepoOpener{repo: repo, localErr: errors.New("cache missing")}
-	adapter, err := git.NewAdapter(git.DefaultLimits(), nil, opener)
+	resolver := git.NewRefResolver(stubRemoteRefLister{refs: []*plumbing.Reference{
+		plumbing.NewHashReference(testRefFullBranchMain, currentCommit),
+	}})
+	adapter, err := git.NewAdapter(git.DefaultLimits(), resolver, opener)
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := knowl.Source{ID: "resumed-source", Type: knowl.SourceTypeGit, Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
-		Remote: testRemoteMain, Include: []string{testIncludeMarkdown},
+		Remote: testRemoteMain, Ref: testRefBranchMain, RefKind: knowl.GitRefKindBranch, Include: []string{testIncludeMarkdown},
 	}}}
 	missingSnapshot := plumbing.NewHash("1111111111111111111111111111111111111111")
 	token, err := git.EncodePageTokenForTest(1, missingSnapshot.String(), "")
