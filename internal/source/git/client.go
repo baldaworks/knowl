@@ -23,8 +23,12 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 )
 
-// DefaultNetworkTimeout bounds network operations against the remote repository.
-const DefaultNetworkTimeout = 30 * time.Second
+const (
+	// DefaultDialTimeout bounds connection establishment to a remote repository.
+	DefaultDialTimeout = 30 * time.Second
+	// DefaultNetworkTimeout bounds complete HTTP operations, including large pack transfers.
+	DefaultNetworkTimeout = 5 * time.Minute
+)
 
 // RemoteClient queries and interacts with remote Git repositories without executing local processes.
 type RemoteClient struct {
@@ -43,7 +47,7 @@ type transferBudget struct {
 // NewRemoteClient constructs a RemoteClient with bounded network timeouts and SSRF controls.
 func NewRemoteClient() *RemoteClient {
 	dialer := &net.Dialer{
-		Timeout:   DefaultNetworkTimeout,
+		Timeout:   DefaultDialTimeout,
 		KeepAlive: 30 * time.Second,
 	}
 	transport := &http.Transport{
