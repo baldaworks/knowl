@@ -13,13 +13,14 @@ import (
 )
 
 const (
-	testRemoteMain    = "https://github.com/org/repo.git"
-	testRemoteNew     = "https://github.com/org/new-repo.git"
-	testRemoteOld     = "https://github.com/org/old-repo.git"
-	testRefBranchMain = "main"
-	testRefTagV1      = "v1.0"
-	testAuthorName    = "Test"
-	testAuthorEmail   = "test@example.com"
+	testRemoteMain        = "https://github.com/org/repo.git"
+	testRemoteNew         = "https://github.com/org/new-repo.git"
+	testRemoteOld         = "https://github.com/org/old-repo.git"
+	testRefBranchMain     = "main"
+	testRefFullBranchMain = "refs/heads/main"
+	testRefTagV1          = "v1.0"
+	testAuthorName        = "Test"
+	testAuthorEmail       = "test@example.com"
 )
 
 func TestFindTargetRef(t *testing.T) {
@@ -30,7 +31,7 @@ func TestFindTargetRef(t *testing.T) {
 	hashTagPeeled := plumbing.NewHash("3333333333333333333333333333333333333333")
 
 	refs := []*plumbing.Reference{
-		plumbing.NewReferenceFromStrings("refs/heads/main", hashMain.String()),
+		plumbing.NewReferenceFromStrings(testRefFullBranchMain, hashMain.String()),
 		plumbing.NewReferenceFromStrings("refs/tags/v1.0", hashTagObj.String()),
 		plumbing.NewReferenceFromStrings("refs/tags/v1.0^{}", hashTagPeeled.String()),
 	}
@@ -45,7 +46,7 @@ func TestFindTargetRef(t *testing.T) {
 		if res.Hash != hashMain {
 			t.Errorf("got hash %s, want %s", res.Hash, hashMain)
 		}
-		if res.Name != "refs/heads/main" {
+		if res.Name != plumbing.ReferenceName(testRefFullBranchMain) {
 			t.Errorf("got ref %s, want refs/heads/main", res.Name)
 		}
 	})

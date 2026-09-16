@@ -12,11 +12,14 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	gogit "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 const (
 	defaultCacheSubdir = ".knowl/cache/git"
 	cacheIdentityFile  = "knowl.repository-identity"
+	trackedCacheRef    = plumbing.ReferenceName("refs/knowl/tracked")
 )
 
 const (
@@ -25,7 +28,7 @@ const (
 	maxCacheEntries      = 1_000_000
 )
 
-// CacheManager manages on-disk bare repository mirror caches.
+// CacheManager manages on-disk bare repository caches.
 type CacheManager struct {
 	baseDir string
 	client  *RemoteClient
@@ -45,7 +48,7 @@ func NewCacheManager(baseDir string, client *RemoteClient) *CacheManager {
 	}
 }
 
-// OpenCached opens the source-scoped bare mirror without refreshing or
+// OpenCached opens the source-scoped bare cache without refreshing or
 // repairing it. Callers use this after PrepareSnapshot has made the immutable
 // objects available locally.
 func (m *CacheManager) OpenCached(ctx context.Context, source knowl.Source) (*gogit.Repository, error) {
@@ -66,10 +69,28 @@ func (m *CacheManager) OpenCached(ctx context.Context, source knowl.Source) (*go
 	return repo, nil
 }
 
-// OpenOrClone opens an existing bare mirror cache or transparently clones a new one.
+// OpenOrClone resolves the configured ref and refreshes its source-scoped cache.
+// New callers that already resolved the remote ref should call Refresh directly.
 func (m *CacheManager) OpenOrClone(ctx context.Context, source knowl.Source) (*gogit.Repository, error) {
-	if source.Config.Git == nil || app.ValidateSourceID(source.ID) != nil {
+	if source.Type != knowl.SourceTypeGit || source.Config.Git == nil || app.ValidateSourceID(source.ID) != nil {
 		return nil, app.ErrSourceInvalid
+	}
+	resolved, err := NewRefResolver(m.client).ResolveRemoteRef(ctx, *source.Config.Git)
+	if err != nil {
+		return nil, err
+	}
+	return m.Refresh(ctx, source, *resolved)
+}
+
+// Refresh opens or creates a source-scoped bare cache and fetches only the
+// concrete remote ref selected by the resolver.
+func (m *CacheManager) Refresh(ctx context.Context, source knowl.Source, resolved ResolvedRef) (*gogit.Repository, error) {
+	if source.Type != knowl.SourceTypeGit || source.Config.Git == nil || app.ValidateSourceID(source.ID) != nil {
+		return nil, app.ErrSourceInvalid
+	}
+	refSpec, err := scopedRefSpec(resolved)
+	if err != nil {
+		return nil, err
 	}
 	gitCfg := *source.Config.Git
 	dir := filepath.Join(m.baseDir, string(source.ID))
@@ -89,7 +110,7 @@ func (m *CacheManager) OpenOrClone(ctx context.Context, source knowl.Source) (*g
 	// Try opening existing repository
 	repo, err := gogit.PlainOpen(dir)
 	if err == nil {
-		origin, originErr := repo.Remote("origin")
+		origin, originErr := repo.Remote(gogit.DefaultRemoteName)
 		if originErr == nil {
 			urls := origin.Config().URLs
 			if len(urls) != 1 {
@@ -134,12 +155,19 @@ func (m *CacheManager) OpenOrClone(ctx context.Context, source knowl.Source) (*g
 			}
 			transferCtx := withTransferLimit(ctx, transferBudget)
 			fetchErr := repo.FetchContext(transferCtx, &gogit.FetchOptions{
-				RemoteName: "origin",
+				RemoteName: gogit.DefaultRemoteName,
+				RefSpecs:   []gitconfig.RefSpec{refSpec},
 				Auth:       auth,
 				Force:      true,
-				Tags:       gogit.AllTags,
+				Tags:       gogit.NoTags,
 			})
 			if fetchErr == nil || errors.Is(fetchErr, gogit.NoErrAlreadyUpToDate) {
+				if err := requireResolvedRef(repo, resolved); err != nil {
+					return nil, err
+				}
+				if err := normalizeScopedOrigin(repo, refSpec); err != nil {
+					return nil, err
+				}
 				if identityErr := writeCacheIdentity(dir, RepositoryIdentity(gitCfg)); identityErr != nil {
 					return nil, identityErr
 				}
@@ -170,7 +198,7 @@ func (m *CacheManager) OpenOrClone(ctx context.Context, source knowl.Source) (*g
 		}
 	}
 
-	// Fresh clone
+	// Fresh cache
 	cacheBytes, err = cacheUsage(dir, cacheLimit)
 	if err != nil {
 		return nil, err
@@ -184,18 +212,33 @@ func (m *CacheManager) OpenOrClone(ctx context.Context, source knowl.Source) (*g
 		return nil, WrapClassified(ClassScanInvalid, err, fmt.Sprintf("failed to create cache root %s", m.baseDir))
 	}
 
-	cloneOpts := &gogit.CloneOptions{
-		URL:        gitCfg.Remote,
-		Auth:       auth,
-		Mirror:     true,
-		NoCheckout: true,
-		Tags:       gogit.AllTags,
-	}
-
-	repo, err = gogit.PlainCloneContext(transferCtx, dir, true, cloneOpts)
+	repo, err = gogit.PlainInit(dir, true)
 	if err != nil {
 		_ = os.RemoveAll(dir)
+		return nil, WrapClassified(ClassScanInvalid, err, "failed to initialize Git cache")
+	}
+	if _, err := repo.CreateRemote(&gitconfig.RemoteConfig{
+		Name:   gogit.DefaultRemoteName,
+		URLs:   []string{gitCfg.Remote},
+		Fetch:  []gitconfig.RefSpec{refSpec},
+		Mirror: false,
+	}); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, WrapClassified(ClassScanInvalid, err, "failed to configure Git cache origin")
+	}
+	if err := repo.FetchContext(transferCtx, &gogit.FetchOptions{
+		RemoteName: gogit.DefaultRemoteName,
+		RefSpecs:   []gitconfig.RefSpec{refSpec},
+		Auth:       auth,
+		Force:      true,
+		Tags:       gogit.NoTags,
+	}); err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		_ = os.RemoveAll(dir)
 		return nil, m.client.classifyTransportError(err, gitCfg.Remote)
+	}
+	if err := requireResolvedRef(repo, resolved); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
 	}
 	if err := writeCacheIdentity(dir, RepositoryIdentity(gitCfg)); err != nil {
 		_ = os.RemoveAll(dir)
@@ -209,8 +252,54 @@ func (m *CacheManager) OpenOrClone(ctx context.Context, source knowl.Source) (*g
 	return repo, nil
 }
 
+func scopedRefSpec(resolved ResolvedRef) (gitconfig.RefSpec, error) {
+	if resolved.Hash.IsZero() || !strings.HasPrefix(resolved.Name.String(), "refs/") || resolved.Name.Validate() != nil {
+		return "", WrapClassified(ClassScanInvalid, ErrScanInvalid, "resolved Git ref is invalid")
+	}
+	refSpec := gitconfig.RefSpec("+" + resolved.Name.String() + ":" + trackedCacheRef.String())
+	if err := refSpec.Validate(); err != nil {
+		return "", WrapClassified(ClassScanInvalid, err, "resolved Git ref cannot be fetched")
+	}
+	return refSpec, nil
+}
+
+func requireResolvedRef(repo *gogit.Repository, resolved ResolvedRef) error {
+	fetchedHash, err := repo.ResolveRevision(plumbing.Revision(trackedCacheRef.String()))
+	if err != nil {
+		return WrapClassified(ClassScanInvalid, err, "fetched Git ref cannot be resolved to a commit")
+	}
+	if *fetchedHash != resolved.Hash {
+		return WrapClassified(
+			ClassScanInvalid,
+			ErrScanInvalid,
+			fmt.Sprintf("fetched Git ref moved from resolved commit %s to %s", resolved.Hash, *fetchedHash),
+		)
+	}
+	return nil
+}
+
+func normalizeScopedOrigin(repo *gogit.Repository, refSpec gitconfig.RefSpec) error {
+	config, err := repo.Config()
+	if err != nil {
+		return WrapClassified(ClassScanInvalid, err, "cannot read Git cache configuration")
+	}
+	origin, ok := config.Remotes[gogit.DefaultRemoteName]
+	if !ok || origin == nil {
+		return WrapClassified(ClassScanInvalid, ErrScanInvalid, "Git cache origin is unavailable")
+	}
+	origin.Mirror = false
+	origin.Fetch = []gitconfig.RefSpec{refSpec}
+	if config.Raw != nil {
+		config.Raw.Section("remote").Subsection(gogit.DefaultRemoteName).RemoveOption("mirror")
+	}
+	if err := repo.SetConfig(config); err != nil {
+		return WrapClassified(ClassScanInvalid, err, "cannot update Git cache configuration")
+	}
+	return nil
+}
+
 func validateCacheIdentity(repo *gogit.Repository, dir string, config knowl.GitSourceConfig) error {
-	origin, err := repo.Remote("origin")
+	origin, err := repo.Remote(gogit.DefaultRemoteName)
 	if err != nil {
 		return WrapClassified(ClassScanInvalid, err, "Git cache origin is unavailable")
 	}

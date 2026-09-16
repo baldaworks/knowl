@@ -19,7 +19,7 @@ import (
 
 // RepositoryOpener provides access to a local Git repository for a configured source.
 type RepositoryOpener interface {
-	OpenOrClone(ctx context.Context, source knowl.Source) (*gogit.Repository, error)
+	Refresh(ctx context.Context, source knowl.Source, resolved ResolvedRef) (*gogit.Repository, error)
 	OpenCached(ctx context.Context, source knowl.Source) (*gogit.Repository, error)
 }
 
@@ -102,7 +102,11 @@ func (a *Adapter) List(ctx context.Context, source knowl.Source, pageToken strin
 		if !resuming || ctx.Err() != nil {
 			return knowl.DocumentPage{}, err
 		}
-		repo, err = a.repoStore.OpenOrClone(ctx, source)
+		resolved, resolveErr := a.resolver.ResolveRemoteRef(ctx, gitCfg)
+		if resolveErr != nil {
+			return knowl.DocumentPage{}, resolveErr
+		}
+		repo, err = a.repoStore.Refresh(ctx, source, *resolved)
 		if err != nil {
 			return knowl.DocumentPage{}, err
 		}
@@ -171,7 +175,7 @@ func (a *Adapter) PrepareSnapshot(ctx context.Context, source knowl.Source, prev
 	if err != nil {
 		return app.SnapshotPreparation{}, err
 	}
-	repo, err := a.repoStore.OpenOrClone(ctx, source)
+	repo, err := a.repoStore.Refresh(ctx, source, *resolved)
 	if err != nil {
 		return app.SnapshotPreparation{}, err
 	}

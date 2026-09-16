@@ -69,7 +69,7 @@ type stubGitRepoOpener struct {
 	err  error
 }
 
-func (s *stubGitRepoOpener) OpenOrClone(_ context.Context, _ domain.Source) (*gogit.Repository, error) {
+func (s *stubGitRepoOpener) Refresh(_ context.Context, _ domain.Source, _ sourcegit.ResolvedRef) (*gogit.Repository, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
