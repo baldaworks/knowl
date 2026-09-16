@@ -16,6 +16,17 @@ const (
 	testDummyRemoteURL = "https://user:" + testSentinelSecret + "@github.com/org/private-repo.git"
 )
 
+func TestRemoteClientTimeoutBudgets(t *testing.T) {
+	t.Parallel()
+
+	if git.DefaultDialTimeout != 30*time.Second {
+		t.Fatalf("DefaultDialTimeout = %s, want 30s", git.DefaultDialTimeout)
+	}
+	if git.DefaultNetworkTimeout != 5*time.Minute {
+		t.Fatalf("DefaultNetworkTimeout = %s, want 5m", git.DefaultNetworkTimeout)
+	}
+}
+
 func TestRemoteClientErrorRedaction(t *testing.T) {
 	t.Parallel()
 
