@@ -113,6 +113,11 @@ async function smokeCurrentPlatform(sourceRootPackage) {
     CODEX_HOME: path.join(fixtureRoot, 'codex-home'),
     XDG_CONFIG_HOME: path.join(fixtureRoot, 'xdg-config'),
   };
+  if (expectedVersion === '') {
+    await verifyStagedMCP(launcher, fixtureRoot, isolatedEnv);
+    return;
+  }
+
   const versionResult = spawnSync(process.execPath, [launcher, 'version', '--json'], {
     encoding: 'utf8',
     cwd: fixtureRoot,
