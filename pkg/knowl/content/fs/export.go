@@ -53,8 +53,11 @@ func (workspace *Workspace) ExportOKF(ctx context.Context, destination string, l
 		return fmt.Errorf("validate export source: %w", err)
 	}
 
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	before, err := workspace.exportEntries(ctx, limits, true)
 	if err != nil {
 		return fmt.Errorf("read export source: %w", err)

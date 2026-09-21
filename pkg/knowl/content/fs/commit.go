@@ -44,8 +44,11 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	if strings.TrimSpace(staged.OperationID) == "" {
 		return knowl.ContentCommit{}, ErrPlanConflict
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	defer unlock()
 	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(staged.OperationID))
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
 	if err != nil {
@@ -127,8 +130,11 @@ func (workspace *Workspace) CommitHierarchy(ctx context.Context, staged knowl.St
 	if strings.TrimSpace(staged.OperationID) == "" {
 		return knowl.ContentCommit{}, ErrPlanConflict
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	defer unlock()
 	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(staged.OperationID))
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
 	if err != nil {
@@ -210,8 +216,11 @@ func (workspace *Workspace) CommitSource(ctx context.Context, staged knowl.Stage
 	if err := contextErr(ctx); err != nil {
 		return knowl.ContentCommit{}, err
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	defer unlock()
 	stageDir := workspace.sourceStageDir(staged.Scope, staged.SourceID, staged.RunID)
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
 	if err != nil {

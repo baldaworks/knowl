@@ -15,4 +15,5 @@ var (
 	ErrExportDestinationExists = errors.New("export destination exists")
 	ErrExportLimitExceeded     = errors.New("export limit exceeded")
 	ErrExportSourceChanged     = errors.New("export source changed")
+	ErrWorkspaceBusy           = errors.New("workspace filesystem is busy")
 )

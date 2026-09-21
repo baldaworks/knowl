@@ -1,0 +1,4 @@
+interface:
+  display_name: "Knowl Setup"
+  short_description: "Set up Knowl and its Codex plugin"
+  default_prompt: "Use $knowl:setup to set up Knowl in this project."

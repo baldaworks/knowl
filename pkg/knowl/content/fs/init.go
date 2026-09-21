@@ -42,6 +42,15 @@ Preserve compatible facts when updating a page. Record material contradictions e
 
 // Init creates the canonical empty workspace without replacing existing files.
 func (workspace *Workspace) Init() error {
+	if err := workspace.prepareLockDirectory(); err != nil {
+		return err
+	}
+	unlock, err := workspace.lockBounded()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	for _, relative := range []string{
 		workspaceRawDir,
 		filepath.Join(workspaceWikiDir, "entities"),
@@ -76,6 +85,15 @@ func (workspace *Workspace) Init() error {
 
 // Validate checks the required workspace shape and rejects symlinked roots.
 func (workspace *Workspace) Validate() error {
+	unlock, err := workspace.lockBounded()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return workspace.validateLocked()
+}
+
+func (workspace *Workspace) validateLocked() error {
 	if err := rejectSymlinkPath(workspace.root, workspace.root); err != nil {
 		return err
 	}

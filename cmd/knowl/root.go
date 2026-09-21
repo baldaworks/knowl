@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	skipConfigAnnotation          = "knowl.io/skip-config"
 	appName                       = "knowl"
 	initCommandName               = "init"
 	validateCommandName           = "validate"
@@ -23,6 +24,8 @@ const (
 	exportOKFName                 = "okf"
 	exportLLMsTxtName             = "llms-txt"
 	startCommandName              = "start"
+	setupCommandName              = "setup"
+	setupCodexCommandName         = "codex"
 	ingestCommandName             = "ingest"
 	retrieveCommandName           = "retrieve"
 	searchCommandName             = "search"
@@ -69,12 +72,21 @@ func newRootCommand() *cobra.Command {
    - knowl run
    - knowl run --source <source-id>
 7. Run knowl start when you need the retained loopback HTTP/OpenAPI service mode.
+8. Prepare a local project and install or repair its Codex plugin:
+   - knowl setup codex
+
+The installed Codex plugin starts knowl mcp stdio as a project-scoped child
+process. Codex owns its lifecycle; users do not start a daemon or configure a
+port or operator token for this stdio path.
 
 Bootstrap creates a Knowl-owned workspace. Local workflow commands execute
 in-process and print structured JSON results. The retained loopback HTTP API
 exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			initCommandLogging(cmd.ErrOrStderr())
+			if cmd.Annotations[skipConfigAnnotation] == "true" {
+				return nil
+			}
 			configDir, err := cmd.Flags().GetString("config-dir")
 			if err != nil {
 				return fmt.Errorf("read config-dir flag: %w", err)
@@ -102,7 +114,10 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 		newBootstrapCommand(),
 		newExportCommand(),
 		newStartCommand(),
+		newSetupCommand(),
 		newRunCommand(),
+		newMCPCommand(),
+		newVersionCommand(),
 		newIngestCommand(),
 		newRetrieveCommand(),
 		newOperationCommand(),

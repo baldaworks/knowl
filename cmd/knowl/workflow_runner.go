@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/internal/httpapi/trustedrequest"
 	"github.com/baldaworks/knowl/pkg/knowl"
 )
@@ -140,44 +141,39 @@ func waitForLocalIngest(ctx context.Context, handler http.Handler, request local
 	if request.Method != http.MethodPost || request.Path != "/v1/ingest" || response.Code != http.StatusOK {
 		return nil
 	}
-	var submitted struct {
-		OperationID string `json:"operation_id"`
-		Status      string `json:"status"`
-	}
+	var submitted knowlapi.IngestResult
 	if err := json.Unmarshal(response.Body.Bytes(), &submitted); err != nil {
 		return fmt.Errorf("decode local ingest submission: %w", err)
 	}
-	if submitted.Status != "queued" || submitted.OperationID == "" {
+	if submitted.Status != knowlapi.IngestResultStatusQueued || submitted.OperationId == "" {
 		return nil
 	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		operationRequest := httptest.NewRequest(http.MethodGet, "http://knowl/v1/operations/"+url.PathEscape(submitted.OperationID), nil)
+		operationRequest := httptest.NewRequest(http.MethodGet, "http://knowl/v1/operations/"+url.PathEscape(submitted.OperationId), nil)
 		operationResponse := httptest.NewRecorder()
 		handler.ServeHTTP(operationResponse, operationRequest)
 		if operationResponse.Code != http.StatusOK {
 			return fmt.Errorf("read local ingest operation: HTTP %d", operationResponse.Code)
 		}
-		var operation struct {
-			Status string `json:"status"`
-		}
+		var operation knowlapi.OperationResult
 		if err := json.Unmarshal(operationResponse.Body.Bytes(), &operation); err != nil {
 			return fmt.Errorf("decode local ingest operation: %w", err)
 		}
 		switch operation.Status {
-		case "completed":
+		case knowlapi.OperationResultStatusCompleted:
 			response.Body.Reset()
 			if err := json.NewEncoder(response.Body).Encode(struct {
 				OperationID string `json:"operation_id"`
 				Status      string `json:"status"`
-			}{OperationID: submitted.OperationID, Status: operation.Status}); err != nil {
+			}{OperationID: submitted.OperationId, Status: string(operation.Status)}); err != nil {
 				return fmt.Errorf("encode completed local ingest: %w", err)
 			}
 			return nil
-		case "failed":
-			return fmt.Errorf("local ingest operation %q failed", submitted.OperationID)
+		case knowlapi.OperationResultStatusFailed:
+			return fmt.Errorf("local ingest operation %q failed", submitted.OperationId)
 		}
 		select {
 		case <-ctx.Done():

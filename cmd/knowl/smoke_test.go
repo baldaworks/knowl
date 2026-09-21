@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
@@ -93,9 +94,9 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	waitForHTTPStatus(t, client, baseURL, "/readyz", http.StatusOK)
 
 	ingestRequest := map[string]string{
-		"content":         smokeSourceText,
-		"origin":          smokeSourceID,
-		"idempotency_key": smokeSourceVersion,
+		testContentArgument:     smokeSourceText,
+		testOriginArgument:      smokeSourceID,
+		testIdempotencyArgument: smokeSourceVersion,
 	}
 	encoded, err := json.Marshal(ingestRequest)
 	if err != nil {
@@ -116,7 +117,7 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	if err := json.Unmarshal(body, &ingested); err != nil {
 		t.Fatalf("decode ingest response: %v", err)
 	}
-	if ingested.Status != "queued" {
+	if ingested.Status != string(knowlapi.IngestResultStatusQueued) {
 		t.Fatalf("ingest status = %q, want queued", ingested.Status)
 	}
 	waitForSmokeOperation(t, client, baseURL, ingested.OperationID)
@@ -163,9 +164,9 @@ func waitForSmokeOperation(t *testing.T, client *http.Client, baseURL, operation
 			t.Fatalf("decode operation response: %v", err)
 		}
 		switch operation.Status {
-		case "completed":
+		case string(knowlapi.OperationResultStatusCompleted):
 			return
-		case "failed":
+		case string(knowlapi.OperationResultStatusFailed):
 			t.Fatalf("operation %q failed", operationID)
 		}
 		time.Sleep(10 * time.Millisecond)

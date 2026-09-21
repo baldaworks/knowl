@@ -12,6 +12,7 @@ durable sources into an inspectable Markdown knowledge base and returns
 bounded, provenance-backed evidence.
 
 [Quickstart](#minimal-sidecar-quickstart) ·
+[Local Codex](#local-codex-plugin) ·
 [Connect an agent](#connect-an-agent) ·
 [Documentation](#documentation-by-goal) ·
 [GitHub](https://github.com/baldaworks/knowl)
@@ -94,8 +95,59 @@ settings.
 
 ## Connect an Agent
 
-MCP Streamable HTTP is the primary agent-facing interface. Adapt these fields
-to your MCP client:
+### Local Codex plugin
+
+The repository stages a local Codex plugin and the native Knowl CLI as
+`@baldaworks/knowl@0.6.0`. Those artifacts are implemented and verified but
+are not claimed as published by this branch. After that exact release is
+published, run this once from the project root:
+
+```bash
+npx --yes @baldaworks/knowl@0.6.0 setup codex
+```
+
+Setup creates only missing project state (`.config/knowl`, `schema.md`, `raw/`,
+`wiki/`, and `.knowl/`), validates it, and installs the release-matched Knowl
+marketplace and plugin. Existing project files are preserved. A conflicting
+Knowl-managed marketplace or plugin is replaced only after explicit approval
+and a rerun with `--replace`.
+
+Start a new Codex thread in the project after setup. The plugin provides exactly
+two workflow skills:
+
+- `$knowl:setup` repeats or repairs the same pinned setup workflow;
+- `$knowl:run` validates, performs one bounded `knowl run`, validates again,
+  and reports structured results and changes under Knowl-owned paths.
+
+The run skill uses a local `knowl` only when `knowl version --json` identifies
+the exact `0.6.0` release; otherwise it uses the pinned
+`npx --yes @baldaworks/knowl@0.6.0` launcher for the whole workflow. Maintenance
+also requires the configured provider; the default local configuration expects
+an installed and authenticated `opencode acp` runtime.
+
+Plugin installation also registers the project-scoped MCP server. Codex starts
+`npx --yes @baldaworks/knowl@0.6.0 mcp stdio` with the active project as its
+working directory and owns that child process. Do not run a daemon, configure
+`codex mcp add`, set an operator token, or allocate a port for this path.
+
+The npm release contains native packages for macOS x64/arm64, Linux x64/arm64,
+and Windows x64. Setup and the first MCP launch can download the exact npm
+package; setup also fetches the pinned Git marketplace. Prewarm both while
+online when later work must be offline. The sparse marketplace checkout limits
+the materialized working-tree paths to plugin assets, but it does not promise a
+metadata-only Git transfer or eliminate all repository metadata fetches.
+
+This plugin workflow is supported for local Codex projects on a local
+filesystem. Hosted Codex, remote MCP hosting, shared/network filesystems, and
+secondary workspace folders are outside the verified contract. Separate local
+projects resolve separate state. Multiple local Codex threads in one project
+share the durable store and coordinated workspace, while unrelated user changes
+remain outside Knowl's write scope.
+
+### Other MCP clients and the HTTP sidecar
+
+The existing sidecar remains the supported independently operated network
+service. Adapt these fields to a Streamable HTTP MCP client:
 
 ```json
 {
@@ -168,10 +220,17 @@ storage, authentication, and health checks.
 Embedding changes composition, not the business contract. See the
 [product design](docs/design.md) for architecture and ownership boundaries.
 
+### Local Codex plugin
+
+Use the pinned setup command in [Connect an Agent](#local-codex-plugin). The
+plugin uses host-owned MCP stdio and does not replace the explicit HTTP sidecar
+or embedded-Go modes.
+
 ## Documentation By Goal
 
 | Goal | Start here |
 | --- | --- |
+| Set up local Codex | [Local Codex plugin](#local-codex-plugin) |
 | Deploy the sidecar | [Sidecar deployment](docs/sidecar.md) |
 | Configure providers, sources, and recovery | [Operations guide](docs/operations.md) |
 | Understand workspace and provenance semantics | [Workspace guide](docs/workspace.md) |
@@ -180,6 +239,7 @@ Embedding changes composition, not the business contract. See the
 | Integrate over HTTP | [OpenAPI contract](api/openapi/knowl.yaml) |
 | See source documents become a wiki | [Source-to-wiki showcase](examples/source-to-wiki/README.md) |
 | Review the latest release | [v0.5.0 release notes](docs/releases/v0.5.0.md) |
+| Review the staged npm/plugin release | [v0.6.0 release notes](docs/releases/v0.6.0.md) |
 
 ## Contributing
 

@@ -1,0 +1,28 @@
+{
+  "name": "knowl",
+  "version": "0.6.0",
+  "description": "Project-scoped Knowl setup, bounded knowledge runs, and local MCP tools for Codex.",
+  "author": {
+    "name": "Baldaworks",
+    "url": "https://github.com/baldaworks"
+  },
+  "homepage": "https://github.com/baldaworks/knowl",
+  "repository": "https://github.com/baldaworks/knowl",
+  "license": "MIT",
+  "keywords": ["knowledge", "codex", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Knowl",
+    "shortDescription": "Maintain project knowledge with Knowl",
+    "longDescription": "Set up project-local Knowl, run one bounded maintenance cycle, and use its MCP tools from Codex.",
+    "developerName": "Baldaworks",
+    "category": "Developer Tools",
+    "capabilities": ["Skills", "MCP"],
+    "websiteURL": "https://github.com/baldaworks/knowl",
+    "defaultPrompt": [
+      "Set up Knowl for this project.",
+      "Run one bounded Knowl maintenance cycle."
+    ]
+  }
+}

@@ -35,6 +35,9 @@ const (
 	mcpRetrieveToolName       = "knowl_retrieve"
 	mcpIngestToolName         = "knowl_ingest"
 	mcpOperationToolName      = "knowl_operation"
+	testContentArgument       = "content"
+	testOriginArgument        = "origin"
+	testIdempotencyArgument   = "idempotency_key"
 )
 
 type stubLocalWorkflowHost struct {

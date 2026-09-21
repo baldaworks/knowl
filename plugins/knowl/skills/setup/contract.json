@@ -1,0 +1,8 @@
+{
+  "release_version": "0.6.0",
+  "argv": {
+    "setup": ["npx", "--yes", "@baldaworks/knowl@0.6.0", "setup", "codex"],
+    "replace": ["npx", "--yes", "@baldaworks/knowl@0.6.0", "setup", "codex", "--replace"],
+    "validate": ["npx", "--yes", "@baldaworks/knowl@0.6.0", "validate"]
+  }
+}

@@ -27,3 +27,11 @@
 - Keep public docs and config examples aligned with the checked-in Go types.
 - Prefer small, reviewable changes over broad refactors.
 - Preserve deterministic tests and bounded local defaults.
+
+## Testing
+
+- Do not test code, configuration, workflows, or documentation by searching raw
+  text for expected substrings. Parse structured formats and assert typed fields,
+  or exercise the observable behavior through the real interface.
+- Assert errors with stable types, sentinels, or machine-readable fields rather
+  than matching error-message text.

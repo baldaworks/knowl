@@ -1,0 +1,4 @@
+interface:
+  display_name: "Knowl Run"
+  short_description: "Run one bounded Knowl maintenance cycle"
+  default_prompt: "Use $knowl:run to process this project knowledge once."

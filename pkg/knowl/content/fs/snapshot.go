@@ -36,8 +36,11 @@ func (workspace *Workspace) snapshot(ctx context.Context, scope knowl.ScopeRef, 
 	if err != nil {
 		return knowl.WorkspaceSnapshot{}, err
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.WorkspaceSnapshot{}, err
+	}
+	defer unlock()
 	rawSources, err := workspace.acceptedRawSourcesLocked(scope)
 	if err != nil {
 		return knowl.WorkspaceSnapshot{}, err
@@ -195,11 +198,14 @@ func (workspace *Workspace) catalogSnapshots(ctx context.Context) ([]knowl.PageS
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	wikiRoot := filepath.Join(workspace.root, workspaceWikiDir)
 	catalogs := make([]knowl.PageSnapshot, 0)
-	err := filepath.WalkDir(wikiRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(wikiRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -263,8 +269,11 @@ func (workspace *Workspace) inspectRawSources(ctx context.Context, scope knowl.S
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	return workspace.inspectRawSourcesLocked(scope)
 }
 

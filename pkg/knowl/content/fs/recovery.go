@@ -25,8 +25,11 @@ func (workspace *Workspace) Recover(ctx context.Context) ([]knowl.RecoveryResult
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	recoveryRoot := filepath.Join(workspace.root, knowlDir, "recovery")
 	if err := rejectSymlinkPath(workspace.root, recoveryRoot); err != nil {
 		return nil, err

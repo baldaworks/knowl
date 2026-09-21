@@ -1,0 +1,20 @@
+{
+  "release_version": "0.6.0",
+  "argv": {
+    "local_version": ["knowl", "version", "--json"],
+    "fallback_prefix": ["npx", "--yes", "@baldaworks/knowl@0.6.0"],
+    "all_sources": ["run"],
+    "one_source": ["run", "--source", "<validated-source-id>"]
+  },
+  "workflow": {
+    "validate_before": true,
+    "validate_after": true,
+    "result_json_required": true,
+    "failed_operations_field": "operations.failed",
+    "fail_on_run_nonzero": true,
+    "fail_on_failed_operations": true,
+    "preserve_unrelated_changes": true,
+    "report_owned_changes": true,
+    "forbidden_subcommands": ["start", "mcp"]
+  }
+}
