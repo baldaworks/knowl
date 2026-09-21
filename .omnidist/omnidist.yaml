@@ -1,0 +1,33 @@
+profiles:
+  default:
+    enabled-distributions: [npm]
+    tool:
+      name: knowl
+      main: ./cmd/knowl
+    version:
+      source: git-tag
+    targets:
+      - os: darwin
+        arch: amd64
+      - os: darwin
+        arch: arm64
+      - os: linux
+        arch: amd64
+      - os: linux
+        arch: arm64
+      - os: windows
+        arch: amd64
+    build:
+      ldflags: >-
+        -s -w
+        -X github.com/baldaworks/knowl/internal/releaseinfo.Version=${OMNIDIST_VERSION}
+      tags: []
+      cgo: false
+    distributions:
+      npm:
+        package: '@baldaworks/knowl'
+        registry: https://registry.npmjs.org
+        access: public
+        publish-auth: token
+        repository-url: git+https://github.com/baldaworks/knowl.git
+        include-readme: true

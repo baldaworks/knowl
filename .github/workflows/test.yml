@@ -50,3 +50,40 @@ jobs:
 
       - name: Vulnerability scan
         run: go tool govulncheck ./...
+
+  npm-package:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Install Omnidist
+        run: npm install --global '@omnidist/omnidist@0.1.36'
+
+      - name: Verify checked-in release contract
+        run: go run ./internal/cmd/releasecheck --version 0.6.0
+
+      - name: Build native artifacts
+        run: omnidist --profile default build
+
+      - name: Stage development npm artifacts
+        run: omnidist --profile default stage --dev --only npm
+
+      - name: Verify npm artifacts
+        run: omnidist --profile default verify --only npm
+
+      - name: Exercise npm launcher and target selectors
+        run: node scripts/verify-npm-stage.mjs .omnidist/default/npm

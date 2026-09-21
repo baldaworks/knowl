@@ -6,12 +6,77 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/internal/mcpsdk"
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestSharedSDKAdapterMatchesRegistryTools(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	host, err := knowl.NewHost(ctx, config, provider.Fixture{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownHost(t, host) })
+	server, err := mcpsdk.NewServer(host.MCP())
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Run(ctx, serverTransport) }()
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: hostMCPClientName, Version: hostMCPClientVersion}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := host.MCP().Tools()
+	if len(listed.Tools) != len(want) {
+		t.Fatalf("SDK tool count = %d, want %d", len(listed.Tools), len(want))
+	}
+	listedByName := make(map[string]*sdkmcp.Tool, len(listed.Tools))
+	for _, tool := range listed.Tools {
+		listedByName[tool.Name] = tool
+	}
+	for _, definition := range want {
+		got := listedByName[definition.Name]
+		if got == nil || got.Description != definition.Description || got.Annotations == nil || got.Annotations.ReadOnlyHint != definition.ReadOnly {
+			t.Fatalf("SDK tool %q = %#v, want %#v", definition.Name, got, definition)
+		}
+	}
+	failure, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: hostRetrieveToolName, Arguments: map[string]any{"scope": "other", hostQueryKey: hostQuery}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !failure.IsError || failure.StructuredContent.(map[string]any)["error"] != "scope_override_forbidden" {
+		t.Fatalf("SDK classified failure = %#v", failure)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-serverDone; err != nil && err != context.Canceled {
+		t.Fatalf("SDK server exit: %v", err)
+	}
+}
 
 func TestHostServesMCPContract(t *testing.T) {
 	ctx := context.Background()

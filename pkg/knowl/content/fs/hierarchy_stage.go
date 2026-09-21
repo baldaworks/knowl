@@ -26,8 +26,11 @@ func (workspace *Workspace) StageHierarchyPlan(ctx context.Context, id knowl.Ope
 		!validSHA256(plan.SchemaDigest) || !validSHA256(plan.SnapshotDigest) || len(plan.Mutations) == 0 {
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.StagedChange{}, err
+	}
+	defer unlock()
 	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(string(id)))
 	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
 		return knowl.StagedChange{}, err
@@ -125,8 +128,11 @@ func (workspace *Workspace) LoadHierarchyStage(ctx context.Context, scope knowl.
 	if strings.TrimSpace(string(scope)) == "" || strings.TrimSpace(string(id)) == "" {
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.StagedChange{}, err
+	}
+	defer unlock()
 	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(string(id)))
 	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
 		return knowl.StagedChange{}, err

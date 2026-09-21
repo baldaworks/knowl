@@ -26,8 +26,11 @@ func (workspace *Workspace) SourceDigests(ctx context.Context, scope knowl.Scope
 	if strings.TrimSpace(string(scope)) == "" || app.ValidateSourceID(sourceID) != nil || app.ValidateSourceDigestLimit(limit) != nil {
 		return nil, app.ErrSourceInvalid
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	prefix := "wiki/sources/" + string(sourceID) + "/"
 	namespace := filepath.Join(workspace.root, filepath.FromSlash("wiki/sources/"+string(sourceID)))
 	if _, err := os.Lstat(namespace); errors.Is(err, os.ErrNotExist) {
@@ -100,8 +103,11 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 	if strings.ToLower(strings.TrimSpace(envelope.Version.Digest)) != digest {
 		return knowl.AcceptedSource{}, ErrDigestMismatch
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.AcceptedSource{}, err
+	}
+	defer unlock()
 
 	keyDir := filepath.Join(workspace.root, workspaceRawDir, token(string(envelope.Scope)+"\x00"+envelope.Source.Adapter+"\x00"+envelope.Source.ID), token(envelope.Version.Version))
 	sourcePath := filepath.Join(keyDir, "source")
@@ -163,7 +169,15 @@ func (workspace *Workspace) ReadSource(ctx context.Context, source knowl.Accepte
 	if strings.TrimSpace(string(source.Scope)) == "" || strings.TrimSpace(source.Source.Adapter) == "" || strings.TrimSpace(source.Source.ID) == "" || strings.TrimSpace(source.Version.Version) == "" {
 		return nil, fmt.Errorf("source identity is incomplete: %w", ErrInvalidSource)
 	}
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return workspace.readSourceLocked(source, limits)
+}
 
+func (workspace *Workspace) readSourceLocked(source knowl.AcceptedSource, limits knowl.ReadLimits) ([]byte, error) {
 	maxBytes := limits.Bytes
 	if maxBytes <= 0 || maxBytes > workspace.maxSourceBytes {
 		maxBytes = workspace.maxSourceBytes

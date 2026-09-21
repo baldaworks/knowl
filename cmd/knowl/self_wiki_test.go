@@ -191,7 +191,7 @@ func ensureSelfWikiOperationalDir(t *testing.T, workspaceRoot string) {
 	err := os.Mkdir(operationalDir, 0o700)
 	if err == nil {
 		t.Cleanup(func() {
-			if err := os.Remove(operationalDir); err != nil && !os.IsNotExist(err) {
+			if err := os.RemoveAll(operationalDir); err != nil {
 				t.Errorf("remove temporary operational directory: %v", err)
 			}
 		})
@@ -199,6 +199,22 @@ func ensureSelfWikiOperationalDir(t *testing.T, workspaceRoot string) {
 	}
 	if !os.IsExist(err) {
 		t.Fatalf("create temporary operational directory: %v", err)
+	}
+}
+
+func TestEnsureSelfWikiOperationalDirRemovesLockArtifactsItOwns(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	operationalDir := filepath.Join(workspaceRoot, ".knowl")
+	if ok := t.Run("fresh", func(t *testing.T) {
+		ensureSelfWikiOperationalDir(t, workspaceRoot)
+		if err := os.WriteFile(filepath.Join(operationalDir, "workspace.lock"), nil, 0o600); err != nil {
+			t.Fatalf("create workspace lock artifact: %v", err)
+		}
+	}); !ok {
+		t.Fatal("fresh operational directory cleanup failed")
+	}
+	if _, err := os.Stat(operationalDir); !os.IsNotExist(err) {
+		t.Fatalf("temporary operational directory still exists after cleanup: %v", err)
 	}
 }
 

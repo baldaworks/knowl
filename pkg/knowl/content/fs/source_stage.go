@@ -31,8 +31,11 @@ func (workspace *Workspace) StageSourcePlan(ctx context.Context, plan knowl.Sour
 	if err != nil {
 		return knowl.StagedSourceMutation{}, err
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.StagedSourceMutation{}, err
+	}
+	defer unlock()
 	stageDir := workspace.sourceStageDir(normalized.Scope, normalized.SourceID, normalized.RunID)
 	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
 		return knowl.StagedSourceMutation{}, err
@@ -126,8 +129,11 @@ func (workspace *Workspace) LoadSourceStage(ctx context.Context, scope knowl.Sco
 	if strings.TrimSpace(string(scope)) == "" || app.ValidateSourceID(sourceID) != nil || app.ValidateSyncRunID(runID) != nil {
 		return knowl.StagedSourceMutation{}, app.ErrSourceMutationInvalid
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.StagedSourceMutation{}, err
+	}
+	defer unlock()
 	stageDir := workspace.sourceStageDir(scope, sourceID, runID)
 	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
 		return knowl.StagedSourceMutation{}, err

@@ -36,8 +36,11 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		return diagnostic.Code == knowl.DiagnosticOriginalLinkUnresolved
 	})
 	plan.Diagnostics = diagnostics
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.StagedChange{}, err
+	}
+	defer unlock()
 	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(plan.OperationID))
 	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
 		return knowl.StagedChange{}, err
@@ -199,8 +202,11 @@ func (workspace *Workspace) LoadStage(ctx context.Context, scope knowl.ScopeRef,
 	if strings.TrimSpace(string(scope)) == "" || strings.TrimSpace(string(id)) == "" {
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.StagedChange{}, err
+	}
+	defer unlock()
 	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(string(id)))
 	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
 		return knowl.StagedChange{}, err

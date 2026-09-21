@@ -5,6 +5,7 @@ allow:
 
 excludeFiles:
   - "^.*_test\\.go$"
+  - "^.*\/cmd/knowl/testdata\/.*\\.go$"
 
 components:
   cli:
@@ -33,6 +34,14 @@ components:
     in: pkg/knowl/mcp
   mcphttp:
     in: internal/mcphttp
+  mcpsdk:
+    in: internal/mcpsdk
+  releaseinfo:
+    in: internal/releaseinfo
+  releasecheck:
+    in: internal/releasecheck
+  releasecmd:
+    in: internal/cmd/**
   httpapi:
     in: internal/httpapi/**
   source:
@@ -85,6 +94,16 @@ deps:
   mcphttp:
     mayDependOn:
       - mcp
+      - mcpsdk
+  mcpsdk:
+    mayDependOn:
+      - mcp
+  releasecheck:
+    mayDependOn:
+      - releaseinfo
+  releasecmd:
+    mayDependOn:
+      - releasecheck
   httpapi:
     mayDependOn:
       - httpapi
@@ -123,6 +142,8 @@ deps:
       - httpapi
       - okf
       - llmstxt
+      - mcpsdk
+      - releaseinfo
   testsupport:
     mayDependOn:
       - app

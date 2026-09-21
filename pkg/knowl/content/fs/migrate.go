@@ -45,8 +45,11 @@ func (workspace *Workspace) MigrateOKFV02(ctx context.Context) (MigrationResult,
 	if _, err := workspace.Recover(ctx); err != nil {
 		return MigrationResult{}, fmt.Errorf("recover workspace before OKF migration: %w", err)
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return MigrationResult{}, err
+	}
+	defer unlock()
 
 	markerPath := filepath.Join(workspace.root, filepath.FromSlash(migrationMarkerPath))
 	if marker, err := readMigrationMarker(markerPath); err == nil {

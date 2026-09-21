@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "knowl": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["--yes", "@baldaworks/knowl@0.6.0", "mcp", "stdio"],
+      "startup_timeout_sec": 60,
+      "default_tools_approval_mode": "writes"
+    }
+  }
+}

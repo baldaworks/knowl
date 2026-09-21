@@ -1,0 +1,20 @@
+{
+  "name": "knowl",
+  "interface": {
+    "displayName": "Knowl"
+  },
+  "plugins": [
+    {
+      "name": "knowl",
+      "source": {
+        "source": "local",
+        "path": "./plugins/knowl"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

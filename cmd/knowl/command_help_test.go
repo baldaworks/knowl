@@ -118,6 +118,8 @@ func TestRootExposesCurrentLifecycleCommands(t *testing.T) {
 		hierarchyCommandName: true,
 		bootstrapCommandName: true,
 		startCommandName:     true,
+		setupCommandName:     true,
+		mcpCommandName:       true,
 		ingestCommandName:    true,
 		retrieveCommandName:  true,
 		operationCommandName: true,

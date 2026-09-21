@@ -27,6 +27,36 @@ func (host *Host) PrepareReadOnly() error {
 	return nil
 }
 
+// StartOperationWorker starts only durable operation processing. It does not
+// bind an HTTP listener or start periodic source synchronization.
+func (host *Host) StartOperationWorker(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	if host.closed {
+		return fmt.Errorf("host is closed")
+	}
+	if host.started {
+		if host.operationOnly {
+			return nil
+		}
+		return fmt.Errorf("host HTTP lifecycle is already started")
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	host.cancel = cancel
+	if err := host.scheduler.start(workerCtx); err != nil {
+		cancel()
+		host.cancel = nil
+		return fmt.Errorf("start Knowl operation worker: %w", err)
+	}
+	host.started = true
+	host.operationOnly = true
+	host.ready.Store(true)
+	return nil
+}
+
 // Start binds the loopback HTTP listener and marks the host ready after preflight.
 // The context is used for the start operation; Stop owns the server lifetime.
 func (host *Host) Start(ctx context.Context) error {
@@ -39,6 +69,9 @@ func (host *Host) Start(ctx context.Context) error {
 		return fmt.Errorf("host is closed")
 	}
 	if host.started {
+		if host.operationOnly {
+			return fmt.Errorf("host operation-only lifecycle is already started")
+		}
 		return nil
 	}
 	listener, err := net.Listen("tcp", host.config.ListenAddr)
@@ -183,7 +216,7 @@ func (host *Host) Close() error {
 	return host.Stop(ctx)
 }
 
-// Ready reports whether recovery, migrations, projection preparation, and HTTP start completed.
+// Ready reports whether preflight and the selected lifecycle mode completed.
 func (host *Host) Ready() bool { return host.ready.Load() }
 
 // Addr returns the bound HTTP address, or the configured address before Start.

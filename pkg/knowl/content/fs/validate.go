@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -54,7 +53,7 @@ func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, ed
 	}
 	originalTargets := make(map[string]struct{})
 	if requiredSourceRef != "" {
-		sourceContent, readErr := workspace.ReadSource(context.Background(), rawSources[requiredSourceRef], knowl.ReadLimits{Bytes: workspace.maxSourceBytes})
+		sourceContent, readErr := workspace.readSourceLocked(rawSources[requiredSourceRef], knowl.ReadLimits{Bytes: workspace.maxSourceBytes})
 		if readErr != nil {
 			return nil, nil, readErr
 		}

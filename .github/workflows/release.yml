@@ -14,6 +14,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/baldaworks/knowl
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   verify:
@@ -92,8 +93,58 @@ jobs:
           KNOWL_SMOKE_EXPECT_VERSION: ${{ github.ref_name }}
         run: scripts/smoke-test-sidecar.sh knowl:release-smoke
 
+  npm-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Install Omnidist
+        run: npm install --global '@omnidist/omnidist@0.1.36'
+
+      - name: Build native artifacts
+        run: omnidist --profile default build
+
+      - name: Stage npm artifacts
+        run: omnidist --profile default stage --only npm
+
+      - name: Verify npm artifacts
+        run: omnidist --profile default verify --only npm
+
+      - name: Verify release version alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_version="${GITHUB_REF_NAME#v}"
+          go run ./internal/cmd/releasecheck \
+            --version "$release_version" \
+            --binary .omnidist/default/dist/linux/amd64/knowl \
+            --staged-npm .omnidist/default/npm
+          node scripts/verify-npm-stage.mjs .omnidist/default/npm "$release_version"
+
+      - name: Pack verified npm artifacts
+        run: tar -czf omnidist-staged.tgz .omnidist/default
+
+      - name: Upload verified npm artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: omnidist-staged
+          path: omnidist-staged.tgz
+          if-no-files-found: error
+
   publish:
-    needs: [verify, integration, container-smoke]
+    needs: [verify, integration, container-smoke, npm-verify]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -104,6 +155,31 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Install Omnidist
+        run: npm install --global '@omnidist/omnidist@0.1.36'
+
+      - name: Check npm publication authority
+        shell: bash
+        env:
+          NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$NPM_PUBLISH_TOKEN"
+
+      - name: Download verified npm artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: omnidist-staged
+
+      - name: Restore verified npm artifacts
+        run: tar -xzf omnidist-staged.tgz
 
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -167,6 +243,11 @@ jobs:
           docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST" --format '{{json .Manifest}}' > manifest.json
           jq -e '.manifests | map(.platform.architecture) | index("amd64")' manifest.json >/dev/null
           jq -e '.manifests | map(.platform.architecture) | index("arm64")' manifest.json >/dev/null
+
+      - name: Publish npm artifacts
+        env:
+          NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+        run: omnidist --profile default npm publish
 
       - name: Publish GitHub Release
         shell: bash

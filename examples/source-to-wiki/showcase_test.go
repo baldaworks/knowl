@@ -221,7 +221,7 @@ func assertCheckedInShowcaseDigest(t *testing.T) {
 	operationalRoot := filepath.Join(workspaceRoot, ".knowl")
 	if err := os.Mkdir(operationalRoot, 0o700); err == nil {
 		t.Cleanup(func() {
-			if err := os.Remove(operationalRoot); err != nil && !os.IsNotExist(err) {
+			if err := os.RemoveAll(operationalRoot); err != nil {
 				t.Errorf("remove temporary showcase operational directory: %v", err)
 			}
 		})

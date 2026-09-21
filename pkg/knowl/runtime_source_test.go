@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -69,6 +70,63 @@ func TestPrepareReadOnlyDoesNotRunOnStartSourceSync(t *testing.T) {
 	}
 	if lists, fetches := adapter.calls(); lists != 0 || fetches != 0 {
 		t.Fatalf("read-only host source calls = (%d lists, %d fetches), want zero", lists, fetches)
+	}
+}
+
+func TestStartOperationWorkerDoesNotListenOrRunSourceJobs(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &runtimeSourceAdapter{}
+	source := runtimeFilesystemSource(runtimeAlphaSourceID, t.TempDir(), true)
+	source.Sync = domain.SourceSyncPolicy{OnStart: true}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = address
+	config.Sources = []domain.Source{source}
+	host, err := knowl.New(ctx, knowl.Options{
+		Config: config, Maintainer: provider.Fixture{},
+		SourceAdapters: map[domain.SourceType]app.SourceAdapter{domain.SourceTypeFilesystem: adapter},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.StartOperationWorker(ctx); err != nil {
+		t.Fatalf("StartOperationWorker() error: %v", err)
+	}
+	if !host.Ready() {
+		t.Fatal("operation worker host is not ready")
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("operation worker bound HTTP address: %v", err)
+	}
+	_ = listener.Close()
+	time.Sleep(50 * time.Millisecond)
+	if lists, fetches := adapter.calls(); lists != 0 || fetches != 0 {
+		t.Fatalf("operation worker source calls = (%d lists, %d fetches), want zero", lists, fetches)
+	}
+	if err := host.Start(ctx); err == nil {
+		t.Fatal("HTTP lifecycle started after operation-only lifecycle")
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := host.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop() error: %v", err)
 	}
 }
 

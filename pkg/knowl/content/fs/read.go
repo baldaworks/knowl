@@ -17,6 +17,11 @@ func (workspace *Workspace) Schema(ctx context.Context, scope knowl.ScopeRef) (k
 	if err := contextErr(ctx); err != nil {
 		return knowl.SchemaDocument{}, err
 	}
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.SchemaDocument{}, err
+	}
+	defer unlock()
 	content, err := os.ReadFile(filepath.Join(workspace.root, schemaFile))
 	if err != nil {
 		return knowl.SchemaDocument{}, fmt.Errorf("read schema: %w", err)
@@ -29,8 +34,11 @@ func (workspace *Workspace) ReadPages(ctx context.Context, scope knowl.ScopeRef,
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	rawSources, err := workspace.acceptedRawSourcesLocked(scope)
 	if err != nil {
 		return nil, err
@@ -96,8 +104,11 @@ func (workspace *Workspace) readControlPage(ctx context.Context, id knowl.PageID
 	if id != "index" && id != "log" {
 		return knowl.PageSnapshot{}, fmt.Errorf("unsupported control page %q: %w", id, ErrPathRejected)
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.PageSnapshot{}, err
+	}
+	defer unlock()
 	relative := filepath.ToSlash(filepath.Join(workspaceWikiDir, string(id)+markdownExt))
 	path := filepath.Join(workspace.root, filepath.FromSlash(relative))
 	if err := rejectSymlinkPath(workspace.root, path); err != nil {

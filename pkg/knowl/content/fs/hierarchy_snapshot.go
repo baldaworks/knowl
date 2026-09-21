@@ -27,8 +27,11 @@ func (workspace *Workspace) HierarchySnapshotDigest(ctx context.Context, scope k
 	if strings.TrimSpace(string(scope)) == "" {
 		return "", fmt.Errorf("hierarchy scope is required: %w", ErrWorkspaceInvalid)
 	}
-	workspace.mu.Lock()
-	defer workspace.mu.Unlock()
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	return workspace.hierarchySnapshotDigestLocked(scope)
 }
 

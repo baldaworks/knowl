@@ -56,6 +56,7 @@ type Host struct {
 	listener        net.Listener
 	cancel          context.CancelFunc
 	started         bool
+	operationOnly   bool
 	closed          bool
 	resourcesClosed bool
 	serverErr       chan error
