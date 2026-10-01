@@ -7,8 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-const packageNames = ['knowl', '@baldaworks/knowl'];
-const platformPackage = '@baldaworks/knowl';
+const packageName = '@baldaworks/knowl';
 const description = 'Self-hosted LLM wiki turning project context into OKF memory';
 const stageRoot = path.resolve(process.argv[2] ?? '.omnidist/default/npm');
 const expectedVersion = process.argv[3] ?? '';
@@ -20,38 +19,35 @@ const targets = [
   { platform: 'win32', arch: 'x64', suffix: 'win32-x64', binary: 'knowl.exe' },
 ];
 
-const rootMetadata = readJSON(path.join(packageDirectory(stageRoot, packageNames[0]), 'package.json'));
-const dependencyNames = targets.map(({ suffix }) => `${platformPackage}-${suffix}`).sort();
-for (const packageName of packageNames) {
-  const rootPackageDir = packageDirectory(stageRoot, packageName);
-  const metadata = readJSON(path.join(rootPackageDir, 'package.json'));
-  assert.equal(metadata.name, packageName);
-  assert.equal(metadata.bin.knowl, 'knowl.js');
-  assert.equal(metadata.version, rootMetadata.version);
-  assert.equal(metadata.description, description);
-  assert.equal(metadata.description.length, 60);
-  assert.equal(metadata.license, 'MIT');
-  if (expectedVersion !== '') {
-    assert.equal(metadata.version, expectedVersion);
-  }
-  assert.deepEqual(Object.keys(metadata.optionalDependencies).sort(), dependencyNames);
-
-  for (const target of targets) {
-    const nativeName = `${platformPackage}-${target.suffix}`;
-    const nativeDir = packageDirectory(stageRoot, nativeName);
-    const native = readJSON(path.join(nativeDir, 'package.json'));
-    assert.equal(native.name, nativeName);
-    assert.equal(native.version, metadata.version);
-    assert.equal(native.license, 'MIT');
-    assert.equal(metadata.optionalDependencies[nativeName], metadata.version);
-    assert.deepEqual(native.os, [target.platform]);
-    assert.deepEqual(native.cpu, [target.arch]);
-
-    verifySelector(rootPackageDir, nativeName, nativeDir, target);
-  }
-  await smokeCurrentPlatform(rootPackageDir);
-  console.log(`verified ${packageName}@${metadata.version} and ${targets.length} native selectors`);
+const rootMetadata = readJSON(path.join(packageDirectory(stageRoot, packageName), 'package.json'));
+const dependencyNames = targets.map(({ suffix }) => `${packageName}-${suffix}`).sort();
+const rootPackageDir = packageDirectory(stageRoot, packageName);
+const metadata = rootMetadata;
+assert.equal(metadata.name, packageName);
+assert.equal(metadata.bin.knowl, 'knowl.js');
+assert.equal(metadata.description, description);
+assert.equal(metadata.description.length, 60);
+assert.equal(metadata.license, 'MIT');
+if (expectedVersion !== '') {
+  assert.equal(metadata.version, expectedVersion);
 }
+assert.deepEqual(Object.keys(metadata.optionalDependencies).sort(), dependencyNames);
+
+for (const target of targets) {
+  const nativeName = `${packageName}-${target.suffix}`;
+  const nativeDir = packageDirectory(stageRoot, nativeName);
+  const native = readJSON(path.join(nativeDir, 'package.json'));
+  assert.equal(native.name, nativeName);
+  assert.equal(native.version, metadata.version);
+  assert.equal(native.license, 'MIT');
+  assert.equal(metadata.optionalDependencies[nativeName], metadata.version);
+  assert.deepEqual(native.os, [target.platform]);
+  assert.deepEqual(native.cpu, [target.arch]);
+
+  verifySelector(rootPackageDir, nativeName, nativeDir, target);
+}
+await smokeCurrentPlatform(rootPackageDir);
+console.log(`verified ${packageName}@${metadata.version} and ${targets.length} native selectors`);
 
 function verifySelector(sourceRootPackage, nativeName, sourceNativePackage, target) {
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'knowl-npm-selector-'));
@@ -109,7 +105,7 @@ async function smokeCurrentPlatform(sourceRootPackage) {
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'knowl-npm-smoke-'));
   const modulesDir = path.join(fixtureRoot, 'node_modules');
   const rootDestination = packageDirectory(modulesDir, readJSON(path.join(sourceRootPackage, 'package.json')).name);
-  const nativeName = `${platformPackage}-${target.suffix}`;
+  const nativeName = `${packageName}-${target.suffix}`;
   mkdirSync(path.dirname(rootDestination), { recursive: true });
   cpSync(sourceRootPackage, rootDestination, { recursive: true });
   mkdirSync(path.dirname(packageDirectory(modulesDir, nativeName)), { recursive: true });

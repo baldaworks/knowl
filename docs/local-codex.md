@@ -7,15 +7,15 @@ It provides setup and bounded maintenance skills without a separate service.
 
 These instructions require the v0.6.0 npm release to be published. See the
 [release notes](releases/v0.6.0.md) for availability and supported scope.
-The primary package is `knowl`; `@baldaworks/knowl` is an equivalent alias.
-Both use the same native binaries and exact release version.
+The npm package is `@baldaworks/knowl`; it selects the native binary for your
+platform at the exact release version.
 
 You need Node.js with npm/npx and the Codex CLI. For maintenance, the default
 project configuration also requires an installed and authenticated
 `opencode acp` runtime. Run this once from the project root:
 
 ```bash
-npx --yes knowl@0.6.0 setup codex
+npx --yes @baldaworks/knowl@0.6.0 setup codex
 ```
 
 Setup creates only missing project state (`.config/knowl`, `schema.md`, `raw/`,

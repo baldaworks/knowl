@@ -101,12 +101,12 @@ Use Knowl from a local Codex project with setup and maintenance skills plus
 MCP tools. For the v0.6.0 npm release, setup is:
 
 ```bash
-npx --yes knowl@0.6.0 setup codex
+npx --yes @baldaworks/knowl@0.6.0 setup codex
 ```
 
 The npm instructions require that release to be published.
-`@baldaworks/knowl@0.6.0` is the equivalent scoped alias. After setup, start a
-new Codex thread and use `$knowl:run` for one bounded wiki maintenance cycle.
+After setup, start a new Codex thread and use `$knowl:run` for one bounded
+wiki maintenance cycle.
 See the [local Codex guide](docs/local-codex.md) for requirements, provider
 configuration, offline use, and supported scope.
 

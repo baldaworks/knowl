@@ -18,21 +18,20 @@ import (
 )
 
 const (
-	npmPackage        = "@baldaworks/knowl" // Scoped alias retained by pinned plugin launchers and native packages.
-	npmPrimaryPackage = "knowl"
-	npmDescription    = "Self-hosted LLM wiki turning project context into OKF memory"
-	npmLicense        = "MIT"
-	versionCommand    = "version"
-	goOSDarwin        = "darwin"
-	goOSLinux         = "linux"
-	archAMD64         = "amd64"
-	archARM64         = "arm64"
-	npmCPUX64         = "x64"
-	binaryName        = "knowl"
-	npxCommand        = "npx"
-	yesArgument       = "--yes"
-	setupName         = "setup"
-	runName           = "run"
+	npmPackage     = "@baldaworks/knowl"
+	npmDescription = "Self-hosted LLM wiki turning project context into OKF memory"
+	npmLicense     = "MIT"
+	versionCommand = "version"
+	goOSDarwin     = "darwin"
+	goOSLinux      = "linux"
+	archAMD64      = "amd64"
+	archARM64      = "arm64"
+	npmCPUX64      = "x64"
+	binaryName     = "knowl"
+	npxCommand     = "npx"
+	yesArgument    = "--yes"
+	setupName      = "setup"
+	runName        = "run"
 )
 
 var (
@@ -303,8 +302,8 @@ func checkOmnidist(root string) error {
 	}
 	npm := profile.Distributions["npm"]
 	if !reflect.DeepEqual(profile.EnabledDistributions, []string{"npm"}) || len(profile.Distributions) != 1 ||
-		npm.Package != npmPrimaryPackage || !reflect.DeepEqual(npm.Aliases, []string{npmPackage}) ||
-		npm.PlatformPackage != npmPackage || npm.Description != npmDescription || npm.License != npmLicense || npm.Registry != "https://registry.npmjs.org" || npm.Access != "public" ||
+		npm.Package != npmPackage || len(npm.Aliases) != 0 ||
+		(npm.PlatformPackage != "" && npm.PlatformPackage != npmPackage) || npm.Description != npmDescription || npm.License != npmLicense || npm.Registry != "https://registry.npmjs.org" || npm.Access != "public" ||
 		npm.PublishAuth != "token" || npm.RepositoryURL != "git+https://github.com/baldaworks/knowl.git" {
 		return fmt.Errorf("%w: npm distribution", errOmnidistContract)
 	}
@@ -342,7 +341,7 @@ func checkReleaseNotes(root, version string) error {
 	if err := readJSON(path, &metadata); err != nil {
 		return err
 	}
-	if metadata.Version != version || metadata.NPMPackage != npmPrimaryPackage {
+	if metadata.Version != version || metadata.NPMPackage != npmPackage {
 		return fmt.Errorf("%w: %s", errDocumentationContract, version)
 	}
 	return nil
@@ -387,23 +386,21 @@ func checkStagedNPM(root, version string) error {
 			return fmt.Errorf("%w: inspect binary for %s: %w", errStagedNPMContract, name, err)
 		}
 	}
-	for _, name := range []string{npmPrimaryPackage, npmPackage} {
-		var meta struct {
-			Name                 string            `json:"name"`
-			Version              string            `json:"version"`
-			Description          string            `json:"description"`
-			License              string            `json:"license"`
-			Bin                  map[string]string `json:"bin"`
-			OptionalDependencies map[string]string `json:"optionalDependencies"`
-		}
-		if err := readJSON(packageJSONPath(root, name), &meta); err != nil {
-			return fmt.Errorf("%w: meta package %s: %w", errStagedNPMContract, name, err)
-		}
-		if meta.Name != name || meta.Version != version || meta.Bin[binaryName] != "knowl.js" ||
-			meta.Description != npmDescription || meta.License != npmLicense ||
-			!reflect.DeepEqual(meta.OptionalDependencies, wantDependencies) {
-			return fmt.Errorf("%w: meta package %s@%s", errStagedNPMContract, name, version)
-		}
+	var meta struct {
+		Name                 string            `json:"name"`
+		Version              string            `json:"version"`
+		Description          string            `json:"description"`
+		License              string            `json:"license"`
+		Bin                  map[string]string `json:"bin"`
+		OptionalDependencies map[string]string `json:"optionalDependencies"`
+	}
+	if err := readJSON(packageJSONPath(root, npmPackage), &meta); err != nil {
+		return fmt.Errorf("%w: meta package %s: %w", errStagedNPMContract, npmPackage, err)
+	}
+	if meta.Name != npmPackage || meta.Version != version || meta.Bin[binaryName] != "knowl.js" ||
+		meta.Description != npmDescription || meta.License != npmLicense ||
+		!reflect.DeepEqual(meta.OptionalDependencies, wantDependencies) {
+		return fmt.Errorf("%w: meta package %s@%s", errStagedNPMContract, npmPackage, version)
 	}
 	return nil
 }
