@@ -18,8 +18,8 @@ const (
 	driftedVersion      = "0.6.1"
 	packageNameKey      = "name"
 	packageVersionKey   = "version"
-	expectedPrimaryName = "knowl"
-	expectedAliasName   = "@baldaworks/knowl"
+	expectedPackageName = "@baldaworks/knowl"
+	expectedBinaryName  = "knowl"
 	expectedLicense     = "MIT"
 	descriptionKey      = "description"
 	licenseKey          = "license"
@@ -160,8 +160,7 @@ func TestRepositoryContractRejectsInvalidReleaseVersions(t *testing.T) {
 	}
 }
 
-// The release gate must reject broken alias metadata even when the primary
-// launcher and all native packages remain valid.
+// The release gate rejects broken launcher and native metadata.
 func TestStagedNPMRejectsPackageDrift(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -169,14 +168,11 @@ func TestStagedNPMRejectsPackageDrift(t *testing.T) {
 		field       string
 		value       any
 	}{
-		{name: "primary identity", packageName: expectedPrimaryName, field: packageNameKey, value: "other"},
-		{name: "alias identity", packageName: expectedAliasName, field: packageNameKey, value: "other"},
-		{name: "alias version", packageName: expectedAliasName, field: packageVersionKey, value: driftedVersion},
-		{name: "primary description", packageName: expectedPrimaryName, field: descriptionKey, value: ""},
-		{name: "alias description", packageName: expectedAliasName, field: descriptionKey, value: "Meta package for knowl"},
-		{name: "primary license", packageName: expectedPrimaryName, field: licenseKey, value: invalidLicense},
-		{name: "alias license", packageName: expectedAliasName, field: licenseKey, value: invalidLicense},
-		{name: "alias dependencies", packageName: expectedAliasName, field: "optionalDependencies", value: map[string]string{}},
+		{name: "launcher identity", packageName: expectedPackageName, field: packageNameKey, value: "other"},
+		{name: "launcher version", packageName: expectedPackageName, field: packageVersionKey, value: driftedVersion},
+		{name: "launcher description", packageName: expectedPackageName, field: descriptionKey, value: ""},
+		{name: "launcher license", packageName: expectedPackageName, field: licenseKey, value: invalidLicense},
+		{name: "launcher dependencies", packageName: expectedPackageName, field: "optionalDependencies", value: map[string]string{}},
 		{name: "native version", packageName: "@baldaworks/knowl-linux-x64", field: packageVersionKey, value: driftedVersion},
 		{name: "native license", packageName: "@baldaworks/knowl-linux-x64", field: licenseKey, value: invalidLicense},
 	}
@@ -193,17 +189,13 @@ func TestStagedNPMRejectsPackageDrift(t *testing.T) {
 	}
 }
 
-func TestStagedNPMRequiresBothLaunchers(t *testing.T) {
-	for _, name := range []string{expectedPrimaryName, expectedAliasName} {
-		t.Run(name, func(t *testing.T) {
-			root := stagedNPMFixture(t)
-			if err := os.RemoveAll(filepath.Dir(packageJSONPath(root, name))); err != nil {
-				t.Fatal(err)
-			}
-			if err := checkStagedNPM(root, testVersion); !errors.Is(err, errStagedNPMContract) {
-				t.Fatalf("checkStagedNPM() error = %v, want %v", err, errStagedNPMContract)
-			}
-		})
+func TestStagedNPMRequiresLauncher(t *testing.T) {
+	root := stagedNPMFixture(t)
+	if err := os.RemoveAll(filepath.Dir(packageJSONPath(root, expectedPackageName))); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkStagedNPM(root, testVersion); !errors.Is(err, errStagedNPMContract) {
+		t.Fatalf("checkStagedNPM() error = %v, want %v", err, errStagedNPMContract)
 	}
 }
 
@@ -232,13 +224,11 @@ func stagedNPMFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{expectedPrimaryName, expectedAliasName} {
-		writePackageJSON(t, root, name, map[string]any{
-			packageNameKey: name, packageVersionKey: testVersion, licenseKey: expectedLicense,
-			descriptionKey: "Self-hosted LLM wiki turning project context into OKF memory",
-			"bin":          map[string]string{expectedPrimaryName: "knowl.js"}, "optionalDependencies": dependencies,
-		})
-	}
+	writePackageJSON(t, root, expectedPackageName, map[string]any{
+		packageNameKey: expectedPackageName, packageVersionKey: testVersion, licenseKey: expectedLicense,
+		descriptionKey: "Self-hosted LLM wiki turning project context into OKF memory",
+		"bin":          map[string]string{expectedBinaryName: "knowl.js"}, "optionalDependencies": dependencies,
+	})
 	return root
 }
 
@@ -247,10 +237,10 @@ func TestOmnidistRejectsNPMMetadataDrift(t *testing.T) {
 		name, field string
 		value       any
 	}{
-		{name: "primary", field: "package", value: expectedAliasName},
-		{name: "missing alias", field: "aliases", value: []string{}},
+		{name: "unscoped primary", field: "package", value: expectedBinaryName},
+		{name: "unscoped alias", field: "aliases", value: []string{expectedBinaryName}},
 		{name: "wrong alias", field: "aliases", value: []string{"@baldaworks/other"}},
-		{name: "native base", field: "platform-package", value: expectedPrimaryName},
+		{name: "native base", field: "platform-package", value: expectedBinaryName},
 		{name: descriptionKey, field: descriptionKey, value: ""},
 		{name: licenseKey, field: licenseKey, value: invalidLicense},
 	}
@@ -267,9 +257,9 @@ func TestOmnidistRejectsNPMMetadataDrift(t *testing.T) {
 				t.Fatal(err)
 			}
 			npm := config["profiles"].(map[string]any)["default"].(map[string]any)["distributions"].(map[string]any)["npm"].(map[string]any)
-			npm["package"] = expectedPrimaryName
-			npm["aliases"] = []string{expectedAliasName}
-			npm["platform-package"] = expectedAliasName
+			npm["package"] = expectedPackageName
+			delete(npm, "aliases")
+			delete(npm, "platform-package")
 			npm[descriptionKey] = "Self-hosted LLM wiki turning project context into OKF memory"
 			npm[licenseKey] = expectedLicense
 			npm[test.field] = test.value
