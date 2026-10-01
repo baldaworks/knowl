@@ -71,7 +71,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install Omnidist
-        run: npm install --global '@omnidist/omnidist@0.1.36'
+        run: npm install --global '@omnidist/omnidist@0.1.40'
 
       - name: Verify checked-in release contract
         run: go run ./internal/cmd/releasecheck --version 0.6.0

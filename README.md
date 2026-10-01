@@ -5,42 +5,42 @@
 [![release](https://img.shields.io/github/v/release/baldaworks/knowl)](https://github.com/baldaworks/knowl/releases/latest)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Durable project knowledge for agents.**
+**Your project knowledge, maintained as a wiki.**
 
-Knowl is a self-hosted knowledge sidecar for agentic applications. It turns
-durable sources into an inspectable Markdown knowledge base and returns
-bounded, provenance-backed evidence.
+Knowl is a self-hosted LLM wiki for your projects. It turns source documents
+into connected Markdown pages and gives AI agents grounded evidence from that
+wiki. Knowledge remains available across tasks, with references back to the
+sources that support it.
+
+Run Knowl with your own storage and maintainer provider. The wiki uses
+[Open Knowledge Format (OKF) v0.2](docs/workspace.md), so you can inspect it,
+review it in Git, and export it as a portable bundle.
 
 [Quickstart](#minimal-sidecar-quickstart) ·
-[Local Codex](#local-codex-plugin) ·
+[Use with Codex](#local-codex-plugin) ·
 [Connect an agent](#connect-an-agent) ·
-[Documentation](#documentation-by-goal) ·
-[GitHub](https://github.com/baldaworks/knowl)
+[Documentation](#documentation-by-goal)
 
-## What Users Get
+## What You Get
 
-| Capability | Result |
+| Need | What Knowl provides |
 | --- | --- |
-| Durable ingestion | Accepted source revisions survive restarts and remain traceable |
-| Inspectable knowledge | Semantic pages live in a portable, Git-reviewable Markdown workspace |
-| Grounded retrieval | Every response is bounded evidence with source provenance |
-| Agent integration | The same contract is available over MCP, HTTP, or embedded Go |
+| Keep project knowledge across tasks | An LLM-maintained wiki built from durable source revisions |
+| Understand where a result came from | Bounded evidence linked to its supporting sources |
+| Own and inspect your knowledge | Plain Markdown in an OKF-compatible workspace |
+| Choose where it runs | Local Codex, a self-hosted MCP/HTTP service, or an embedded Go runtime |
 
-## Why Knowl
+## From Sources to a Wiki
 
-- **Built for durable knowledge:** keep accepted project knowledge beyond one
-  chat or agent run.
-- **Human-inspectable:** review the generated Markdown instead of hiding
-  knowledge in an opaque memory store.
-- **Clear ownership:** the host selects durable inputs and writes the final
-  answer; Knowl maintains knowledge and retrieves evidence.
-- **Self-hosted:** run it beside an agent with your own storage and maintainer
-  provider.
-- **Recoverable:** durable operations and local state resume safely after
-  process restarts.
+Connect project sources or start from an existing Markdown wiki, Obsidian vault,
+or OKF bundle. Knowl preserves accepted source revisions, and the configured
+LLM maintainer proposes semantic updates to the wiki. Updates pass validation
+before they become part of the knowledge base.
 
-Knowl is not session memory, a workflow orchestrator, or the primary
-final-answer generator. Knowl does not answer the user itself.
+Your agent retrieves relevant evidence and uses it to answer or act. You can
+also read the wiki directly, inspect its source references, or export it for
+publishing. See the [source-to-wiki example](examples/source-to-wiki/README.md)
+for a complete walkthrough.
 
 ## Minimal Sidecar Quickstart
 
@@ -97,154 +97,60 @@ settings.
 
 ### Local Codex plugin
 
-The repository stages a local Codex plugin and the native Knowl CLI as
-`@baldaworks/knowl@0.6.0`. Those artifacts are implemented and verified but
-are not claimed as published by this branch. After that exact release is
-published, run this once from the project root:
+Use Knowl from a local Codex project with setup and maintenance skills plus
+MCP tools. For the v0.6.0 npm release, setup is:
 
 ```bash
-npx --yes @baldaworks/knowl@0.6.0 setup codex
+npx --yes knowl@0.6.0 setup codex
 ```
 
-Setup creates only missing project state (`.config/knowl`, `schema.md`, `raw/`,
-`wiki/`, and `.knowl/`), validates it, and installs the release-matched Knowl
-marketplace and plugin. Existing project files are preserved. A conflicting
-Knowl-managed marketplace or plugin is replaced only after explicit approval
-and a rerun with `--replace`.
+The npm instructions require that release to be published.
+`@baldaworks/knowl@0.6.0` is the equivalent scoped alias. After setup, start a
+new Codex thread and use `$knowl:run` for one bounded wiki maintenance cycle.
+See the [local Codex guide](docs/local-codex.md) for requirements, provider
+configuration, offline use, and supported scope.
 
-Start a new Codex thread in the project after setup. The plugin provides exactly
-two workflow skills:
+### MCP and HTTP
 
-- `$knowl:setup` repeats or repairs the same pinned setup workflow;
-- `$knowl:run` validates, performs one bounded `knowl run`, validates again,
-  and reports structured results and changes under Knowl-owned paths.
+Connect other agents to the self-hosted service over MCP. Knowl exposes three
+tools: `knowl_retrieve` for evidence, `knowl_ingest` for durable inputs, and
+`knowl_operation` for operation status.
 
-The run skill uses a local `knowl` only when `knowl version --json` identifies
-the exact `0.6.0` release; otherwise it uses the pinned
-`npx --yes @baldaworks/knowl@0.6.0` launcher for the whole workflow. Maintenance
-also requires the configured provider; the default local configuration expects
-an installed and authenticated `opencode acp` runtime.
+The same capabilities are available through HTTP. See
+[sidecar deployment](docs/sidecar.md#connect-an-mcp-client),
+[service operations](docs/operations.md#http-contract), and the
+[OpenAPI contract](api/openapi/knowl.yaml).
 
-Plugin installation also registers the project-scoped MCP server. Codex starts
-`npx --yes @baldaworks/knowl@0.6.0 mcp stdio` with the active project as its
-working directory and owns that child process. Do not run a daemon, configure
-`codex mcp add`, set an operator token, or allocate a port for this path.
+### Go applications
 
-The npm release contains native packages for macOS x64/arm64, Linux x64/arm64,
-and Windows x64. Setup and the first MCP launch can download the exact npm
-package; setup also fetches the pinned Git marketplace. Prewarm both while
-online when later work must be offline. The sparse marketplace checkout limits
-the materialized working-tree paths to plugin assets, but it does not promise a
-metadata-only Git transfer or eliminate all repository metadata fetches.
+Embed Knowl through `pkg/knowl`, or use `pkg/knowlfx` for Fx lifecycle
+integration. See the [product design](docs/design.md) for runtime composition
+and ownership boundaries.
 
-This plugin workflow is supported for local Codex projects on a local
-filesystem. Hosted Codex, remote MCP hosting, shared/network filesystems, and
-secondary workspace folders are outside the verified contract. Separate local
-projects resolve separate state. Multiple local Codex threads in one project
-share the durable store and coordinated workspace, while unrelated user changes
-remain outside Knowl's write scope.
+## Keep Your Knowledge Portable
 
-### Other MCP clients and the HTTP sidecar
+The canonical wiki lives in `wiki/` as an OKF v0.2 bundle. Accepted source
+revisions are preserved separately in `raw/`, so semantic pages remain connected
+to their evidence. The default local operational store uses SQLite.
 
-The existing sidecar remains the supported independently operated network
-service. Adapt these fields to a Streamable HTTP MCP client:
-
-```json
-{
-  "transport": "streamable_http",
-  "url": "http://127.0.0.1:8080/mcp",
-  "headers": {
-    "Authorization": "Bearer <operator-token>"
-  }
-}
-```
-
-Knowl exposes three MCP tools:
-
-- `knowl_retrieve` returns bounded evidence;
-- `knowl_ingest` submits durable content or a source reference;
-- `knowl_operation` reports durable operation status.
-
-The equivalent HTTP endpoints are `GET /v1/retrieve`, `POST /v1/ingest`, and
-`GET /v1/operations/{operation_id}`. See the
-[OpenAPI contract](api/openapi/knowl.yaml) for request and response schemas.
-
-## How It Works
-
-```text
-sources → Knowl → grounded evidence → host agent → final answer
-```
-
-| Component | Owns |
-| --- | --- |
-| Host agent or application | Selecting durable inputs, orchestrating tools, and generating the final answer |
-| Knowl | Preserving source revisions, maintaining Markdown knowledge, and retrieving evidence |
-| Maintainer provider | Proposing semantic updates through Knowl's validated write path |
-
-Knowl stores immutable accepted source revisions under `raw/` and semantic
-knowledge under `wiki/`. Source documents are never copied into `wiki/`.
-Initial bootstrap and automatic `on_start` synchronization are both optional.
-The workspace remains inspectable and portable, with SQLite at
-`.knowl/knowl.sqlite` providing the default local operational store:
-
-```text
-workspace/
-├── schema.md
-├── raw/
-├── wiki/
-│   ├── index.md
-│   └── ... semantic pages
-└── .knowl/
-    └── knowl.sqlite
-```
-
-See the [source-to-wiki showcase](examples/source-to-wiki/README.md) for a
-complete checked-in example.
-
-## Run Knowl Your Way
-
-### Sidecar
-
-Use the published container for a standalone MCP/HTTP service. Persist
-`/var/lib/knowl`, keep source mounts read-only, and pin an immutable image
-digest in production. The [sidecar guide](docs/sidecar.md) covers deployment,
-storage, authentication, and health checks.
-
-### Go library
-
-- `pkg/knowl` provides plain-Go runtime composition;
-- `pkg/knowlfx` adds Fx lifecycle integration;
-- `pkg/knowl/mcp` provides the MCP adapter;
-- `pkg/knowl/types` contains transport-neutral domain types.
-
-Embedding changes composition, not the business contract. See the
-[product design](docs/design.md) for architecture and ownership boundaries.
-
-### Local Codex plugin
-
-Use the pinned setup command in [Connect an Agent](#local-codex-plugin). The
-plugin uses host-owned MCP stdio and does not replace the explicit HTTP sidecar
-or embedded-Go modes.
+Export the wiki as a standalone bundle, or add an `llms.txt` navigation file for
+agents and publication. See [workspace and export](docs/workspace.md) for the
+layout and commands.
 
 ## Documentation By Goal
 
 | Goal | Start here |
 | --- | --- |
-| Set up local Codex | [Local Codex plugin](#local-codex-plugin) |
-| Deploy the sidecar | [Sidecar deployment](docs/sidecar.md) |
+| Set up local Codex | [Local Codex guide](docs/local-codex.md) |
+| Deploy an MCP/HTTP service | [Sidecar deployment](docs/sidecar.md) |
 | Configure providers, sources, and recovery | [Operations guide](docs/operations.md) |
-| Understand workspace and provenance semantics | [Workspace guide](docs/workspace.md) |
+| Understand storage and source provenance | [Workspace guide](docs/workspace.md) |
 | Export the wiki for publishing or agents | [OKF and llms.txt export](docs/workspace.md#export-for-publication) |
-| Understand the architecture | [Product design](docs/design.md) |
+| Embed Knowl in an application | [Product design](docs/design.md) |
 | Integrate over HTTP | [OpenAPI contract](api/openapi/knowl.yaml) |
 | See source documents become a wiki | [Source-to-wiki showcase](examples/source-to-wiki/README.md) |
-| Review the latest release | [v0.5.0 release notes](docs/releases/v0.5.0.md) |
-| Review the staged npm/plugin release | [v0.6.0 release notes](docs/releases/v0.6.0.md) |
-
-## Contributing
-
-Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for
-local setup, verification commands, and repository conventions.
+| Review the container quickstart release | [v0.5.0 release notes](docs/releases/v0.5.0.md) |
+| Review the npm/plugin release | [v0.6.0 release notes](docs/releases/v0.6.0.md) |
 
 ## License
 

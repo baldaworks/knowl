@@ -7,7 +7,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-const packageName = '@baldaworks/knowl';
+const packageNames = ['knowl', '@baldaworks/knowl'];
+const platformPackage = '@baldaworks/knowl';
+const description = 'Self-hosted LLM wiki turning project context into OKF memory';
 const stageRoot = path.resolve(process.argv[2] ?? '.omnidist/default/npm');
 const expectedVersion = process.argv[3] ?? '';
 const targets = [
@@ -18,38 +20,44 @@ const targets = [
   { platform: 'win32', arch: 'x64', suffix: 'win32-x64', binary: 'knowl.exe' },
 ];
 
-const rootPackageDir = packageDirectory(stageRoot, packageName);
-const rootMetadata = readJSON(path.join(rootPackageDir, 'package.json'));
-assert.equal(rootMetadata.name, packageName);
-assert.equal(rootMetadata.bin.knowl, 'knowl.js');
-if (expectedVersion !== '') {
-  assert.equal(rootMetadata.version, expectedVersion);
-}
-
-const dependencyNames = targets.map(({ suffix }) => `${packageName}-${suffix}`).sort();
-assert.deepEqual(Object.keys(rootMetadata.optionalDependencies).sort(), dependencyNames);
-
-for (const target of targets) {
-  const nativeName = `${packageName}-${target.suffix}`;
-  const nativeDir = packageDirectory(stageRoot, nativeName);
-  const metadata = readJSON(path.join(nativeDir, 'package.json'));
-  assert.equal(metadata.name, nativeName);
+const rootMetadata = readJSON(path.join(packageDirectory(stageRoot, packageNames[0]), 'package.json'));
+const dependencyNames = targets.map(({ suffix }) => `${platformPackage}-${suffix}`).sort();
+for (const packageName of packageNames) {
+  const rootPackageDir = packageDirectory(stageRoot, packageName);
+  const metadata = readJSON(path.join(rootPackageDir, 'package.json'));
+  assert.equal(metadata.name, packageName);
+  assert.equal(metadata.bin.knowl, 'knowl.js');
   assert.equal(metadata.version, rootMetadata.version);
-  assert.equal(rootMetadata.optionalDependencies[nativeName], rootMetadata.version);
-  assert.deepEqual(metadata.os, [target.platform]);
-  assert.deepEqual(metadata.cpu, [target.arch]);
+  assert.equal(metadata.description, description);
+  assert.equal(metadata.description.length, 60);
+  assert.equal(metadata.license, 'MIT');
+  if (expectedVersion !== '') {
+    assert.equal(metadata.version, expectedVersion);
+  }
+  assert.deepEqual(Object.keys(metadata.optionalDependencies).sort(), dependencyNames);
 
-  verifySelector(rootPackageDir, nativeName, nativeDir, target);
+  for (const target of targets) {
+    const nativeName = `${platformPackage}-${target.suffix}`;
+    const nativeDir = packageDirectory(stageRoot, nativeName);
+    const native = readJSON(path.join(nativeDir, 'package.json'));
+    assert.equal(native.name, nativeName);
+    assert.equal(native.version, metadata.version);
+    assert.equal(native.license, 'MIT');
+    assert.equal(metadata.optionalDependencies[nativeName], metadata.version);
+    assert.deepEqual(native.os, [target.platform]);
+    assert.deepEqual(native.cpu, [target.arch]);
+
+    verifySelector(rootPackageDir, nativeName, nativeDir, target);
+  }
+  await smokeCurrentPlatform(rootPackageDir);
+  console.log(`verified ${packageName}@${metadata.version} and ${targets.length} native selectors`);
 }
-
-await smokeCurrentPlatform(rootPackageDir);
-console.log(`verified ${packageName}@${rootMetadata.version} and ${targets.length} native selectors`);
 
 function verifySelector(sourceRootPackage, nativeName, sourceNativePackage, target) {
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'knowl-npm-selector-'));
-  const scopeDir = path.join(fixtureRoot, 'node_modules', '@baldaworks');
-  const fixtureRootPackage = path.join(scopeDir, 'knowl');
-  const fixtureNativePackage = path.join(scopeDir, path.basename(nativeName));
+  const modulesDir = path.join(fixtureRoot, 'node_modules');
+  const fixtureRootPackage = packageDirectory(modulesDir, readJSON(path.join(sourceRootPackage, 'package.json')).name);
+  const fixtureNativePackage = packageDirectory(modulesDir, nativeName);
   mkdirSync(fixtureRootPackage, { recursive: true });
   mkdirSync(path.join(fixtureNativePackage, 'bin'), { recursive: true });
   cpSync(path.join(sourceRootPackage, 'knowl.js'), path.join(fixtureRootPackage, 'knowl.js'));
@@ -99,12 +107,13 @@ async function smokeCurrentPlatform(sourceRootPackage) {
   }
 
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'knowl-npm-smoke-'));
-  const scopeDir = path.join(fixtureRoot, 'node_modules', '@baldaworks');
-  const rootDestination = path.join(scopeDir, 'knowl');
-  const nativeName = `${packageName}-${target.suffix}`;
-  mkdirSync(scopeDir, { recursive: true });
+  const modulesDir = path.join(fixtureRoot, 'node_modules');
+  const rootDestination = packageDirectory(modulesDir, readJSON(path.join(sourceRootPackage, 'package.json')).name);
+  const nativeName = `${platformPackage}-${target.suffix}`;
+  mkdirSync(path.dirname(rootDestination), { recursive: true });
   cpSync(sourceRootPackage, rootDestination, { recursive: true });
-  cpSync(packageDirectory(stageRoot, nativeName), path.join(scopeDir, path.basename(nativeName)), { recursive: true });
+  mkdirSync(path.dirname(packageDirectory(modulesDir, nativeName)), { recursive: true });
+  cpSync(packageDirectory(stageRoot, nativeName), packageDirectory(modulesDir, nativeName), { recursive: true });
 
   const launcher = path.join(rootDestination, 'knowl.js');
   const isolatedEnv = {

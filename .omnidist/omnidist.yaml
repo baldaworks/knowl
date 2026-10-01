@@ -25,7 +25,11 @@ profiles:
       cgo: false
     distributions:
       npm:
-        package: '@baldaworks/knowl'
+        package: knowl
+        aliases: ['@baldaworks/knowl']
+        platform-package: '@baldaworks/knowl'
+        description: Self-hosted LLM wiki turning project context into OKF memory
+        license: MIT
         registry: https://registry.npmjs.org
         access: public
         publish-auth: token

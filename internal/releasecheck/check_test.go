@@ -13,11 +13,17 @@ import (
 )
 
 const (
-	testVersion       = "0.6.0"
-	driftedPackagePin = "@baldaworks/knowl@0.6.1"
-	driftedVersion    = "0.6.1"
-	packageNameKey    = "name"
-	packageVersionKey = "version"
+	testVersion         = "0.6.0"
+	driftedPackagePin   = "@baldaworks/knowl@0.6.1"
+	driftedVersion      = "0.6.1"
+	packageNameKey      = "name"
+	packageVersionKey   = "version"
+	expectedPrimaryName = "knowl"
+	expectedAliasName   = "@baldaworks/knowl"
+	expectedLicense     = "MIT"
+	descriptionKey      = "description"
+	licenseKey          = "license"
+	invalidLicense      = "UNLICENSED"
 )
 
 func TestRepositoryContract(t *testing.T) {
@@ -154,45 +160,130 @@ func TestRepositoryContractRejectsInvalidReleaseVersions(t *testing.T) {
 	}
 }
 
-func TestStagedNPMRejectsNativeVersionDrift(t *testing.T) {
+// The release gate must reject broken alias metadata even when the primary
+// launcher and all native packages remain valid.
+func TestStagedNPMRejectsPackageDrift(t *testing.T) {
+	tests := []struct {
+		name        string
+		packageName string
+		field       string
+		value       any
+	}{
+		{name: "primary identity", packageName: expectedPrimaryName, field: packageNameKey, value: "other"},
+		{name: "alias identity", packageName: expectedAliasName, field: packageNameKey, value: "other"},
+		{name: "alias version", packageName: expectedAliasName, field: packageVersionKey, value: driftedVersion},
+		{name: "primary description", packageName: expectedPrimaryName, field: descriptionKey, value: ""},
+		{name: "alias description", packageName: expectedAliasName, field: descriptionKey, value: "Meta package for knowl"},
+		{name: "primary license", packageName: expectedPrimaryName, field: licenseKey, value: invalidLicense},
+		{name: "alias license", packageName: expectedAliasName, field: licenseKey, value: invalidLicense},
+		{name: "alias dependencies", packageName: expectedAliasName, field: "optionalDependencies", value: map[string]string{}},
+		{name: "native version", packageName: "@baldaworks/knowl-linux-x64", field: packageVersionKey, value: driftedVersion},
+		{name: "native license", packageName: "@baldaworks/knowl-linux-x64", field: licenseKey, value: invalidLicense},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := stagedNPMFixture(t)
+			mutateJSONObject(t, packageJSONPath(root, test.packageName), func(object map[string]any) {
+				object[test.field] = test.value
+			})
+			if err := checkStagedNPM(root, testVersion); !errors.Is(err, errStagedNPMContract) {
+				t.Fatalf("checkStagedNPM() error = %v, want %v", err, errStagedNPMContract)
+			}
+		})
+	}
+}
+
+func TestStagedNPMRequiresBothLaunchers(t *testing.T) {
+	for _, name := range []string{expectedPrimaryName, expectedAliasName} {
+		t.Run(name, func(t *testing.T) {
+			root := stagedNPMFixture(t)
+			if err := os.RemoveAll(filepath.Dir(packageJSONPath(root, name))); err != nil {
+				t.Fatal(err)
+			}
+			if err := checkStagedNPM(root, testVersion); !errors.Is(err, errStagedNPMContract) {
+				t.Fatalf("checkStagedNPM() error = %v, want %v", err, errStagedNPMContract)
+			}
+		})
+	}
+}
+
+func TestStagedNPMContract(t *testing.T) {
+	if err := checkStagedNPM(stagedNPMFixture(t), testVersion); err != nil {
+		t.Fatalf("checkStagedNPM() error: %v", err)
+	}
+}
+
+func stagedNPMFixture(t *testing.T) string {
+	t.Helper()
 	root := t.TempDir()
 	dependencies := make(map[string]string, len(targets))
 	for _, expected := range targets {
-		name := npmPackage + "-" + expected.suffix
+		name := "@baldaworks/knowl-" + expected.suffix
 		dependencies[name] = testVersion
 		writePackageJSON(t, root, name, map[string]any{
-			packageNameKey:    name,
-			packageVersionKey: testVersion,
-			"os":              []string{expected.npmOS},
-			"cpu":             []string{expected.npmCPU},
+			packageNameKey: name, packageVersionKey: testVersion, licenseKey: expectedLicense,
+			"os": []string{expected.npmOS}, "cpu": []string{expected.npmCPU},
 		})
 		binary := filepath.Join(root, filepath.FromSlash(name), "bin", expected.binary)
 		if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
-			t.Fatalf("create staged binary directory: %v", err)
+			t.Fatal(err)
 		}
 		if err := os.WriteFile(binary, []byte("fixture"), 0o700); err != nil {
-			t.Fatalf("write staged binary: %v", err)
+			t.Fatal(err)
 		}
 	}
-	writePackageJSON(t, root, npmPackage, map[string]any{
-		packageNameKey:         npmPackage,
-		packageVersionKey:      testVersion,
-		"bin":                  map[string]string{binaryName: "knowl.js"},
-		"optionalDependencies": dependencies,
-	})
-
-	if err := checkStagedNPM(root, testVersion); err != nil {
-		t.Fatalf("checkStagedNPM() error: %v", err)
+	for _, name := range []string{expectedPrimaryName, expectedAliasName} {
+		writePackageJSON(t, root, name, map[string]any{
+			packageNameKey: name, packageVersionKey: testVersion, licenseKey: expectedLicense,
+			descriptionKey: "Self-hosted LLM wiki turning project context into OKF memory",
+			"bin":          map[string]string{expectedPrimaryName: "knowl.js"}, "optionalDependencies": dependencies,
+		})
 	}
-	drifted := npmPackage + "-linux-x64"
-	writePackageJSON(t, root, drifted, map[string]any{
-		packageNameKey:    drifted,
-		packageVersionKey: driftedVersion,
-		"os":              []string{"linux"},
-		"cpu":             []string{"x64"},
-	})
-	if err := checkStagedNPM(root, testVersion); !errors.Is(err, errStagedNPMContract) {
-		t.Fatalf("checkStagedNPM() error = %v, want native version drift", err)
+	return root
+}
+
+func TestOmnidistRejectsNPMMetadataDrift(t *testing.T) {
+	tests := []struct {
+		name, field string
+		value       any
+	}{
+		{name: "primary", field: "package", value: expectedAliasName},
+		{name: "missing alias", field: "aliases", value: []string{}},
+		{name: "wrong alias", field: "aliases", value: []string{"@baldaworks/other"}},
+		{name: "native base", field: "platform-package", value: expectedPrimaryName},
+		{name: descriptionKey, field: descriptionKey, value: ""},
+		{name: licenseKey, field: licenseKey, value: invalidLicense},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyContractFixture(t)
+			path := filepath.Join(root, ".omnidist/omnidist.yaml")
+			var config map[string]any
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := yaml.Unmarshal(content, &config); err != nil {
+				t.Fatal(err)
+			}
+			npm := config["profiles"].(map[string]any)["default"].(map[string]any)["distributions"].(map[string]any)["npm"].(map[string]any)
+			npm["package"] = expectedPrimaryName
+			npm["aliases"] = []string{expectedAliasName}
+			npm["platform-package"] = expectedAliasName
+			npm[descriptionKey] = "Self-hosted LLM wiki turning project context into OKF memory"
+			npm[licenseKey] = expectedLicense
+			npm[test.field] = test.value
+			content, err = yaml.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := checkOmnidist(root); !errors.Is(err, errOmnidistContract) {
+				t.Fatalf("checkOmnidist() error = %v, want %v", err, errOmnidistContract)
+			}
+		})
 	}
 }
 

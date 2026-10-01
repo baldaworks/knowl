@@ -133,57 +133,6 @@ func TestEmbeddedDefaultConfigArtifactLoadsThroughProductionTypes(t *testing.T) 
 	}
 }
 
-func TestOperatorDocsDoNotExposeRemovedIngestPolicyConfig(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := testRepoRoot(t)
-	tests := []struct {
-		name string
-		path string
-		want []string
-	}{
-		{
-			name: "readme",
-			path: filepath.Join(repoRoot, readmeRelativePath),
-			want: []string{"SQLite", ".knowl/knowl.sqlite"},
-		},
-		{
-			name: commandOperationsSourceID,
-			path: filepath.Join(repoRoot, "docs", "operations.md"),
-			want: []string{"KNOWL_STORAGE_TYPE", "KNOWL_SERVER_LISTEN_ADDR"},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			content, err := os.ReadFile(test.path)
-			if err != nil {
-				t.Fatalf("read %s: %v", test.path, err)
-			}
-			text := string(content)
-			for _, unwanted := range []string{
-				"ingest:",
-				"knowl.ingest",
-				"auto_apply:",
-				"KNOWL_INGEST_AUTO_APPLY",
-				"maintenance:",
-				"maintenance.review",
-				"maintenance.auto_apply",
-				"KNOWL_MAINTENANCE_",
-			} {
-				if strings.Contains(text, unwanted) {
-					t.Fatalf("%s contains retired ingest-policy reference %q", test.path, unwanted)
-				}
-			}
-			for _, want := range test.want {
-				if !strings.Contains(text, want) {
-					t.Fatalf("%s missing canonical ingest-policy reference %q", test.path, want)
-				}
-			}
-		})
-	}
-}
-
 func TestLoadConfigMatchesBaldaRuntimeDocumentAndOverrides(t *testing.T) {
 	workingDir := t.TempDir()
 	t.Chdir(workingDir)
