@@ -114,3 +114,27 @@ KISS HTTP contract:
 - `GET /v1/operations/{operation_id}`
 
 Keep the published port loopback-only for local sidecar use.
+
+## Connect an MCP client
+
+With the service running, configure a Streamable HTTP MCP client using the
+service URL and operator token:
+
+```json
+{
+  "transport": "streamable_http",
+  "url": "http://127.0.0.1:8080/mcp",
+  "headers": {
+    "Authorization": "Bearer <operator-token>"
+  }
+}
+```
+
+Adapt the configuration shape to your client. The three tools are
+`knowl_retrieve`, `knowl_ingest`, and `knowl_operation`. Their equivalent HTTP
+endpoints are `GET /v1/retrieve`, `POST /v1/ingest`, and
+`GET /v1/operations/{operation_id}`; request and response schemas are in the
+[OpenAPI contract](../api/openapi/knowl.yaml).
+
+For local Codex with host-owned MCP stdio, use the
+[local Codex guide](local-codex.md).

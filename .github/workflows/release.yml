@@ -111,7 +111,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install Omnidist
-        run: npm install --global '@omnidist/omnidist@0.1.36'
+        run: npm install --global '@omnidist/omnidist@0.1.40'
 
       - name: Build native artifacts
         run: omnidist --profile default build
@@ -163,7 +163,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install Omnidist
-        run: npm install --global '@omnidist/omnidist@0.1.36'
+        run: npm install --global '@omnidist/omnidist@0.1.40'
 
       - name: Check npm publication authority
         shell: bash

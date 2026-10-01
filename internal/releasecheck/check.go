@@ -18,17 +18,21 @@ import (
 )
 
 const (
-	npmPackage  = "@baldaworks/knowl"
-	goOSDarwin  = "darwin"
-	goOSLinux   = "linux"
-	archAMD64   = "amd64"
-	archARM64   = "arm64"
-	npmCPUX64   = "x64"
-	binaryName  = "knowl"
-	npxCommand  = "npx"
-	yesArgument = "--yes"
-	setupName   = "setup"
-	runName     = "run"
+	npmPackage        = "@baldaworks/knowl" // Scoped alias retained by pinned plugin launchers and native packages.
+	npmPrimaryPackage = "knowl"
+	npmDescription    = "Self-hosted LLM wiki turning project context into OKF memory"
+	npmLicense        = "MIT"
+	versionCommand    = "version"
+	goOSDarwin        = "darwin"
+	goOSLinux         = "linux"
+	archAMD64         = "amd64"
+	archARM64         = "arm64"
+	npmCPUX64         = "x64"
+	binaryName        = "knowl"
+	npxCommand        = "npx"
+	yesArgument       = "--yes"
+	setupName         = "setup"
+	runName           = "run"
 )
 
 var (
@@ -137,7 +141,7 @@ func checkPlugin(root, version string) error {
 		return err
 	}
 	if manifest.Name != binaryName || manifest.Version != version || manifest.Skills != "./skills/" ||
-		manifest.MCPServers != "./.mcp.json" || manifest.License != "MIT" {
+		manifest.MCPServers != "./.mcp.json" || manifest.License != npmLicense {
 		return fmt.Errorf("%w: plugin version %q does not match %q", errPluginContract, manifest.Version, version)
 	}
 
@@ -202,7 +206,7 @@ func checkSkills(root, version string) error {
 			"validate": {npxCommand, yesArgument, pin, "validate"},
 		},
 		runName: {
-			"local_version":   {binaryName, "version", "--json"},
+			"local_version":   {binaryName, versionCommand, "--json"},
 			"fallback_prefix": {npxCommand, yesArgument, pin},
 			"all_sources":     {runName},
 			"one_source":      {runName, "--source", "<validated-source-id>"},
@@ -273,11 +277,15 @@ func checkOmnidist(root string) error {
 			} `yaml:"build"`
 			EnabledDistributions []string `yaml:"enabled-distributions"`
 			Distributions        map[string]struct {
-				Package       string `yaml:"package"`
-				Registry      string `yaml:"registry"`
-				Access        string `yaml:"access"`
-				PublishAuth   string `yaml:"publish-auth"`
-				RepositoryURL string `yaml:"repository-url"`
+				Package         string   `yaml:"package"`
+				Aliases         []string `yaml:"aliases"`
+				PlatformPackage string   `yaml:"platform-package"`
+				Description     string   `yaml:"description"`
+				License         string   `yaml:"license"`
+				Registry        string   `yaml:"registry"`
+				Access          string   `yaml:"access"`
+				PublishAuth     string   `yaml:"publish-auth"`
+				RepositoryURL   string   `yaml:"repository-url"`
 			} `yaml:"distributions"`
 		} `yaml:"profiles"`
 	}
@@ -290,12 +298,13 @@ func checkOmnidist(root string) error {
 		return fmt.Errorf("decode %s: %w", path, err)
 	}
 	profile, ok := config.Profiles["default"]
-	if !ok || profile.Tool.Name != "knowl" || profile.Tool.Main != "./cmd/knowl" || profile.Version.Source != "git-tag" {
+	if !ok || profile.Tool.Name != binaryName || profile.Tool.Main != "./cmd/knowl" || profile.Version.Source != "git-tag" {
 		return fmt.Errorf("%w: tool or version source", errOmnidistContract)
 	}
 	npm := profile.Distributions["npm"]
 	if !reflect.DeepEqual(profile.EnabledDistributions, []string{"npm"}) || len(profile.Distributions) != 1 ||
-		npm.Package != npmPackage || npm.Registry != "https://registry.npmjs.org" || npm.Access != "public" ||
+		npm.Package != npmPrimaryPackage || !reflect.DeepEqual(npm.Aliases, []string{npmPackage}) ||
+		npm.PlatformPackage != npmPackage || npm.Description != npmDescription || npm.License != npmLicense || npm.Registry != "https://registry.npmjs.org" || npm.Access != "public" ||
 		npm.PublishAuth != "token" || npm.RepositoryURL != "git+https://github.com/baldaworks/knowl.git" {
 		return fmt.Errorf("%w: npm distribution", errOmnidistContract)
 	}
@@ -333,7 +342,7 @@ func checkReleaseNotes(root, version string) error {
 	if err := readJSON(path, &metadata); err != nil {
 		return err
 	}
-	if metadata.Version != version || metadata.NPMPackage != npmPackage {
+	if metadata.Version != version || metadata.NPMPackage != npmPrimaryPackage {
 		return fmt.Errorf("%w: %s", errDocumentationContract, version)
 	}
 	return nil
@@ -355,19 +364,6 @@ func checkBinary(path string, expected releaseinfo.Identity) error {
 }
 
 func checkStagedNPM(root, version string) error {
-	rootPackage := npmPackage
-	var meta struct {
-		Name                 string            `json:"name"`
-		Version              string            `json:"version"`
-		Bin                  map[string]string `json:"bin"`
-		OptionalDependencies map[string]string `json:"optionalDependencies"`
-	}
-	if err := readJSON(packageJSONPath(root, rootPackage), &meta); err != nil {
-		return err
-	}
-	if meta.Name != rootPackage || meta.Version != version || meta.Bin["knowl"] != "knowl.js" {
-		return fmt.Errorf("%w: root package %s@%s", errStagedNPMContract, rootPackage, version)
-	}
 	wantDependencies := make(map[string]string, len(targets))
 	for _, expected := range targets {
 		name := npmPackage + "-" + expected.suffix
@@ -375,23 +371,39 @@ func checkStagedNPM(root, version string) error {
 		var native struct {
 			Name    string   `json:"name"`
 			Version string   `json:"version"`
+			License string   `json:"license"`
 			OS      []string `json:"os"`
 			CPU     []string `json:"cpu"`
 		}
 		if err := readJSON(packageJSONPath(root, name), &native); err != nil {
-			return err
+			return fmt.Errorf("%w: native package %s: %w", errStagedNPMContract, name, err)
 		}
-		if native.Name != name || native.Version != version ||
+		if native.Name != name || native.Version != version || native.License != npmLicense ||
 			!reflect.DeepEqual(native.OS, []string{expected.npmOS}) ||
 			!reflect.DeepEqual(native.CPU, []string{expected.npmCPU}) {
 			return fmt.Errorf("%w: native package %s", errStagedNPMContract, name)
 		}
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(name), "bin", expected.binary)); err != nil {
-			return fmt.Errorf("%w: inspect binary for %s: %v", errStagedNPMContract, name, err)
+			return fmt.Errorf("%w: inspect binary for %s: %w", errStagedNPMContract, name, err)
 		}
 	}
-	if !reflect.DeepEqual(meta.OptionalDependencies, wantDependencies) {
-		return fmt.Errorf("%w: native dependencies", errStagedNPMContract)
+	for _, name := range []string{npmPrimaryPackage, npmPackage} {
+		var meta struct {
+			Name                 string            `json:"name"`
+			Version              string            `json:"version"`
+			Description          string            `json:"description"`
+			License              string            `json:"license"`
+			Bin                  map[string]string `json:"bin"`
+			OptionalDependencies map[string]string `json:"optionalDependencies"`
+		}
+		if err := readJSON(packageJSONPath(root, name), &meta); err != nil {
+			return fmt.Errorf("%w: meta package %s: %w", errStagedNPMContract, name, err)
+		}
+		if meta.Name != name || meta.Version != version || meta.Bin[binaryName] != "knowl.js" ||
+			meta.Description != npmDescription || meta.License != npmLicense ||
+			!reflect.DeepEqual(meta.OptionalDependencies, wantDependencies) {
+			return fmt.Errorf("%w: meta package %s@%s", errStagedNPMContract, name, version)
+		}
 	}
 	return nil
 }

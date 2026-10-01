@@ -4,6 +4,7 @@ This document is the operator-facing reference for running Knowl as a service.
 
 If you only need the product overview, start with [README.md](../README.md).
 If you need the baseline container path, see [sidecar deployment](sidecar.md).
+For project-local Codex setup and MCP stdio, see the [local Codex guide](local-codex.md).
 
 ## Runtime model
 

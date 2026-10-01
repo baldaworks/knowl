@@ -2,9 +2,9 @@
 
 **Durable project knowledge for agents.**
 
-Knowl is a self-hosted knowledge sidecar for agentic applications. It turns
-durable sources into an inspectable Markdown knowledge base and returns
-bounded, provenance-backed evidence.
+Knowl is a self-hosted LLM wiki for agentic applications. It turns durable
+sources into an inspectable Markdown wiki with OKF-compatible storage and
+returns bounded, provenance-backed evidence.
 
 The host decides which events are durable, assigns their immutable source
 revisions, orchestrates tools, and generates the final user answer. Knowl owns
