@@ -7,12 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"mime"
-	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 var (
@@ -32,6 +31,9 @@ const (
 
 // IngestOptions configures bounded planning and the review gate.
 type IngestOptions struct {
+	// CatalogLimits bounds complete navigation independently of ReadLimits.Pages.
+	// An entirely zero value selects defaults; custom values must set every field.
+	CatalogLimits knowl.CatalogLimits
 	PlanLimits    PlanLimits
 	ReadLimits    knowl.ReadLimits
 	LeaseDuration time.Duration
@@ -119,6 +121,7 @@ type IngestService struct {
 	operations    OperationStore
 	index         SearchIndex
 	maintainer    Maintainer
+	catalogLimits knowl.CatalogLimits
 	planLimits    PlanLimits
 	readLimits    knowl.ReadLimits
 	leaseDuration time.Duration
@@ -140,6 +143,11 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 	if content == nil || operations == nil || index == nil {
 		return nil, fmt.Errorf("ingest dependencies are required")
 	}
+	catalogLimits, err := NormalizeCatalogLimits(options.CatalogLimits)
+	if err != nil {
+		return nil, err
+	}
+	options.CatalogLimits = catalogLimits
 	if options.PlanLimits == (PlanLimits{}) {
 		options.PlanLimits = DefaultPlanLimits()
 	}
@@ -160,6 +168,7 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 		operations:    operations,
 		index:         index,
 		maintainer:    maintainer,
+		catalogLimits: options.CatalogLimits,
 		planLimits:    options.PlanLimits,
 		readLimits:    options.ReadLimits,
 		leaseDuration: options.LeaseDuration,
@@ -267,7 +276,9 @@ func (service *IngestService) submitAcceptedWithSchema(ctx context.Context, acce
 }
 
 func (service *IngestService) maintenanceGeneration(schema knowl.SchemaDocument) (string, error) {
-	generation, err := MaintenancePolicyGeneration(SourceMaintenancePolicy(schema.Digest, service.readLimits, service.planLimits))
+	policy := SourceMaintenancePolicy(schema.Digest, service.readLimits, service.planLimits)
+	policy.CatalogLimits = service.catalogLimits
+	generation, err := MaintenancePolicyGeneration(policy)
 	if err != nil {
 		return "", fmt.Errorf("compute maintenance policy generation: %w", err)
 	}
@@ -448,16 +459,39 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 	if err := service.requireMaintainer(); err != nil {
 		return IngestResult{}, err
 	}
-	operation := submission.Operation
+	operation, err := service.operations.Operation(ctx, submission.Operation.Key.Scope, submission.Operation.ID)
+	if err != nil {
+		return IngestResult{Operation: submission.Operation}, fmt.Errorf("read submitted operation: %w", err)
+	}
 	result := IngestResult{Operation: operation}
 	switch operation.Status {
 	case knowl.StatusCommitted, knowl.StatusAwaitingReview, knowl.StatusApplying, knowl.StatusFailed:
 		return result, nil
 	}
 
-	prepared, err := service.prepareStage(ctx, submission, suppliedPlan)
+	descriptor, err := service.operations.Execution(ctx, operation.Key.Scope, operation.ID)
 	if err != nil {
-		return service.failIngest(ctx, result, failureClass(err), err)
+		return result, fmt.Errorf("read submitted execution: %w", err)
+	}
+	if err := ValidateExecutionDescriptor(operation.Key, descriptor); err != nil {
+		return result, err
+	}
+	submission.Operation = operation
+	submission.accepted = descriptor.Source
+	submission.schema = descriptor.Schema
+	var prepared preparedStage
+	staged, loadErr := service.content.LoadStage(ctx, operation.Key.Scope, operation.ID)
+	switch {
+	case loadErr == nil:
+		prepared.Staged = staged
+	case errors.Is(loadErr, ErrStageNotFound) && operation.Status == knowl.StatusReceived:
+		var err error
+		prepared, err = service.prepareStage(ctx, submission, suppliedPlan)
+		if err != nil {
+			return service.failIngest(ctx, result, failureClass(err), err)
+		}
+	default:
+		return service.failIngest(ctx, result, "staging", loadErr)
 	}
 	result.Plan = prepared.Plan
 	result.Staged = prepared.Staged
@@ -502,6 +536,13 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 	if err := service.requireMaintainer(); err != nil {
 		return preparedStage{}, err
 	}
+	expectedGeneration, err := service.maintenanceGeneration(submission.schema)
+	if err != nil {
+		return preparedStage{}, err
+	}
+	if submission.Operation.Key.MaintenanceGeneration != expectedGeneration {
+		return preparedStage{}, ErrMaintenancePolicyMismatch
+	}
 	readCtx, cancel := service.boundedContext(ctx)
 	sourceText, err := service.content.ReadSource(readCtx, submission.accepted, service.readLimits)
 	if err != nil {
@@ -515,21 +556,29 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		cancel()
 		return preparedStage{}, fmt.Errorf("context: %w", err)
 	}
-	pages, err := service.content.ReadPages(readCtx, submission.accepted.Scope, pageIDs, service.readLimits)
+	inspection, err := service.content.Inspect(readCtx, submission.accepted.Scope)
 	if err != nil {
 		cancel()
-		return preparedStage{}, fmt.Errorf("content: %w", err)
+		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
 	}
-	inspection, err := service.content.Inspect(readCtx, submission.accepted.Scope)
+	catalogs, err := catalogGraph(inspection.Catalogs, service.catalogLimits)
+	if err != nil {
+		cancel()
+		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
+	}
+	factualIDs := make([]knowl.PageID, 0, len(pageIDs))
+	for _, id := range pageIDs {
+		if _, ordinary := wiki.PageIDFromPath("wiki/" + string(id) + ".md"); ordinary {
+			factualIDs = append(factualIDs, id)
+		}
+	}
+	pages, err := service.content.ReadPages(readCtx, submission.accepted.Scope, factualIDs, service.readLimits)
 	cancel()
 	if err != nil {
-		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
-	}
-	catalogs, err := boundedCatalogs(inspection.Catalogs, service.readLimits)
-	if err != nil {
-		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
+		return preparedStage{}, fmt.Errorf("content: %w", err)
 	}
 	input := knowl.MaintenanceInput{
+		ContractVersion: SourceMaintenanceContractVersion, CatalogLimits: service.catalogLimits,
 		Scope: submission.accepted.Scope, Schema: submission.schema, Source: submission.accepted,
 		SourceText: string(sourceText), Pages: pages, Catalogs: catalogs, Limits: service.readLimits,
 	}
@@ -542,7 +591,7 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 			return preparedStage{}, fmt.Errorf("provider: %w", err)
 		}
 	}
-	validated, err := ValidatePlan(ctx, input, modelPlan, service.planLimits)
+	validated, err := ValidateMaintenancePlan(ctx, input, modelPlan, inspection, service.catalogLimits, service.planLimits)
 	if err != nil {
 		return preparedStage{}, fmt.Errorf("plan_validation: %w", err)
 	}
@@ -552,33 +601,6 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		return preparedStage{}, fmt.Errorf("staging: %w", err)
 	}
 	return preparedStage{Plan: validated, Staged: staged}, nil
-}
-
-func boundedCatalogs(catalogs []knowl.PageSnapshot, limits knowl.ReadLimits) ([]knowl.PageSnapshot, error) {
-	if len(catalogs) == 0 || len(catalogs) > limits.Pages {
-		return nil, ErrPlanLimitExceeded
-	}
-	result := append([]knowl.PageSnapshot(nil), catalogs...)
-	sort.Slice(result, func(left, right int) bool {
-		if result[left].Path == rootCatalogPath {
-			return result[right].Path != rootCatalogPath
-		}
-		if result[right].Path == rootCatalogPath {
-			return false
-		}
-		return result[left].Path < result[right].Path
-	})
-	bytes, characters := 0, 0
-	for index := range result {
-		result[index].Content = strings.Clone(result[index].Content)
-		result[index].Body = strings.Clone(result[index].Body)
-		bytes += len(result[index].Content)
-		characters += utf8.RuneCountInString(result[index].Content)
-	}
-	if bytes > limits.Bytes || characters > limits.Characters {
-		return nil, ErrPlanLimitExceeded
-	}
-	return result, nil
 }
 
 func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {

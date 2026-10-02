@@ -80,9 +80,10 @@ type acceptanceGenericACP struct {
 }
 
 type acceptancePlan struct {
-	SchemaDigest string               `json:"schema_digest"`
-	SourceRefs   []string             `json:"source_refs"`
-	Edits        []acceptancePlanEdit `json:"edits"`
+	SchemaDigest     string                   `json:"schema_digest"`
+	SourceRefs       []string                 `json:"source_refs"`
+	Edits            []acceptancePlanEdit     `json:"edits"`
+	CatalogAdditions []domain.CatalogAddition `json:"catalog_additions,omitempty"`
 }
 
 type acceptancePlanEdit struct {
@@ -340,7 +341,6 @@ func encodedAcceptancePlan(t *testing.T, project acceptanceProject, origin, vers
 		t.Fatalf("read acceptance root catalog: %v", err)
 	}
 	rootDigest := sha256.Sum256(rootContent)
-	rootAfter := string(bytes.TrimRight(rootContent, "\n")) + "\n\n* [" + title + "](" + pageID + ".md)\n"
 	plan := acceptancePlan{
 		SchemaDigest: project.schema.Digest,
 		SourceRefs:   []string{sourceRef},
@@ -349,9 +349,9 @@ func encodedAcceptancePlan(t *testing.T, project acceptanceProject, origin, vers
 				Path:    "wiki/" + pageID + ".md",
 				Content: fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\nsource_refs:\n  - %s\n---\n# %s\n", pageID, title, sourceRef, title),
 			},
-			{Path: indexFile, ExpectedDigest: hex.EncodeToString(rootDigest[:]), Content: rootAfter},
 		},
 	}
+	plan.CatalogAdditions = []domain.CatalogAddition{{Path: indexFile, ExpectedDigest: hex.EncodeToString(rootDigest[:]), Children: []string{"wiki/" + pageID + ".md"}}}
 	encoded, err := json.Marshal(plan)
 	if err != nil {
 		t.Fatalf("encode acceptance plan: %v", err)

@@ -17,6 +17,7 @@ import (
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 func TestDefaultReadLimitsAllowLargeWikiDocuments(t *testing.T) {
@@ -260,8 +261,8 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	maintainer.plan.Edits = []knowl.FileEdit{
 		{Path: testPagePath, Content: planPageContent},
 		{Path: testPageTwoPath, Content: planSupportingContent},
-		{Path: testRootCatalogPath, ExpectedDigest: digest(indexBefore), Content: append(indexBefore, []byte("\n* [One](entities/one.md)\n* [Two](entities/two.md)\n")...)},
 	}
+	maintainer.plan.CatalogAdditions = []knowl.CatalogAddition{{Path: testRootCatalogPath, ExpectedDigest: digest(indexBefore), Children: []string{testPagePath, testPageTwoPath}}}
 	maintainer.mu.Unlock()
 	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
 	if err != nil {
@@ -278,8 +279,22 @@ func TestIngestCommitsIndexAlongsidePagesAndLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read updated index: %v", err)
 	}
-	if string(indexAfter) != string(append(indexBefore, []byte("\n* [One](entities/one.md)\n* [Two](entities/two.md)\n")...)) {
-		t.Fatalf("updated index = %q", indexAfter)
+	if !strings.HasPrefix(string(indexAfter), string(indexBefore)) {
+		t.Fatal("original index rewritten")
+	}
+	destinations, malformed := wiki.IndexDestinations(string(indexAfter), 3)
+	if malformed || len(destinations) != 2 {
+		t.Fatalf("updated index links=%v malformed=%v", destinations, malformed)
+	}
+	for _, expected := range []string{testPagePath, testPageTwoPath} {
+		found := false
+		for _, destination := range destinations {
+			target, external, valid := wiki.ResolveIndexDestination("index.md", destination)
+			found = found || (valid && !external && "wiki/"+target == expected)
+		}
+		if !found {
+			t.Fatalf("missing index target %s", expected)
+		}
 	}
 }
 
@@ -1287,30 +1302,29 @@ func withRootCatalog(input knowl.MaintenanceInput, plan knowl.ModelEditPlan) kno
 	if len(plan.Edits) == 0 {
 		return plan
 	}
+	for _, addition := range plan.CatalogAdditions {
+		if addition.Path == testRootCatalogPath {
+			return plan
+		}
+	}
 	for _, edit := range plan.Edits {
 		if edit.Path == testRootCatalogPath {
 			return plan
 		}
 	}
-	var root knowl.PageSnapshot
 	for _, catalog := range input.Catalogs {
-		if catalog.Path == testRootCatalogPath {
-			root = catalog
-			break
-		}
-	}
-	if root.Path == "" {
-		return plan
-	}
-	content := strings.TrimRight(root.Content, "\n") + "\n"
-	for _, edit := range plan.Edits {
-		if !strings.HasPrefix(edit.Path, "wiki/") || !strings.HasSuffix(edit.Path, ".md") || strings.HasSuffix(edit.Path, "/index.md") {
+		if catalog.Path != testRootCatalogPath {
 			continue
 		}
-		target := strings.TrimPrefix(edit.Path, "wiki/")
-		content += "\n* [" + strings.TrimSuffix(filepath.Base(target), ".md") + "](" + target + ")\n"
+		children := make([]string, 0, len(plan.Edits))
+		for _, edit := range plan.Edits {
+			if strings.HasPrefix(edit.Path, "wiki/") && strings.HasSuffix(edit.Path, ".md") && !strings.HasSuffix(edit.Path, "/index.md") {
+				children = append(children, edit.Path)
+			}
+		}
+		plan.CatalogAdditions = append(append([]knowl.CatalogAddition(nil), plan.CatalogAdditions...), knowl.CatalogAddition{Path: catalog.Path, ExpectedDigest: catalog.Digest, Children: children})
+		break
 	}
-	plan.Edits = append(plan.Edits, knowl.FileEdit{Path: root.Path, ExpectedDigest: root.Digest, Content: []byte(content)})
 	return plan
 }
 

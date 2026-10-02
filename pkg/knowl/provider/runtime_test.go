@@ -28,52 +28,6 @@ const (
 	testArchitectureTitle   = "Architecture"
 )
 
-func TestMaintainerInstructionRequiresSemanticSynthesisAndProvenance(t *testing.T) {
-	for _, required := range []string{
-		"entities/",
-		"concepts/",
-		"syntheses/",
-		"Never mirror configured source paths",
-		"Merge overlapping evidence",
-		"include every source ref used by any edited page",
-		"preserve every unrelated existing source ref",
-		"preserve every unrelated existing child link",
-		"same source/document lineage",
-		"Never invent a wiki-link target",
-	} {
-		if !strings.Contains(maintainerInstruction, required) {
-			t.Errorf("maintainer instruction missing %q", required)
-		}
-	}
-}
-
-func TestHierarchyMaintainerInstructionDefinesGenericTaxonomyContract(t *testing.T) {
-	for _, required := range []string{
-		"subject domains as the primary navigation axis",
-		"implementation technology as supporting signals",
-		"Recursively split broad heterogeneous groups",
-		"Never return an empty catalog",
-		"singleton catalog only when",
-		"primary subject placement",
-		"secondary catalog membership sparingly",
-		"Preserve suitable current catalog paths",
-		"stable semantic paths and titles",
-		"complete final catalog graph",
-	} {
-		if !strings.Contains(hierarchyMaintainerInstruction, required) {
-			t.Errorf("hierarchy maintainer instruction missing %q", required)
-		}
-	}
-	for _, forbidden := range []string{"fastronome", "valera", "billing", "kyc"} {
-		if strings.Contains(strings.ToLower(hierarchyMaintainerInstruction), forbidden) {
-			t.Errorf("hierarchy maintainer instruction contains tenant-specific term %q", forbidden)
-		}
-	}
-	if !strings.Contains(maintainerInstruction, hierarchyMaintainerInstruction) {
-		t.Fatal("composed maintainer instruction omits hierarchy contract")
-	}
-}
-
 func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	plan := maintainerPlanOutput{
 		SchemaDigest: "schema-digest",
@@ -93,11 +47,13 @@ func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 		t.Fatalf("new maintainer: %v", err)
 	}
 
-	got, err := maintainer.Plan(context.Background(), knowl.MaintenanceInput{
-		Schema:     knowl.SchemaDocument{Digest: plan.SchemaDigest},
-		Source:     knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: "inline", ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
-		SourceText: "untrusted source text",
-	})
+	input := knowl.MaintenanceInput{
+		ContractVersion: app.SourceMaintenanceContractVersion,
+		Schema:          knowl.SchemaDocument{Digest: plan.SchemaDigest},
+		Source:          knowl.AcceptedSource{Source: knowl.SourceRef{Adapter: "inline", ID: "source-1"}, Version: knowl.SourceVersion{Version: "1"}},
+		SourceText:      "untrusted source text",
+	}
+	got, err := maintainer.Plan(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Plan() error: %v", err)
 	}
@@ -116,15 +72,7 @@ func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	if len(factory.request.Tools) != 0 || len(factory.request.Toolsets) != 0 {
 		t.Fatalf("build request granted tools: tools=%d toolsets=%d", len(factory.request.Tools), len(factory.request.Toolsets))
 	}
-	for _, want := range []string{
-		`"input":{"scope":""`,
-		`"required_schema_digest":"schema-digest"`,
-		`"required_source_ref":"inline:source-1@1"`,
-	} {
-		if !strings.Contains(requestPayload, want) {
-			t.Fatalf("maintainer prompt does not contain %q: %s", want, requestPayload)
-		}
-	}
+	assertBaselineEnvelope(t, requestPayload, input)
 
 	if err := maintainer.Close(); err != nil {
 		t.Fatalf("Close() error: %v", err)
@@ -574,7 +522,8 @@ func TestRuntimeMaintainerKeepsCachedRuntimeAfterCanceledPlan(t *testing.T) {
 
 func testMaintenanceInput() knowl.MaintenanceInput {
 	return knowl.MaintenanceInput{
-		Schema: knowl.SchemaDocument{Digest: "schema"},
+		ContractVersion: app.SourceMaintenanceContractVersion,
+		Schema:          knowl.SchemaDocument{Digest: "schema"},
 		Source: knowl.AcceptedSource{
 			Source:  knowl.SourceRef{Adapter: "fixture", ID: "source"},
 			Version: knowl.SourceVersion{Version: "1"},

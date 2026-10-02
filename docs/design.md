@@ -106,6 +106,39 @@ inject an explicit maintainer instead. Host construction fails before readiness
 when neither is present. Provider code receives bounded untrusted context and
 structured-output constraints, never unrestricted filesystem authority.
 
+### Source maintenance contract v2
+
+`MaintenanceInput.contract_version` is `source-maintenance-v2`. Its `pages`
+contain selected ordinary factual snapshots. Its `catalogs` contain the complete
+bounded navigation graph as `HierarchyCatalog` values: canonical `path`,
+original `digest`, `title`, and sorted `children`. The root comes first;
+remaining catalogs are path-sorted. Full catalog Markdown stays in the
+application and is excluded from provider input. Catalog bounds are independent
+of the factual `ReadLimits.Pages` default of 20.
+
+Source plans add memberships through `ModelEditPlan.CatalogAdditions`
+(`catalog_additions` in provider JSON). Existing catalogs require their original
+`expected_digest` and omit `title`. New catalogs require an empty digest, a safe
+nonempty single-line title and children. Children are canonical wiki file paths
+that already exist or are created in the same plan. Duplicate memberships are
+no-ops; duplicate entries for one catalog are invalid.
+
+The application appends escaped links to authoritative catalog originals,
+preserving unrelated prose and existing links. It validates the final graph and
+the combined factual/catalog file mutations before staging. Arbitrary model
+`index.md` FileEdits are rejected, including through the supplied `FilePlan`
+seam. New catalogs and edited factual pages must be reachable from the root;
+cycles, invalid targets, bounds and stale digest failures cannot commit.
+Explicit hierarchy reconciliation retains its separate complete-graph contract
+and can restructure navigation; it does not accept `catalog_additions`.
+
+The contract version, schema digest and effective read, plan and catalog limits
+participate in the maintenance-policy generation. Incompatible unplanned work
+fails before inference with `maintenance_policy_mismatch`. Already validated
+concrete stages resume through canonical preconditions without inference;
+terminal operations remain replayable. See [operator bounds and upgrade
+recovery](operations.md#source-maintenance-context-and-navigation).
+
 OKF Attested Computation declarations are data, not an execution interface.
 Knowl preserves and exposes their runtime, parameters, computation, executor,
 and attester fields without loading resources or running any declared program.

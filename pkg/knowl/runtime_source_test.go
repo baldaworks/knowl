@@ -660,10 +660,7 @@ func (runtimeSharedAtlasMaintainer) Plan(_ context.Context, input domain.Mainten
 		if catalog.Path != hostRootIndexPath {
 			continue
 		}
-		root := strings.TrimRight(catalog.Content, "\n") + "\n\n* [Project Atlas](entities/atlas-integration.md)\n"
-		plan.Edits = append(plan.Edits, domain.FileEdit{
-			Path: catalog.Path, ExpectedDigest: catalog.Digest, Content: []byte(root),
-		})
+		plan.CatalogAdditions = append(plan.CatalogAdditions, domain.CatalogAddition{Path: catalog.Path, ExpectedDigest: catalog.Digest, Children: []string{runtimeSharedAtlasPagePath}})
 		break
 	}
 	return plan, nil
@@ -747,6 +744,7 @@ func TestHostOnStartSourceDoesNotBlockReadinessAndStopsCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := knowl.DefaultConfig()
+	config.ListenAddr = hostListenAddr
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	source := runtimeFilesystemSource("blocking", t.TempDir(), true)

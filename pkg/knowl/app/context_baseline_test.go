@@ -3,7 +3,6 @@ package app_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -90,16 +89,41 @@ func TestContextBaselineCatalogScaling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Ingest(t.Context(), sourceEnvelope([]byte("# Catalog maintenance")))
-	outcome := baselineMet
-	if errors.Is(err, app.ErrPlanLimitExceeded) {
-		outcome = "gap"
-	} else if err != nil {
-		t.Fatalf("unexpected catalog failure: %v", err)
+	result, err := service.Ingest(t.Context(), sourceEnvelope([]byte("# Catalog maintenance")))
+	if err != nil {
+		t.Fatalf("32-catalog ingest must succeed at factual Pages=20: %v", err)
 	}
-	if outcome == baselineMet && len(maintainer.input.Catalogs) != 32 {
+	if _, err := service.Apply(t.Context(), result.Operation.Key.Scope, result.Operation.ID); err != nil {
+		t.Fatalf("32-catalog commit: %v", err)
+	}
+	if len(maintainer.input.Catalogs) != 32 {
 		t.Fatal("successful ingest omitted catalogs")
 	}
+	for _, p := range maintainer.input.Pages {
+		if filepath.Base(p.Path) == "index.md" || filepath.Base(p.Path) == "log.md" {
+			t.Fatal("catalog/control Markdown leaked through factual pages")
+		}
+	}
+	if maintainer.input.Limits.Pages != 20 || maintainer.input.CatalogLimits.MaxCatalogs != 1024 || maintainer.input.ContractVersion != "source-maintenance-v2" {
+		t.Fatal("incorrect independent limits/contract")
+	}
+	for i, node := range maintainer.input.Catalogs {
+		expected := testRootCatalogPath
+		if i > 0 {
+			expected = fmt.Sprintf("wiki/catalog-%02d/index.md", i-1)
+		}
+		if node.Path != expected || node.Digest == "" {
+			t.Fatalf("graph node%d=%v", i, node)
+		}
+	}
+	expectedChildren := make([]string, 31)
+	for i := range expectedChildren {
+		expectedChildren[i] = fmt.Sprintf("wiki/catalog-%02d/index.md", i)
+	}
+	if !reflect.DeepEqual(maintainer.input.Catalogs[0].Children, expectedChildren) {
+		t.Fatal("incomplete root edges")
+	}
+	outcome := baselineMet
 	logBaseline(t, struct {
 		CaseID   string `json:"case_id"`
 		Catalogs int    `json:"catalogs"`
@@ -107,6 +131,12 @@ func TestContextBaselineCatalogScaling(t *testing.T) {
 		Outcome  string `json:"outcome"`
 	}{"catalog-scaling", 32, 20, outcome})
 	after, snapshotErr := workspace.Snapshot(t.Context(), "local")
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
+	}
+	// Commit records its normal log entry while no-op navigation/factual content stays unchanged.
+	delete(before.PageDigests, "wiki/log.md")
+	delete(after.PageDigests, "wiki/log.md")
 	if snapshotErr != nil || !reflect.DeepEqual(before.PageDigests, after.PageDigests) {
 		t.Fatalf("catalog measurement mutated canonical data: %v", snapshotErr)
 	}

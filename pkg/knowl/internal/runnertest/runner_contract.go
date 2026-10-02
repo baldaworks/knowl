@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -147,10 +146,7 @@ func (maintainer *contractMaintainer) Plan(ctx context.Context, input domain.Mai
 		if catalog.Path != "wiki/index.md" {
 			continue
 		}
-		content := strings.TrimRight(catalog.Content, "\n") + "\n\n* [runner](entities/runner.md)\n"
-		plan.Edits = append(plan.Edits, domain.FileEdit{
-			Path: catalog.Path, ExpectedDigest: catalog.Digest, Content: []byte(content),
-		})
+		plan.CatalogAdditions = append(plan.CatalogAdditions, domain.CatalogAddition{Path: catalog.Path, ExpectedDigest: catalog.Digest, Children: []string{"wiki/entities/runner.md"}})
 		break
 	}
 	return plan, nil

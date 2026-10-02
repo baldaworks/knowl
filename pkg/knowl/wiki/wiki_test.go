@@ -211,3 +211,15 @@ func TestMigrateLegacyEnvelopeRejectsOwnedCollision(t *testing.T) {
 		t.Fatal("MigrateLegacyEnvelope() error = nil")
 	}
 }
+
+func TestIndexDestinationsExactLimit(t *testing.T) {
+	for _, content := range []string{"# Root\n- [One](one.md)\n", "# Root\n[[one.md]]\n", "# Root\n- one.md\n"} {
+		got, malformed := IndexDestinations(content, 1)
+		if malformed || !reflect.DeepEqual(got, []string{"one.md"}) {
+			t.Fatalf("exactly one destination = %v, malformed=%v", got, malformed)
+		}
+	}
+	if _, malformed := IndexDestinations("- [One](one.md)\n- [Two](two.md)\n", 1); !malformed {
+		t.Fatal("overflow accepted")
+	}
+}

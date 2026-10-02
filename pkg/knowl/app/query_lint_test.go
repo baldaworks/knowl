@@ -57,7 +57,7 @@ func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
 	if _, err := queryService.Page(ctx, "local", "entities/missing", knowl.ReadLimits{Pages: 1}); !errors.Is(err, app.ErrPageNotFound) {
 		t.Fatalf("missing page error = %v, want page-not-found", err)
 	}
-	for _, reserved := range []knowl.PageID{"index", "log", "entities/index"} {
+	for _, reserved := range []knowl.PageID{testRootCatalogPageID, testLogPageID, "entities/index"} {
 		if _, err := queryService.Page(ctx, "local", reserved, knowl.ReadLimits{Pages: 1}); !errors.Is(err, app.ErrPageNotFound) {
 			t.Errorf("reserved page %q error = %v, want page-not-found", reserved, err)
 		}
@@ -85,8 +85,7 @@ func TestExplicitQueryFilingUsesTheStandardPlanApplyGate(t *testing.T) {
 		Result: app.QueryResult{Scope: testSourceScope, Query: "file this result", Pages: []knowl.PageReference{{ID: "entities/source", Path: "wiki/entities/source.md", Title: "Source", Untrusted: true}}, Citations: []app.Citation{{Kind: "raw", Reference: testSourceRef, SourceRef: testSourceRef, Untrusted: true}}},
 		Plan: knowl.ModelEditPlan{SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef}, Edits: []knowl.FileEdit{
 			{Path: "wiki/entities/filed.md", Content: []byte("---\nid: entities/filed\ntitle: Filed\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Filed\n")},
-			{Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [Filed](entities/filed.md)\n")},
-		}},
+		}, CatalogAdditions: []knowl.CatalogAddition{{Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Children: []string{"wiki/entities/filed.md"}}}},
 	}
 	planned, err := queryService.File(ctx, "local", request)
 	if err != nil {

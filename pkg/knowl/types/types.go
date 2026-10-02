@@ -344,21 +344,28 @@ func (report LintReport) Healthy() bool {
 	return true
 }
 
-// MaintenanceInput is the bounded data supplied to a maintainer provider.
+// MaintenanceInput is the versioned, bounded data supplied to a maintainer.
+// Pages contains ordinary factual snapshots; Catalogs is the complete compact
+// navigation graph. Authoritative catalog Markdown remains in the application.
 type MaintenanceInput struct {
-	Scope      ScopeRef       `json:"scope"`
-	Schema     SchemaDocument `json:"schema"`
-	Source     AcceptedSource `json:"source"`
-	SourceText string         `json:"source_text"`
-	Pages      []PageSnapshot `json:"pages"`
-	Catalogs   []PageSnapshot `json:"catalogs,omitempty"`
-	Limits     ReadLimits     `json:"limits"`
+	ContractVersion string             `json:"contract_version"`
+	CatalogLimits   CatalogLimits      `json:"catalog_limits"`
+	Scope           ScopeRef           `json:"scope"`
+	Schema          SchemaDocument     `json:"schema"`
+	Source          AcceptedSource     `json:"source"`
+	SourceText      string             `json:"source_text"`
+	Pages           []PageSnapshot     `json:"pages"`
+	Catalogs        []HierarchyCatalog `json:"catalogs,omitempty"`
+	Limits          ReadLimits         `json:"limits"`
 }
 
 // ModelEditPlan is structured provider output before application validation.
+// Source maintenance uses CatalogAdditions for navigation; Edits must not
+// replace index.md catalog Markdown.
 type ModelEditPlan struct {
-	SchemaDigest string     `json:"schema_digest"`
-	SourceRefs   []string   `json:"source_refs"`
-	Edits        []FileEdit `json:"edits"`
-	Rationale    string     `json:"rationale,omitempty"`
+	CatalogAdditions []CatalogAddition `json:"catalog_additions,omitempty"`
+	SchemaDigest     string            `json:"schema_digest"`
+	SourceRefs       []string          `json:"source_refs"`
+	Edits            []FileEdit        `json:"edits"`
+	Rationale        string            `json:"rationale,omitempty"`
 }

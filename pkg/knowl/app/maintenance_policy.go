@@ -12,13 +12,14 @@ import (
 
 // SourceMaintenanceContractVersion identifies the output-affecting maintainer
 // and validation contract. Compatibility-only changes must retain this value.
-const SourceMaintenanceContractVersion = "source-maintenance-v1"
+const SourceMaintenanceContractVersion = "source-maintenance-v2"
 
 const maintenanceGenerationPrefixBytes = 16
 
 // MaintenancePolicy is the explicit non-secret input to source-maintenance
 // generation. It intentionally cannot carry provider or runtime configuration.
 type MaintenancePolicy struct {
+	CatalogLimits   knowl.CatalogLimits
 	ContractVersion string
 	SchemaDigest    string
 	ReadLimits      knowl.ReadLimits
@@ -26,6 +27,7 @@ type MaintenancePolicy struct {
 }
 
 type maintenancePolicyPayload struct {
+	CatalogLimits   knowl.CatalogLimits   `json:"catalog_limits"`
 	ContractVersion string                `json:"contract_version"`
 	SchemaDigest    string                `json:"schema_digest"`
 	ReadLimits      maintenanceReadLimits `json:"read_limits"`
@@ -51,6 +53,7 @@ type maintenancePlanLimits struct {
 func SourceMaintenancePolicy(schemaDigest string, readLimits knowl.ReadLimits, planLimits PlanLimits) MaintenancePolicy {
 	return MaintenancePolicy{
 		ContractVersion: SourceMaintenanceContractVersion,
+		CatalogLimits:   DefaultCatalogLimits(),
 		SchemaDigest:    schemaDigest,
 		ReadLimits:      readLimits,
 		PlanLimits:      planLimits,
@@ -98,6 +101,10 @@ func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayl
 	schemaDigest := strings.ToLower(strings.TrimSpace(policy.SchemaDigest))
 	readLimits := policy.ReadLimits
 	planLimits := policy.PlanLimits
+	catalogLimits, catalogErr := NormalizeCatalogLimits(policy.CatalogLimits)
+	if catalogErr != nil {
+		return maintenancePolicyPayload{}, fmt.Errorf("invalid catalog policy: %w", ErrExecutionDescriptorUnavailable)
+	}
 	if readLimits == (knowl.ReadLimits{}) {
 		readLimits = DefaultReadLimits()
 	}
@@ -114,6 +121,7 @@ func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayl
 	}
 	return maintenancePolicyPayload{
 		ContractVersion: contractVersion,
+		CatalogLimits:   catalogLimits,
 		SchemaDigest:    schemaDigest,
 		ReadLimits: maintenanceReadLimits{
 			Pages: readLimits.Pages, Bytes: readLimits.Bytes, Characters: readLimits.Characters,

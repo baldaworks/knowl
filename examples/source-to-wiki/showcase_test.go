@@ -58,12 +58,7 @@ func (showcaseTestMaintainer) Plan(_ context.Context, input domain.MaintenanceIn
 
 	for _, catalog := range input.Catalogs {
 		if catalog.Path == "wiki/index.md" {
-			root := strings.TrimRight(catalog.Content, "\n") + fmt.Sprintf("\n* [%s](%s.md)\n", title, pageID)
-			plan.Edits = append(plan.Edits, domain.FileEdit{
-				Path:           catalog.Path,
-				ExpectedDigest: catalog.Digest,
-				Content:        []byte(root),
-			})
+			plan.CatalogAdditions = append(plan.CatalogAdditions, domain.CatalogAddition{Path: catalog.Path, ExpectedDigest: catalog.Digest, Children: []string{pagePath}})
 			break
 		}
 	}
