@@ -22,6 +22,22 @@ const (
 	testSignalHeading  = "heading"
 )
 
+func TestSourceSignalsFenceCloserRequiresASCIIWhitespace(t *testing.T) {
+	for _, marker := range []string{"```", "~~~"} {
+		t.Run(marker, func(t *testing.T) {
+			content := marker + "\n# Hidden\n" + marker + "\u00a0\n# Still code\n" + marker + "\n# Real\nBody"
+			got, err := SourceSignals(t.Context(), []byte(content))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := knowl.SourceSummary{Title: testSignalReal, Headings: []string{testSignalReal}, Body: testSignalBody}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("signals=%#v want=%#v", got, want)
+			}
+		})
+	}
+}
+
 func TestSourceSignalsMetadataAndMarkdown(t *testing.T) {
 	tests := []struct {
 		name, text string

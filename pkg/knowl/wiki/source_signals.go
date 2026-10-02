@@ -218,7 +218,7 @@ func (scan *sourceMarkdown) line(raw []byte) {
 	indented := sourceIndented(raw)
 	marker, count, rest := sourceFence(line)
 	if scan.fence != 0 {
-		if !indented && marker == scan.fence && count >= scan.fenceLength && len(bytes.TrimSpace(rest)) == 0 {
+		if !indented && marker == scan.fence && count >= scan.fenceLength && len(bytes.Trim(rest, " \t")) == 0 {
 			scan.fence = 0
 		}
 		return

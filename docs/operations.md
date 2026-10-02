@@ -334,7 +334,7 @@ unchanged document eligible once under the new generation.
 
 ### Source maintenance context and navigation
 
-Source maintenance v2 separates complete catalog navigation from selected
+Source maintenance v3 separates complete catalog navigation from selected
 factual pages. The factual read limit defaults to 20 pages; catalog count does
 not consume that allowance. The model receives `catalogs` as compact
 path/digest/title/children nodes and `catalog_limits` as effective bounds.
@@ -365,7 +365,7 @@ For custom limits, supply all seven positive fields; partially populated values
 are invalid, and `MaxPathBytes` cannot exceed 2,048. The CLI uses the defaults;
 its YAML does not expose `knowl.ingest` or `knowl.maintenance` sections.
 
-Update custom maintainers and supplied-plan callers for `source-maintenance-v2`.
+Update custom maintainers and supplied-plan callers for `source-maintenance-v3`.
 Ordinary page edits still carry schema/source provenance and existing digests.
 Use `catalog_additions` for navigation. For example, this fragment adds a new
 subject catalog and links an ordinary page created in the same plan:
@@ -399,18 +399,80 @@ provider envelope overhead can still exceed the separate provider input limit,
 causing `provider_input_limit`. The current provider checks serialized input
 before inference; it does not yet fit the complete wrapper to an overall budget.
 
+#### Source signals
+
+Context selection uses parsed title, tags, headings and the bounded beginning
+of eligible prose. A source may start with exact `---` delimiter lines around
+YAML frontmatter (LF or CRLF). `title` must be a string and `tags` a sequence of
+strings; other keys are ignored after structural validation. It need not be a
+complete OKF document. For example:
+
+```markdown
+---
+title: Session retention
+tags: [storage, durability]
+---
+# Operational decision
+
+Keep session records durable across restarts.
+```
+
+A usable metadata title wins; otherwise extraction uses the first eligible
+ATX heading (`#` through `######` followed by an ASCII space/tab), Setext heading
+(a prose line followed by an `=` or `-` underline), or first eligible nonempty
+prose line. Backtick/tilde fences of at least three markers at up to three
+ASCII spaces of indentation exclude code until a matching closer of at least
+the opening length. Indented code (four columns, with four-column tab stops)
+is also excluded. Markdown structure uses ASCII spaces/tabs; the scanner does
+not implement full CommonMark, HTML interpretation or inline rendering.
+
+Malformed YAML, duplicate/non-string keys, aliases, merge keys, invalid
+`title`/`tags` types, extra YAML documents or exceeded metadata bounds discard
+all metadata signals and fall back to Markdown. A closed metadata block is
+excluded from prose even when invalid. Unterminated frontmatter is treated as
+ordinary Markdown; delimiter and horizontal-rule lines are excluded from
+signals. Invalid UTF-8 fails before inference with class `source_signals`,
+preserving the accepted immutable raw revision.
+
+| Signal / parser limit | Fixed ceiling |
+| --- | --- |
+| Source read (defaults) | 4 MiB and 262,144 characters per document, under the configured read deadline |
+| YAML metadata | 262,144 bytes, 16,384 nodes, nesting depth 64 |
+| Title / each tag / each heading | 256 Unicode runes |
+| Tags / headings examined | First 32 entries in each list |
+| All semantic signals combined | 4,096 runes and 16,384 UTF-8 bytes |
+| Lexical query | 32 distinct terms and 256 total term runes |
+
+Signals retain first-seen spelling/order; tags and headings are deduplicated.
+The combined budget is consumed in title, tags, headings, body order, and cuts
+preserve UTF-8 boundaries. Useful evidence late in a source may be omitted.
+These are bounded local defaults, not a semantic-recall guarantee. Fixed
+signal/parser/query limits have no YAML settings. `SourceText` sent to the
+provider is the complete accepted text within its separate read limits.
+
+SQLite and PostgreSQL share this query policy. Source ID/adapter are used only
+when semantic fields produce no usable lexical terms, not when a nonempty
+query has no matches. Retrieval still uses the existing neighbor/root/recent
+page budget and one generic multilingual path.
+
+Embedded indexes receive the optional `SourceSummary.Tags`, `Headings` and
+`Body` fields. Custom indexes must consume them to reproduce this selection
+behavior. The slice fields make `SourceSummary` non-comparable in Go; callers
+that previously used `==` must compare its fields explicitly.
+
 #### Upgrading pending operations
 
+The v3 source-selection policy changes the maintenance generation from v2.
 Changing the contract or any effective catalog limit changes the maintenance
-policy generation. Queued work that still needs a plan, including legacy
-empty-generation work, fails before inference with class `maintenance_policy`
+policy generation. Queued work that still needs a plan, including v1/v2 and
+legacy empty-generation work, fails before inference with class `maintenance_policy`
 and reason `maintenance_policy_mismatch`. It is a permanent failure; restart
 and automatic retry do not replan it under new rules. Stored execution metadata
 remains authoritative.
 
 Already validated concrete stages can resume without inference, including v1
-stages containing catalog FileEdits. They still enforce schema, provenance,
-original digests and atomic commit. Terminal replay remains available. Stale or
+stages containing catalog FileEdits and v2 stages. They still enforce schema,
+provenance, original digests and atomic commit. Terminal replay remains available. Stale or
 corrupt stages fail under the existing recovery rules.
 
 For configured sources, inspect the mismatch and explicitly reserve work under

@@ -259,7 +259,10 @@ type Failure struct {
 	OperationID string `json:"operation_id"`
 }
 
-// SourceSummary is bounded source context for a maintainer or index.
+// SourceSummary carries detached source signals for context selection.
+// Built-in indexes prioritize Title, Tags, Headings, then Body under shared
+// bounds; source identity is a fallback only when no usable terms remain.
+// Body is a bounded prose prefix, not the complete authoritative source text.
 type SourceSummary struct {
 	Source   SourceRef     `json:"source"`
 	Version  SourceVersion `json:"version"`
