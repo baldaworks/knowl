@@ -28,6 +28,15 @@ func TestContextContract(t *testing.T) {
 	contexttest.Run(t, store)
 }
 
+func TestContextBaseline(t *testing.T) {
+	store, err := Open(t.Context(), t.TempDir()+"/context-baseline.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	knowledgetest.RunContextBaseline(t, store)
+}
+
 func TestGoldenProjectionReplay(t *testing.T) {
 	store, err := Open(context.Background(), t.TempDir()+"/golden-projection.sqlite")
 	if err != nil {
