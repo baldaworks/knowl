@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
@@ -61,6 +63,44 @@ func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
 		if _, err := queryService.Page(ctx, "local", reserved, knowl.ReadLimits{Pages: 1}); !errors.Is(err, app.ErrPageNotFound) {
 			t.Errorf("reserved page %q error = %v, want page-not-found", reserved, err)
 		}
+	}
+}
+
+func TestQueryCanonicalTermsKeepOriginalCitations(t *testing.T) {
+	workspace, store, _, maintainer := newWorkflow(t, false, nil)
+	prepareCanonicalQueryWorkspace(t, workspace, store)
+	original := cleanPageOne + "\nCafé cafe\u0301 SDKхранилище2\n"
+	filename := filepath.Join(workspace.Root(), filepath.FromSlash(testPagePath))
+	if err := os.WriteFile(filename, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := workspace.Snapshot(t.Context(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	query, err := app.NewQueryService(workspace, store, store, nil, app.QueryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"CAFE\u0301", "sdkХРАНИЛИЩЕ2"} {
+		result, err := query.Query(t.Context(), "local", text, knowl.ReadLimits{Pages: 1, Characters: 256}, nil)
+		if err != nil || len(result.Pages) != 1 || result.Pages[0].ID != testPageID {
+			t.Fatalf("query results=%v error=%v", result, err)
+		}
+		ref := result.Pages[0]
+		if ref.Title != "One" || !ref.Untrusted || !slices.Equal(ref.SourceRefs, []string{testSourceRef}) || !strings.Contains(ref.Snippet, "Café cafe\u0301 SDKхранилище2") {
+			t.Fatalf("original evidence=%#v", ref)
+		}
+		if !hasCitation(result.Citations, "wiki", testPageID) || !hasCitation(result.Citations, "raw", testSourceRef) {
+			t.Fatalf("citations=%v", result.Citations)
+		}
+	}
+	after, err := os.ReadFile(filename)
+	if err != nil || string(after) != original || maintainer.calls() != 0 {
+		t.Fatalf("read mutated canonical content or inferred: %v", err)
 	}
 }
 

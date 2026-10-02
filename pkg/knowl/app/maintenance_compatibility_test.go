@@ -17,9 +17,10 @@ import (
 const historicContractV1 = "source-maintenance-v1"
 const historicContractV2 = "source-maintenance-v2"
 const historicContractV3 = "source-maintenance-v3"
+const historicContractV4 = "source-maintenance-v4"
 
 func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
-	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, ""} {
+	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, ""} {
 		t.Run("old contract "+version, func(t *testing.T) {
 			workspace, store, service, maintainer := newWorkflow(t, false, nil)
 			accepted, err := workspace.AcceptSource(t.Context(), sourceEnvelope([]byte("old queued evidence")))
@@ -89,7 +90,7 @@ func TestExecuteRejectsChangedPolicyBeforeInference(t *testing.T) {
 }
 
 func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
-	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3} {
+	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4} {
 		for _, scheduled := range []bool{false, true} {
 			t.Run(version+"/"+map[bool]string{false: "synchronous", true: "scheduled"}[scheduled], func(t *testing.T) {
 				workspace, store, _, maintainer := newWorkflow(t, false, nil)
@@ -168,20 +169,22 @@ func TestCatalogPolicyGenerationChangesWithEveryEffectiveLimit(t *testing.T) {
 }
 
 // Frozen payloads were emitted by the normalized implementations at 9e9edf0
-// (v1), fddb1a3 (v2), and 0a1d133 (v3). Never retrofit them through current policy.
+// (v1), fddb1a3 (v2), 0a1d133 (v3), and c929d69 (v4). Never retrofit them through current policy.
 func historicalPolicyGeneration(t *testing.T, version, schemaDigest string) string {
 	t.Helper()
-	filename := map[string]string{historicContractV1: "v1.json", historicContractV2: "v2.json", historicContractV3: "v3.json"}[version]
+	filename := map[string]string{historicContractV1: "v1.json", historicContractV2: "v2.json", historicContractV3: "v3.json", historicContractV4: "v4.json"}[version]
 	encoded, err := os.ReadFile(filepath.Join("testdata", "maintenance-policy", filename))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var payload struct {
-		CatalogLimits   json.RawMessage `json:"catalog_limits,omitempty"`
-		ContractVersion string          `json:"contract_version"`
-		SchemaDigest    string          `json:"schema_digest"`
-		ReadLimits      json.RawMessage `json:"read_limits"`
-		PlanLimits      json.RawMessage `json:"plan_limits"`
+		CatalogLimits        json.RawMessage `json:"catalog_limits,omitempty"`
+		InputLimits          json.RawMessage `json:"input_limits,omitempty"`
+		RequestFormatVersion string          `json:"request_format_version,omitempty"`
+		ContractVersion      string          `json:"contract_version"`
+		SchemaDigest         string          `json:"schema_digest"`
+		ReadLimits           json.RawMessage `json:"read_limits"`
+		PlanLimits           json.RawMessage `json:"plan_limits"`
 	}
 	if err := json.Unmarshal(encoded, &payload); err != nil || payload.ContractVersion != version {
 		t.Fatalf("historical payload: %v", err)
@@ -200,15 +203,25 @@ func TestHistoricalMaintenanceGenerationsRemainAuthentic(t *testing.T) {
 		historicContractV1: "ca4b71538979962f984b558495fe2e6fcf32e877be0d80ce2b52f7e9524f2913",
 		historicContractV2: "6153684971b79cb7a22632607c6f179ae28f2e3bdd1dd58117cf85740cafdc40",
 		historicContractV3: "e733dc8514e0ef90a6e41ac33b2ea4aaf311b8832fc71ebf98bd72c1a1e06c83",
+		historicContractV4: "73fa3a07f730f3d6dceef78e863c67786bce93e1b682b4b9a7f3eac9a74c7453",
 	}
 	for version, want := range hashes {
 		got := historicalPolicyGeneration(t, version, strings.Repeat("a", 64))
 		if got != want {
 			t.Fatalf("historical %s generation=%s want=%s", version, got, want)
 		}
+		policy := app.SourceMaintenancePolicy(strings.Repeat("a", 64), app.DefaultReadLimits(), app.DefaultPlanLimits())
+		current, err := app.MaintenancePolicyGeneration(policy)
+		if err != nil || current == got {
+			t.Fatalf("current generation reused historical %s: %v", version, err)
+		}
+		// v4 has the current payload shape; older payloads predate input sizing.
+		if version == historicContractV4 {
+			continue
+		}
 		retrofitted := app.SourceMaintenancePolicy(strings.Repeat("a", 64), app.DefaultReadLimits(), app.DefaultPlanLimits())
 		retrofitted.ContractVersion = version
-		current, err := app.MaintenancePolicyGeneration(retrofitted)
+		current, err = app.MaintenancePolicyGeneration(retrofitted)
 		if err != nil || current == got {
 			t.Fatalf("historical payload was retrofitted to current shape: %v", err)
 		}

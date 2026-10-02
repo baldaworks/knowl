@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/contextpolicy"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
@@ -20,7 +21,13 @@ func (store *Store) SelectContext(ctx context.Context, scope knowl.ScopeRef, sou
 		return nil, err
 	}
 	limit := boundedLimit(limits.Pages)
-	query := contextpolicy.SourceQuery(source)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	query, queryErr := contextpolicy.SourceQuery(source)
+	if queryErr != nil {
+		return nil, fmt.Errorf("normalize source query: %w: %w", ErrInvalidQuery, queryErr)
+	}
 	candidates, err := store.contextCandidates(ctx, scope, query.Terms, contextpolicy.CandidateLimit(limit))
 	if err != nil {
 		return nil, err
@@ -144,12 +151,20 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sources, filterErr := app.NormalizeSourcesFilter(sources)
+	if filterErr != nil {
+		return nil, filterErr
+	}
 	normalized, err := lexical.Normalize(query)
 	if err != nil {
 		return nil, fmt.Errorf("normalize search query: %w", ErrInvalidQuery)
 	}
 	limit := boundedLimit(limits.Pages)
-	strict, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "AND"), limit, limits.Characters, normalized.Terms, sources)
+	encodedTerms := normalized.IndexTerms()
+	strict, err := store.searchPhase(ctx, scope, ftsQuery(encodedTerms, "AND"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +172,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return strict, nil
 	}
 
-	relaxed, err := store.searchPhase(ctx, scope, ftsQuery(normalized.Terms, "OR"), limit, limits.Characters, normalized.Terms, sources)
+	relaxed, err := store.searchPhase(ctx, scope, ftsQuery(encodedTerms, "OR"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +198,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string, sources []knowl.SourceID) ([]knowl.PageReference, error) {
 	statement := `
 		SELECT p.page_id, p.path, p.title, p.tags, p.description, p.body, p.source_refs, p.source_document, p.source_documents,
-		       p.format, p.okf_metadata, snippet(knowl_pages_fts, 6, '', '', ' … ', 64)
+		       p.format, p.okf_metadata
 		FROM knowl_pages_fts
 		JOIN knowl_pages p ON p.scope = knowl_pages_fts.scope AND p.page_id = knowl_pages_fts.page_id
 		WHERE knowl_pages_fts MATCH ? AND knowl_pages_fts.scope = ?`
@@ -213,9 +228,9 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 	var references []knowl.PageReference
 	for rows.Next() {
 		var reference knowl.PageReference
-		var tags, description, body, sourceRefs, sourceDocuments, format, nativeSnippet string
+		var tags, description, body, sourceRefs, sourceDocuments, format string
 		var sourceDocument, metadata sql.NullString
-		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &tags, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata, &nativeSnippet); err != nil {
+		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &tags, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata); err != nil {
 			return nil, fmt.Errorf("scan search page: %w", err)
 		}
 		if err := json.Unmarshal([]byte(sourceRefs), &reference.SourceRefs); err != nil {
@@ -247,7 +262,7 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 			return nil, fmt.Errorf("decode page %q metadata: %w", reference.ID, err)
 		}
 		fields := lexical.DocumentFields{Title: reference.Title, Tags: tags, Description: description, Body: body}
-		reference.Snippet = lexical.ExcerptFields(nativeSnippet, fields, terms, maxCharacters)
+		reference.Snippet = lexical.ExcerptFields("", fields, terms, maxCharacters)
 		reference.Untrusted = true
 		references = append(references, reference)
 		if len(references) == limit {

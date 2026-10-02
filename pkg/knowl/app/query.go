@@ -274,6 +274,9 @@ func (service *QueryService) Query(ctx context.Context, scope knowl.ScopeRef, qu
 // NormalizeSourcesFilter returns a canonical bounded source identity filter.
 // Empty input means unfiltered retrieval.
 func NormalizeSourcesFilter(sources []knowl.SourceID) ([]knowl.SourceID, error) {
+	if len(sources) > 256 {
+		return nil, ErrSourceInvalid
+	}
 	normalized := make([]knowl.SourceID, 0, len(sources))
 	for _, source := range sources {
 		trimmed := knowl.SourceID(strings.TrimSpace(string(source)))

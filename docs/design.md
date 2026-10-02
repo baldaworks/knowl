@@ -76,8 +76,10 @@ The lexical projection indexes four semantic fields with descending priority:
 title, normalized OKF tags, OKF description, and user-authored body. It excludes
 paths and filenames, OKF extensions, source references and documents, and other
 provenance or transport metadata from ranking and evidence snippets. SQLite FTS
-and PostgreSQL text search implement the same observable contract; the stored
-OKF object and public retrieval schema remain unchanged.
+and PostgreSQL text search share literal matching, field priority, filters,
+strict-then-relaxed retrieval and path ties. Their native scores can order other
+results differently. The stored OKF object and public retrieval schema remain
+unchanged.
 The detailed filesystem contract is in [workspace.md](workspace.md).
 
 An ingest-side connector may translate text, a URI, origin, and idempotency
@@ -106,6 +108,39 @@ inject an explicit maintainer instead. Host construction fails before readiness
 when neither is present. Provider code receives bounded untrusted context and
 structured-output constraints, never unrestricted filesystem authority.
 
+### Generic literal retrieval
+
+One scanner finds Unicode letter/number words with attached combining marks.
+Each complete word uses NFC, `strings.ToLower`, then NFC for identity; there is
+no language detection, full case folding, accent stripping, stemming or
+transliteration. Ordinary English/Russian casing and composed/decomposed accents
+match: `CAFÉ` retrieves `Café`, while `cafe` remains distinct. Question words
+such as `what` and `why` participate like other words. Word forms and paraphrases
+remain lexical recall observations; self-hosted multilingual embeddings belong
+to Story `knowl-wxe.10`.
+
+The shared encoder represents supported normalized words as lowercase unpadded
+base32 of their UTF-8 bytes, prefixed with `k`. This private representation avoids
+native tokenizer differences without hashes or extra persistent text fields.
+SQLite writes it only into the existing FTS semantic columns. PostgreSQL writes
+its existing A/B/C/D-weighted `search_vector` from transient encoded fields in
+the same transaction as original page values. Queries use these tokens for
+native AND then OR retrieval, deduplicate fillers and retain deterministic path
+ties. Native scores and PostgreSQL position/ranking limits still apply.
+
+Evidence comes from original semantic fields and original rune spans; snippets
+preserve spelling, case and combining marks. Native snippet/headline generation
+is excluded from the retrieval path. Tag-only evidence retains its `tag:` label.
+The encoder and query guards have fixed finite bounds, and a failed projection
+rolls back without partial readiness or truncating supported indexed words;
+see [literal retrieval bounds](operations.md#generic-literal-retrieval).
+
+Both migration 15 upgrades invalidate readiness and clear incompatible derived
+search tokens while preserving original page values and durable history. A
+complete current rebuild makes the scoped projection ready in its transaction.
+Down restores the earlier projection layout and invalidates readiness again;
+rollback requires a compatible binary, migration direction and fresh rebuild.
+
 ### Source signals and context selection
 
 Ingest extracts detached `SourceSummary` title, tags, headings and body from the
@@ -124,7 +159,9 @@ eligible prose within the remaining budget and can omit useful later terms.
 Metadata parsing is separately bounded; see [syntax and limits](operations.md#source-signals).
 
 Both SQLite and PostgreSQL build the same lexical query from those fields in
-priority order, capped at 32 terms and 256 total term runes. Source ID and
+priority order, capped at 32 terms and 256 total normalized term runes.
+Direct index callers are checked for valid UTF-8 and a combined 64 KiB of
+examined raw signals before clipping; only the first 32 tags/headings are examined. Source ID and
 adapter are bounded fallback inputs only when semantic fields yield no usable
 terms. A query with no search hits does not switch to identity. Existing
 neighbor, root and recent-page merging, scope isolation and page limits remain
@@ -132,9 +169,9 @@ in effect. There is one generic multilingual path; inflection and paraphrase
 recall are not guaranteed by this lexical policy. Embedding retrieval belongs
 to the later hybrid-search Story.
 
-### Source maintenance contract v4
+### Source maintenance contract v5
 
-`MaintenanceInput.contract_version` is `source-maintenance-v4`. Its `pages`
+`MaintenanceInput.contract_version` is `source-maintenance-v5`. Its `pages`
 contain selected ordinary factual snapshots. Its `catalogs` contain the complete
 bounded navigation graph as `HierarchyCatalog` values: canonical `path`,
 original `digest`, `title`, and sorted `children`. The root comes first;
@@ -189,7 +226,7 @@ byte/count evidence, not a public durable HTTP/MCP diagnostics contract.
 The contract version, schema digest, effective request cap/format identity and
 read, plan and catalog limits participate in the maintenance-policy generation. Incompatible unplanned work
 fails before inference with `maintenance_policy_mismatch`. Already validated
-v1/v2/v3 concrete stages resume through canonical preconditions without inference;
+v1/v2/v3/v4 concrete stages resume through canonical preconditions without inference;
 terminal operations remain replayable. See [operator bounds and upgrade
 recovery](operations.md#source-maintenance-context-and-navigation).
 

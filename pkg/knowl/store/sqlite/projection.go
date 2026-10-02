@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -58,6 +59,10 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		if valuesErr != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, valuesErr)
 		}
+		encoded, encodeErr := lexical.EncodeFields(ctx, lexical.DocumentFields{Title: page.Title, Tags: values.Tags, Description: values.Description, Body: values.Body})
+		if encodeErr != nil {
+			return fmt.Errorf("project page %q: %w", page.Path, encodeErr)
+		}
 		updatedAt := page.UpdatedAt
 		if updatedAt.IsZero() {
 			updatedAt = now
@@ -97,7 +102,7 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 				return fmt.Errorf("project page source %q: %w", page.Path, err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, tags, description, body, source_refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, page.Title, values.Tags, values.Description, values.Body, sourceRefs); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO knowl_pages_fts (page_id, scope, path, title, tags, description, body, source_refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, page.ID, snapshot.Scope, page.Path, encoded.Title, encoded.Tags, encoded.Description, encoded.Body, sourceRefs); err != nil {
 			return fmt.Errorf("project page search %q: %w", page.Path, err)
 		}
 	}

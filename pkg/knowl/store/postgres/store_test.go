@@ -29,6 +29,7 @@ import (
 const (
 	testSchemaDigest = "schema"
 	testPageID       = "one"
+	testSourceID     = "engineering"
 )
 
 func TestOpenRequiresDSN(t *testing.T) {
@@ -76,27 +77,6 @@ func TestOKFProjectionMigrationIsPostgresNative(t *testing.T) {
 	for _, required := range []string{"ADD COLUMN format TEXT", "ADD COLUMN description TEXT", "ADD COLUMN okf_metadata JSONB", "coalesce(description", "DELETE FROM knowl_projection_state"} {
 		if !strings.Contains(string(content), required) {
 			t.Fatalf("OKF projection migration missing %q", required)
-		}
-	}
-}
-
-func TestOKFSearchTagsMigrationIsPostgresNative(t *testing.T) {
-	content, err := migrationFiles.ReadFile("migrations/00010_okf_search_tags.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{
-		"ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
-		"coalesce(title, '')), 'A'",
-		"coalesce(tags, '')), 'B'",
-		"coalesce(description, '')), 'C'",
-		"coalesce(body, '')), 'D'",
-		"USING GIN(search_vector)",
-		"DELETE FROM knowl_projection_state",
-		"DROP COLUMN tags",
-	} {
-		if !strings.Contains(string(content), required) {
-			t.Fatalf("OKF tag migration missing %q", required)
 		}
 	}
 }
@@ -437,7 +417,7 @@ func runStoreContract(t *testing.T, dsn string) {
 	}
 
 	sourceDocument := &knowl.SourceDocument{
-		SourceID: "engineering", DocumentID: "docs/one.md", Revision: "revision-1", URI: "file:///source/docs/one.md",
+		SourceID: testSourceID, DocumentID: "docs/one.md", Revision: "revision-1", URI: "file:///source/docs/one.md",
 	}
 	snapshot := knowl.WorkspaceSnapshot{
 		Scope: scope, SchemaDigest: testSchemaDigest, CapturedAt: time.Unix(1, 0).UTC(),

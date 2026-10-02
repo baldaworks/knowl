@@ -32,5 +32,6 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get PostgreSQL Testcontainer connection string: %v", err)
 	}
+	t.Run("generic", func(t *testing.T) { runGenericPostgres(t, dsn) })
 	runStoreContract(t, dsn)
 }

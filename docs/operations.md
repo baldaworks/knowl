@@ -334,7 +334,7 @@ unchanged document eligible once under the new generation.
 
 ### Source maintenance context and navigation
 
-Source maintenance v4 separates complete catalog navigation from selected
+Source maintenance v5 separates complete catalog navigation from selected
 factual pages. The factual read limit defaults to 20 pages; catalog count does
 not consume that allowance. The model receives `catalogs` as compact
 path/digest/title/children nodes and `catalog_limits` as effective bounds.
@@ -365,7 +365,7 @@ For custom limits, supply all seven positive fields; partially populated values
 are invalid, and `MaxPathBytes` cannot exceed 2,048. The CLI uses the defaults;
 its YAML does not expose `knowl.ingest` or `knowl.maintenance` sections.
 
-Update custom maintainers and supplied-plan callers for `source-maintenance-v4`.
+Update custom maintainers and supplied-plan callers for `source-maintenance-v5`.
 Ordinary page edits still carry schema/source provenance and existing digests.
 Use `catalog_additions` for navigation. For example, this fragment adds a new
 subject catalog and links an ordinary page created in the same plan:
@@ -513,20 +513,72 @@ Embedded indexes receive the optional `SourceSummary.Tags`, `Headings` and
 behavior. The slice fields make `SourceSummary` non-comparable in Go; callers
 that previously used `==` must compare its fields explicitly.
 
+#### Generic literal retrieval
+
+SQLite and PostgreSQL use one fixed word policy: Unicode letters/numbers with
+attached combining marks, normalized with NFC, generic lowercase, then NFC.
+English/Russian case and canonical accents match; accents remain distinct.
+`what` and `why` are ordinary searchable words. Full case folding, stemming,
+transliteration and language-specific paths are outside this literal policy.
+Inflection, plurals and paraphrases are measured limitations; normalization does
+not provide semantic recall. Self-hosted multilingual embedding retrieval is
+owned by Story `knowl-wxe.10`.
+
+Native indexes receive private reversible tokens for the normalized complete
+words. Original title, tags, description, body and provenance stay intact;
+retrieval excerpts use original character spans rather than native snippets.
+Field priority remains title, tags, description, body. AND matches precede OR
+fillers, duplicate pages are removed, and score ties use paths. Native scores,
+rankings and PostgreSQL position limits can differ between backends.
+
+Fixed direct-index bounds have no YAML settings:
+
+| Input / result | Supported bound |
+| --- | --- |
+| Query passed to the index | Valid UTF-8, at most 65,536 raw bytes |
+| Query terms | 32 distinct terms, 256 normalized runes combined |
+| Examined raw source signals | Valid UTF-8, 65,536 bytes combined before clipping; first 32 tags and headings |
+| Original semantic field | Valid UTF-8, 4,194,304 bytes per title/tags/description/body field |
+| Derived page token streams | 524,288 bytes across all four fields; 8,192 distinct supported words |
+| Queryable word | At most 256 normalized runes; longer words are excluded whole from the index |
+| Source filter | At most 256 raw entries and 16 distinct validated source IDs, sorted/deduplicated |
+| Direct-index snippet | Nonpositive character limit defaults to 4,096 runes; positive limits clamp at 262,144 |
+
+`QueryService` retains its existing positive default read limits. The direct
+snippet default bounds embedded calls that previously returned an entire page.
+Invalid queries/source summaries and invalid projections return stable typed
+errors; adapter `ErrInvalidProjection` aliases the shared projection sentinel.
+A dense page can fit a file read yet exceed the derived limit. Rebuild then
+fails atomically, preserving the previous scoped index/readiness and canonical
+content. Supported words are never silently truncated to publish readiness.
+These bounds are finite local ceilings, not production capacity measurements.
+
+Migration `00015_generic_lexical` clears old FTS tokens / PostgreSQL vectors and
+projection readiness, preserving original pages, links, provenance, operations,
+source state and raw/canonical files. Startup rebuilds the derived projection
+before serving readiness. PostgreSQL reuses its existing GIN index and stores
+the vector explicitly with original values; it adds no encoded text columns.
+On failure, correct the offending canonical page or configuration and retry the
+existing rebuild/startup path. Down invalidates readiness; PostgreSQL restores
+the earlier generated A/B/C/D vector, while SQLite recreates empty FTS. Stop
+writers, pair the earlier binary with its schema/policy and rebuild before
+resuming. Preserve raw and operation history.
+
 #### Upgrading pending operations
 
-The v4 source wire, fitting and visibility policy changes the maintenance
-generation from v3. Changing the effective request cap or sizing format identity,
+The v5 generic literal query/source-selection policy changes the maintenance
+generation from v4. The v4 source wire, complete request sizing and whole-page
+visibility guards remain in force. Changing the effective request cap or sizing format identity,
 contract, schema, read/plan/catalog limits changes the generation. Endpoints,
 credentials and per-source measured usage are excluded. Queued work that still
-needs a plan, including v1/v2/v3 and
+needs a plan, including v1/v2/v3/v4 and
 legacy empty-generation work, fails before inference with class `maintenance_policy`
 and reason `maintenance_policy_mismatch`. It is a permanent failure; restart
 and automatic retry do not replan it under new rules. Stored execution metadata
 remains authoritative.
 
 Already validated concrete stages can resume without inference, including v1
-stages containing catalog FileEdits and v2/v3 stages. They still enforce schema,
+stages containing catalog FileEdits and v2/v3/v4 stages. They still enforce schema,
 provenance, original digests and atomic commit. Terminal replay remains available. Stale or
 corrupt stages fail under the existing recovery rules.
 

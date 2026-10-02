@@ -249,7 +249,7 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 		}
 	})
 	t.Run("invalid normalization", func(t *testing.T) {
-		_, err := index.Search(ctx, Scope, "what is why", knowl.ReadLimits{Pages: 5, Characters: 48}, nil)
+		_, err := index.Search(ctx, Scope, "--- ?!", knowl.ReadLimits{Pages: 5, Characters: 48}, nil)
 		if err == nil || invalid == nil || !invalid(err) {
 			t.Fatalf("Search() error = %v, want adapter invalid-query classification", err)
 		}
@@ -267,6 +267,7 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 			t.Fatalf("top-five hits = %d/%d, want at least %d", hits, len(MeasuredQueries), minimum)
 		}
 	})
+	t.Run("generic literals evidence and bounds", func(t *testing.T) { runGeneric(t, index, invalid) })
 	t.Run("rebuild equivalence", func(t *testing.T) {
 		before := search(t, index, Scope, "badger session", 5, 48)
 		if err := index.Rebuild(ctx, Snapshot()); err != nil {

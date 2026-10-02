@@ -43,6 +43,23 @@ func TestNormalizeSourcesFilter(t *testing.T) {
 	}
 }
 
+func TestNormalizeSourcesFilterBoundsRawEntries(t *testing.T) {
+	for _, count := range []int{256, 257} {
+		values := make([]knowl.SourceID, count)
+		for i := range values {
+			values[i] = queryTestSourceOperations
+		}
+		got, err := NormalizeSourcesFilter(values)
+		if count == 257 {
+			if !errors.Is(err, ErrSourceInvalid) {
+				t.Fatalf("overflow error=%v", err)
+			}
+		} else if err != nil || len(got) != 1 || got[0] != queryTestSourceOperations {
+			t.Fatalf("bounded repeated filter=%v error=%v", got, err)
+		}
+	}
+}
+
 func TestQueryServiceNormalizesSourcesBeforeDispatch(t *testing.T) {
 	t.Parallel()
 
