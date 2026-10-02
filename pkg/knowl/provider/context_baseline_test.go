@@ -56,7 +56,7 @@ func TestContextBaselineProviderInputBudget(t *testing.T) {
 	input.SourceText = "bounded source 界<>"
 
 	t.Run("aggregate-pages", func(t *testing.T) {
-		payload, err := json.Marshal(input)
+		payload, err := app.EncodeSourceMaintenanceRequest(ctx, input)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +76,8 @@ func TestContextBaselineProviderInputBudget(t *testing.T) {
 			}
 			outcome, reason = baselineGap, failure.Reason
 		} else {
-			if len(payload) > maintainer.maxInput {
+			size, sizeErr := maintainer.RequestBytes(ctx, input)
+			if sizeErr != nil || size > maintainer.maxInput {
 				t.Fatal("provider accepted input above its configured payload limit")
 			}
 			assertBaselineEnvelope(t, captured, input)
@@ -89,7 +90,7 @@ func TestContextBaselineProviderInputBudget(t *testing.T) {
 
 	t.Run("serialized-envelope", func(t *testing.T) {
 		input.Pages = pages[:1]
-		payload, err := json.Marshal(input)
+		payload, err := app.EncodeSourceMaintenanceRequest(ctx, input)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -137,7 +138,15 @@ func assertBaselineEnvelope(t *testing.T, captured string, input knowl.Maintenan
 		}
 	}
 	// Compare wire values: omitted empty SourceDocuments is equivalent to nil.
-	payload, err := json.Marshal(input)
+	expected := input
+	if expected.InputLimits.MaxRequestBytes == 0 {
+		expected.InputLimits.MaxRequestBytes = app.MaxMaintenanceRequestBytes
+	}
+	expected.Pages = append([]knowl.PageSnapshot{}, input.Pages...)
+	for i := range expected.Pages {
+		expected.Pages[i].Body = ""
+	}
+	payload, err := json.Marshal(expected)
 	if err != nil {
 		t.Fatal(err)
 	}

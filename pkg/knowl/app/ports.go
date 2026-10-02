@@ -293,3 +293,11 @@ const (
 	OperationWrite  OperationKind = "write"
 	OperationReview OperationKind = "review"
 )
+
+// MaintenanceRequestSizer declares a pure, finite source request budget and
+// measures the same representation that Plan will send, including its wrapper.
+// Implementations must not initialize providers or perform inference here.
+type MaintenanceRequestSizer interface {
+	RequestBudget() knowl.MaintenanceRequestBudget
+	RequestBytes(ctx context.Context, input knowl.MaintenanceInput) (int, error)
+}

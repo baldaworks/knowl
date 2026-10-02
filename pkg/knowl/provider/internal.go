@@ -230,7 +230,7 @@ func (maintainer *RuntimeMaintainer) ensureRuntime(_ context.Context) (*maintain
 		return nil, permanentProviderFailure(reasonProviderSetup)
 	}
 	wrapped, err := structuredagent.NewAgent(
-		agent,
+		&sourceRequestGuard{Agent: agent},
 		structuredagent.WithSystemInstruction(maintainerInstruction),
 		structuredagent.WithInputSchema(maintainerInputSchema),
 		structuredagent.WithOutputSchema(maintainerOutputSchema),
