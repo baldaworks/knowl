@@ -392,6 +392,17 @@ func TestIngestRejectsStaleReviewedPlan(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "stale.md"), before, 0o600); err != nil {
 		t.Fatalf("write stale fixture: %v", err)
 	}
+	// Project the real existing fixtures so their complete snapshots are selected.
+	if _, err := workspace.AcceptSource(ctx, sourceEnvelope([]byte("source text"))); err != nil {
+		t.Fatal(err)
+	}
+	fixtureSnapshot, err := workspace.Snapshot(ctx, testSourceScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rebuild(ctx, fixtureSnapshot); err != nil {
+		t.Fatal(err)
+	}
 	planned, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
 	if err != nil {
 		t.Fatalf("ingest stale plan: %v", err)
@@ -828,6 +839,17 @@ func TestAutoApplyCommitsValidSubsetAndPersistsDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Project the real existing fixtures so their complete snapshots are selected.
+	if _, err := workspace.AcceptSource(ctx, sourceEnvelope([]byte("source text"))); err != nil {
+		t.Fatal(err)
+	}
+	fixtureSnapshot, err := workspace.Snapshot(ctx, testSourceScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rebuild(ctx, fixtureSnapshot); err != nil {
+		t.Fatal(err)
+	}
 	result, err := service.Ingest(ctx, sourceEnvelope([]byte("source text")))
 	if err != nil {
 		t.Fatalf("ingest mixed plan: %v", err)

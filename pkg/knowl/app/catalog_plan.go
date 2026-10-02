@@ -29,6 +29,26 @@ func ValidateMaintenancePlan(ctx context.Context, input knowl.MaintenanceInput, 
 	if err != nil {
 		return knowl.ValidatedEditPlan{}, err
 	}
+	existing := make(map[string]bool, len(inspection.Snapshot.Pages))
+	for _, page := range inspection.Snapshot.Pages {
+		existing[page.Path] = true
+	}
+	included := make(map[string]knowl.PageSnapshot, len(input.Pages))
+	for _, page := range input.Pages {
+		included[page.Path] = page
+	}
+	for _, edit := range ordinary.Edits {
+		if !existing[edit.Path] {
+			continue
+		}
+		snapshot, seen := included[edit.Path]
+		if !seen {
+			return knowl.ValidatedEditPlan{}, ErrForbiddenEdit
+		}
+		if snapshot.Digest == "" || edit.ExpectedDigest != snapshot.Digest {
+			return knowl.ValidatedEditPlan{}, ErrPlanInvalid
+		}
+	}
 	graph, err := catalogGraph(inspection.Catalogs, limits)
 	if err != nil {
 		return knowl.ValidatedEditPlan{}, err
