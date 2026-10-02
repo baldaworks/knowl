@@ -127,7 +127,7 @@ func Run(t *testing.T, index Index) {
 		assertIDs(t, selectContext(t, index, Scope, semantic, 1), controlID)
 	})
 	t.Run("empty semantic terms use identity", func(t *testing.T) {
-		fallback := knowl.SourceSummary{Source: knowl.SourceRef{ID: "Badger Session"}, Title: "why", Body: "how"}
+		fallback := knowl.SourceSummary{Source: knowl.SourceRef{ID: "Badger Session"}, Title: "---", Body: "?!"}
 		assertIDs(t, selectContext(t, index, Scope, fallback, 1), relevantID)
 	})
 	t.Run("deterministic rebuild", func(t *testing.T) {

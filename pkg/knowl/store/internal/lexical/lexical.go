@@ -2,26 +2,27 @@
 package lexical
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
-	MaxTerms       = 32
-	MaxTermRunes   = 256
-	omissionMarker = "…"
+	MaxTerms            = 32
+	MaxTermRunes        = 256
+	MaxQueryBytes       = 64 * 1024
+	DefaultSnippetRunes = 4096
+	MaxSnippetRunes     = 262144
+	omissionMarker      = "…"
 )
 
 // ErrInvalidQuery identifies a query with no usable terms or one exceeding
 // the bounded lexical policy.
 var ErrInvalidQuery = errors.New("invalid lexical query")
-
-var framingWords = map[string]struct{}{
-	"what": {}, "why": {}, "how": {}, "when": {}, "where": {}, "who": {},
-	"which": {}, "is": {}, "are": {}, "was": {}, "were": {}, "do": {},
-	"does": {}, "did": {},
-}
 
 // Query is a validated, ordered set of distinct normalized terms.
 type Query struct {
@@ -38,61 +39,56 @@ type DocumentFields struct {
 }
 
 // Normalize tokenizes raw text into a bounded, first-seen sequence of distinct
-// lower-case Unicode terms. Only the version-1 question framing words are
-// removed.
+// NFC/lowercase/NFC Unicode terms. Question words remain searchable.
 func Normalize(raw string) (Query, error) {
-	tokens := scanTokens(raw)
-	terms := make([]string, 0, len(tokens))
-	seen := make(map[string]struct{}, len(tokens))
-	totalRunes := 0
-	for _, token := range tokens {
-		if _, framing := framingWords[token.value]; framing {
-			continue
-		}
-		if _, duplicate := seen[token.value]; duplicate {
-			continue
-		}
-		seen[token.value] = struct{}{}
-		terms = append(terms, token.value)
-		totalRunes += len([]rune(token.value))
-		if len(terms) > MaxTerms || totalRunes > MaxTermRunes {
-			return Query{}, ErrInvalidQuery
-		}
+	if err := ValidateQueryParts(raw); err != nil {
+		return Query{}, err
 	}
-	if len(terms) == 0 {
+	query, overflow := collectTerms([]string{raw}, false)
+	if overflow || len(query.Terms) == 0 {
 		return Query{}, ErrInvalidQuery
 	}
-	return Query{Terms: terms}, nil
+	return query, nil
 }
 
-// Summarize builds maintenance terms from priority-ordered parts. It shares
-// Normalize's lexical semantics but truncates at the fixed bounds instead of
-// rejecting an already-accepted durable source.
-func Summarize(parts ...string) Query {
+// Summarize builds bounded terms in source priority order. It clips usable
+// terms, while malformed or excessive raw input returns ErrInvalidQuery.
+func Summarize(parts ...string) (Query, error) {
+	if err := ValidateQueryParts(parts...); err != nil {
+		return Query{}, err
+	}
+	query, _ := collectTerms(parts, true)
+	return query, nil
+}
+
+func collectTerms(parts []string, clip bool) (Query, bool) {
 	terms := make([]string, 0, MaxTerms)
 	seen := make(map[string]struct{}, MaxTerms)
-	totalRunes := 0
+	total := 0
+	overflow := false
 	for _, part := range parts {
-		for _, token := range scanTokens(part) {
-			if _, framing := framingWords[token.value]; framing {
-				continue
+		_ = walkTokens(context.Background(), part, func(candidate token) bool {
+			if _, exists := seen[candidate.value]; exists {
+				return true
 			}
-			if _, duplicate := seen[token.value]; duplicate {
-				continue
+			count := utf8.RuneCountInString(candidate.value)
+			if clip && count > MaxTermRunes {
+				return true
 			}
-			termRunes := len([]rune(token.value))
-			if termRunes > MaxTermRunes {
-				continue
+			if len(terms) == MaxTerms || total+count > MaxTermRunes {
+				overflow = true
+				return false
 			}
-			if len(terms) == MaxTerms || totalRunes+termRunes > MaxTermRunes {
-				return Query{Terms: terms}
-			}
-			seen[token.value] = struct{}{}
-			terms = append(terms, token.value)
-			totalRunes += termRunes
+			seen[candidate.value] = struct{}{}
+			terms = append(terms, candidate.value)
+			total += count
+			return true
+		})
+		if overflow {
+			break
 		}
 	}
-	return Query{Terms: terms}
+	return Query{Terms: terms}, overflow
 }
 
 // Excerpt returns a deterministic fragment selected around the first complete
@@ -100,8 +96,9 @@ func Summarize(parts ...string) Query {
 // otherwise title and body are searched as the authoritative fallback.
 func Excerpt(nativeFragment, title, body string, terms []string, maxRunes int) string {
 	if maxRunes <= 0 {
-		return body
+		maxRunes = DefaultSnippetRunes
 	}
+	maxRunes = min(maxRunes, MaxSnippetRunes)
 	nativeFragment = strings.TrimSpace(nativeFragment)
 	combined := strings.TrimSpace(title + "\n" + body)
 
@@ -148,9 +145,6 @@ func ExcerptFields(nativeFragment string, fields DocumentFields, terms []string,
 	if context != "" {
 		evidence += " — " + context
 	}
-	if maxRunes <= 0 {
-		return evidence
-	}
 	return Excerpt(evidence, "", "", terms, maxRunes)
 }
 
@@ -175,35 +169,50 @@ type token struct {
 	start, end int
 }
 
-func scanTokens(text string) []token {
-	runes := []rune(text)
-	var tokens []token
-	start := -1
-	flush := func(end int) {
-		if start < 0 {
-			return
+// walkTokens keeps original rune positions and stops as soon as its consumer
+// has enough terms or rejects a bound; it never collects an entire page.
+func walkTokens(ctx context.Context, text string, visit func(token) bool) error {
+	byteStart, runeStart, runeIndex := -1, -1, 0
+	flush := func(byteEnd, runeEnd int) (bool, error) {
+		if byteStart < 0 {
+			return true, nil
 		}
-		tokens = append(tokens, token{
-			value: strings.ToLower(string(runes[start:end])),
-			start: start,
-			end:   end,
-		})
-		start = -1
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		value := normalizeWord(text[byteStart:byteEnd])
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		keepGoing := visit(token{value: value, start: runeStart, end: runeEnd})
+		byteStart = -1
+		return keepGoing, nil
 	}
-	for index, character := range runes {
+	for byteIndex, character := range text {
+		if runeIndex%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		switch {
 		case unicode.IsLetter(character) || unicode.IsNumber(character):
-			if start < 0 {
-				start = index
+			if byteStart < 0 {
+				byteStart, runeStart = byteIndex, runeIndex
 			}
-		case unicode.IsMark(character) && start >= 0:
-			// Combining marks remain attached to an already-started token.
+		case unicode.IsMark(character) && byteStart >= 0:
 		default:
-			flush(index)
+			keepGoing, err := flush(byteIndex, runeIndex)
+			if err != nil || !keepGoing {
+				return err
+			}
 		}
+		runeIndex++
 	}
-	flush(len(runes))
-	return tokens
+	_, err := flush(len(text), runeIndex)
+	if err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 func firstMatch(text string, terms []string) (int, int, bool) {
@@ -212,14 +221,34 @@ func firstMatch(text string, terms []string) (int, int, bool) {
 	}
 	wanted := make(map[string]struct{}, len(terms))
 	for _, term := range terms {
-		wanted[strings.ToLower(term)] = struct{}{}
+		wanted[normalizeWord(term)] = struct{}{}
 	}
-	for _, candidate := range scanTokens(text) {
+	var start, end int
+	matched := false
+	_ = walkTokens(context.Background(), text, func(candidate token) bool {
 		if _, ok := wanted[candidate.value]; ok {
-			return candidate.start, candidate.end, true
+			start, end, matched = candidate.start, candidate.end, true
+			return false
 		}
+		return true
+	})
+	return start, end, matched
+}
+
+func normalizeWord(text string) string {
+	return norm.NFC.String(strings.ToLower(norm.NFC.String(text)))
+}
+
+// ValidateQueryParts bounds raw lexical input before scanning or clipping.
+func ValidateQueryParts(parts ...string) error {
+	total := 0
+	for _, part := range parts {
+		if len(part) > MaxQueryBytes-total || !utf8.ValidString(part) {
+			return ErrInvalidQuery
+		}
+		total += len(part)
 	}
-	return 0, 0, false
+	return nil
 }
 
 func boundedPrefix(characters []rune, limit int) string {

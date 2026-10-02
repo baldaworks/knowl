@@ -249,7 +249,7 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 		}
 	})
 	t.Run("invalid normalization", func(t *testing.T) {
-		_, err := index.Search(ctx, Scope, "what is why", knowl.ReadLimits{Pages: 5, Characters: 48}, nil)
+		_, err := index.Search(ctx, Scope, "--- ?!", knowl.ReadLimits{Pages: 5, Characters: 48}, nil)
 		if err == nil || invalid == nil || !invalid(err) {
 			t.Fatalf("Search() error = %v, want adapter invalid-query classification", err)
 		}

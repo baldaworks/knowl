@@ -8,7 +8,12 @@ import (
 	"unicode/utf8"
 )
 
-const testTerm = "badger"
+const (
+	testTerm           = "badger"
+	testQuestionWord   = "why"
+	testAlphabeticWord = "alpha"
+	testAccentWord     = "café"
+)
 
 func TestNormalize(t *testing.T) {
 	t.Parallel()
@@ -18,14 +23,17 @@ func TestNormalize(t *testing.T) {
 		want  []string
 		error bool
 	}{
-		{name: "case punctuation and framing", raw: "Why WAS Badger selected, for Session-Memory?", want: []string{testTerm, "selected", "for", "session", "memory"}},
-		{name: "first seen distinct", raw: "alpha BETA alpha beta gamma", want: []string{"alpha", "beta", "gamma"}},
-		{name: "unicode letters numbers and attached marks", raw: "КАК cafe\u0301 версия2?", want: []string{"как", "cafe\u0301", "версия2"}},
-		{name: "leading mark does not start token", raw: "\u0301alpha", want: []string{"alpha"}},
+		{name: "case punctuation and question words", raw: "Why WAS Badger selected, for Session-Memory?", want: []string{testQuestionWord, "was", testTerm, "selected", "for", "session", "memory"}},
+		{name: "first seen distinct", raw: "alpha BETA alpha beta gamma", want: []string{testAlphabeticWord, "beta", "gamma"}},
+		{name: "unicode letters numbers and attached marks", raw: "КАК cafe\u0301 версия2?", want: []string{"как", testAccentWord, "версия2"}},
+		{name: "leading mark does not start token", raw: "\u0301alpha", want: []string{testAlphabeticWord}},
 		{name: "only exact framing set removed", raw: "can should the decision", want: []string{"can", "should", "the", "decision"}},
 		{name: "blank", raw: "  -- ", error: true},
-		{name: "framing only", raw: "What is it?", want: []string{"it"}},
-		{name: "all framing", raw: "what is why", error: true},
+		{name: "question words", raw: "What is it?", want: []string{"what", "is", "it"}},
+		{name: "all question words", raw: "what is why", want: []string{"what", "is", testQuestionWord}},
+		{name: "canonical dedup", raw: "CAFÉ cafe\u0301 café", want: []string{testAccentWord}},
+		{name: "accent distinction", raw: "cafe café", want: []string{"cafe", testAccentWord}},
+		{name: "invalid UTF8", raw: "alpha\xff", error: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -67,28 +75,58 @@ func TestSummarizeTruncatesInPriorityOrder(t *testing.T) {
 	for index := range parts {
 		parts[index] = fmt.Sprintf("term%d", index)
 	}
-	got := Summarize(strings.Join(parts[:MaxTerms+1], " "), "origin-adapter")
+	got := summarize(t, strings.Join(parts[:MaxTerms+1], " "), "origin-adapter")
 	if len(got.Terms) != MaxTerms || got.Terms[0] != "term0" || got.Terms[MaxTerms-1] != fmt.Sprintf("term%d", MaxTerms-1) {
-		t.Fatalf("Summarize() terms = %q", got.Terms)
+		t.Fatalf("summarize(t, ) terms = %q", got.Terms)
 	}
 	if strings.Contains(strings.Join(got.Terms, " "), "origin") {
-		t.Fatal("Summarize() displaced higher-priority title terms")
+		t.Fatal("summarize(t, ) displaced higher-priority title terms")
 	}
 }
 
 func TestSummarizeSharesNormalizationAndAllowsEmpty(t *testing.T) {
 	t.Parallel()
-	got := Summarize("Why WAS Badger, badger?", "Source-ID", "Adapter")
-	want := []string{testTerm, "source", "id", "adapter"}
+	got := summarize(t, "Why WAS Badger, badger?", "Source-ID", "Adapter")
+	want := []string{testQuestionWord, "was", testTerm, "source", "id", "adapter"}
 	if strings.Join(got.Terms, "|") != strings.Join(want, "|") {
-		t.Fatalf("Summarize() terms = %q, want %q", got.Terms, want)
+		t.Fatalf("summarize(t, ) terms = %q, want %q", got.Terms, want)
 	}
-	if empty := Summarize("what is why"); len(empty.Terms) != 0 {
-		t.Fatalf("Summarize() framing-only terms = %q, want empty", empty.Terms)
+	if empty := summarize(t, "--- ?!"); len(empty.Terms) != 0 {
+		t.Fatalf("summarize(t, ) punctuation-only terms = %q, want empty", empty.Terms)
 	}
-	withOversizedTitle := Summarize(strings.Repeat("界", MaxTermRunes+1), "origin")
+	withOversizedTitle := summarize(t, strings.Repeat("界", MaxTermRunes+1), "origin")
 	if len(withOversizedTitle.Terms) != 1 || withOversizedTitle.Terms[0] != "origin" {
-		t.Fatalf("Summarize() after oversized title = %q, want origin fallback", withOversizedTitle.Terms)
+		t.Fatalf("summarize(t, ) after oversized title = %q, want origin fallback", withOversizedTitle.Terms)
+	}
+}
+
+// These cases catch unbounded raw scans and silently repaired malformed input.
+func TestNormalizeRawBounds(t *testing.T) {
+	for _, test := range []struct {
+		raw     string
+		invalid bool
+	}{
+		{raw: strings.Repeat(" ", 64*1024-len(testTerm)) + testTerm},
+		{raw: strings.Repeat(" ", 64*1024-len(testTerm)+1) + testTerm, invalid: true},
+	} {
+		got, err := Normalize(test.raw)
+		if test.invalid {
+			if !errors.Is(err, ErrInvalidQuery) {
+				t.Fatalf("overflow error=%v", err)
+			}
+		} else if err != nil || len(got.Terms) != 1 || got.Terms[0] != testTerm {
+			t.Fatalf("boundary terms=%v error=%v", got.Terms, err)
+		}
+	}
+}
+
+// NFC changes the token length; snippets must still use its original span.
+func TestExcerptCanonicalOriginalSpan(t *testing.T) {
+	for _, original := range []string{"e\u0301", "é"} {
+		got := Excerpt("", "", "prefix "+original+" suffix", []string{"é"}, utf8.RuneCountInString(original))
+		if got != original {
+			t.Fatalf("excerpt=%q want original %q", got, original)
+		}
 	}
 }
 
@@ -109,7 +147,6 @@ func TestExcerpt(t *testing.T) {
 		{name: "title-only fallback", native: "body without it", title: "PostgreSQL Recovery", body: "ordinary text", terms: []string{"postgresql"}, limit: 14, wantContains: "PostgreSQL"},
 		{name: "unicode", native: "начало решение Баджер завершение", terms: []string{"баджер"}, limit: 16, wantContains: "Баджер"},
 		{name: "tiny bound wins", native: "prefix extraordinarilylongterm suffix", terms: []string{"extraordinarilylongterm"}, limit: 5, want: "extra"},
-		{name: "unlimited body compatibility", native: "short fragment", title: "Title", body: "complete body without truncation", terms: []string{"fragment"}, limit: 0, want: "complete body without truncation"},
 		{name: "unmatched prefix bounded", native: "abcdefghijk", terms: []string{"missing"}, limit: 5, want: "abcd…"},
 	}
 	for _, test := range tests {
@@ -129,6 +166,20 @@ func TestExcerpt(t *testing.T) {
 				t.Fatalf("Excerpt() returned invalid UTF-8: %q", got)
 			}
 		})
+	}
+}
+
+func TestExcerptFieldsBoundsDefaultAndMaximum(t *testing.T) {
+	fields := DocumentFields{Body: strings.Repeat("x ", 140000) + "badger suffix"}
+	for _, requested := range []int{0, -1, 262145} {
+		limit := 4096
+		if requested > 0 {
+			limit = 262144
+		}
+		got := ExcerptFields("", fields, []string{testTerm}, requested)
+		if utf8.RuneCountInString(got) > limit || !ContainsTerm(got, []string{testTerm}) {
+			t.Fatalf("requested=%d excerpt length=%d match=%t", requested, utf8.RuneCountInString(got), ContainsTerm(got, []string{testTerm}))
+		}
 	}
 }
 
@@ -191,4 +242,13 @@ func TestExcerptPreservesMatchWithinEverySufficientBudget(t *testing.T) {
 			}
 		}
 	}
+}
+
+func summarize(t *testing.T, parts ...string) Query {
+	t.Helper()
+	query, err := Summarize(parts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return query
 }
