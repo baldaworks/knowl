@@ -19,7 +19,7 @@ func (store *Store) SelectContext(ctx context.Context, scope knowl.ScopeRef, sou
 		return nil, err
 	}
 	limit := boundedLimit(limits.Pages)
-	query := lexical.Summarize(source.Title, source.Source.ID, source.Source.Adapter)
+	query := contextpolicy.SourceQuery(source)
 	candidates, err := store.contextCandidates(ctx, scope, query.Terms, contextpolicy.CandidateLimit(limit))
 	if err != nil {
 		return nil, err
