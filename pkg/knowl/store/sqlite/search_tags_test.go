@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,15 +17,6 @@ import (
 
 func TestOKFSearchTagsMigrationRebuildsSQLiteProjection(t *testing.T) {
 	t.Parallel()
-	content, err := migrationFiles.ReadFile("migrations/00010_okf_search_tags.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{"ADD COLUMN tags TEXT NOT NULL DEFAULT ''", "title,\n    tags,\n    description,\n    body", "DELETE FROM knowl_projection_state", "DROP COLUMN tags"} {
-		if !strings.Contains(string(content), required) {
-			t.Fatalf("OKF tag migration missing %q", required)
-		}
-	}
 
 	ctx := context.Background()
 	db, err := sql.Open("sqlite", t.TempDir()+"/okf-tags-migration.sqlite")
@@ -60,15 +52,15 @@ func TestOKFSearchTagsMigrationRebuildsSQLiteProjection(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT scope FROM knowl_projection_state WHERE scope = ?`, "legacy").Scan(new(string)); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("projection readiness after tag migration = %v, want invalidated", err)
 	}
-	var ftsSchema string
-	if err := db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowl_pages_fts'`).Scan(&ftsSchema); err != nil || !strings.Contains(ftsSchema, "tags") {
-		t.Fatalf("FTS schema = %q, %v", ftsSchema, err)
+	if columns := sqliteTableColumns(t, db, "knowl_pages_fts"); !slices.Contains(columns, "tags") {
+		t.Fatalf("FTS columns=%v", columns)
 	}
+
 	if _, err := provider.DownTo(ctx, 9); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRowContext(ctx, `SELECT tags FROM knowl_pages LIMIT 1`).Scan(new(string)); err == nil || !strings.Contains(strings.ToLower(err.Error()), "no such column") {
-		t.Fatalf("tags column after down migration error = %v", err)
+	if columns := sqliteTableColumns(t, db, "knowl_pages"); slices.Contains(columns, "tags") {
+		t.Fatalf("down migration columns=%v", columns)
 	}
 }
 
@@ -113,4 +105,25 @@ func TestSQLiteSearchIndexesOKFTagsWithFieldPriority(t *testing.T) {
 	if !strings.Contains(results[1].Snippet, "tag: "+term) || results[1].OKF == nil || results[1].OKF.Tags[0] != term {
 		t.Fatalf("tag evidence = %#v", results[1])
 	}
+}
+
+func sqliteTableColumns(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return names
 }
