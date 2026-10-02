@@ -172,6 +172,7 @@ func TestPublicIngestStillExposesCompletedResultWithoutConfigPolicy(t *testing.T
 	if config.IngestOptions.AutoApply {
 		t.Fatal("hostConfig().IngestOptions.AutoApply = true, want default false")
 	}
+	config.ListenAddr = loopbackListenAddr
 	fixture := commandWorkflowFixture{
 		config: config,
 		schema: schema,

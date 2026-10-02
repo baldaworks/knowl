@@ -747,6 +747,7 @@ func TestHostOnStartSourceDoesNotBlockReadinessAndStopsCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := knowl.DefaultConfig()
+	config.ListenAddr = hostListenAddr
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	source := runtimeFilesystemSource("blocking", t.TempDir(), true)

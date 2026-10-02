@@ -32,6 +32,7 @@ const (
 
 // IngestOptions configures bounded planning and the review gate.
 type IngestOptions struct {
+	CatalogLimits knowl.CatalogLimits
 	PlanLimits    PlanLimits
 	ReadLimits    knowl.ReadLimits
 	LeaseDuration time.Duration
@@ -140,6 +141,11 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 	if content == nil || operations == nil || index == nil {
 		return nil, fmt.Errorf("ingest dependencies are required")
 	}
+	catalogLimits, err := NormalizeCatalogLimits(options.CatalogLimits)
+	if err != nil {
+		return nil, err
+	}
+	options.CatalogLimits = catalogLimits
 	if options.PlanLimits == (PlanLimits{}) {
 		options.PlanLimits = DefaultPlanLimits()
 	}

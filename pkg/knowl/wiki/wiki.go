@@ -350,7 +350,7 @@ func IndexDestinations(content string, limit int) ([]string, bool) {
 	if len(destinations) > limit {
 		destinations = destinations[:limit]
 	}
-	for offset := 0; offset < len(content) && len(destinations) < limit; {
+	for offset := 0; offset < len(content) && len(destinations) <= limit; {
 		start := strings.Index(content[offset:], "[[")
 		if start < 0 {
 			break
@@ -371,8 +371,7 @@ func IndexDestinations(content string, limit int) ([]string, bool) {
 		offset = start + end + 2
 	}
 	for _, line := range strings.Split(content, "\n") {
-		if len(destinations) >= limit {
-			malformed = true
+		if len(destinations) > limit {
 			break
 		}
 		trimmed := strings.TrimSpace(line)
@@ -384,6 +383,10 @@ func IndexDestinations(content string, limit int) ([]string, bool) {
 			continue
 		}
 		destinations = append(destinations, item)
+	}
+	if len(destinations) > limit {
+		malformed = true
+		destinations = destinations[:limit]
 	}
 	sort.Strings(destinations)
 	return uniqueStrings(destinations), malformed
