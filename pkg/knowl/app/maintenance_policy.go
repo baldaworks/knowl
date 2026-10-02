@@ -12,7 +12,7 @@ import (
 
 // SourceMaintenanceContractVersion identifies the output-affecting maintainer
 // and validation contract. Compatibility-only changes must retain this value.
-const SourceMaintenanceContractVersion = "source-maintenance-v2"
+const SourceMaintenanceContractVersion = "source-maintenance-v3"
 
 const maintenanceGenerationPrefixBytes = 16
 

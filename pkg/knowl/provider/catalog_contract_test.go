@@ -68,7 +68,7 @@ func TestRuntimeMaintainerRejectsOldSourceContractBeforeBuild(t *testing.T) {
 		}
 	})
 	input := testMaintenanceInput()
-	input.ContractVersion = "source-maintenance-v1"
+	input.ContractVersion = "source-maintenance-v2"
 	_, err = maintainer.Plan(t.Context(), input)
 	failure, classified := app.ClassifyExecutionFailure(err)
 	if !classified || failure.Reason != reasonProviderInput || factory.builds != 0 {

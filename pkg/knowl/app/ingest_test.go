@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -78,6 +79,46 @@ func TestProviderFreeIngestFailsBeforeDurableMutation(t *testing.T) {
 	}
 	if _, err := service.Recover(ctx); err != nil {
 		t.Fatalf("provider-free recovery: %v", err)
+	}
+}
+
+func TestIngestInvalidSourceSignalsFailDurably(t *testing.T) {
+	ctx := t.Context()
+	workspace, store, service, maintainer := newWorkflow(t, false, nil)
+	content := []byte{0xff}
+	envelope := sourceEnvelope(content)
+	result, err := service.Ingest(ctx, envelope)
+	if !errors.Is(err, wiki.ErrSourceSignalsInvalid) {
+		t.Fatalf("error=%v, want invalid source signals", err)
+	}
+	operation, err := store.Operation(ctx, envelope.Scope, result.Operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []knowl.Operation{result.Operation, operation} {
+		if op.Status != knowl.StatusFailed || op.Failure == nil || op.Failure.Class != "source_signals" || op.Failure.Reason != "" {
+			t.Fatalf("failed operation=%#v", op)
+		}
+	}
+	if maintainer.calls() != 0 {
+		t.Fatal("invalid source reached provider")
+	}
+	if _, err := workspace.LoadStage(ctx, envelope.Scope, operation.ID); !errors.Is(err, app.ErrStageNotFound) {
+		t.Fatalf("stage error=%v, want absent", err)
+	}
+	inspection, err := workspace.Inspect(ctx, envelope.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection.RawSources) != 1 {
+		t.Fatalf("raw sources=%d", len(inspection.RawSources))
+	}
+	raw, err := workspace.ReadSource(ctx, inspection.RawSources[0].Source, app.DefaultReadLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, content) {
+		t.Fatal("immutable raw changed")
 	}
 }
 
@@ -1136,7 +1177,7 @@ func TestExecutePassesBoundedSourceSummaryToContextSelection(t *testing.T) {
 	if _, err := service.Ingest(ctx, envelope); err != nil {
 		t.Fatalf("Ingest(): %v", err)
 	}
-	want := knowl.SourceSummary{Source: envelope.Source, Version: envelope.Version, Title: "Badger session decision"}
+	want := knowl.SourceSummary{Source: envelope.Source, Version: envelope.Version, Title: "Badger session decision", Headings: []string{"Badger session decision"}, Body: "preamble\nbody"}
 	if !reflect.DeepEqual(index.summary, want) {
 		t.Fatalf("SelectContext() summary = %#v, want %#v", index.summary, want)
 	}
