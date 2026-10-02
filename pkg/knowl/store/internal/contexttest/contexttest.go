@@ -4,10 +4,13 @@ package contexttest
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -82,6 +85,29 @@ func Run(t *testing.T, index Index) {
 		Source: knowl.SourceRef{Adapter: "fixture", ID: "decision-42"},
 		Title:  "Badger session",
 	}
+	t.Run("generic semantic signals and raw bounds", func(t *testing.T) {
+		fixture := Snapshot()
+		fixture.Pages = append(fixture.Pages, page("canonical", "wiki/canonical.md", "Café SDKхранилище2", "What is WHY", -40))
+		if err := index.Rebuild(t.Context(), fixture); err != nil {
+			t.Fatal(err)
+		}
+		for _, source := range []knowl.SourceSummary{{Title: "CAFE\u0301"}, {Body: "sdkХРАНИЛИЩЕ2"}, {Tags: []string{"café"}}, {Headings: []string{"what"}}} {
+			assertIDs(t, selectContext(t, index, Scope, source, 1), "canonical")
+		}
+		for _, source := range []knowl.SourceSummary{{Body: "malformed\xff"}, {Body: strings.Repeat(" ", 64*1024+1)}} {
+			if _, err := index.SelectContext(t.Context(), Scope, source, knowl.ReadLimits{Pages: 1}); !errors.Is(err, lexical.ErrInvalidQuery) {
+				t.Fatalf("invalid source error=%v", err)
+			}
+		}
+		canceled, cancel := context.WithCancel(t.Context())
+		cancel()
+		if _, err := index.SelectContext(canceled, Scope, summary, knowl.ReadLimits{Pages: 1}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("context cancellation=%v", err)
+		}
+		if err := index.Rebuild(t.Context(), Snapshot()); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("one page preserves relevance", func(t *testing.T) {
 		got := selectContext(t, index, Scope, summary, 1)
 		assertIDs(t, got, relevantID)

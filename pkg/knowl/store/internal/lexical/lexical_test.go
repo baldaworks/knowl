@@ -27,7 +27,7 @@ func TestNormalize(t *testing.T) {
 		{name: "first seen distinct", raw: "alpha BETA alpha beta gamma", want: []string{testAlphabeticWord, "beta", "gamma"}},
 		{name: "unicode letters numbers and attached marks", raw: "КАК cafe\u0301 версия2?", want: []string{"как", testAccentWord, "версия2"}},
 		{name: "leading mark does not start token", raw: "\u0301alpha", want: []string{testAlphabeticWord}},
-		{name: "only exact framing set removed", raw: "can should the decision", want: []string{"can", "should", "the", "decision"}},
+		{name: "ordinary English words retained", raw: "can should the decision", want: []string{"can", "should", "the", "decision"}},
 		{name: "blank", raw: "  -- ", error: true},
 		{name: "question words", raw: "What is it?", want: []string{"what", "is", "it"}},
 		{name: "all question words", raw: "what is why", want: []string{"what", "is", testQuestionWord}},
@@ -189,7 +189,7 @@ func TestContainsTermRequiresCompleteToken(t *testing.T) {
 		t.Fatal("ContainsTerm() matched a substring")
 	}
 	if !ContainsTerm("A BADGER decision", []string{testTerm}) {
-		t.Fatal("ContainsTerm() did not match a complete case-folded token")
+		t.Fatal("ContainsTerm() did not match a complete lowercase token")
 	}
 }
 

@@ -267,6 +267,7 @@ func Run(t *testing.T, index Index, invalid InvalidError) {
 			t.Fatalf("top-five hits = %d/%d, want at least %d", hits, len(MeasuredQueries), minimum)
 		}
 	})
+	t.Run("generic literals evidence and bounds", func(t *testing.T) { runGeneric(t, index, invalid) })
 	t.Run("rebuild equivalence", func(t *testing.T) {
 		before := search(t, index, Scope, "badger session", 5, 48)
 		if err := index.Rebuild(ctx, Snapshot()); err != nil {

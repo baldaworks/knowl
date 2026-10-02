@@ -54,6 +54,8 @@ func BaselineQueries() []BaselineQuery {
 	return []BaselineQuery{
 		{ID: "exact-body", Query: "quasarretention", Expected: []knowl.PageID{BaselineStoragePage}, Control: true},
 		{ID: "word-form-base", Query: "хранилище", Expected: []knowl.PageID{BaselineStoragePage}, Control: true},
+		{ID: "generic-cyrillic-case", Query: "ХРАНИЛИЩЕ", Expected: []knowl.PageID{BaselineStoragePage}, Control: true},
+		{ID: "canonical-accent", Query: "CAFE\u0301", Expected: []knowl.PageID{"concepts/canonical"}, Control: true},
 		{ID: "word-form-genitive", Query: "хранилища", Expected: []knowl.PageID{BaselineStoragePage}},
 		{ID: "word-form-instrumental", Query: "хранилищем", Expected: []knowl.PageID{BaselineStoragePage}},
 		{ID: "word-form-english", Query: "archives", Expected: []knowl.PageID{"decisions/archive"}},
@@ -81,6 +83,7 @@ func BaselineSources() []BaselineSource {
 // BaselineSnapshot provides the factual evidence behind the curated queries.
 func BaselineSnapshot(scope knowl.ScopeRef) knowl.WorkspaceSnapshot {
 	pages := []knowl.PageSnapshot{
+		page("concepts/canonical", "wiki/concepts/canonical.md", "Canonical terms", "Café technical glossary.", []string{"fixture:canonical@1"}, fixedTime.Add(-45*time.Hour)),
 		page(BaselineStoragePage, "wiki/decisions/storage.md", "Storage decision", "quasarretention: durable хранилище retains project facts.", []string{"fixture:storage@1"}, fixedTime.Add(-48*time.Hour)),
 		page("decisions/archive", "wiki/decisions/archive.md", "Retention decision", "archive preserves historical records.", []string{"fixture:archive@1"}, fixedTime.Add(-47*time.Hour)),
 		page("runbooks/recovery", "wiki/runbooks/recovery.md", "Recovery procedure", "restart daemon following crash.", []string{"fixture:recovery@1"}, fixedTime.Add(-46*time.Hour)),
