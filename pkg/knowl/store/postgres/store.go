@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )
@@ -28,6 +29,7 @@ var (
 	ErrInvalidQuery       = errors.New("knowl search query is invalid")
 	ErrProjectionNotReady = errors.New("knowl projection is not ready")
 	ErrProjectionDrift    = errors.New("knowl projection drift detected")
+	ErrInvalidProjection  = lexical.ErrInvalidProjection
 )
 
 const (

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/contextpolicy"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
@@ -145,12 +146,20 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sources, filterErr := app.NormalizeSourcesFilter(sources)
+	if filterErr != nil {
+		return nil, filterErr
+	}
 	normalized, err := lexical.Normalize(query)
 	if err != nil {
 		return nil, fmt.Errorf("normalize search query: %w", ErrInvalidQuery)
 	}
 	limit := boundedLimit(limits.Pages)
-	strict, err := store.searchPhase(ctx, scope, tsQuery(normalized.Terms, "&"), limit, limits.Characters, normalized.Terms, sources)
+	encodedTerms := normalized.IndexTerms()
+	strict, err := store.searchPhase(ctx, scope, tsQuery(encodedTerms, "&"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +167,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return strict, nil
 	}
 
-	relaxed, err := store.searchPhase(ctx, scope, tsQuery(normalized.Terms, "|"), limit, limits.Characters, normalized.Terms, sources)
+	relaxed, err := store.searchPhase(ctx, scope, tsQuery(encodedTerms, "|"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -186,13 +195,7 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query
 		WITH lexical_query AS (
 			SELECT to_tsquery('simple'::regconfig, $2) AS query
 		)
-		SELECT p.page_id, p.path, p.title, p.tags, p.description, p.body, p.source_refs, p.source_document, p.source_documents, p.format, p.okf_metadata,
-		       ts_headline(
-		           'simple'::regconfig,
-		           body,
-		           lexical_query.query,
-		           'StartSel=, StopSel=, MaxFragments=1, MinWords=1, MaxWords=64, FragmentDelimiter= … '
-		       )
+		SELECT p.page_id, p.path, p.title, p.tags, p.description, p.body, p.source_refs, p.source_document, p.source_documents, p.format, p.okf_metadata
 		FROM knowl_pages AS p
 		CROSS JOIN lexical_query
 		WHERE p.scope = $1
@@ -225,9 +228,9 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query
 	var references []knowl.PageReference
 	for rows.Next() {
 		var reference knowl.PageReference
-		var pageID, path, title, tags, description, body, format, nativeSnippet string
+		var pageID, path, title, tags, description, body, format string
 		var sourceRefs, sourceDocument, sourceDocuments, metadata []byte
-		if err := rows.Scan(&pageID, &path, &title, &tags, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata, &nativeSnippet); err != nil {
+		if err := rows.Scan(&pageID, &path, &title, &tags, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata); err != nil {
 			return nil, fmt.Errorf("scan search page: %w", err)
 		}
 		if err := json.Unmarshal(sourceRefs, &reference.SourceRefs); err != nil {
@@ -258,7 +261,7 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, query
 			return nil, fmt.Errorf("decode page %q metadata: %w", reference.ID, err)
 		}
 		fields := lexical.DocumentFields{Title: title, Tags: tags, Description: description, Body: body}
-		reference.Snippet = lexical.ExcerptFields(nativeSnippet, fields, terms, maxCharacters)
+		reference.Snippet = lexical.ExcerptFields("", fields, terms, maxCharacters)
 		reference.Untrusted = true
 		references = append(references, reference)
 		if len(references) == limit {

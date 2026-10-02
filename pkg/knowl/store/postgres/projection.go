@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -61,6 +62,10 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		if valuesErr != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, valuesErr)
 		}
+		encoded, encodeErr := lexical.EncodeFields(ctx, lexical.DocumentFields{Title: page.Title, Tags: values.Tags, Description: values.Description, Body: values.Body})
+		if encodeErr != nil {
+			return fmt.Errorf("project page %q: %w", page.Path, encodeErr)
+		}
 		updatedAt := page.UpdatedAt
 		if updatedAt.IsZero() {
 			updatedAt = now
@@ -90,8 +95,12 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO knowl_pages (
-				scope, page_id, path, title, tags, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13, $14::jsonb, $15)
+				scope, page_id, path, title, tags, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at, search_vector
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13, $14::jsonb, $15,
+				setweight(to_tsvector('simple'::regconfig, $16), 'A') ||
+				setweight(to_tsvector('simple'::regconfig, $17), 'B') ||
+				setweight(to_tsvector('simple'::regconfig, $18), 'C') ||
+				setweight(to_tsvector('simple'::regconfig, $19), 'D'))
 			ON CONFLICT (scope, path) DO UPDATE SET
 				page_id = EXCLUDED.page_id,
 				title = EXCLUDED.title,
@@ -105,9 +114,10 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 				source_documents = EXCLUDED.source_documents,
 				format = EXCLUDED.format,
 				okf_metadata = EXCLUDED.okf_metadata,
-				updated_at = EXCLUDED.updated_at`,
+				updated_at = EXCLUDED.updated_at,
+				search_vector = EXCLUDED.search_vector`,
 			snapshot.Scope, page.ID, page.Path, page.Title, values.Tags, values.Description, values.Body, page.Digest,
-			string(sourceRefs), sourceID, sourceDocument, string(encodedDocuments), values.Format, nullableJSON(values.Metadata), updatedAt.UTC()); err != nil {
+			string(sourceRefs), sourceID, sourceDocument, string(encodedDocuments), values.Format, nullableJSON(values.Metadata), updatedAt.UTC(), encoded.Title, encoded.Tags, encoded.Description, encoded.Body); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
 		for _, document := range documents {
