@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -39,9 +40,10 @@ const (
 
 // Store implements app.OperationStore and app.SearchIndex.
 type Store struct {
-	db  *sql.DB
-	dsn string
-	mu  sync.Mutex
+	embedding *hybrid.Engine
+	db        *sql.DB
+	dsn       string
+	mu        sync.Mutex
 }
 
 var (
@@ -51,7 +53,11 @@ var (
 )
 
 // Open opens a PostgreSQL operational store and runs its embedded migrations.
-func Open(ctx context.Context, dsn string) (*Store, error) {
+func Open(ctx context.Context, dsn string, options ...app.EmbeddingOptions) (*Store, error) {
+	embedding, err := hybrid.New(options)
+	if err != nil {
+		return nil, err
+	}
 	trimmed := strings.TrimSpace(dsn)
 	if trimmed == "" {
 		return nil, fmt.Errorf("postgres dsn is required")
@@ -62,7 +68,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(10)
-	store := &Store{db: db, dsn: trimmed}
+	store := &Store{db: db, dsn: trimmed, embedding: embedding}
 	if err := store.configure(ctx); err != nil {
 		_ = db.Close()
 		return nil, err

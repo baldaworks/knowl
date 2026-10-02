@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	"github.com/baldaworks/knowl/pkg/knowl/store/postgres"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -24,9 +25,13 @@ type operationalStore struct {
 }
 
 func openStore(ctx context.Context, config Config) (operationalStore, error) {
+	embedding, err := embeddingStoreOptions(config.Embeddings)
+	if err != nil {
+		return operationalStore{}, err
+	}
 	switch config.StoreDriver {
 	case StoreSQLite:
-		store, err := sqlite.Open(ctx, config.StorePath)
+		store, err := sqlite.Open(ctx, config.StorePath, embedding...)
 		if err != nil {
 			return operationalStore{}, fmt.Errorf("open sqlite operational store: %w", err)
 		}
@@ -38,7 +43,7 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 			checker:    store,
 		}, nil
 	case StorePostgres:
-		store, err := postgres.Open(ctx, config.PostgresDSN)
+		store, err := postgres.Open(ctx, config.PostgresDSN, embedding...)
 		if err != nil {
 			return operationalStore{}, fmt.Errorf("open postgres operational store: %w", err)
 		}
@@ -73,7 +78,18 @@ func ensureProjection(ctx context.Context, index app.SearchIndex, checker projec
 		return fmt.Errorf("operational store does not expose projection readiness")
 	}
 	if err := checker.CheckProjection(ctx, snapshot); err == nil {
-		return nil
+		degraded := false
+		if status, ok := index.(interface {
+			ProjectionDegraded(ctx context.Context, scope domain.ScopeRef) (bool, error)
+		}); ok {
+			degraded, err = status.ProjectionDegraded(ctx, snapshot.Scope)
+			if err != nil {
+				return fmt.Errorf("read projection degradation: %w", err)
+			}
+		}
+		if !degraded {
+			return nil
+		}
 	}
 	if err := index.Rebuild(ctx, snapshot); err != nil {
 		return fmt.Errorf("rebuild search projection: %w", err)
@@ -82,4 +98,23 @@ func ensureProjection(ctx context.Context, index app.SearchIndex, checker projec
 		return fmt.Errorf("verify search projection: %w", err)
 	}
 	return nil
+}
+
+func embeddingStoreOptions(config EmbeddingsConfig) ([]app.EmbeddingOptions, error) {
+	normalized, err := config.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	if !normalized.Enabled {
+		return nil, nil
+	}
+	credential, err := normalized.Credential()
+	if err != nil {
+		return nil, err
+	}
+	client, err := provider.NewEmbeddingClient(provider.EmbeddingClientOptions{Endpoint: normalized.Endpoint, Space: normalized.Space(), APIKey: credential})
+	if err != nil {
+		return nil, err
+	}
+	return []app.EmbeddingOptions{{Provider: client, Space: normalized.Space(), FailurePolicy: normalized.FailurePolicy}}, nil
 }

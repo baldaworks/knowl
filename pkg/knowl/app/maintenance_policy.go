@@ -12,13 +12,14 @@ import (
 
 // SourceMaintenanceContractVersion identifies the output-affecting maintainer
 // and validation contract. Compatibility-only changes must retain this value.
-const SourceMaintenanceContractVersion = "source-maintenance-v5"
+const SourceMaintenanceContractVersion = "source-maintenance-v6"
 
 const maintenanceGenerationPrefixBytes = 16
 
 // MaintenancePolicy is the explicit non-secret input to source-maintenance
 // generation. It intentionally cannot carry provider or runtime configuration.
 type MaintenancePolicy struct {
+	Retrieval            *MaintenanceRetrievalPolicy
 	CatalogLimits        knowl.CatalogLimits
 	InputLimits          knowl.MaintenanceInputLimits
 	RequestFormatVersion string
@@ -29,6 +30,7 @@ type MaintenancePolicy struct {
 }
 
 type maintenancePolicyPayload struct {
+	Retrieval            *MaintenanceRetrievalPolicy  `json:"retrieval,omitempty"`
 	CatalogLimits        knowl.CatalogLimits          `json:"catalog_limits"`
 	InputLimits          knowl.MaintenanceInputLimits `json:"input_limits"`
 	RequestFormatVersion string                       `json:"request_format_version"`
@@ -103,6 +105,9 @@ func MaintenanceGenerationPrefix(generation string) (string, error) {
 }
 
 func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayload, error) {
+	if err := validateMaintenanceRetrievalPolicy(policy.Retrieval); err != nil {
+		return maintenancePolicyPayload{}, err
+	}
 	contractVersion := strings.TrimSpace(policy.ContractVersion)
 	schemaDigest := strings.ToLower(strings.TrimSpace(policy.SchemaDigest))
 	readLimits := policy.ReadLimits
@@ -134,6 +139,7 @@ func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayl
 		return maintenancePolicyPayload{}, fmt.Errorf("invalid maintenance policy: %w", ErrExecutionDescriptorUnavailable)
 	}
 	return maintenancePolicyPayload{
+		Retrieval:            policy.Retrieval,
 		ContractVersion:      contractVersion,
 		CatalogLimits:        catalogLimits,
 		InputLimits:          inputLimits,

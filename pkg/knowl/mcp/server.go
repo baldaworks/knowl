@@ -114,7 +114,7 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 			server.waker.Wake(submission.Operation.ID)
 		}
 		public := operationResult(submission.Operation)
-		return IngestResult{OperationID: public.ID, Status: public.Status}, nil
+		return IngestResult{OperationID: public.ID, Status: public.Status, Retrieval: public.Retrieval}, nil
 	case "knowl_operation":
 		id, err := argumentString(arguments, "id", "operation_id")
 		if err != nil {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,15 @@ import (
 )
 
 const maxRetrievalReportBytes = 2048
+
+// PublicRetrievalStatus excludes internal selection counts and model identity.
+// Missing legacy evidence remains missing; invalid evidence is never published.
+func PublicRetrievalStatus(report *knowl.RetrievalReport) *knowl.RetrievalStatus {
+	if report == nil || ValidateRetrievalReport(*report) != nil {
+		return nil
+	}
+	return &knowl.RetrievalStatus{Effective: report.Effective, Reason: report.Reason}
+}
 
 var ErrRetrievalReportInvalid = errors.New("invalid retrieval report")
 
@@ -127,4 +137,23 @@ func DecodeOperationRetrieval(encoded string, attempt, workAttempt int) (*knowl.
 		return nil, 0, nil
 	}
 	return report, attempt, nil
+}
+
+// FailedRetrievalReport marks a failed hybrid read without publishing unsafe causes.
+func FailedRetrievalReport(ctx context.Context, report knowl.RetrievalReport, cause error) knowl.RetrievalReport {
+	if report.Requested != knowl.RetrievalHybrid {
+		return report
+	}
+	report.Effective = knowl.RetrievalFailed
+	if !ValidRetrievalFailure(report.Reason) {
+		report.Reason = knowl.RetrievalUnavailable
+	}
+	var classified *EmbeddingError
+	if errors.As(cause, &classified) && ValidRetrievalFailure(classified.Code) {
+		report.Reason = classified.Code
+	}
+	if ctx.Err() != nil {
+		report.Reason = knowl.RetrievalDeadline
+	}
+	return report
 }

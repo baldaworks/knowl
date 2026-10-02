@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -42,9 +43,10 @@ const (
 
 // Store implements app.OperationStore and app.SearchIndex.
 type Store struct {
-	db   *sql.DB
-	path string
-	mu   sync.Mutex
+	embedding *hybrid.Engine
+	db        *sql.DB
+	path      string
+	mu        sync.Mutex
 }
 
 var (
@@ -54,7 +56,11 @@ var (
 )
 
 // Open opens or creates a Knowl SQLite operational store and runs migrations.
-func Open(ctx context.Context, path string) (*Store, error) {
+func Open(ctx context.Context, path string, options ...app.EmbeddingOptions) (*Store, error) {
+	embedding, err := hybrid.New(options)
+	if err != nil {
+		return nil, err
+	}
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
 		return nil, fmt.Errorf("sqlite path is required")
@@ -72,7 +78,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	store := &Store{db: db, path: trimmed}
+	store := &Store{db: db, path: trimmed, embedding: embedding}
 	if err := store.configure(ctx); err != nil {
 		_ = db.Close()
 		return nil, err

@@ -114,21 +114,24 @@ type httpEvidenceItem struct {
 }
 
 type httpRetrieveResponse struct {
-	Query     string             `json:"query"`
-	Evidence  []httpEvidenceItem `json:"evidence"`
-	Citations []app.Citation     `json:"citations,omitempty"`
+	Retrieval *domain.RetrievalStatus `json:"retrieval,omitempty"`
+	Query     string                  `json:"query"`
+	Evidence  []httpEvidenceItem      `json:"evidence"`
+	Citations []app.Citation          `json:"citations,omitempty"`
 }
 
 type httpIngestResponse struct {
-	OperationID domain.OperationID `json:"operation_id"`
-	Status      string             `json:"status"`
+	Retrieval   *domain.RetrievalStatus `json:"retrieval,omitempty"`
+	OperationID domain.OperationID      `json:"operation_id"`
+	Status      string                  `json:"status"`
 }
 
 type httpOperationResponse struct {
-	ID        domain.OperationID `json:"id"`
-	Status    string             `json:"status"`
-	UpdatedAt time.Time          `json:"updated_at"`
-	Failure   *domain.Failure    `json:"failure,omitempty"`
+	Retrieval *domain.RetrievalStatus `json:"retrieval,omitempty"`
+	ID        domain.OperationID      `json:"id"`
+	Status    string                  `json:"status"`
+	UpdatedAt time.Time               `json:"updated_at"`
+	Failure   *domain.Failure         `json:"failure,omitempty"`
 }
 
 func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
@@ -158,6 +161,7 @@ func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
 	citations := make([]app.Citation, len(result.Citations))
 	copy(citations, result.Citations)
 	return httpRetrieveResponse{
+		Retrieval: app.PublicRetrievalStatus(result.Retrieval),
 		Query:     result.Query,
 		Evidence:  evidence,
 		Citations: citations,
@@ -166,6 +170,7 @@ func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
 
 func httpIngestResult(operation domain.Operation) httpIngestResponse {
 	return httpIngestResponse{
+		Retrieval:   app.PublicRetrievalStatus(operation.Retrieval),
 		OperationID: operation.ID,
 		Status:      httpOperationStatus(operation.Status),
 	}
@@ -173,6 +178,7 @@ func httpIngestResult(operation domain.Operation) httpIngestResponse {
 
 func httpOperationResult(operation domain.Operation) httpOperationResponse {
 	return httpOperationResponse{
+		Retrieval: app.PublicRetrievalStatus(operation.Retrieval),
 		ID:        operation.ID,
 		Status:    httpOperationStatus(operation.Status),
 		UpdatedAt: operation.UpdatedAt,

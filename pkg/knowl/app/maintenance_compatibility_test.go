@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,9 +22,14 @@ const historicContractV4 = "source-maintenance-v4"
 const historicContractV5 = "source-maintenance-v5"
 
 func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
-	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, ""} {
+	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, historicContractV5, ""} {
 		t.Run("old contract "+version, func(t *testing.T) {
-			workspace, store, service, maintainer := newWorkflow(t, false, nil)
+			workspace, store, _, maintainer := newWorkflow(t, false, nil)
+			index := &historicalInferenceIndex{SearchIndex: store}
+			service, err := app.NewIngestService(workspace, store, index, maintainer, app.IngestOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
 			accepted, err := workspace.AcceptSource(t.Context(), sourceEnvelope([]byte("old queued evidence")))
 			if err != nil {
 				t.Fatal(err)
@@ -42,7 +48,7 @@ func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := service.RunToTerminal(t.Context(), claimReady(t, store, accepted.Scope))
-			if !errors.Is(err, app.ErrMaintenancePolicyMismatch) || result.Operation.Status != knowl.StatusFailed || maintainer.calls() != 0 {
+			if !errors.Is(err, app.ErrMaintenancePolicyMismatch) || result.Operation.Status != knowl.StatusFailed || maintainer.calls() != 0 || index.inferenceCalls != 0 {
 				t.Fatalf("incompatible queue ran: status=%s calls=%d err=%v", result.Operation.Status, maintainer.calls(), err)
 			}
 			if result.Operation.ID != reservation.ID || result.Operation.Failure == nil || result.Operation.Failure.Reason != "maintenance_policy_mismatch" {
@@ -91,7 +97,7 @@ func TestExecuteRejectsChangedPolicyBeforeInference(t *testing.T) {
 }
 
 func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
-	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4} {
+	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, historicContractV5} {
 		for _, scheduled := range []bool{false, true} {
 			t.Run(version+"/"+map[bool]string{false: "synchronous", true: "scheduled"}[scheduled], func(t *testing.T) {
 				workspace, store, _, maintainer := newWorkflow(t, false, nil)
@@ -127,7 +133,8 @@ func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
 				}
 				bounds := app.DefaultCatalogLimits()
 				bounds.MaxCatalogs++
-				current, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{CatalogLimits: bounds, InputLimits: knowl.MaintenanceInputLimits{MaxRequestBytes: 100}, AutoApply: true})
+				index := &historicalInferenceIndex{SearchIndex: store}
+				current, err := app.NewIngestService(workspace, store, index, maintainer, app.IngestOptions{CatalogLimits: bounds, InputLimits: knowl.MaintenanceInputLimits{MaxRequestBytes: 100}, AutoApply: true})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -137,11 +144,11 @@ func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
 				} else {
 					result, err = current.Execute(t.Context(), submission)
 				}
-				if err != nil || result.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 {
+				if err != nil || result.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 || index.inferenceCalls != 0 {
 					t.Fatalf("stage replanned: status=%s calls=%d err=%v", result.Operation.Status, maintainer.calls(), err)
 				}
 				replay, err := current.Execute(t.Context(), app.IngestSubmission{Operation: result.Operation})
-				if err != nil || replay.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 {
+				if err != nil || replay.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 || index.inferenceCalls != 0 {
 					t.Fatalf("terminal replay=%s %v", replay.Operation.Status, err)
 				}
 			})
@@ -237,4 +244,21 @@ func TestGenuineV5MaintenanceGeneration(t *testing.T) {
 	if got != want {
 		t.Fatalf("genuine v5 generation=%s want=%s", got, want)
 	}
+}
+
+type historicalInferenceIndex struct {
+	app.SearchIndex
+	inferenceCalls int
+}
+
+func (index *historicalInferenceIndex) SelectContext(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, error) {
+	index.inferenceCalls++
+	return index.SearchIndex.SelectContext(ctx, scope, source, limits)
+}
+func (index *historicalInferenceIndex) Project(ctx context.Context, commit knowl.ContentCommit) error {
+	index.inferenceCalls++
+	return index.SearchIndex.Project(ctx, commit)
+}
+func (index *historicalInferenceIndex) ProjectWithoutInference(ctx context.Context, commit knowl.ContentCommit) error {
+	return index.SearchIndex.Project(ctx, commit)
 }

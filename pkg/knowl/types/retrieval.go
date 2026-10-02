@@ -43,3 +43,9 @@ type RetrievalReport struct {
 	IndexOmittedChunks int              `json:"index_omitted_chunks"`
 	IndexOmittedRunes  int              `json:"index_omitted_runes"`
 }
+
+// RetrievalStatus is the public, safe summary of a retrieval attempt.
+type RetrievalStatus struct {
+	Effective RetrievalMode    `json:"effective"`
+	Reason    RetrievalFailure `json:"reason,omitempty"`
+}

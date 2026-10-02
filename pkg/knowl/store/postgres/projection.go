@@ -22,7 +22,7 @@ func (store *Store) Project(ctx context.Context, commit knowl.ContentCommit) err
 }
 
 // Rebuild recreates all projections from canonical Markdown snapshots.
-func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
+func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
 	if err := validateScope(snapshot.Scope); err != nil {
 		return err
 	}
@@ -177,11 +177,15 @@ type ProjectionState struct {
 
 // ProjectionStatus returns readiness metadata for a scope.
 func (store *Store) ProjectionStatus(ctx context.Context, scope knowl.ScopeRef) (ProjectionState, error) {
+	return projectionStatusUsing(ctx, store.db, scope)
+}
+
+func projectionStatusUsing(ctx context.Context, reader projectionReader, scope knowl.ScopeRef) (ProjectionState, error) {
 	if err := validateScope(scope); err != nil {
 		return ProjectionState{}, err
 	}
 	var state ProjectionState
-	err := store.db.QueryRowContext(ctx, `
+	err := reader.QueryRowContext(ctx, `
 		SELECT schema_digest, snapshot_digest, page_count, link_count, ready_at
 		FROM knowl_projection_state
 		WHERE scope = $1`, scope).
@@ -197,8 +201,12 @@ func (store *Store) ProjectionStatus(ctx context.Context, scope knowl.ScopeRef) 
 }
 
 // CheckProjection verifies that a projection represents the supplied snapshot.
-func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
-	state, err := store.ProjectionStatus(ctx, snapshot.Scope)
+func (store *Store) checkLexicalProjection(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
+	return checkLexicalProjectionUsing(ctx, store.db, snapshot)
+}
+
+func checkLexicalProjectionUsing(ctx context.Context, reader projectionReader, snapshot knowl.WorkspaceSnapshot) error {
+	state, err := projectionStatusUsing(ctx, reader, snapshot.Scope)
 	if err != nil {
 		return err
 	}

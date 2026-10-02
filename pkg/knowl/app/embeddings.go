@@ -13,6 +13,14 @@ type EmbeddingProvider interface {
 	Embed(ctx context.Context, inputs []string) ([][]float32, error)
 }
 
+// EmbeddingOptions configures one immutable store lifetime. Zero disables
+// embeddings; HTTP endpoint/credentials belong to the provider, not the index.
+type EmbeddingOptions struct {
+	Provider      EmbeddingProvider
+	Space         EmbeddingSpace
+	FailurePolicy EmbeddingFailurePolicy
+}
+
 // EmbeddingSpace identifies the operator-declared immutable model contract.
 // It intentionally cannot carry endpoints, credentials or runtime settings.
 type EmbeddingSpace struct {
@@ -49,4 +57,11 @@ type ReportedSearchIndex interface {
 // Scope, current attempt and terminal state must be checked atomically.
 type RetrievalReportStore interface {
 	SaveRetrievalReport(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, attempt int, report knowl.RetrievalReport) error
+}
+
+// InferenceFreeProjection preserves concrete historical stages without running
+// a newly configured model. Dense readiness is repaired separately at startup
+// or by an explicit rebuild; canonical authority and lexical projection remain.
+type InferenceFreeProjection interface {
+	ProjectWithoutInference(ctx context.Context, commit knowl.ContentCommit) error
 }

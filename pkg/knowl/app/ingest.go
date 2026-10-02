@@ -61,6 +61,8 @@ type IngestResult struct {
 	Commit    *knowl.ContentCommit
 	// Budget is transient for this planning call; replay does not reconstruct it.
 	Budget *knowl.MaintenanceBudgetReport
+	// Retrieval is transient when a custom operation store cannot persist reports.
+	Retrieval *knowl.RetrievalReport
 }
 
 // IngestSubmission is the durable handoff from request-time source acceptance
@@ -121,17 +123,18 @@ type ApplyResult struct {
 
 // IngestService coordinates source acceptance, planning, review, commit, and projection.
 type IngestService struct {
-	content       ContentStore
-	operations    OperationStore
-	index         SearchIndex
-	maintainer    Maintainer
-	requestSizer  MaintenanceRequestSizer
-	requestBudget knowl.MaintenanceRequestBudget
-	catalogLimits knowl.CatalogLimits
-	planLimits    PlanLimits
-	readLimits    knowl.ReadLimits
-	leaseDuration time.Duration
-	autoApply     bool
+	retrievalPolicy *MaintenanceRetrievalPolicy
+	content         ContentStore
+	operations      OperationStore
+	index           SearchIndex
+	maintainer      Maintainer
+	requestSizer    MaintenanceRequestSizer
+	requestBudget   knowl.MaintenanceRequestBudget
+	catalogLimits   knowl.CatalogLimits
+	planLimits      PlanLimits
+	readLimits      knowl.ReadLimits
+	leaseDuration   time.Duration
+	autoApply       bool
 }
 
 var _ interface {
@@ -173,18 +176,30 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 	if options.LeaseDuration <= 0 {
 		options.LeaseDuration = defaultLeaseDuration
 	}
+	var retrievalPolicy *MaintenanceRetrievalPolicy
+	if provider, ok := index.(MaintenanceRetrievalPolicyProvider); ok {
+		retrievalPolicy = provider.MaintenanceRetrievalPolicy()
+	}
+	if err := validateMaintenanceRetrievalPolicy(retrievalPolicy); err != nil {
+		return nil, err
+	}
+	if retrievalPolicy != nil {
+		copied := *retrievalPolicy
+		retrievalPolicy = &copied
+	}
 	return &IngestService{
-		content:       content,
-		operations:    operations,
-		index:         index,
-		maintainer:    maintainer,
-		requestSizer:  requestSizer,
-		requestBudget: requestBudget,
-		catalogLimits: options.CatalogLimits,
-		planLimits:    options.PlanLimits,
-		readLimits:    options.ReadLimits,
-		leaseDuration: options.LeaseDuration,
-		autoApply:     options.AutoApply,
+		retrievalPolicy: retrievalPolicy,
+		content:         content,
+		operations:      operations,
+		index:           index,
+		maintainer:      maintainer,
+		requestSizer:    requestSizer,
+		requestBudget:   requestBudget,
+		catalogLimits:   options.CatalogLimits,
+		planLimits:      options.PlanLimits,
+		readLimits:      options.ReadLimits,
+		leaseDuration:   options.LeaseDuration,
+		autoApply:       options.AutoApply,
 	}, nil
 }
 
@@ -289,6 +304,7 @@ func (service *IngestService) submitAcceptedWithSchema(ctx context.Context, acce
 
 func (service *IngestService) maintenanceGeneration(schema knowl.SchemaDocument) (string, error) {
 	policy := SourceMaintenancePolicy(schema.Digest, service.readLimits, service.planLimits)
+	policy.Retrieval = service.retrievalPolicy
 	policy.CatalogLimits = service.catalogLimits
 	policy.InputLimits = knowl.MaintenanceInputLimits{MaxRequestBytes: service.requestBudget.MaxBytes}
 	policy.RequestFormatVersion = service.requestBudget.FormatVersion
@@ -398,7 +414,7 @@ func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.Wor
 	if err := ValidateExecutionDescriptor(operation.Key, descriptor); err != nil {
 		return IngestResult{}, err
 	}
-	result := IngestResult{Operation: operation}
+	result := IngestResult{Operation: operation, Retrieval: operation.Retrieval}
 	if terminalOperation(operation.Status) {
 		return result, nil
 	}
@@ -414,6 +430,7 @@ func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.Wor
 		}
 	case errors.Is(loadErr, ErrStageNotFound) && operation.Status == knowl.StatusReceived:
 		planned, planErr := service.prepareStage(ctx, submission, nil)
+		result.withRetrieval(planned, operation.WorkAttempt)
 		if planErr != nil {
 			return service.failIngest(ctx, result, failureClass(planErr), planErr)
 		}
@@ -466,7 +483,7 @@ func (service *IngestService) ingest(ctx context.Context, envelope knowl.SourceE
 	return service.execute(ctx, submission, suppliedPlan, forceReview)
 }
 
-func (service *IngestService) execute(ctx context.Context, submission IngestSubmission, suppliedPlan *knowl.ModelEditPlan, forceReview bool) (IngestResult, error) {
+func (service *IngestService) execute(ctx context.Context, submission IngestSubmission, suppliedPlan *knowl.ModelEditPlan, forceReview bool) (executionResult IngestResult, executionErr error) {
 	ctx = nonNilContext(ctx)
 	if err := contextErr(ctx); err != nil {
 		return IngestResult{}, err
@@ -478,7 +495,7 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 	if err != nil {
 		return IngestResult{Operation: submission.Operation}, fmt.Errorf("read submitted operation: %w", err)
 	}
-	result := IngestResult{Operation: operation}
+	result := IngestResult{Operation: operation, Retrieval: operation.Retrieval}
 	switch operation.Status {
 	case knowl.StatusCommitted, knowl.StatusAwaitingReview, knowl.StatusApplying, knowl.StatusFailed:
 		return result, nil
@@ -500,8 +517,42 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 	case loadErr == nil:
 		prepared.Staged = staged
 	case errors.Is(loadErr, ErrStageNotFound) && operation.Status == knowl.StatusReceived:
+		lease, claimErr := newLease(time.Now().UTC(), service.leaseDuration)
+		if claimErr != nil {
+			return result, claimErr
+		}
+		claim, claimErr := service.operations.ClaimOperation(ctx, operation.Key.Scope, operation.ID, knowl.WorkLease(lease))
+		if errors.Is(claimErr, ErrNoReadyOperation) {
+			current, readErr := service.operations.Operation(ctx, operation.Key.Scope, operation.ID)
+			return IngestResult{Operation: current, Retrieval: current.Retrieval}, readErr
+		}
+		if claimErr != nil {
+			return result, claimErr
+		}
+		operation = claim.Operation
+		submission.Operation = operation
+		result.Operation = operation
+		executionCtx, cancelExecution := context.WithCancel(ctx)
+		renewalCtx, stopRenewal := context.WithCancel(ctx)
+		renewalDone := make(chan string, 1)
+		go func() {
+			renewalDone <- renewExecutionClaim(renewalCtx, cancelExecution, service.operations, claim, service.leaseDuration)
+		}()
+		defer func() {
+			stopRenewal()
+			token := <-renewalDone
+			cancelExecution()
+			stateCtx, cancel := context.WithTimeout(durableContext(ctx), 5*time.Second)
+			defer cancel()
+			releaseErr := service.operations.ReleaseClaim(stateCtx, operation.Key.Scope, operation.ID, token)
+			if releaseErr != nil && !terminalOperation(executionResult.Operation.Status) {
+				executionErr = errors.Join(executionErr, releaseErr)
+			}
+		}()
+		ctx = executionCtx
 		var err error
 		prepared, err = service.prepareStage(ctx, submission, suppliedPlan)
+		result.withRetrieval(prepared, operation.WorkAttempt)
 		if err != nil {
 			return service.failIngest(ctx, result, failureClass(err), err)
 		}
@@ -544,48 +595,81 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 }
 
 type preparedStage struct {
-	Plan   knowl.ValidatedEditPlan
-	Staged knowl.StagedChange
-	Budget *knowl.MaintenanceBudgetReport
+	Plan               knowl.ValidatedEditPlan
+	Staged             knowl.StagedChange
+	Budget             *knowl.MaintenanceBudgetReport
+	Retrieval          *knowl.RetrievalReport
+	RetrievalPersisted bool
 }
 
-func (service *IngestService) prepareStage(ctx context.Context, submission IngestSubmission, suppliedPlan *knowl.ModelEditPlan) (preparedStage, error) {
+func (result *IngestResult) withRetrieval(prepared preparedStage, attempt int) {
+	if prepared.Retrieval == nil {
+		return
+	}
+	result.Retrieval = prepared.Retrieval
+	if prepared.RetrievalPersisted {
+		result.Operation.Retrieval = prepared.Retrieval
+		result.Operation.RetrievalAttempt = attempt
+	}
+}
+
+func (service *IngestService) prepareStage(ctx context.Context, submission IngestSubmission, suppliedPlan *knowl.ModelEditPlan) (prepared preparedStage, preparationErr error) {
 	if err := service.requireMaintainer(); err != nil {
-		return preparedStage{}, err
+		return prepared, err
 	}
 	expectedGeneration, err := service.maintenanceGeneration(submission.schema)
 	if err != nil {
-		return preparedStage{}, err
+		return prepared, err
 	}
 	if submission.Operation.Key.MaintenanceGeneration != expectedGeneration {
-		return preparedStage{}, ErrMaintenancePolicyMismatch
+		return prepared, ErrMaintenancePolicyMismatch
 	}
 	readCtx, cancel := service.boundedContext(ctx)
+	defer cancel()
 	sourceText, err := service.content.ReadSource(readCtx, submission.accepted, service.readLimits)
 	if err != nil {
 		cancel()
-		return preparedStage{}, fmt.Errorf("source: %w", err)
+		return prepared, fmt.Errorf("source: %w", err)
 	}
 	summary, err := wiki.SourceSignals(readCtx, sourceText)
 	if err != nil {
 		cancel()
-		return preparedStage{}, fmt.Errorf("source_signals: %w", err)
+		return prepared, fmt.Errorf("source_signals: %w", err)
 	}
 	summary.Source, summary.Version = submission.accepted.Source, submission.accepted.Version
-	pageIDs, err := service.index.SelectContext(readCtx, submission.accepted.Scope, summary, service.readLimits)
+	var pageIDs []knowl.PageID
+	if index, ok := service.index.(ReportedSearchIndex); ok {
+		var report knowl.RetrievalReport
+		pageIDs, report, err = index.SelectContextWithReport(readCtx, submission.accepted.Scope, summary, service.readLimits)
+		if reportErr := ValidateRetrievalReport(report); reportErr != nil {
+			return prepared, errors.Join(err, reportErr)
+		}
+		prepared.Retrieval = &report
+		if store, ok := service.operations.(RetrievalReportStore); ok {
+			stateCtx, stateCancel := context.WithTimeout(durableContext(ctx), 5*time.Second)
+			saveErr := store.SaveRetrievalReport(stateCtx, submission.accepted.Scope, submission.Operation.ID, submission.Operation.WorkAttempt, report)
+			stateCancel()
+			if saveErr != nil {
+				return prepared, errors.Join(err, fmt.Errorf("retrieval_report: %w", saveErr))
+			}
+			prepared.RetrievalPersisted = true
+		}
+	} else {
+		pageIDs, err = service.index.SelectContext(readCtx, submission.accepted.Scope, summary, service.readLimits)
+	}
 	if err != nil {
 		cancel()
-		return preparedStage{}, fmt.Errorf("context: %w", err)
+		return prepared, fmt.Errorf("context: %w", err)
 	}
 	inspection, err := service.content.Inspect(readCtx, submission.accepted.Scope)
 	if err != nil {
 		cancel()
-		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
+		return prepared, fmt.Errorf("catalogs: %w", err)
 	}
 	catalogs, err := catalogGraph(inspection.Catalogs, service.catalogLimits)
 	if err != nil {
 		cancel()
-		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
+		return prepared, fmt.Errorf("catalogs: %w", err)
 	}
 	input := knowl.MaintenanceInput{
 		ContractVersion: SourceMaintenanceContractVersion, CatalogLimits: service.catalogLimits,
@@ -596,10 +680,10 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 	input, budget, err := service.fitSourcePages(readCtx, input, pageIDs)
 	cancel()
 	if err != nil {
-		return preparedStage{}, fmt.Errorf("input_assembly: %w", err)
+		return prepared, fmt.Errorf("input_assembly: %w", err)
 	}
 	if err := contextErr(ctx); err != nil {
-		return preparedStage{}, err
+		return prepared, err
 	}
 	var modelPlan knowl.ModelEditPlan
 	if suppliedPlan != nil {
@@ -607,19 +691,20 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 	} else {
 		modelPlan, err = service.maintainer.Plan(ctx, input)
 		if err != nil {
-			return preparedStage{}, fmt.Errorf("provider: %w", err)
+			return prepared, fmt.Errorf("provider: %w", err)
 		}
 	}
 	validated, err := ValidateMaintenancePlan(ctx, input, modelPlan, inspection, service.catalogLimits, service.planLimits)
 	if err != nil {
-		return preparedStage{}, fmt.Errorf("plan_validation: %w", err)
+		return prepared, fmt.Errorf("plan_validation: %w", err)
 	}
 	validated.OperationID = string(submission.Operation.ID)
 	staged, err := service.content.StagePlan(ctx, validated)
 	if err != nil {
-		return preparedStage{}, fmt.Errorf("staging: %w", err)
+		return prepared, fmt.Errorf("staging: %w", err)
 	}
-	return preparedStage{Plan: validated, Staged: staged, Budget: &budget}, nil
+	prepared.Plan, prepared.Staged, prepared.Budget = validated, staged, &budget
+	return prepared, nil
 }
 
 func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {
@@ -692,7 +777,7 @@ func (service *IngestService) apply(ctx context.Context, scope knowl.ScopeRef, i
 		return service.failAfterCommit(stateCtx, scope, id, operation, commit, err)
 	}
 	commit.Snapshot = snapshot
-	if err := service.index.Project(ctx, commit); err != nil {
+	if err := service.projectCommit(ctx, operation, commit); err != nil {
 		return service.failAfterCommit(stateCtx, scope, id, operation, commit, err)
 	}
 	if err := service.operations.CommitOutcome(stateCtx, id, commit); err != nil {
@@ -707,6 +792,19 @@ func (service *IngestService) apply(ctx context.Context, scope knowl.ScopeRef, i
 		return ApplyResult{Commit: &commit}, fmt.Errorf("read committed operation: %w", err)
 	}
 	return ApplyResult{Operation: operation, Commit: &commit}, nil
+}
+
+func (service *IngestService) projectCommit(ctx context.Context, operation knowl.Operation, commit knowl.ContentCommit) error {
+	generation, err := service.maintenanceGeneration(knowl.SchemaDocument{Digest: commit.Snapshot.SchemaDigest})
+	if err != nil {
+		return err
+	}
+	if generation != operation.Key.MaintenanceGeneration {
+		if index, ok := service.index.(InferenceFreeProjection); ok {
+			return index.ProjectWithoutInference(ctx, commit)
+		}
+	}
+	return service.index.Project(ctx, commit)
 }
 
 func (service *IngestService) failAfterCommit(
@@ -792,7 +890,7 @@ func (service *IngestService) advancedIngest(ctx context.Context, scope knowl.Sc
 	if operation.Status == knowl.StatusReceived || operation.Status == knowl.StatusPlanned {
 		return false, IngestResult{}, nil
 	}
-	return true, IngestResult{Operation: operation}, nil
+	return true, IngestResult{Operation: operation, Retrieval: operation.Retrieval}, nil
 }
 
 func (service *IngestService) boundedContext(ctx context.Context) (context.Context, context.CancelFunc) {
