@@ -1,0 +1,56 @@
+# Opt in: docker compose -f deploy/sidecar/compose.yaml \
+#   -f deploy/sidecar/embeddings.compose.yaml up -d
+services:
+  knowl:
+    volumes:
+      - ./embeddings.yaml:/etc/knowl/config.yaml:ro
+    depends_on:
+      tei:
+        condition: service_started
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.0@sha256:bc7ad262695df5b7875b0c9c702deb8e9df3953bdf22c3d6068d9c0429b7b3f3
+    platform: linux/amd64
+    cpus: 2
+    mem_limit: 4g
+    environment:
+      AUTO_TRUNCATE: 'false'
+      RAYON_NUM_THREADS: '2'
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+    command:
+      - --json-output
+      - --model-id
+      - intfloat/multilingual-e5-small
+      - --revision
+      - 614241f622f53c4eeff9890bdc4f31cfecc418b3
+      - --hostname
+      - 0.0.0.0
+      - --served-model-name
+      - intfloat/multilingual-e5-small
+      - --dtype
+      - float32
+      - --pooling
+      - mean
+      - --tokenization-workers
+      - '2'
+      - --max-concurrent-requests
+      - '4'
+      - --max-client-batch-size
+      - '16'
+      - --max-batch-requests
+      - '8'
+      - --max-batch-tokens
+      - '8192'
+      - --payload-limit
+      - '65536'
+    volumes:
+      - tei-model-cache:/data
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:80/health]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10m
+
+volumes:
+  tei-model-cache: {}

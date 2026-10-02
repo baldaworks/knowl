@@ -1,0 +1,52 @@
+runtime:
+  providers:
+    opencode:
+      type: opencode_acp
+      opencode_acp:
+        model: opencode/big-pickle
+
+knowl:
+  embeddings:
+    enabled: true
+    endpoint: http://tei:80/v1/embeddings
+    model: intfloat/multilingual-e5-small
+    revision: 614241f622f53c4eeff9890bdc4f31cfecc418b3
+    dimensions: 384
+    query_prefix: 'query: '
+    passage_prefix: 'passage: '
+    failure_policy: lexical
+  provider: opencode
+  workspace:
+    path: /var/lib/knowl/knowledge
+  sources:
+    - id: engineering
+      type: filesystem
+      enabled: true
+      filesystem:
+        root: /sources/engineering
+        include: ["**/*.md"]
+        flavor: obsidian
+      sync:
+        on_start: true
+        interval: 5m
+        retry_initial: 1s
+        retry_maximum: 1m
+    - id: operations
+      type: filesystem
+      enabled: true
+      filesystem:
+        root: /sources/operations
+        include: ["**/*.md"]
+        flavor: markdown
+      sync:
+        on_start: true
+        interval: 5m
+        retry_initial: 1s
+        retry_maximum: 1m
+  storage:
+    type: sqlite
+    sqlite:
+      path: .knowl/knowl.sqlite
+  scope: local
+  server:
+    listen_addr: 0.0.0.0:8080
