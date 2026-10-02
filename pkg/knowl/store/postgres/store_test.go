@@ -476,6 +476,7 @@ func runStoreContract(t *testing.T, dsn string) {
 	assertOKFTagSearch(t, ctx, store, knowl.ScopeRef(string(scope)+"_tags"))
 	searchtest.Run(t, store, func(err error) bool { return errors.Is(err, ErrInvalidQuery) })
 	contexttest.Run(t, store)
+	t.Run("ContextBaseline", func(t *testing.T) { knowledgetest.RunContextBaseline(t, store) })
 	metrics, err := knowledgetest.EvaluateProjectionReplay(ctx, store, knowl.ScopeRef(string(scope)+"_golden"))
 	if err != nil {
 		t.Fatalf("evaluate golden projection replay: %v", err)

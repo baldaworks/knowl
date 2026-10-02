@@ -361,6 +361,11 @@ func TestIngestRejectsStaleReviewedPlan(t *testing.T) {
 	if string(content) != string(humanEdit) {
 		t.Fatalf("human edit was overwritten: %q", content)
 	}
+	logBaseline(t, struct {
+		CaseID    string `json:"case_id"`
+		Preserved bool   `json:"canonical_preserved"`
+		Outcome   string `json:"outcome"`
+	}{"stale-write", true, baselineMet})
 }
 
 func TestIngestRejectsStaleSchemaAtApply(t *testing.T) {
