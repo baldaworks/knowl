@@ -155,7 +155,7 @@ func TestHierarchyValeraScaleUnicodeMultiSourceRebuildAndExport(t *testing.T) {
 	if err != nil || len(controls) != 0 {
 		t.Fatalf("catalog controls entered retrieval = %#v, %v", controls, err)
 	}
-	for _, reserved := range []knowl.PageID{"index", "log", "catalogs/business/index", "catalogs/business/identity/index"} {
+	for _, reserved := range []knowl.PageID{testRootCatalogPageID, testLogPageID, "catalogs/business/index", "catalogs/business/identity/index"} {
 		if _, err := query.Page(ctx, testSourceScope, reserved, knowl.ReadLimits{Pages: 1}); !errors.Is(err, app.ErrPageNotFound) {
 			t.Fatalf("reserved control %q page error = %v", reserved, err)
 		}

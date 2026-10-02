@@ -346,13 +346,15 @@ func (report LintReport) Healthy() bool {
 
 // MaintenanceInput is the bounded data supplied to a maintainer provider.
 type MaintenanceInput struct {
-	Scope      ScopeRef       `json:"scope"`
-	Schema     SchemaDocument `json:"schema"`
-	Source     AcceptedSource `json:"source"`
-	SourceText string         `json:"source_text"`
-	Pages      []PageSnapshot `json:"pages"`
-	Catalogs   []PageSnapshot `json:"catalogs,omitempty"`
-	Limits     ReadLimits     `json:"limits"`
+	ContractVersion string             `json:"contract_version"`
+	CatalogLimits   CatalogLimits      `json:"catalog_limits"`
+	Scope           ScopeRef           `json:"scope"`
+	Schema          SchemaDocument     `json:"schema"`
+	Source          AcceptedSource     `json:"source"`
+	SourceText      string             `json:"source_text"`
+	Pages           []PageSnapshot     `json:"pages"`
+	Catalogs        []HierarchyCatalog `json:"catalogs,omitempty"`
+	Limits          ReadLimits         `json:"limits"`
 }
 
 // ModelEditPlan is structured provider output before application validation.

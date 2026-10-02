@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
@@ -32,7 +31,7 @@ func (fixture Fixture) Plan(ctx context.Context, input knowl.MaintenanceInput) (
 		return knowl.ModelEditPlan{}, fixture.Error
 	}
 	if fixture.Result.SchemaDigest == "" && len(fixture.Result.SourceRefs) == 0 &&
-		len(fixture.Result.Edits) == 0 && fixture.Result.Rationale == "" {
+		len(fixture.Result.Edits) == 0 && len(fixture.Result.CatalogAdditions) == 0 && fixture.Result.Rationale == "" {
 		return knowl.ModelEditPlan{
 			SchemaDigest: input.Schema.Digest,
 			SourceRefs:   []string{app.SourceRefKey(input.Source)},
@@ -69,32 +68,40 @@ func cloneHierarchyModelPlan(plan knowl.HierarchyModelPlan) knowl.HierarchyModel
 }
 
 func fixtureCatalogPlan(input knowl.MaintenanceInput, plan knowl.ModelEditPlan) knowl.ModelEditPlan {
+	plan.Edits = append([]knowl.FileEdit(nil), plan.Edits...)
+	additions := make([]knowl.CatalogAddition, len(plan.CatalogAdditions))
+	for i, addition := range plan.CatalogAdditions {
+		addition.Children = append([]string(nil), addition.Children...)
+		additions[i] = addition
+	}
+	plan.CatalogAdditions = additions
 	if len(plan.Edits) == 0 {
 		return plan
+	}
+	for _, addition := range plan.CatalogAdditions {
+		if addition.Path == fixtureRootCatalogPath {
+			return plan
+		}
 	}
 	for _, edit := range plan.Edits {
 		if edit.Path == fixtureRootCatalogPath {
 			return plan
 		}
 	}
-	var root knowl.PageSnapshot
 	for _, catalog := range input.Catalogs {
-		if catalog.Path == fixtureRootCatalogPath {
-			root = catalog
-			break
-		}
-	}
-	if root.Path == "" {
-		return plan
-	}
-	content := strings.TrimRight(root.Content, "\n") + "\n"
-	for _, edit := range plan.Edits {
-		if !strings.HasPrefix(edit.Path, "wiki/") || !strings.HasSuffix(edit.Path, ".md") || strings.HasSuffix(edit.Path, "/index.md") {
+		if catalog.Path != fixtureRootCatalogPath {
 			continue
 		}
-		target := strings.TrimPrefix(edit.Path, "wiki/")
-		content += "\n* [" + strings.TrimSuffix(filepath.Base(target), ".md") + "](" + target + ")\n"
+		children := make([]string, 0, len(plan.Edits))
+		for _, edit := range plan.Edits {
+			if strings.HasPrefix(edit.Path, "wiki/") && strings.HasSuffix(edit.Path, ".md") && !strings.HasSuffix(edit.Path, "/index.md") {
+				children = append(children, edit.Path)
+			}
+		}
+		if len(children) > 0 {
+			plan.CatalogAdditions = append(plan.CatalogAdditions, knowl.CatalogAddition{Path: catalog.Path, ExpectedDigest: catalog.Digest, Children: children})
+		}
+		break
 	}
-	plan.Edits = append(plan.Edits, knowl.FileEdit{Path: root.Path, ExpectedDigest: root.Digest, Content: []byte(content)})
 	return plan
 }

@@ -89,12 +89,12 @@ func TestSourceAwareContextUpdatesExistingPageWithoutDuplicate(t *testing.T) {
 
 type updateExistingMaintainer struct {
 	pages    []knowl.PageSnapshot
-	catalogs []knowl.PageSnapshot
+	catalogs []knowl.HierarchyCatalog
 }
 
 func (maintainer *updateExistingMaintainer) Plan(_ context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
 	maintainer.pages = append([]knowl.PageSnapshot(nil), input.Pages...)
-	maintainer.catalogs = append([]knowl.PageSnapshot(nil), input.Catalogs...)
+	maintainer.catalogs = append([]knowl.HierarchyCatalog(nil), input.Catalogs...)
 	if len(input.Pages) == 0 || input.Pages[0].ID != decisionPageID {
 		return knowl.ModelEditPlan{}, errors.New("expected relevant decision page first")
 	}

@@ -660,10 +660,7 @@ func (runtimeSharedAtlasMaintainer) Plan(_ context.Context, input domain.Mainten
 		if catalog.Path != hostRootIndexPath {
 			continue
 		}
-		root := strings.TrimRight(catalog.Content, "\n") + "\n\n* [Project Atlas](entities/atlas-integration.md)\n"
-		plan.Edits = append(plan.Edits, domain.FileEdit{
-			Path: catalog.Path, ExpectedDigest: catalog.Digest, Content: []byte(root),
-		})
+		plan.CatalogAdditions = append(plan.CatalogAdditions, domain.CatalogAddition{Path: catalog.Path, ExpectedDigest: catalog.Digest, Children: []string{runtimeSharedAtlasPagePath}})
 		break
 	}
 	return plan, nil

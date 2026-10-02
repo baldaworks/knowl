@@ -46,12 +46,12 @@ Factual content.
 The frontmatter knowl.id must match the page path. Every factual page edit must cite required_source_ref in knowl.source_refs.
 When updating a page, preserve every unrelated existing source ref. An older ref may be replaced only by required_source_ref for the same source/document lineage.
 When replacing an existing page, copy its digest to expected_digest. Omit expected_digest for a new page.
-input.catalogs contains the bounded root-first OKF catalog hierarchy. Every new or edited ordinary page must be reachable from wiki/index.md through catalog links.
-When needed, create or update root and nested index.md catalogs in the same plan. Catalog links must target existing or same-plan Markdown documents, stay inside wiki/, and remain acyclic.
+input.contract_version identifies source-maintenance-v2. input.catalogs contains the complete bounded root-first path/digest/title/children graph, without catalog Markdown. input.catalog_limits bounds navigation independently of input.limits for factual pages. Every new or edited ordinary page must be reachable from wiki/index.md through catalog links.
+Use catalog_additions to add child memberships: each entry contains path, expected_digest, optional title, and children (canonical wiki/ Markdown paths). Existing catalogs require their exact input digest and no title. New index.md catalogs require an empty expected_digest, a nonempty single-line title, and children. Link new catalogs from existing reachable navigation. Never return an index.md FileEdit or catalog Markdown; the application renders additive links from authoritative originals. Targets must exist or be created by the same plan, stay inside wiki/, and remain acyclic.
 Every double-bracket wiki link in an ordinary page must target an ordinary page present in input.pages or created by the same plan. Never invent a wiki-link target; use plain text when no confirmed target exists.
-When updating an existing catalog, preserve every unrelated existing child link; the current source does not authorize removing other pages from navigation.
+Additive catalog maintenance must preserve every unrelated existing child link; the current source does not authorize removing other pages from navigation.
 Only propose edits that are necessary to maintain the canonical knowledge workspace.`
-	hierarchyMaintainerInstruction = `For hierarchy, return only schema_digest, snapshot_digest, and catalogs; never return edits, source_refs, rationale, Markdown content, or factual page changes.
+	hierarchyMaintainerInstruction = `For hierarchy, return only schema_digest, snapshot_digest, and catalogs; never return edits, source_refs, rationale, catalog_additions, Markdown content, or factual page changes.
 Copy required_schema_digest and required_snapshot_digest exactly.
 input.pages is the complete bounded ordinary-page set. Organize it by subject meaning from title, type, description, tags, excerpt, and current catalog membership. Do not organize by configured source identity or source-native directory layout.
 Use cohesive subject domains as the primary navigation axis. Treat document type, document kind, and implementation technology as supporting signals, not automatic top-level categories.
@@ -81,7 +81,15 @@ Return the complete final catalog graph, not commentary, alternatives, or an inc
         "additionalProperties": false
       }
 	},
-	"rationale": {"type": "string"},
+	"catalog_additions": {
+ "type": "array", "items": {
+  "type": "object", "properties": {
+   "path": {"type": "string"}, "expected_digest": {"type": "string"}, "title": {"type": "string"},
+   "children": {"type": "array", "items": {"type": "string"}}
+  }, "required": ["path", "children"], "additionalProperties": false
+ }
+},
+ "rationale": {"type": "string"},
 	"snapshot_digest": {"type": "string"},
 	"catalogs": {
 	  "type": "array",
@@ -111,7 +119,8 @@ Return the complete final catalog graph, not commentary, alternatives, or an inc
 		"allOf": [
 		  {"not": {"required": ["edits"]}},
 		  {"not": {"required": ["source_refs"]}},
-		  {"not": {"required": ["rationale"]}}
+		  {"not": {"required": ["rationale"]}},
+		  {"not": {"required": ["catalog_additions"]}}
 		]
 	  }
 	],

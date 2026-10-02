@@ -7,12 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"mime"
-	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 var (
@@ -555,21 +554,29 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		cancel()
 		return preparedStage{}, fmt.Errorf("context: %w", err)
 	}
-	pages, err := service.content.ReadPages(readCtx, submission.accepted.Scope, pageIDs, service.readLimits)
+	inspection, err := service.content.Inspect(readCtx, submission.accepted.Scope)
 	if err != nil {
 		cancel()
-		return preparedStage{}, fmt.Errorf("content: %w", err)
+		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
 	}
-	inspection, err := service.content.Inspect(readCtx, submission.accepted.Scope)
+	catalogs, err := catalogGraph(inspection.Catalogs, service.catalogLimits)
+	if err != nil {
+		cancel()
+		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
+	}
+	factualIDs := make([]knowl.PageID, 0, len(pageIDs))
+	for _, id := range pageIDs {
+		if _, ordinary := wiki.PageIDFromPath("wiki/" + string(id) + ".md"); ordinary {
+			factualIDs = append(factualIDs, id)
+		}
+	}
+	pages, err := service.content.ReadPages(readCtx, submission.accepted.Scope, factualIDs, service.readLimits)
 	cancel()
 	if err != nil {
-		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
-	}
-	catalogs, err := boundedCatalogs(inspection.Catalogs, service.readLimits)
-	if err != nil {
-		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
+		return preparedStage{}, fmt.Errorf("content: %w", err)
 	}
 	input := knowl.MaintenanceInput{
+		ContractVersion: SourceMaintenanceContractVersion, CatalogLimits: service.catalogLimits,
 		Scope: submission.accepted.Scope, Schema: submission.schema, Source: submission.accepted,
 		SourceText: string(sourceText), Pages: pages, Catalogs: catalogs, Limits: service.readLimits,
 	}
@@ -582,7 +589,7 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 			return preparedStage{}, fmt.Errorf("provider: %w", err)
 		}
 	}
-	validated, err := ValidatePlan(ctx, input, modelPlan, service.planLimits)
+	validated, err := ValidateMaintenancePlan(ctx, input, modelPlan, inspection, service.catalogLimits, service.planLimits)
 	if err != nil {
 		return preparedStage{}, fmt.Errorf("plan_validation: %w", err)
 	}
@@ -592,33 +599,6 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		return preparedStage{}, fmt.Errorf("staging: %w", err)
 	}
 	return preparedStage{Plan: validated, Staged: staged}, nil
-}
-
-func boundedCatalogs(catalogs []knowl.PageSnapshot, limits knowl.ReadLimits) ([]knowl.PageSnapshot, error) {
-	if len(catalogs) == 0 || len(catalogs) > limits.Pages {
-		return nil, ErrPlanLimitExceeded
-	}
-	result := append([]knowl.PageSnapshot(nil), catalogs...)
-	sort.Slice(result, func(left, right int) bool {
-		if result[left].Path == rootCatalogPath {
-			return result[right].Path != rootCatalogPath
-		}
-		if result[right].Path == rootCatalogPath {
-			return false
-		}
-		return result[left].Path < result[right].Path
-	})
-	bytes, characters := 0, 0
-	for index := range result {
-		result[index].Content = strings.Clone(result[index].Content)
-		result[index].Body = strings.Clone(result[index].Body)
-		bytes += len(result[index].Content)
-		characters += utf8.RuneCountInString(result[index].Content)
-	}
-	if bytes > limits.Bytes || characters > limits.Characters {
-		return nil, ErrPlanLimitExceeded
-	}
-	return result, nil
 }
 
 func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {

@@ -21,6 +21,9 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 	if err := validatePlanContext(ctx); err != nil {
 		return knowl.ModelEditPlan{}, err
 	}
+	if input.ContractVersion != app.SourceMaintenanceContractVersion {
+		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
+	}
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
@@ -93,7 +96,7 @@ func (maintainer *RuntimeMaintainer) PlanHierarchy(ctx context.Context, input kn
 	}
 	var plan knowl.HierarchyModelPlan
 	err = maintainer.runStructuredPlan(ctx, envelope, "hierarchy", func(candidate string) error {
-		if branchErr := validateOutputBranch(candidate, []string{"snapshot_digest", "catalogs"}, []string{"source_refs", "edits", "rationale"}); branchErr != nil {
+		if branchErr := validateOutputBranch(candidate, []string{"snapshot_digest", "catalogs"}, []string{"source_refs", "edits", "rationale", "catalog_additions"}); branchErr != nil {
 			return branchErr
 		}
 		return json.Unmarshal([]byte(candidate), &plan)
@@ -196,10 +199,11 @@ func (maintainer *RuntimeMaintainer) runStructuredPlan(ctx context.Context, enve
 }
 
 type maintainerPlanOutput struct {
-	SchemaDigest string                     `json:"schema_digest"`
-	SourceRefs   []string                   `json:"source_refs"`
-	Edits        []maintainerFileEditOutput `json:"edits"`
-	Rationale    string                     `json:"rationale,omitempty"`
+	CatalogAdditions []knowl.CatalogAddition    `json:"catalog_additions,omitempty"`
+	SchemaDigest     string                     `json:"schema_digest"`
+	SourceRefs       []string                   `json:"source_refs"`
+	Edits            []maintainerFileEditOutput `json:"edits"`
+	Rationale        string                     `json:"rationale,omitempty"`
 }
 
 type maintainerFileEditOutput struct {
@@ -218,10 +222,11 @@ func (output maintainerPlanOutput) modelPlan() knowl.ModelEditPlan {
 		}
 	}
 	return knowl.ModelEditPlan{
-		SchemaDigest: output.SchemaDigest,
-		SourceRefs:   append([]string(nil), output.SourceRefs...),
-		Edits:        edits,
-		Rationale:    output.Rationale,
+		CatalogAdditions: output.CatalogAdditions,
+		SchemaDigest:     output.SchemaDigest,
+		SourceRefs:       append([]string(nil), output.SourceRefs...),
+		Edits:            edits,
+		Rationale:        output.Rationale,
 	}
 }
 

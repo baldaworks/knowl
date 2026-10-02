@@ -24,7 +24,7 @@ func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
 			generation := ""
 			if !legacy {
 				policy := app.SourceMaintenancePolicy(schema.Digest, app.DefaultReadLimits(), app.DefaultPlanLimits())
-				policy.ContractVersion = "source-maintenance-v0"
+				policy.ContractVersion = "source-maintenance-v1"
 				generation, err = app.MaintenancePolicyGeneration(policy)
 				if err != nil {
 					t.Fatal(err)
@@ -87,12 +87,28 @@ func TestExecuteRejectsChangedPolicyBeforeInference(t *testing.T) {
 func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
 	for _, scheduled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "synchronous", true: "scheduled"}[scheduled], func(t *testing.T) {
-			workspace, store, previous, maintainer := newWorkflow(t, false, nil)
-			submission, err := previous.Submit(t.Context(), sourceEnvelope([]byte("staged policy change")))
+			workspace, store, _, maintainer := newWorkflow(t, false, nil)
+			accepted, err := workspace.AcceptSource(t.Context(), sourceEnvelope([]byte("staged policy change")))
 			if err != nil {
 				t.Fatal(err)
 			}
-			schema, err := workspace.Schema(t.Context(), submission.Operation.Key.Scope)
+			schema, err := workspace.Schema(t.Context(), accepted.Scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := app.SourceMaintenancePolicy(schema.Digest, app.DefaultReadLimits(), app.DefaultPlanLimits())
+			policy.ContractVersion = "source-maintenance-v1"
+			generation, err := app.MaintenancePolicyGeneration(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := knowl.OperationKey{Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version, MaintenanceGeneration: generation}
+			reservation, err := store.Reserve(t.Context(), key, knowl.OperationMeta{Key: key, AcceptedSource: accepted, Schema: schema, SchemaDigest: schema.Digest, MaintenanceGeneration: generation})
+			if err != nil {
+				t.Fatal(err)
+			}
+			submission := app.IngestSubmission{Operation: reservation.Operation}
+			schema, err = workspace.Schema(t.Context(), submission.Operation.Key.Scope)
 			if err != nil {
 				t.Fatal(err)
 			}

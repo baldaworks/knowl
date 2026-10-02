@@ -121,6 +121,7 @@ func TestContextBaselineProviderInputBudget(t *testing.T) {
 func assertBaselineEnvelope(t *testing.T, captured string, input knowl.MaintenanceInput) int {
 	t.Helper()
 	var envelope struct {
+		Schema    string                 `json:"required_schema_digest"`
 		Operation string                 `json:"operation"`
 		Input     knowl.MaintenanceInput `json:"input"`
 		Ref       string                 `json:"required_source_ref"`
@@ -128,7 +129,9 @@ func assertBaselineEnvelope(t *testing.T, captured string, input knowl.Maintenan
 	// Decode the actual emitted JSON object inside the structured wrapper prompt.
 	envelopeBytes := 0
 	for line := range strings.Lines(captured) {
-		if err := json.Unmarshal([]byte(line), &envelope); err == nil && envelope.Operation == baselineSourceOperation {
+		decoder := json.NewDecoder(strings.NewReader(line))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&envelope); err == nil && envelope.Operation == baselineSourceOperation {
 			envelopeBytes = len(strings.TrimSpace(line))
 			break
 		}
@@ -142,7 +145,7 @@ func assertBaselineEnvelope(t *testing.T, captured string, input knowl.Maintenan
 	if err := json.Unmarshal(payload, &wireInput); err != nil {
 		t.Fatal(err)
 	}
-	if envelopeBytes == 0 || envelope.Operation != baselineSourceOperation || envelope.Ref != app.SourceRefKey(input.Source) || !reflect.DeepEqual(envelope.Input, wireInput) {
+	if envelopeBytes == 0 || envelope.Operation != baselineSourceOperation || envelope.Ref != app.SourceRefKey(input.Source) || envelope.Schema != input.Schema.Digest || !reflect.DeepEqual(envelope.Input, wireInput) {
 		t.Fatal("accepted envelope changed authoritative input")
 	}
 	return envelopeBytes

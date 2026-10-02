@@ -59,7 +59,7 @@ func TestMaintenancePolicyGenerationChangesWithEffectivePolicy(t *testing.T) {
 		name string
 		edit func(*MaintenancePolicy)
 	}{
-		{name: "contract", edit: func(policy *MaintenancePolicy) { policy.ContractVersion = "source-maintenance-v2" }},
+		{name: "contract", edit: func(policy *MaintenancePolicy) { policy.ContractVersion = "source-maintenance-test-revision" }},
 		{name: fixtureSchema, edit: func(policy *MaintenancePolicy) { policy.SchemaDigest = strings.Repeat("b", 64) }},
 		{name: "read pages", edit: func(policy *MaintenancePolicy) { policy.ReadLimits.Pages++ }},
 		{name: "read bytes", edit: func(policy *MaintenancePolicy) { policy.ReadLimits.Bytes++ }},

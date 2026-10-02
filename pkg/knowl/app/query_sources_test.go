@@ -18,6 +18,8 @@ const (
 	queryTestSourceRevision    = "revision-1"
 )
 
+const mutatedFixtureValue = "mutated"
+
 func TestNormalizeSourcesFilter(t *testing.T) {
 	t.Parallel()
 
