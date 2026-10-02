@@ -30,7 +30,8 @@ type Query struct {
 }
 
 // DocumentFields contains only semantic page fields allowed to participate in
-// lexical retrieval. Tags is a newline-separated list of normalized OKF tags.
+// lexical retrieval. Tags is a newline-separated list of original OKF semantic tags.
+// Values remain original until EncodeFields produces private index tokens.
 type DocumentFields struct {
 	Title       string
 	Tags        string

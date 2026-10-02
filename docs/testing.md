@@ -37,7 +37,7 @@ to strict gates.
 
 | Cases | Real interface / existing control | Epic requirement; follow-up Story |
 |---|---|---|
-| `exact-body`, `word-form-base`, `mixed-language` | Shared `RunContextBaseline`; mandatory working retrieval controls | REQ-RECALL-001; `.5` |
+| `exact-body`, `word-form-base`, `mixed-language`, `generic-cyrillic-case`, `canonical-accent` | Shared `RunContextBaseline`; mandatory working retrieval controls | REQ-RECALL-001; `.5` |
 | `word-form-genitive`, `word-form-instrumental`, `word-form-english`, `semantic-duplicate` | Same store Search interface and corpus, with expected canonical IDs | REQ-RECALL/EMBED-001; `.5`, `.10` |
 | `generic-title`, `frontmatter`, `fenced-heading` | `TestContextBaselineSourceSignals`: actual app ingest, content and SQLite; old relevant page plus 30 newer decoys; strict recall gate | REQ-SOURCE-001; `.3` |
 | `frontmatter-title`, `fenced-heading-title` | `TestContextBaselineSourceTitles`: actual shared source extraction; strict title gate | REQ-SOURCE-001; `.3` |
@@ -78,7 +78,7 @@ no-op additions, raw catalog-edit rejection, final graph/combined plan bounds,
 stale preconditions and v1 queued/staged compatibility have behavioral gates.
 
 The original four-page UTF-8 fixture now fits: the shared Content-only wire
-is 2,230,845 bytes and the complete v4 SDK prompt is 2,239,474 bytes, below
+is 2,230,845 bytes and the complete v5 SDK prompt is 2,239,474 bytes, below
 4,194,304. This is a strict success gate with exact measured/actual equality and
 typed envelope/provenance comparison. Setting the provider cap to the single-page
 envelope size, 558,270 bytes, must reject before runtime creation or inference
@@ -102,7 +102,7 @@ Real FilePlan coverage rejects omitted existing edits even with the correct
 digest, preserves unrelated prose and old/new citations on complete updates, and
 retains stale human-write protection. Typed cap/format changes discriminate
 policy generations before reservation. Frozen historical policy payloads from
-v1 (`9e9edf0`), v2 (`fddb1a3`) and v3 (`0a1d133`) drive queued rejection and
+v1 (`9e9edf0`), v2 (`fddb1a3`) and v3 (`0a1d133`) and v4 (`c929d69`) drive queued rejection and
 concrete-stage/terminal replay recovery without new inference.
 
 Current default scheduler order is `first_started`, `first_released`,
@@ -111,6 +111,37 @@ future configured capacity-two behavior. Story `.9` owns that configuration and
 its strict progress/isolated-session test. URI references and stale-write
 safeguards pass their existing contracts. These fixtures measure specific
 limitations, not universal semantic recall or duplicate prevention.
+
+## Generic lexical retrieval gates
+
+Story `.5` uses one shared `searchtest`/`contexttest` corpus through actual SQLite
+and integration-tagged PostgreSQL. Independently authored originals and expected
+IDs cover canonical accents, ordinary English/Russian lowercase, mixed technical
+words, accent/whole-word negatives and literal question words. A two-rune excerpt
+must return the original `e` plus combining accent. Original titles, provenance,
+OKF fields, strict-then-relaxed ordering, field priority, path ties, scope/source
+filters, cancellation and deterministic rebuild remain strict controls. Numeric
+native scores and arbitrary cross-backend rank equality are not assertions.
+
+Exact/overflow tests exercise raw query/source limits, term counts/runes,
+256-entry/16-unique filters, direct snippet defaults/clamping and projection
+ceilings. Real PostgreSQL indexes/searches the maximum 1,640-byte private term,
+8,192 distinct words and an exact 524,288-byte page stream; typed SQL measures
+native vector size. One-byte derived overflow and failed/canceled rebuilds retain
+the prior projection. Historical migration 14 to 15, reopen/rebuild and Down
+invalidate incompatible tokens/readiness while preserving original and durable
+operation/source/document state. A real filesystem/SQLite `QueryService` gate
+preserves original evidence and citations without writing or inference.
+
+Two fresh native baseline runs produce identical nine decoded observations.
+`generic-cyrillic-case` and `canonical-accent` are strict `met` controls; inflected
+Russian words, the English plural and semantic paraphrase remain `gap` in this
+lexical implementation. They may improve without breaking tests. These results
+measure this fixed corpus; Story `.10` still requires the selected real
+self-hosted multilingual embedding model. The existing golden 11/12 gate stays
+unchanged. Genuine v1-v4 policy fixtures gate old queued rejection and concrete
+stage/terminal replay without inference. Exact source request sizes and
+whole-page authority regressions remain unchanged under contract v5.
 
 ## Verification
 
@@ -128,5 +159,14 @@ a working container runtime:
 
 ```sh
 go test -tags integration -count=1 ./pkg/knowl/store/postgres \
+  -run TestStoreContractWithTestcontainers
+```
+
+For the shared corpus and migration failures under race detection:
+
+```sh
+go test -race -count=1 ./pkg/knowl/store/sqlite \
+  -run 'TestSearchContract|TestContextContract|TestContextBaseline|TestSQLiteGeneric'
+go test -race -tags integration -count=1 ./pkg/knowl/store/postgres \
   -run TestStoreContractWithTestcontainers
 ```
