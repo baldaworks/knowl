@@ -328,9 +328,110 @@ bodies, prompts, provider error text, credentials, and raw provider output are
 never included.
 
 The default per-document maintenance read ceiling is 262,144 characters, still
-bounded by the 4 MiB aggregate read limit. Changing that ceiling or another
+bounded by the 4 MiB per-document byte limit. Changing that ceiling or another
 output-affecting maintenance rule changes the policy generation and makes an
 unchanged document eligible once under the new generation.
+
+### Source maintenance context and navigation
+
+Source maintenance v2 separates complete catalog navigation from selected
+factual pages. The factual read limit defaults to 20 pages; catalog count does
+not consume that allowance. The model receives `catalogs` as compact
+path/digest/title/children nodes and `catalog_limits` as effective bounds.
+Catalog Markdown is retained by the application, which preserves it when
+rendering additive navigation.
+
+`pkg/knowl/types.CatalogLimits` has these finite local defaults:
+
+| Go field / JSON field | Default | Measures |
+| --- | --- | --- |
+| `MaxCatalogs` / `max_catalogs` | 1,024 | All catalogs, including root |
+| `MaxEdges` / `max_edges` | 16,384 | Unique internal child destinations per catalog, summed across catalogs |
+| `MaxDepth` / `max_depth` | 16 | Longest catalog chain, including root |
+| `MaxPathBytes` / `max_path_bytes` | 2,048 bytes | Canonical catalog and child paths |
+| `MaxCatalogBytes` / `max_catalog_bytes` | 262,144 bytes | Each original or rendered catalog |
+| `MaxSnapshotBytes` / `max_snapshot_bytes` | 4,194,304 bytes | All original or rendered catalog Markdown combined |
+| `MaxInputBytes` / `max_input_bytes` | 4,194,304 bytes | Serialized JSON catalog graph |
+
+These are ceilings, not measured production capacity. Catalog input is complete
+or rejected before inference; it is never truncated to fit. Proposed additions
+must satisfy final graph bounds. Generated catalog files and factual edits also
+share the plan defaults of 32 files and 256 KiB per file. Filesystem validation
+and preconditions still apply.
+
+Embedded Go callers set `knowl.Config.IngestOptions.CatalogLimits` using
+`pkg/knowl/types.CatalogLimits`. An entirely zero value selects all defaults.
+For custom limits, supply all seven positive fields; partially populated values
+are invalid, and `MaxPathBytes` cannot exceed 2,048. The CLI uses the defaults;
+its YAML does not expose `knowl.ingest` or `knowl.maintenance` sections.
+
+Update custom maintainers and supplied-plan callers for `source-maintenance-v2`.
+Ordinary page edits still carry schema/source provenance and existing digests.
+Use `catalog_additions` for navigation. For example, this fragment adds a new
+subject catalog and links an ordinary page created in the same plan:
+
+```json
+{
+  "catalog_additions": [
+    {
+      "path": "wiki/index.md",
+      "expected_digest": "<copy the root digest from input.catalogs>",
+      "children": ["wiki/catalogs/storage/index.md"]
+    },
+    {
+      "path": "wiki/catalogs/storage/index.md",
+      "title": "Storage",
+      "children": ["wiki/entities/storage.md"]
+    }
+  ]
+}
+```
+
+A complete source response also includes `schema_digest`, `source_refs` and
+`edits`. Existing catalogs require the exact original digest and omit `title`;
+new catalogs omit the digest and require a nonempty single-line title and
+children. Membership already present produces no catalog mutation. Ingest
+supports additions; use explicit hierarchy reconciliation to restructure
+navigation. A raw catalog FileEdit is rejected rather than converted.
+
+The graph budget covers only navigation. Source, schema, factual pages and
+provider envelope overhead can still exceed the separate provider input limit,
+causing `provider_input_limit`. The current provider checks serialized input
+before inference; it does not yet fit the complete wrapper to an overall budget.
+
+#### Upgrading pending operations
+
+Changing the contract or any effective catalog limit changes the maintenance
+policy generation. Queued work that still needs a plan, including legacy
+empty-generation work, fails before inference with class `maintenance_policy`
+and reason `maintenance_policy_mismatch`. It is a permanent failure; restart
+and automatic retry do not replan it under new rules. Stored execution metadata
+remains authoritative.
+
+Already validated concrete stages can resume without inference, including v1
+stages containing catalog FileEdits. They still enforce schema, provenance,
+original digests and atomic commit. Terminal replay remains available. Stale or
+corrupt stages fail under the existing recovery rules.
+
+For configured sources, inspect the mismatch and explicitly reserve work under
+the current policy through the existing retry command:
+
+```bash
+./knowl source status engineering
+./knowl source retry engineering --failure-class maintenance_policy --dry-run
+./knowl source retry engineering --failure-class maintenance_policy
+```
+
+For a public text/URI ingestion, resubmit the same immutable input with the same
+origin and idempotency key after updating the provider. Current generation
+participates in reservation identity, so this creates or replays current-policy
+work while preserving the historical operation and raw bytes. Embedded callers
+can use the existing accepted-source reservation seam. No descriptor rewriting
+or raw deletion is required. Stop writers before rolling back. Pre-v2 binaries
+lack this mismatch guard and must not process newer queued work. A rollback
+build that resumes operations must retain the compatibility checks; concrete
+stages still require canonical preconditions. Preserve stored descriptors and
+raw history.
 
 Committed operations may include bounded `diagnostics` with only a stable
 `code`, canonical `path`, and optional normalized `target`. An unresolved wiki

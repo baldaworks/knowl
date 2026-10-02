@@ -344,7 +344,9 @@ func (report LintReport) Healthy() bool {
 	return true
 }
 
-// MaintenanceInput is the bounded data supplied to a maintainer provider.
+// MaintenanceInput is the versioned, bounded data supplied to a maintainer.
+// Pages contains ordinary factual snapshots; Catalogs is the complete compact
+// navigation graph. Authoritative catalog Markdown remains in the application.
 type MaintenanceInput struct {
 	ContractVersion string             `json:"contract_version"`
 	CatalogLimits   CatalogLimits      `json:"catalog_limits"`
@@ -358,6 +360,8 @@ type MaintenanceInput struct {
 }
 
 // ModelEditPlan is structured provider output before application validation.
+// Source maintenance uses CatalogAdditions for navigation; Edits must not
+// replace index.md catalog Markdown.
 type ModelEditPlan struct {
 	CatalogAdditions []CatalogAddition `json:"catalog_additions,omitempty"`
 	SchemaDigest     string            `json:"schema_digest"`

@@ -31,6 +31,8 @@ const (
 
 // IngestOptions configures bounded planning and the review gate.
 type IngestOptions struct {
+	// CatalogLimits bounds complete navigation independently of ReadLimits.Pages.
+	// An entirely zero value selects defaults; custom values must set every field.
 	CatalogLimits knowl.CatalogLimits
 	PlanLimits    PlanLimits
 	ReadLimits    knowl.ReadLimits
