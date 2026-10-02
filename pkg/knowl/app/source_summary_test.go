@@ -5,9 +5,13 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
-func TestSourceTitle(t *testing.T) {
+const sourceTitleTestLimit = 256
+
+func TestSourceSignalTitleControls(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name, content, want string
@@ -22,7 +26,11 @@ func TestSourceTitle(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if got := sourceTitle([]byte(test.content)); got != test.want {
+			signals, err := wiki.SourceSignals(t.Context(), []byte(test.content))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := signals.Title; got != test.want {
 				t.Fatalf("sourceTitle() = %q, want %q", got, test.want)
 			}
 		})
@@ -38,11 +46,15 @@ func TestContextBaselineSourceTitles(t *testing.T) {
 	}
 	for _, fixture := range fixtures {
 		t.Run(fixture.id, func(t *testing.T) {
-			observed := sourceTitle([]byte(fixture.content))
-			outcome := "gap"
-			if observed == fixture.expected {
-				outcome = "met"
+			signals, err := wiki.SourceSignals(t.Context(), []byte(fixture.content))
+			if err != nil {
+				t.Fatal(err)
 			}
+			observed := signals.Title
+			if observed != fixture.expected {
+				t.Fatalf("title=%q want=%q", observed, fixture.expected)
+			}
+			outcome := "met"
 			// Titles here are fixed public fixture labels, never operator source data.
 			encoded, err := json.Marshal(struct {
 				CaseID   string `json:"case_id"`
@@ -58,10 +70,14 @@ func TestContextBaselineSourceTitles(t *testing.T) {
 	}
 }
 
-func TestSourceTitleRuneBound(t *testing.T) {
+func TestSourceSignalTitleRuneBound(t *testing.T) {
 	t.Parallel()
-	got := sourceTitle([]byte("# " + strings.Repeat("界", maxSourceTitleRunes+10)))
-	if utf8.RuneCountInString(got) != maxSourceTitleRunes {
-		t.Fatalf("sourceTitle() rune count = %d, want %d", utf8.RuneCountInString(got), maxSourceTitleRunes)
+	signals, err := wiki.SourceSignals(t.Context(), []byte("# "+strings.Repeat("界", sourceTitleTestLimit+10)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := signals.Title
+	if utf8.RuneCountInString(got) != sourceTitleTestLimit {
+		t.Fatalf("sourceTitle() rune count = %d, want %d", utf8.RuneCountInString(got), sourceTitleTestLimit)
 	}
 }

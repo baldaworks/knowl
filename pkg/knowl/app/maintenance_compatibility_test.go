@@ -10,8 +10,8 @@ import (
 )
 
 func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(map[bool]string{false: "old contract", true: "empty legacy"}[legacy], func(t *testing.T) {
+	for _, version := range []string{"source-maintenance-v1", "source-maintenance-v2", ""} {
+		t.Run("old contract "+version, func(t *testing.T) {
 			workspace, store, service, maintainer := newWorkflow(t, false, nil)
 			accepted, err := workspace.AcceptSource(t.Context(), sourceEnvelope([]byte("old queued evidence")))
 			if err != nil {
@@ -22,9 +22,9 @@ func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
 				t.Fatal(err)
 			}
 			generation := ""
-			if !legacy {
+			if version != "" {
 				policy := app.SourceMaintenancePolicy(schema.Digest, app.DefaultReadLimits(), app.DefaultPlanLimits())
-				policy.ContractVersion = "source-maintenance-v1"
+				policy.ContractVersion = version
 				generation, err = app.MaintenancePolicyGeneration(policy)
 				if err != nil {
 					t.Fatal(err)
@@ -85,64 +85,66 @@ func TestExecuteRejectsChangedPolicyBeforeInference(t *testing.T) {
 }
 
 func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
-	for _, scheduled := range []bool{false, true} {
-		t.Run(map[bool]string{false: "synchronous", true: "scheduled"}[scheduled], func(t *testing.T) {
-			workspace, store, _, maintainer := newWorkflow(t, false, nil)
-			accepted, err := workspace.AcceptSource(t.Context(), sourceEnvelope([]byte("staged policy change")))
-			if err != nil {
-				t.Fatal(err)
-			}
-			schema, err := workspace.Schema(t.Context(), accepted.Scope)
-			if err != nil {
-				t.Fatal(err)
-			}
-			policy := app.SourceMaintenancePolicy(schema.Digest, app.DefaultReadLimits(), app.DefaultPlanLimits())
-			policy.ContractVersion = "source-maintenance-v1"
-			generation, err := app.MaintenancePolicyGeneration(policy)
-			if err != nil {
-				t.Fatal(err)
-			}
-			key := knowl.OperationKey{Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version, MaintenanceGeneration: generation}
-			reservation, err := store.Reserve(t.Context(), key, knowl.OperationMeta{Key: key, AcceptedSource: accepted, Schema: schema, SchemaDigest: schema.Digest, MaintenanceGeneration: generation})
-			if err != nil {
-				t.Fatal(err)
-			}
-			submission := app.IngestSubmission{Operation: reservation.Operation}
-			schema, err = workspace.Schema(t.Context(), submission.Operation.Key.Scope)
-			if err != nil {
-				t.Fatal(err)
-			}
-			inspection, err := workspace.Inspect(t.Context(), submission.Operation.Key.Scope)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = workspace.StagePlan(t.Context(), knowl.ValidatedEditPlan{OperationID: string(submission.Operation.ID), Scope: submission.Operation.Key.Scope, SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef}, Edits: []knowl.FileEdit{
-				{Path: testPagePath, Content: planPageContent}, {Path: testPageTwoPath, Content: planSupportingContent},
-				{Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [One](entities/one.md)\n* [Two](entities/two.md)\n")},
-			}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			bounds := app.DefaultCatalogLimits()
-			bounds.MaxCatalogs++
-			current, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{CatalogLimits: bounds, AutoApply: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var result app.IngestResult
-			if scheduled {
-				result, err = current.RunToTerminal(t.Context(), claimReady(t, store, submission.Operation.Key.Scope))
-			} else {
-				result, err = current.Execute(t.Context(), submission)
-			}
-			if err != nil || result.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 {
-				t.Fatalf("stage replanned: status=%s calls=%d err=%v", result.Operation.Status, maintainer.calls(), err)
-			}
-			replay, err := current.Execute(t.Context(), app.IngestSubmission{Operation: result.Operation})
-			if err != nil || replay.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 {
-				t.Fatalf("terminal replay=%s %v", replay.Operation.Status, err)
-			}
-		})
+	for _, version := range []string{"source-maintenance-v1", "source-maintenance-v2"} {
+		for _, scheduled := range []bool{false, true} {
+			t.Run(version+"/"+map[bool]string{false: "synchronous", true: "scheduled"}[scheduled], func(t *testing.T) {
+				workspace, store, _, maintainer := newWorkflow(t, false, nil)
+				accepted, err := workspace.AcceptSource(t.Context(), sourceEnvelope([]byte("staged policy change")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				schema, err := workspace.Schema(t.Context(), accepted.Scope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				policy := app.SourceMaintenancePolicy(schema.Digest, app.DefaultReadLimits(), app.DefaultPlanLimits())
+				policy.ContractVersion = version
+				generation, err := app.MaintenancePolicyGeneration(policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				key := knowl.OperationKey{Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version, MaintenanceGeneration: generation}
+				reservation, err := store.Reserve(t.Context(), key, knowl.OperationMeta{Key: key, AcceptedSource: accepted, Schema: schema, SchemaDigest: schema.Digest, MaintenanceGeneration: generation})
+				if err != nil {
+					t.Fatal(err)
+				}
+				submission := app.IngestSubmission{Operation: reservation.Operation}
+				schema, err = workspace.Schema(t.Context(), submission.Operation.Key.Scope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				inspection, err := workspace.Inspect(t.Context(), submission.Operation.Key.Scope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = workspace.StagePlan(t.Context(), knowl.ValidatedEditPlan{OperationID: string(submission.Operation.ID), Scope: submission.Operation.Key.Scope, SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef}, Edits: []knowl.FileEdit{
+					{Path: testPagePath, Content: planPageContent}, {Path: testPageTwoPath, Content: planSupportingContent},
+					{Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [One](entities/one.md)\n* [Two](entities/two.md)\n")},
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				bounds := app.DefaultCatalogLimits()
+				bounds.MaxCatalogs++
+				current, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{CatalogLimits: bounds, AutoApply: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var result app.IngestResult
+				if scheduled {
+					result, err = current.RunToTerminal(t.Context(), claimReady(t, store, submission.Operation.Key.Scope))
+				} else {
+					result, err = current.Execute(t.Context(), submission)
+				}
+				if err != nil || result.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 {
+					t.Fatalf("stage replanned: status=%s calls=%d err=%v", result.Operation.Status, maintainer.calls(), err)
+				}
+				replay, err := current.Execute(t.Context(), app.IngestSubmission{Operation: result.Operation})
+				if err != nil || replay.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 {
+					t.Fatalf("terminal replay=%s %v", replay.Operation.Status, err)
+				}
+			})
+		}
 	}
 }
 

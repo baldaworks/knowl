@@ -12,6 +12,8 @@ import (
 )
 
 const (
+	semanticTerm                = "durable"
+	controlID    knowl.PageID   = "index"
 	Scope        knowl.ScopeRef = "context-contract"
 	ForeignScope knowl.ScopeRef = "context-contract-foreign"
 	relevantID   knowl.PageID   = "decisions/badger"
@@ -89,7 +91,7 @@ func Run(t *testing.T, index Index) {
 		if len(got) != 8 || got[0] != relevantID {
 			t.Fatalf("context = %q, want eight IDs beginning with %q", got, relevantID)
 		}
-		if !containsAll(got, outgoingID, incomingID, "index") {
+		if !containsAll(got, outgoingID, incomingID, controlID) {
 			t.Fatalf("context = %q, want incoming/outgoing neighbors and index", got)
 		}
 		if slices.Contains(got, knowl.PageID("context/second-hop")) || slices.Contains(got, knowl.PageID("missing/page")) {
@@ -103,7 +105,30 @@ func Run(t *testing.T, index Index) {
 	t.Run("no hit uses control before recent", func(t *testing.T) {
 		noHit := knowl.SourceSummary{Source: knowl.SourceRef{Adapter: "nomatchadapter", ID: "nomatchid"}, Title: "Zephyr quasar"}
 		got := selectContext(t, index, Scope, noHit, 4)
-		assertIDs(t, got, "index", "recent/new", "recent/old", "recent/third")
+		assertIDs(t, got, controlID, "recent/new", "recent/old", "recent/third")
+	})
+
+	for _, signal := range []string{"body", "tags", "headings"} {
+		t.Run(signal+" beats source identity", func(t *testing.T) {
+			semantic := knowl.SourceSummary{Source: knowl.SourceRef{ID: "Newest Unrelated", Adapter: "Older Unrelated"}}
+			switch signal {
+			case "body":
+				semantic.Body = semanticTerm
+			case "tags":
+				semantic.Tags = []string{semanticTerm}
+			case "headings":
+				semantic.Headings = []string{semanticTerm}
+			}
+			assertIDs(t, selectContext(t, index, Scope, semantic, 1), relevantID)
+		})
+	}
+	t.Run("semantic miss does not fall back to identity", func(t *testing.T) {
+		semantic := knowl.SourceSummary{Source: knowl.SourceRef{ID: "Badger Session"}, Body: "absentsemanticterm"}
+		assertIDs(t, selectContext(t, index, Scope, semantic, 1), controlID)
+	})
+	t.Run("empty semantic terms use identity", func(t *testing.T) {
+		fallback := knowl.SourceSummary{Source: knowl.SourceRef{ID: "Badger Session"}, Title: "why", Body: "how"}
+		assertIDs(t, selectContext(t, index, Scope, fallback, 1), relevantID)
 	})
 	t.Run("deterministic rebuild", func(t *testing.T) {
 		before := selectContext(t, index, Scope, summary, 8)

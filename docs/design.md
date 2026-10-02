@@ -106,9 +106,35 @@ inject an explicit maintainer instead. Host construction fails before readiness
 when neither is present. Provider code receives bounded untrusted context and
 structured-output constraints, never unrestricted filesystem authority.
 
-### Source maintenance contract v2
+### Source signals and context selection
 
-`MaintenanceInput.contract_version` is `source-maintenance-v2`. Its `pages`
+Ingest extracts detached `SourceSummary` title, tags, headings and body from the
+accepted UTF-8 source before selecting context. Valid leading YAML `title`
+(string) and `tags` (sequence of strings) take precedence. Without a usable
+metadata title, the first eligible ATX/Setext heading supplies the title,
+then the first eligible prose line. Fenced and indented code are excluded.
+The scanner supports this documented Markdown subset, not full CommonMark.
+Parsing neither rewrites raw bytes nor summarizes the source with a model;
+provider `SourceText` remains complete under the existing read limits.
+
+The shared wiki clipping policy gives title, tags, headings, then body a total
+budget of 4,096 runes / 16,384 UTF-8 bytes. Title and each list entry are capped
+at 256 runes; each list examines at most 32 entries. Body is the beginning of
+eligible prose within the remaining budget and can omit useful later terms.
+Metadata parsing is separately bounded; see [syntax and limits](operations.md#source-signals).
+
+Both SQLite and PostgreSQL build the same lexical query from those fields in
+priority order, capped at 32 terms and 256 total term runes. Source ID and
+adapter are bounded fallback inputs only when semantic fields yield no usable
+terms. A query with no search hits does not switch to identity. Existing
+neighbor, root and recent-page merging, scope isolation and page limits remain
+in effect. There is one generic multilingual path; inflection and paraphrase
+recall are not guaranteed by this lexical policy. Embedding retrieval belongs
+to the later hybrid-search Story.
+
+### Source maintenance contract v3
+
+`MaintenanceInput.contract_version` is `source-maintenance-v3`. Its `pages`
 contain selected ordinary factual snapshots. Its `catalogs` contain the complete
 bounded navigation graph as `HierarchyCatalog` values: canonical `path`,
 original `digest`, `title`, and sorted `children`. The root comes first;

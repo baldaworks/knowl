@@ -50,6 +50,9 @@ func TestContextBaselineSourceSignals(t *testing.T) {
 				}
 				result := knowledgetest.ObserveRecall(fixture.ID, []knowl.PageID{fixture.ExpectedPage}, ids, 20)
 				logBaseline(t, result)
+				if result.Outcome != baselineMet {
+					t.Fatalf("source signal recall must succeed: %#v", result)
+				}
 				if pass == 1 && !reflect.DeepEqual(previous, result) {
 					t.Fatal("source context changed between fresh fixed-input workspaces")
 				}
@@ -104,7 +107,7 @@ func TestContextBaselineCatalogScaling(t *testing.T) {
 			t.Fatal("catalog/control Markdown leaked through factual pages")
 		}
 	}
-	if maintainer.input.Limits.Pages != 20 || maintainer.input.CatalogLimits.MaxCatalogs != 1024 || maintainer.input.ContractVersion != "source-maintenance-v2" {
+	if maintainer.input.Limits.Pages != 20 || maintainer.input.CatalogLimits.MaxCatalogs != 1024 || maintainer.input.ContractVersion != "source-maintenance-v3" {
 		t.Fatal("incorrect independent limits/contract")
 	}
 	for i, node := range maintainer.input.Catalogs {

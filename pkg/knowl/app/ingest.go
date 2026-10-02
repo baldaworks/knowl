@@ -549,9 +549,13 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		cancel()
 		return preparedStage{}, fmt.Errorf("source: %w", err)
 	}
-	pageIDs, err := service.index.SelectContext(readCtx, submission.accepted.Scope, knowl.SourceSummary{
-		Source: submission.accepted.Source, Version: submission.accepted.Version, Title: sourceTitle(sourceText),
-	}, service.readLimits)
+	summary, err := wiki.SourceSignals(readCtx, sourceText)
+	if err != nil {
+		cancel()
+		return preparedStage{}, fmt.Errorf("source_signals: %w", err)
+	}
+	summary.Source, summary.Version = submission.accepted.Source, submission.accepted.Version
+	pageIDs, err := service.index.SelectContext(readCtx, submission.accepted.Scope, summary, service.readLimits)
 	if err != nil {
 		cancel()
 		return preparedStage{}, fmt.Errorf("context: %w", err)
