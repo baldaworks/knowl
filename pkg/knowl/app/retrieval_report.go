@@ -112,3 +112,19 @@ func DecodeRetrievalReport(encoded string) (*knowl.RetrievalReport, error) {
 	}
 	return &report, nil
 }
+
+// DecodeOperationRetrieval preserves historical attempt evidence for recovery
+// while identifying which attempt produced it. Corrupt/future attempts fail closed.
+func DecodeOperationRetrieval(encoded string, attempt, workAttempt int) (*knowl.RetrievalReport, int, error) {
+	if attempt < 0 || attempt > workAttempt {
+		return nil, 0, ErrRetrievalReportInvalid
+	}
+	report, err := DecodeRetrievalReport(encoded)
+	if err != nil {
+		return nil, 0, err
+	}
+	if report == nil {
+		return nil, 0, nil
+	}
+	return report, attempt, nil
+}

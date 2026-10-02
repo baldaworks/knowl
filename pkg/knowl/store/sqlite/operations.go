@@ -271,14 +271,15 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	var operation knowl.Operation
 	var sourceAdapter, sourceID, sourceVersion, sourceDigest, schemaDigest, maintenanceGeneration, maintenanceDiagnostics string
 	var kind, status, failureClass, failureReason, readyAt, updatedAt string
+	var retrievalReport sql.NullString
 	err := store.db.QueryRowContext(ctx, `
 		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation,
 		       schema_digest, status, attempt, work_attempt, retry_attempt, manual_retry_count,
-		       failure_class, failure_reason, maintenance_diagnostics, work_ready_at, updated_at
+		       failure_class, failure_reason, maintenance_diagnostics, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id).
 		Scan(&operation.ID, &kind, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest, &maintenanceGeneration,
 			&schemaDigest, &status, &operation.Attempt, &operation.WorkAttempt, &operation.RetryAttempt,
-			&operation.ManualRetryCount, &failureClass, &failureReason, &maintenanceDiagnostics, &readyAt, &updatedAt)
+			&operation.ManualRetryCount, &failureClass, &failureReason, &maintenanceDiagnostics, &readyAt, &updatedAt, &retrievalReport, &operation.RetrievalAttempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.Operation{}, ErrNotFound
 	}
@@ -306,6 +307,10 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	operation.Diagnostics, err = app.DecodeMaintenanceDiagnostics(maintenanceDiagnostics)
 	if err != nil {
 		return knowl.Operation{}, fmt.Errorf("decode maintenance diagnostics: %w", err)
+	}
+	operation.Retrieval, operation.RetrievalAttempt, err = app.DecodeOperationRetrieval(retrievalReport.String, operation.RetrievalAttempt, operation.WorkAttempt)
+	if err != nil {
+		return knowl.Operation{}, err
 	}
 	_ = schemaDigest
 	return operation, nil

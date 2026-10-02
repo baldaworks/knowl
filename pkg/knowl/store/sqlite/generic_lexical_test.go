@@ -127,14 +127,19 @@ func TestSQLiteGenericMigrationPreservesHistoryAndRebuild(t *testing.T) {
 	}
 	legacy := &Store{db: db, path: filename}
 	key, meta := executionFixture("generic", "upgrade", time.Unix(1, 0).UTC())
-	operation, err := legacy.Reserve(ctx, key, meta)
+	operationID, err := app.SourceOperationID(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationBefore, err := legacy.Operation(ctx, key.Scope, operation.ID)
+	created := meta.CreatedAt.Format(time.RFC3339Nano)
+	acceptedDocument, err := encodeAcceptedSourceDocument(meta.AcceptedSource.SourceDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_operations(operation_id,scope,source_adapter,source_id,source_version,source_digest,schema_digest,status,created_at,updated_at,work_ready_at,accepted_media_type,source_manifest_ref,accepted_source_document,schema_version,schema_snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.Version.Digest, meta.SchemaDigest, knowl.StatusReceived, created, created, created, meta.AcceptedSource.MediaType, meta.AcceptedSource.ManifestRef, acceptedDocument, meta.Schema.Version, meta.Schema.Content); err != nil {
+		t.Fatal(err)
+	}
+	operationBefore := knowl.Operation{ID: operationID, Kind: knowl.WorkSourceMaintenance, Key: key, Status: knowl.StatusReceived, ReadyAt: meta.CreatedAt, UpdatedAt: meta.CreatedAt, Diagnostics: []knowl.MaintenanceDiagnostic{}}
 	run := sqliteSourceRun("generic-upgrade", time.Unix(50, 0).UTC())
 	state := sqliteDocumentState(run, false, time.Time{})
 	finalizeSQLiteSourceRun(t, ctx, legacy, run, state, app.SyncDocumentActive, "checkpoint", "generation", run.StartedAt.Add(time.Second))
@@ -177,9 +182,9 @@ func TestSQLiteGenericMigrationPreservesHistoryAndRebuild(t *testing.T) {
 	if err := current.db.QueryRowContext(ctx, `SELECT title,body,digest FROM knowl_pages WHERE scope=? AND page_id=?`, snapshot.Scope, page.ID).Scan(&title, &body, &digest); err != nil || title != page.Title || body != page.Body || digest != "original-digest" {
 		t.Fatalf("original row changed: %q %q %q %v", title, body, digest, err)
 	}
-	preserved, err := current.Operation(ctx, key.Scope, operation.ID)
+	preserved, err := current.Operation(ctx, key.Scope, operationID)
 	if err != nil || !reflect.DeepEqual(preserved, operationBefore) {
-		t.Fatalf("operation changed: %v", err)
+		t.Fatalf("operation changed: got=%#v want=%#v err=%v", preserved, operationBefore, err)
 	}
 	sourceAfter, err := current.SourceStatus(ctx, run.Scope, run.SourceID)
 	if err != nil || !reflect.DeepEqual(sourceAfter, sourceBefore) {
