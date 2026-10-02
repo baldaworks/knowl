@@ -290,6 +290,8 @@ func (service *IngestService) submitAcceptedWithSchema(ctx context.Context, acce
 func (service *IngestService) maintenanceGeneration(schema knowl.SchemaDocument) (string, error) {
 	policy := SourceMaintenancePolicy(schema.Digest, service.readLimits, service.planLimits)
 	policy.CatalogLimits = service.catalogLimits
+	policy.InputLimits = knowl.MaintenanceInputLimits{MaxRequestBytes: service.requestBudget.MaxBytes}
+	policy.RequestFormatVersion = service.requestBudget.FormatVersion
 	generation, err := MaintenancePolicyGeneration(policy)
 	if err != nil {
 		return "", fmt.Errorf("compute maintenance policy generation: %w", err)

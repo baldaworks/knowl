@@ -61,6 +61,8 @@ func TestMaintenancePolicyGenerationChangesWithEffectivePolicy(t *testing.T) {
 	}{
 		{name: "contract", edit: func(policy *MaintenancePolicy) { policy.ContractVersion = "source-maintenance-test-revision" }},
 		{name: fixtureSchema, edit: func(policy *MaintenancePolicy) { policy.SchemaDigest = strings.Repeat("b", 64) }},
+		{name: "request cap", edit: func(policy *MaintenancePolicy) { policy.InputLimits.MaxRequestBytes-- }},
+		{name: "request format", edit: func(policy *MaintenancePolicy) { policy.RequestFormatVersion = "fixture-wrapper-v2" }},
 		{name: "read pages", edit: func(policy *MaintenancePolicy) { policy.ReadLimits.Pages++ }},
 		{name: "read bytes", edit: func(policy *MaintenancePolicy) { policy.ReadLimits.Bytes++ }},
 		{name: "read characters", edit: func(policy *MaintenancePolicy) { policy.ReadLimits.Characters++ }},
@@ -113,6 +115,8 @@ func TestMaintenancePolicyGenerationRejectsInvalidPolicy(t *testing.T) {
 	}{
 		{name: "contract", edit: func(policy *MaintenancePolicy) { policy.ContractVersion = "" }},
 		{name: fixtureSchema, edit: func(policy *MaintenancePolicy) { policy.SchemaDigest = "not-a-digest" }},
+		{name: "request cap", edit: func(policy *MaintenancePolicy) { policy.InputLimits.MaxRequestBytes = MaxMaintenanceRequestBytes + 1 }},
+		{name: "request format", edit: func(policy *MaintenancePolicy) { policy.RequestFormatVersion = "bad\nformat" }},
 		{name: "partial read limits", edit: func(policy *MaintenancePolicy) { policy.ReadLimits.Characters = 0 }},
 		{name: "partial plan limits", edit: func(policy *MaintenancePolicy) { policy.PlanLimits.MaxFiles = 0 }},
 	}
