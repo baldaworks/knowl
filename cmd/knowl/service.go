@@ -80,6 +80,7 @@ func hostConfig(ctx context.Context) (knowl.Config, error) {
 	config.StorePath = storage.Path
 	config.PostgresDSN = storage.DSN
 	config.OperatorToken = loaded.Document.Knowl.Operator.Token
+	config.Embeddings = loaded.Document.Knowl.Embeddings
 	sources := make([]types.Source, 0, len(loaded.Document.Knowl.Sources))
 	for _, configured := range loaded.Document.Knowl.Sources {
 		enabled := true

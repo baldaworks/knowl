@@ -18,6 +18,7 @@ const historicContractV1 = "source-maintenance-v1"
 const historicContractV2 = "source-maintenance-v2"
 const historicContractV3 = "source-maintenance-v3"
 const historicContractV4 = "source-maintenance-v4"
+const historicContractV5 = "source-maintenance-v5"
 
 func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
 	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, ""} {
@@ -172,7 +173,7 @@ func TestCatalogPolicyGenerationChangesWithEveryEffectiveLimit(t *testing.T) {
 // (v1), fddb1a3 (v2), 0a1d133 (v3), and c929d69 (v4). Never retrofit them through current policy.
 func historicalPolicyGeneration(t *testing.T, version, schemaDigest string) string {
 	t.Helper()
-	filename := map[string]string{historicContractV1: "v1.json", historicContractV2: "v2.json", historicContractV3: "v3.json", historicContractV4: "v4.json"}[version]
+	filename := map[string]string{historicContractV1: "v1.json", historicContractV2: "v2.json", historicContractV3: "v3.json", historicContractV4: "v4.json", historicContractV5: "v5.json"}[version]
 	encoded, err := os.ReadFile(filepath.Join("testdata", "maintenance-policy", filename))
 	if err != nil {
 		t.Fatal(err)
@@ -225,5 +226,15 @@ func TestHistoricalMaintenanceGenerationsRemainAuthentic(t *testing.T) {
 		if err != nil || current == got {
 			t.Fatalf("historical payload was retrofitted to current shape: %v", err)
 		}
+	}
+}
+
+// The v5 payload was captured with the unchanged normalized implementation at
+// f6f1f6040db1b6ff6b394daebf6f8422bd3c6fac before any S10 policy edits.
+func TestGenuineV5MaintenanceGeneration(t *testing.T) {
+	got := historicalPolicyGeneration(t, historicContractV5, strings.Repeat("a", 64))
+	const want = "943b48fb34019ab19621b36c5228d73bc4de3f0bdfd65178cca4f31b54f2ff6e"
+	if got != want {
+		t.Fatalf("genuine v5 generation=%s want=%s", got, want)
 	}
 }
