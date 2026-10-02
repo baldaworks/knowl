@@ -4,8 +4,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -37,10 +35,10 @@ func (config EmbeddingsConfig) Normalize() (EmbeddingsConfig, error) {
 	if config.FailurePolicy == "" {
 		config.FailurePolicy = app.EmbeddingFallbackLexical
 	}
+	_, spaceErr := app.NormalizeEmbeddingSpace(config.Space())
 	u, err := url.Parse(config.Endpoint)
 	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.Fragment != "" || len(config.Endpoint) > 2048 ||
-		!embeddingIdentity(config.Model) || !embeddingIdentity(config.Revision) || config.Dimensions < 1 || config.Dimensions > 4096 ||
-		!embeddingPrefix(config.QueryPrefix) || !embeddingPrefix(config.PassagePrefix) ||
+		spaceErr != nil ||
 		(config.FailurePolicy != app.EmbeddingFallbackLexical && config.FailurePolicy != app.EmbeddingStrict) || !embeddingEnvName(config.APIKeyEnv) {
 		return EmbeddingsConfig{}, &app.EmbeddingError{Code: domain.RetrievalInvalidConfiguration}
 	}
@@ -64,20 +62,6 @@ func (config EmbeddingsConfig) Space() app.EmbeddingSpace {
 	return app.EmbeddingSpace{Model: config.Model, Revision: config.Revision, Dimensions: config.Dimensions, QueryPrefix: config.QueryPrefix, PassagePrefix: config.PassagePrefix}
 }
 
-func embeddingIdentity(value string) bool {
-	if value == "" || len(value) > 256 || !utf8.ValidString(value) {
-		return false
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) {
-			return false
-		}
-	}
-	return true
-}
-func embeddingPrefix(value string) bool {
-	return len(value) <= 256 && utf8.ValidString(value) && !strings.ContainsRune(value, 0)
-}
 func embeddingEnvName(value string) bool {
 	if value == "" {
 		return true
