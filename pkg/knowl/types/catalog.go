@@ -11,3 +11,13 @@ type CatalogLimits struct {
 	MaxSnapshotBytes int `json:"max_snapshot_bytes"`
 	MaxInputBytes    int `json:"max_input_bytes"`
 }
+
+// CatalogAddition adds navigation to an existing catalog or creates a new one.
+// Existing catalogs require ExpectedDigest and omit Title. New catalogs require
+// Title and an empty ExpectedDigest. Children are canonical wiki file paths.
+type CatalogAddition struct {
+	Path           string   `json:"path"`
+	ExpectedDigest string   `json:"expected_digest,omitempty"`
+	Title          string   `json:"title,omitempty"`
+	Children       []string `json:"children"`
+}

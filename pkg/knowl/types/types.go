@@ -357,8 +357,9 @@ type MaintenanceInput struct {
 
 // ModelEditPlan is structured provider output before application validation.
 type ModelEditPlan struct {
-	SchemaDigest string     `json:"schema_digest"`
-	SourceRefs   []string   `json:"source_refs"`
-	Edits        []FileEdit `json:"edits"`
-	Rationale    string     `json:"rationale,omitempty"`
+	CatalogAdditions []CatalogAddition `json:"catalog_additions,omitempty"`
+	SchemaDigest     string            `json:"schema_digest"`
+	SourceRefs       []string          `json:"source_refs"`
+	Edits            []FileEdit        `json:"edits"`
+	Rationale        string            `json:"rationale,omitempty"`
 }

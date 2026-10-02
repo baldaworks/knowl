@@ -658,6 +658,7 @@ func escapeMarkdownLabel(value string) string {
 func escapeMarkdownText(value string) string {
 	return strings.NewReplacer(
 		"&", "&amp;",
+		"`", "&#96;",
 		"<", "&lt;",
 		">", "&gt;",
 		"[", "&#91;",
