@@ -227,3 +227,36 @@ func TestEmbeddingClientProviderTimeoutHasSafeReason(t *testing.T) {
 		t.Fatalf("provider-local timeout=%v", err)
 	}
 }
+
+func TestEmbeddingClientClassifiesStructuredValidationLimits(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		want       knowl.RetrievalFailure
+	}{
+		{"TEI validation", `{"message":"upstream text is not diagnostic authority","code":422,"type":"Validation"}`, knowl.RetrievalInputLimit},
+		{"tokenizer failure", `{"code":422,"type":"Tokenizer"}`, knowl.RetrievalUnavailable},
+		{"unknown type", `{"code":422,"type":"Backend"}`, knowl.RetrievalUnavailable},
+		{"missing code", `{"type":"Validation"}`, knowl.RetrievalUnavailable},
+		{"wrong code", `{"code":400,"type":"Validation"}`, knowl.RetrievalUnavailable},
+		{"wrong shape", `{"code":"422","type":"Validation"}`, knowl.RetrievalUnavailable},
+		{"plain prose", `Input validation error: too many tokens`, knowl.RetrievalUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			client, err := NewEmbeddingClient(EmbeddingClientOptions{Endpoint: server.URL, Space: app.EmbeddingSpace{Model: fixtureEmbeddingModel, Revision: fixtureEmbeddingRevision, Dimensions: 2}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.Embed(t.Context(), []string{fixtureEmbeddingQuery})
+			var failure *app.EmbeddingError
+			if !errors.As(err, &failure) || failure.Code != test.want {
+				t.Fatalf("structured validation=%v want=%s", err, test.want)
+			}
+		})
+	}
+}

@@ -120,6 +120,17 @@ func (client *EmbeddingClient) Embed(ctx context.Context, inputs []string) (outp
 		if response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusRequestEntityTooLarge {
 			return nil, embeddingFailure(knowl.RetrievalInputLimit)
 		}
+		// The supported OpenAI-compatible CPU service reports validation limits
+		// with structured 422 metadata. Never infer a reason from error prose.
+		if response.StatusCode == http.StatusUnprocessableEntity {
+			var failure struct {
+				Code *int   `json:"code"`
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(encoded, &failure) == nil && failure.Code != nil && *failure.Code == http.StatusUnprocessableEntity && failure.Type == "Validation" {
+				return nil, embeddingFailure(knowl.RetrievalInputLimit)
+			}
+		}
 		return nil, embeddingFailure(knowl.RetrievalUnavailable)
 	}
 	var result struct {
