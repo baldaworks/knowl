@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -1136,7 +1137,7 @@ func TestExecutePassesBoundedSourceSummaryToContextSelection(t *testing.T) {
 		t.Fatalf("Ingest(): %v", err)
 	}
 	want := knowl.SourceSummary{Source: envelope.Source, Version: envelope.Version, Title: "Badger session decision"}
-	if index.summary != want {
+	if !reflect.DeepEqual(index.summary, want) {
 		t.Fatalf("SelectContext() summary = %#v, want %#v", index.summary, want)
 	}
 }

@@ -261,9 +261,12 @@ type Failure struct {
 
 // SourceSummary is bounded source context for a maintainer or index.
 type SourceSummary struct {
-	Source  SourceRef     `json:"source"`
-	Version SourceVersion `json:"version"`
-	Title   string        `json:"title"`
+	Source   SourceRef     `json:"source"`
+	Version  SourceVersion `json:"version"`
+	Title    string        `json:"title"`
+	Tags     []string      `json:"tags,omitempty"`
+	Headings []string      `json:"headings,omitempty"`
+	Body     string        `json:"body,omitempty"`
 }
 
 // PageReference is an untrusted bounded search result.
