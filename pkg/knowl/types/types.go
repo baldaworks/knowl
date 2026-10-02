@@ -354,15 +354,16 @@ func (report LintReport) Healthy() bool {
 // Pages contains ordinary factual snapshots; Catalogs is the complete compact
 // navigation graph. Authoritative catalog Markdown remains in the application.
 type MaintenanceInput struct {
-	ContractVersion string             `json:"contract_version"`
-	CatalogLimits   CatalogLimits      `json:"catalog_limits"`
-	Scope           ScopeRef           `json:"scope"`
-	Schema          SchemaDocument     `json:"schema"`
-	Source          AcceptedSource     `json:"source"`
-	SourceText      string             `json:"source_text"`
-	Pages           []PageSnapshot     `json:"pages"`
-	Catalogs        []HierarchyCatalog `json:"catalogs,omitempty"`
-	Limits          ReadLimits         `json:"limits"`
+	InputLimits     MaintenanceInputLimits `json:"input_limits"`
+	ContractVersion string                 `json:"contract_version"`
+	CatalogLimits   CatalogLimits          `json:"catalog_limits"`
+	Scope           ScopeRef               `json:"scope"`
+	Schema          SchemaDocument         `json:"schema"`
+	Source          AcceptedSource         `json:"source"`
+	SourceText      string                 `json:"source_text"`
+	Pages           []PageSnapshot         `json:"pages"`
+	Catalogs        []HierarchyCatalog     `json:"catalogs,omitempty"`
+	Limits          ReadLimits             `json:"limits"`
 }
 
 // ModelEditPlan is structured provider output before application validation.
