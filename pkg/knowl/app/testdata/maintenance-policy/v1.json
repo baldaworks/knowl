@@ -1,0 +1,1 @@
+{"contract_version":"source-maintenance-v1","schema_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","read_limits":{"pages":20,"bytes":4194304,"characters":262144,"depth":8,"deadline_nanos":30000000000},"plan_limits":{"max_files":32,"max_file_bytes":262144,"max_source_refs":64,"max_rationale_size":32768}}

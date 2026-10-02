@@ -34,6 +34,8 @@ type IngestOptions struct {
 	// CatalogLimits bounds complete navigation independently of ReadLimits.Pages.
 	// An entirely zero value selects defaults; custom values must set every field.
 	CatalogLimits knowl.CatalogLimits
+	// InputLimits bounds the complete source request; zero selects 4 MiB.
+	InputLimits   knowl.MaintenanceInputLimits
 	PlanLimits    PlanLimits
 	ReadLimits    knowl.ReadLimits
 	LeaseDuration time.Duration
@@ -57,6 +59,8 @@ type IngestResult struct {
 	Plan      knowl.ValidatedEditPlan
 	Staged    knowl.StagedChange
 	Commit    *knowl.ContentCommit
+	// Budget is transient for this planning call; replay does not reconstruct it.
+	Budget *knowl.MaintenanceBudgetReport
 }
 
 // IngestSubmission is the durable handoff from request-time source acceptance
@@ -121,6 +125,8 @@ type IngestService struct {
 	operations    OperationStore
 	index         SearchIndex
 	maintainer    Maintainer
+	requestSizer  MaintenanceRequestSizer
+	requestBudget knowl.MaintenanceRequestBudget
 	catalogLimits knowl.CatalogLimits
 	planLimits    PlanLimits
 	readLimits    knowl.ReadLimits
@@ -147,6 +153,10 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 	if err != nil {
 		return nil, err
 	}
+	requestBudget, requestSizer, err := sourceRequestBudget(maintainer, options.InputLimits)
+	if err != nil {
+		return nil, err
+	}
 	options.CatalogLimits = catalogLimits
 	if options.PlanLimits == (PlanLimits{}) {
 		options.PlanLimits = DefaultPlanLimits()
@@ -168,6 +178,8 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 		operations:    operations,
 		index:         index,
 		maintainer:    maintainer,
+		requestSizer:  requestSizer,
+		requestBudget: requestBudget,
 		catalogLimits: options.CatalogLimits,
 		planLimits:    options.PlanLimits,
 		readLimits:    options.ReadLimits,
@@ -278,6 +290,8 @@ func (service *IngestService) submitAcceptedWithSchema(ctx context.Context, acce
 func (service *IngestService) maintenanceGeneration(schema knowl.SchemaDocument) (string, error) {
 	policy := SourceMaintenancePolicy(schema.Digest, service.readLimits, service.planLimits)
 	policy.CatalogLimits = service.catalogLimits
+	policy.InputLimits = knowl.MaintenanceInputLimits{MaxRequestBytes: service.requestBudget.MaxBytes}
+	policy.RequestFormatVersion = service.requestBudget.FormatVersion
 	generation, err := MaintenancePolicyGeneration(policy)
 	if err != nil {
 		return "", fmt.Errorf("compute maintenance policy generation: %w", err)
@@ -405,6 +419,7 @@ func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.Wor
 		}
 		result.Plan = planned.Plan
 		result.Staged = planned.Staged
+		result.Budget = planned.Budget
 		if err := service.saveStagedPlan(ctx, operation, planned.Staged); err != nil {
 			return service.failIngest(ctx, result, "operation", err)
 		}
@@ -495,6 +510,7 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 	}
 	result.Plan = prepared.Plan
 	result.Staged = prepared.Staged
+	result.Budget = prepared.Budget
 	if err := service.saveStagedPlan(ctx, operation, prepared.Staged); err != nil {
 		if advanced, current, readErr := service.advancedIngest(ctx, submission.accepted.Scope, operation.ID); readErr == nil {
 			if advanced {
@@ -530,6 +546,7 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 type preparedStage struct {
 	Plan   knowl.ValidatedEditPlan
 	Staged knowl.StagedChange
+	Budget *knowl.MaintenanceBudgetReport
 }
 
 func (service *IngestService) prepareStage(ctx context.Context, submission IngestSubmission, suppliedPlan *knowl.ModelEditPlan) (preparedStage, error) {
@@ -570,21 +587,19 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		cancel()
 		return preparedStage{}, fmt.Errorf("catalogs: %w", err)
 	}
-	factualIDs := make([]knowl.PageID, 0, len(pageIDs))
-	for _, id := range pageIDs {
-		if _, ordinary := wiki.PageIDFromPath("wiki/" + string(id) + ".md"); ordinary {
-			factualIDs = append(factualIDs, id)
-		}
-	}
-	pages, err := service.content.ReadPages(readCtx, submission.accepted.Scope, factualIDs, service.readLimits)
-	cancel()
-	if err != nil {
-		return preparedStage{}, fmt.Errorf("content: %w", err)
-	}
 	input := knowl.MaintenanceInput{
 		ContractVersion: SourceMaintenanceContractVersion, CatalogLimits: service.catalogLimits,
-		Scope: submission.accepted.Scope, Schema: submission.schema, Source: submission.accepted,
-		SourceText: string(sourceText), Pages: pages, Catalogs: catalogs, Limits: service.readLimits,
+		InputLimits: knowl.MaintenanceInputLimits{MaxRequestBytes: service.requestBudget.MaxBytes},
+		Scope:       submission.accepted.Scope, Schema: submission.schema, Source: submission.accepted,
+		SourceText: string(sourceText), Catalogs: catalogs, Limits: service.readLimits,
+	}
+	input, budget, err := service.fitSourcePages(readCtx, input, pageIDs)
+	cancel()
+	if err != nil {
+		return preparedStage{}, fmt.Errorf("input_assembly: %w", err)
+	}
+	if err := contextErr(ctx); err != nil {
+		return preparedStage{}, err
 	}
 	var modelPlan knowl.ModelEditPlan
 	if suppliedPlan != nil {
@@ -604,7 +619,7 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 	if err != nil {
 		return preparedStage{}, fmt.Errorf("staging: %w", err)
 	}
-	return preparedStage{Plan: validated, Staged: staged}, nil
+	return preparedStage{Plan: validated, Staged: staged, Budget: &budget}, nil
 }
 
 func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {

@@ -42,7 +42,7 @@ to strict gates.
 | `generic-title`, `frontmatter`, `fenced-heading` | `TestContextBaselineSourceSignals`: actual app ingest, content and SQLite; old relevant page plus 30 newer decoys; strict recall gate | REQ-SOURCE-001; `.3` |
 | `frontmatter-title`, `fenced-heading-title` | `TestContextBaselineSourceTitles`: actual shared source extraction; strict title gate | REQ-SOURCE-001; `.3` |
 | `catalog-scaling` | `TestContextBaselineCatalogScaling`: 32 actual catalogs including root, factual page bound 20; strict ingest and commit gate | REQ-CONTEXT-001; `.2` |
-| `aggregate-input`, `serialized-envelope` | `TestContextBaselineProviderInputBudget`: real filesystem reads and RuntimeMaintainer | REQ-BUDGET-001; `.4` |
+| `aggregate-input`, `serialized-envelope`, `application-input-fitting` | `TestContextBaselineProviderInputBudget`: real filesystem reads, application fitting and actual RuntimeMaintainer SDK prompt; strict gates | REQ-BUDGET-001; `.4` |
 | `uri-reference-http`, `uri-reference-mcp` | Actual Host HTTP/MCP ingest; raw/provider reference equality and local HTTP fetch counter | REQ-URI-001; `.6` |
 | Invalid structured output | Existing `TestRuntimeMaintainerRejectsUnsafeOutputAndLimits`, with classified errors | REQ-OUTPUT-001; `.8` |
 | `blocked-execution` | Actual scheduler cycle, existing controlled runner/claim seams and channel barriers | REQ-EXEC-001; `.9` |
@@ -77,13 +77,33 @@ Independent catalog ceilings, original Markdown preservation, nested reachabilit
 no-op additions, raw catalog-edit rejection, final graph/combined plan bounds,
 stale preconditions and v1 queued/staged compatibility have behavioral gates.
 
-Four individually readable UTF-8 pages produce 4,458,982 bytes of serialized
-input, exceeding the default 4,194,304-byte provider limit. The provider safely
-rejects them with `provider_input_limit` before inference. A separate case sets
-the payload budget exactly to 1,115,182 bytes: the accepted envelope is
-1,115,300 bytes and the complete structured wrapper prompt is 1,123,536 bytes.
-These are current v3 fixture measurements, including escaping, base64 and
-duplicated page fields; they are not token estimates. Full wire input must remain intact.
+The original four-page UTF-8 fixture now fits: the shared Content-only wire
+is 2,230,845 bytes and the complete v4 SDK prompt is 2,239,474 bytes, below
+4,194,304. This is a strict success gate with exact measured/actual equality and
+typed envelope/provenance comparison. Setting the provider cap to the single-page
+envelope size, 558,270 bytes, must reject before runtime creation or inference
+because the full wrapper costs more.
+
+A separate real application/SQLite/filesystem/runtime fixture uses eight large
+individually readable pages plus a later small page. It retains the first seven
+large pages, omits the eighth, then includes the complete small page. Its actual
+SDK request is 3,915,441 bytes; the typed report must match that size with eight
+included and one omitted candidate. These are fixed-fixture measurements, not
+production capacity or token estimates. All source/schema/catalog input and each
+included page remain complete.
+
+Exact/one-byte-over source-request and actual SDK boundaries are strict gates,
+including a deliberately mismatched wrapper-sizing guard. Tests exercise JSON
+escaping, UTF-8, schema base64, long identity, cancellation, unsafe extension
+marshalers, separate impossible source/schema/catalog input, unchanged raw and
+no stage/canonical changes on failure. Controls/duplicate IDs do not consume the
+factual allowance; omissions still consume the unique candidate count bound.
+Real FilePlan coverage rejects omitted existing edits even with the correct
+digest, preserves unrelated prose and old/new citations on complete updates, and
+retains stale human-write protection. Typed cap/format changes discriminate
+policy generations before reservation. Frozen historical policy payloads from
+v1 (`9e9edf0`), v2 (`fddb1a3`) and v3 (`0a1d133`) drive queued rejection and
+concrete-stage/terminal replay recovery without new inference.
 
 Current default scheduler order is `first_started`, `first_released`,
 `second_started`. This records default serial execution; it does not establish

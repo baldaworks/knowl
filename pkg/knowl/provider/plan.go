@@ -24,27 +24,26 @@ func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.Maint
 	if input.ContractVersion != app.SourceMaintenanceContractVersion {
 		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
 	}
-	payload, err := json.Marshal(input)
+	limits, err := app.NormalizeMaintenanceInputLimits(input.InputLimits)
 	if err != nil {
 		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
 	}
-	if len(payload) > maintainer.maxInput {
+	input.InputLimits = limits
+	envelope, err := app.EncodeSourceMaintenanceRequest(ctx, input)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return knowl.ModelEditPlan{}, ctxErr
+		}
+		if errors.Is(err, app.ErrMaintenanceInputLimit) {
+			return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInputLimit)
+		}
+		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
+	}
+	limit := min(limits.MaxRequestBytes, maintainer.RequestBudget().MaxBytes)
+	if sourceWrappedBytes(len(envelope)) > limit {
 		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInputLimit)
 	}
-	envelope, err := json.Marshal(struct {
-		Operation            string          `json:"operation"`
-		Input                json.RawMessage `json:"input"`
-		RequiredSchemaDigest string          `json:"required_schema_digest"`
-		RequiredSourceRef    string          `json:"required_source_ref"`
-	}{
-		Operation:            "source_maintenance",
-		Input:                payload,
-		RequiredSchemaDigest: input.Schema.Digest,
-		RequiredSourceRef:    app.SourceRefKey(input.Source),
-	})
-	if err != nil {
-		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
-	}
+	ctx = context.WithValue(ctx, sourceRequestBudgetKey{}, limit)
 	var plan knowl.ModelEditPlan
 	err = maintainer.runStructuredPlan(ctx, envelope, "maintainer", func(candidate string) error {
 		if branchErr := validateOutputBranch(candidate, []string{"source_refs", "edits"}, []string{"snapshot_digest", "catalogs"}); branchErr != nil {
@@ -160,6 +159,9 @@ func (maintainer *RuntimeMaintainer) runStructuredPlan(ctx context.Context, enve
 		if runErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
+			}
+			if errors.Is(runErr, app.ErrMaintenanceInputLimit) {
+				return permanentProviderFailure(reasonProviderInputLimit)
 			}
 			if errors.Is(runErr, structuredagent.ErrStructuredInputSchemaValidation) {
 				return permanentProviderFailure(reasonProviderInput)

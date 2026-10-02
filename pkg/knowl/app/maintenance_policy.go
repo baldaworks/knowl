@@ -12,26 +12,30 @@ import (
 
 // SourceMaintenanceContractVersion identifies the output-affecting maintainer
 // and validation contract. Compatibility-only changes must retain this value.
-const SourceMaintenanceContractVersion = "source-maintenance-v3"
+const SourceMaintenanceContractVersion = "source-maintenance-v4"
 
 const maintenanceGenerationPrefixBytes = 16
 
 // MaintenancePolicy is the explicit non-secret input to source-maintenance
 // generation. It intentionally cannot carry provider or runtime configuration.
 type MaintenancePolicy struct {
-	CatalogLimits   knowl.CatalogLimits
-	ContractVersion string
-	SchemaDigest    string
-	ReadLimits      knowl.ReadLimits
-	PlanLimits      PlanLimits
+	CatalogLimits        knowl.CatalogLimits
+	InputLimits          knowl.MaintenanceInputLimits
+	RequestFormatVersion string
+	ContractVersion      string
+	SchemaDigest         string
+	ReadLimits           knowl.ReadLimits
+	PlanLimits           PlanLimits
 }
 
 type maintenancePolicyPayload struct {
-	CatalogLimits   knowl.CatalogLimits   `json:"catalog_limits"`
-	ContractVersion string                `json:"contract_version"`
-	SchemaDigest    string                `json:"schema_digest"`
-	ReadLimits      maintenanceReadLimits `json:"read_limits"`
-	PlanLimits      maintenancePlanLimits `json:"plan_limits"`
+	CatalogLimits        knowl.CatalogLimits          `json:"catalog_limits"`
+	InputLimits          knowl.MaintenanceInputLimits `json:"input_limits"`
+	RequestFormatVersion string                       `json:"request_format_version"`
+	ContractVersion      string                       `json:"contract_version"`
+	SchemaDigest         string                       `json:"schema_digest"`
+	ReadLimits           maintenanceReadLimits        `json:"read_limits"`
+	PlanLimits           maintenancePlanLimits        `json:"plan_limits"`
 }
 
 type maintenanceReadLimits struct {
@@ -52,11 +56,13 @@ type maintenancePlanLimits struct {
 // SourceMaintenancePolicy constructs the effective policy used by ingestion.
 func SourceMaintenancePolicy(schemaDigest string, readLimits knowl.ReadLimits, planLimits PlanLimits) MaintenancePolicy {
 	return MaintenancePolicy{
-		ContractVersion: SourceMaintenanceContractVersion,
-		CatalogLimits:   DefaultCatalogLimits(),
-		SchemaDigest:    schemaDigest,
-		ReadLimits:      readLimits,
-		PlanLimits:      planLimits,
+		ContractVersion:      SourceMaintenanceContractVersion,
+		CatalogLimits:        DefaultCatalogLimits(),
+		InputLimits:          knowl.MaintenanceInputLimits{MaxRequestBytes: MaxMaintenanceRequestBytes},
+		RequestFormatVersion: sourceEnvelopeFormatVersion,
+		SchemaDigest:         schemaDigest,
+		ReadLimits:           readLimits,
+		PlanLimits:           planLimits,
 	}
 }
 
@@ -105,6 +111,14 @@ func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayl
 	if catalogErr != nil {
 		return maintenancePolicyPayload{}, fmt.Errorf("invalid catalog policy: %w", ErrExecutionDescriptorUnavailable)
 	}
+	inputLimits, inputErr := NormalizeMaintenanceInputLimits(policy.InputLimits)
+	format := policy.RequestFormatVersion
+	if format == "" {
+		format = sourceEnvelopeFormatVersion
+	}
+	if inputErr != nil || !validRequestFormat(format) {
+		return maintenancePolicyPayload{}, fmt.Errorf("invalid request policy: %w", ErrExecutionDescriptorUnavailable)
+	}
 	if readLimits == (knowl.ReadLimits{}) {
 		readLimits = DefaultReadLimits()
 	}
@@ -120,9 +134,11 @@ func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayl
 		return maintenancePolicyPayload{}, fmt.Errorf("invalid maintenance policy: %w", ErrExecutionDescriptorUnavailable)
 	}
 	return maintenancePolicyPayload{
-		ContractVersion: contractVersion,
-		CatalogLimits:   catalogLimits,
-		SchemaDigest:    schemaDigest,
+		ContractVersion:      contractVersion,
+		CatalogLimits:        catalogLimits,
+		InputLimits:          inputLimits,
+		RequestFormatVersion: format,
+		SchemaDigest:         schemaDigest,
 		ReadLimits: maintenanceReadLimits{
 			Pages: readLimits.Pages, Bytes: readLimits.Bytes, Characters: readLimits.Characters,
 			Depth: readLimits.Depth, DeadlineNanos: int64(readLimits.Deadline),
