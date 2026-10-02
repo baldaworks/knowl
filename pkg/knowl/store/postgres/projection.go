@@ -34,6 +34,9 @@ func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := lockEmbeddingScope(ctx, tx, snapshot.Scope); err != nil {
+		return err
+	}
 	for _, statement := range []string{
 		"DELETE FROM knowl_links WHERE scope = $1",
 		"DELETE FROM knowl_page_sources WHERE scope = $1",

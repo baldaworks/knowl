@@ -180,7 +180,7 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
 		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation, maintenance_diagnostics,
 		       status, attempt, work_attempt, retry_attempt, manual_retry_count,
-		       failure_class, failure_reason, work_ready_at, updated_at
+		       failure_class, failure_reason, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt
 		FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id), scope)
 	if err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("read claimed operation: %w", err)
@@ -250,7 +250,7 @@ func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
 		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation, maintenance_diagnostics,
 		       status, attempt, work_attempt, retry_attempt, manual_retry_count,
-		       failure_class, failure_reason, work_ready_at, updated_at
+		       failure_class, failure_reason, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt
 		FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id), scope)
 	if err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("read targeted claimed operation: %w", err)
@@ -437,12 +437,13 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Operation, error) {
 	var operation knowl.Operation
 	var kind, status, failureClass, failureReason, maintenanceDiagnostics string
+	var retrievalReport sql.NullString
 	if err := scanner.Scan(
 		&operation.ID, &kind, &operation.Key.Source.Adapter, &operation.Key.Source.ID,
 		&operation.Key.Version.Version, &operation.Key.Version.Digest, &operation.Key.MaintenanceGeneration,
 		&maintenanceDiagnostics,
 		&status, &operation.Attempt, &operation.WorkAttempt, &operation.RetryAttempt,
-		&operation.ManualRetryCount, &failureClass, &failureReason, &operation.ReadyAt, &operation.UpdatedAt,
+		&operation.ManualRetryCount, &failureClass, &failureReason, &operation.ReadyAt, &operation.UpdatedAt, &retrievalReport, &operation.RetrievalAttempt,
 	); err != nil {
 		return knowl.Operation{}, err
 	}
@@ -462,6 +463,10 @@ func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Opera
 		return knowl.Operation{}, fmt.Errorf("decode maintenance diagnostics: %w", err)
 	}
 	operation.Diagnostics = diagnostics
+	operation.Retrieval, operation.RetrievalAttempt, err = app.DecodeOperationRetrieval(retrievalReport.String, operation.RetrievalAttempt, operation.WorkAttempt)
+	if err != nil {
+		return knowl.Operation{}, err
+	}
 	return operation, nil
 }
 
