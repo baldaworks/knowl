@@ -334,7 +334,7 @@ unchanged document eligible once under the new generation.
 
 ### Source maintenance context and navigation
 
-Source maintenance v3 separates complete catalog navigation from selected
+Source maintenance v4 separates complete catalog navigation from selected
 factual pages. The factual read limit defaults to 20 pages; catalog count does
 not consume that allowance. The model receives `catalogs` as compact
 path/digest/title/children nodes and `catalog_limits` as effective bounds.
@@ -365,7 +365,7 @@ For custom limits, supply all seven positive fields; partially populated values
 are invalid, and `MaxPathBytes` cannot exceed 2,048. The CLI uses the defaults;
 its YAML does not expose `knowl.ingest` or `knowl.maintenance` sections.
 
-Update custom maintainers and supplied-plan callers for `source-maintenance-v3`.
+Update custom maintainers and supplied-plan callers for `source-maintenance-v4`.
 Ordinary page edits still carry schema/source provenance and existing digests.
 Use `catalog_additions` for navigation. For example, this fragment adds a new
 subject catalog and links an ordinary page created in the same plan:
@@ -394,10 +394,63 @@ children. Membership already present produces no catalog mutation. Ingest
 supports additions; use explicit hierarchy reconciliation to restructure
 navigation. A raw catalog FileEdit is rejected rather than converted.
 
-The graph budget covers only navigation. Source, schema, factual pages and
-provider envelope overhead can still exceed the separate provider input limit,
-causing `provider_input_limit`. The current provider checks serialized input
-before inference; it does not yet fit the complete wrapper to an overall budget.
+#### Complete source request budget
+
+The default and supported local maximum is **4,194,304 UTF-8 bytes (4 MiB)** for
+the complete current source-maintenance user prompt. With the built-in runtime,
+this includes the JSON envelope, full source, schema (including base64 for its
+byte content), catalog graph, selected page metadata/provenance, instructions,
+input/output schemas and structured-wrapper framing. JSON escaping counts.
+This is not a token limit, backend HTTP payload measurement or session-history
+capacity guarantee. Hierarchy has its separate existing bounds.
+
+Embedded Go callers may set `knowl.Config.IngestOptions.InputLimits`, using
+`pkg/knowl/types.MaintenanceInputLimits{MaxRequestBytes: ...}`. Zero selects the
+default; custom values must be positive and at most 4,194,304. The effective cap
+is the minimum of this value and the maintainer's declared capacity. The CLI
+uses defaults and exposes no input-budget YAML option.
+
+The application measures complete indispensable source/schema/catalog input
+first. If it cannot fit, the operation fails permanently with class
+`input_budget` and reason `required_input_limit` before factual reads, inference
+or staging. Immutable raw is retained; canonical files are unchanged. Increase
+a smaller embedded cap within the supported ceiling or reduce the indispensable
+input before explicitly reserving work under the new policy. Nothing is
+silently truncated.
+
+Otherwise, first-seen ordinary candidates are read in existing context priority
+order under the normal per-page/count/deadline limits. Controls and duplicates
+do not consume the factual page allowance. Up to that many unique candidates
+are considered, including omissions. Only complete fitting snapshots are kept;
+a large omitted page does not prevent a later smaller page from fitting.
+Read/parse failures remain errors. Serialized factual `Content` appears once;
+`Body` remains in application snapshots and is omitted from the source wire.
+
+Existing factual replacements require a complete included snapshot and its exact
+`expected_digest`, including supplied `FilePlan` calls. An omitted existing page
+cannot be edited even if its current digest is known. New pages retain existing
+provenance, reachability and create preconditions; commit still rejects a later
+human edit. Omission can reduce recall and does not guarantee semantic duplicate
+or contradiction detection.
+
+The built-in runtime implements the optional `app.MaintenanceRequestSizer` port.
+`RequestBudget()` declares positive `MaxBytes` and non-secret, nonempty printable
+`FormatVersion` of at most 256 UTF-8 bytes, captured once at service construction.
+`RequestBytes(ctx, input)` must measure the complete current request without
+building a runtime, downloading or inferring. Invalid declarations fail before
+source acceptance/reservation. A plain custom maintainer without this port
+assumes `app.EncodeSourceMaintenanceRequest`'s shared JSON envelope only. Custom
+maintainers that add a wrapper must implement the port to cover its full size.
+The built-in runtime compares the actual wrapped prompt with the effective cap
+before invoking its inner agent; unexpected wrapper overflow remains a safe
+`provider_input_limit` failure.
+
+`IngestResult.Budget` carries transient typed `MaxBytes`, `UsedBytes`,
+`IncludedCount` and `OmittedCount` for a successful planning call. It contains no
+raw text or prompt. Saved-stage/terminal replay need not reconstruct it, and it
+is not added to durable HTTP/MCP operation diagnostics. The budget bounds the
+current request, not total process memory: workspace inspection still snapshots
+canonical content and encoding uses temporary allocations.
 
 #### Source signals
 
@@ -462,16 +515,18 @@ that previously used `==` must compare its fields explicitly.
 
 #### Upgrading pending operations
 
-The v3 source-selection policy changes the maintenance generation from v2.
-Changing the contract or any effective catalog limit changes the maintenance
-policy generation. Queued work that still needs a plan, including v1/v2 and
+The v4 source wire, fitting and visibility policy changes the maintenance
+generation from v3. Changing the effective request cap or sizing format identity,
+contract, schema, read/plan/catalog limits changes the generation. Endpoints,
+credentials and per-source measured usage are excluded. Queued work that still
+needs a plan, including v1/v2/v3 and
 legacy empty-generation work, fails before inference with class `maintenance_policy`
 and reason `maintenance_policy_mismatch`. It is a permanent failure; restart
 and automatic retry do not replan it under new rules. Stored execution metadata
 remains authoritative.
 
 Already validated concrete stages can resume without inference, including v1
-stages containing catalog FileEdits and v2 stages. They still enforce schema,
+stages containing catalog FileEdits and v2/v3 stages. They still enforce schema,
 provenance, original digests and atomic commit. Terminal replay remains available. Stale or
 corrupt stages fail under the existing recovery rules.
 

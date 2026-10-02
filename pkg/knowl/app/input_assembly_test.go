@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 
 const budgetStorageID knowl.PageID = "decisions/storage"
 const budgetSmallID knowl.PageID = "decisions/decoy-01"
+const budgetSourceComponent = "source"
 
 type orderedBudgetIndex struct {
 	app.SearchIndex
@@ -173,7 +175,7 @@ func TestIngestBudgetDoesNotHideReadFailureOrCancellation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := service.Ingest(ctx, sourceEnvelope([]byte("source")))
+			result, err := service.Ingest(ctx, sourceEnvelope([]byte(budgetSourceComponent)))
 			expectedStatus := knowl.StatusFailed
 			if cancel {
 				expectedStatus = knowl.StatusReceived
@@ -253,5 +255,71 @@ func TestIngestFactualAllowanceExcludesControlsAndDuplicates(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, []knowl.PageID{budgetStorageID, budgetSmallID}) || content.reads != 2 || result.Budget.IncludedCount != 2 {
 		t.Fatalf("IDs=%v reads=%d report=%+v", got, content.reads, result.Budget)
+	}
+}
+
+func TestIngestCompleteEssentialComponentsCannotBeTruncated(t *testing.T) {
+	for _, component := range []string{budgetSourceComponent, "schema", "catalogs"} {
+		t.Run(component, func(t *testing.T) {
+			workspace, store, _, _ := newBaselineIngest(t)
+			text := "bounded source"
+			switch component {
+			case budgetSourceComponent:
+				text = strings.Repeat("<", 3000) // Serialized escaping, while the raw read fits.
+			case "schema":
+				target := filepath.Join(workspace.Root(), "schema.md")
+				original, err := os.ReadFile(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(target, append(original, []byte(strings.Repeat("schema prose ", 4000))...), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "catalogs":
+				target := filepath.Join(workspace.Root(), "wiki/index.md")
+				root, err := os.ReadFile(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := range 80 {
+					name := fmt.Sprintf("required-catalog-%02d", i)
+					writeBaselineFile(t, workspace.Root(), "wiki/"+name+"/index.md", "# Required catalog\n", time.Unix(0, 0))
+					root = append(root, []byte("\n* [Required]("+name+"/index.md)\n")...)
+				}
+				if err := os.WriteFile(target, root, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			maintainer := &wrappedBudgetMaintainer{cap: 10000}
+			content := &interruptedBudgetContent{ContentStore: workspace}
+			service, err := app.NewIngestService(content, store, store, maintainer, app.IngestOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := workspace.Snapshot(t.Context(), "local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := service.Ingest(t.Context(), sourceEnvelope([]byte(text)))
+			failure, classified := app.ClassifyExecutionFailure(err)
+			if !errors.Is(err, app.ErrMaintenanceInputLimit) || !classified || failure.Reason != "required_input_limit" || failure.Retryable || maintainer.calls != 0 || content.reads != 0 || result.Operation.Status != knowl.StatusFailed {
+				t.Fatalf("component=%s calls=%d reads=%d failure=%+v err=%v", component, maintainer.calls, content.reads, failure, err)
+			}
+			after, err := workspace.Snapshot(t.Context(), "local")
+			if err != nil || !reflect.DeepEqual(before.PageDigests, after.PageDigests) || before.SchemaDigest != after.SchemaDigest {
+				t.Fatalf("changed canonical/schema: %v", err)
+			}
+			if _, err := workspace.LoadStage(t.Context(), "local", result.Operation.ID); !errors.Is(err, app.ErrStageNotFound) {
+				t.Fatalf("overflow staged: %v", err)
+			}
+			inspection, err := workspace.Inspect(t.Context(), "local")
+			if err != nil || len(inspection.RawSources) != 1 || !inspection.RawSources[0].Valid {
+				t.Fatalf("raw missing: %v", err)
+			}
+			raw, err := workspace.ReadSource(t.Context(), inspection.RawSources[0].Source, app.DefaultReadLimits())
+			if err != nil || string(raw) != text {
+				t.Fatalf("raw truncated: %v", err)
+			}
+		})
 	}
 }

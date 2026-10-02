@@ -132,9 +132,9 @@ in effect. There is one generic multilingual path; inflection and paraphrase
 recall are not guaranteed by this lexical policy. Embedding retrieval belongs
 to the later hybrid-search Story.
 
-### Source maintenance contract v3
+### Source maintenance contract v4
 
-`MaintenanceInput.contract_version` is `source-maintenance-v3`. Its `pages`
+`MaintenanceInput.contract_version` is `source-maintenance-v4`. Its `pages`
 contain selected ordinary factual snapshots. Its `catalogs` contain the complete
 bounded navigation graph as `HierarchyCatalog` values: canonical `path`,
 original `digest`, `title`, and sorted `children`. The root comes first;
@@ -158,10 +158,38 @@ cycles, invalid targets, bounds and stale digest failures cannot commit.
 Explicit hierarchy reconciliation retains its separate complete-graph contract
 and can restructure navigation; it does not accept `catalog_additions`.
 
-The contract version, schema digest and effective read, plan and catalog limits
-participate in the maintenance-policy generation. Incompatible unplanned work
+Source request assembly measures the exact serialized envelope and, for the
+built-in runtime, the complete current structured user prompt: instructions,
+input/output schemas and framing in UTF-8 bytes. The shared wire encoder sends
+complete factual `Content` once and omits `Body`; application snapshots retain
+both fields. Its default and supported local ceiling is 4,194,304 bytes. The
+effective cap is the smaller application/provider declaration, captured with a
+non-secret format identity before operation reservation.
+
+Complete source text, schema and the bounded catalog graph are indispensable.
+If they alone exceed the cap, `input_budget/required_input_limit` fails before
+inference or staging while immutable raw remains accepted. Otherwise the app
+reads first-seen ordinary candidates in existing priority order, one complete
+page at a time under the original per-page/count/deadline bounds. Controls and
+duplicates do not consume the factual allowance. A page that does not fit is
+omitted; later smaller pages can still fit. Editable pages are never excerpted.
+Existing factual edits must target an included full snapshot and copy its exact
+digest, including supplied `FilePlan` calls. Canonical commit preconditions
+still protect against later changes.
+
+`MaintenanceRequestSizer` lets embedded maintainers declare a pure capacity,
+format identity and exact request size. A plain custom maintainer without that
+port assumes the shared JSON envelope only; a custom wrapper must implement
+sizing for its complete request. The built-in runtime also checks the actual
+current prompt before the inner agent runs, preventing overflow if SDK framing
+drifts. This contract excludes token capacity, remote HTTP serialization,
+session history and total workspace RAM. `IngestResult.Budget` is transient typed
+byte/count evidence, not a public durable HTTP/MCP diagnostics contract.
+
+The contract version, schema digest, effective request cap/format identity and
+read, plan and catalog limits participate in the maintenance-policy generation. Incompatible unplanned work
 fails before inference with `maintenance_policy_mismatch`. Already validated
-concrete stages resume through canonical preconditions without inference;
+v1/v2/v3 concrete stages resume through canonical preconditions without inference;
 terminal operations remain replayable. See [operator bounds and upgrade
 recovery](operations.md#source-maintenance-context-and-navigation).
 

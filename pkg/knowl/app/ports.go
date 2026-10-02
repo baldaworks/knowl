@@ -296,7 +296,10 @@ const (
 
 // MaintenanceRequestSizer declares a pure, finite source request budget and
 // measures the same representation that Plan will send, including its wrapper.
-// Implementations must not initialize providers or perform inference here.
+// Capacity and format identity are captured once before durable reservation.
+// Implementations must not initialize providers, download, or infer here.
+// A maintainer without this port assumes only the shared JSON envelope; custom
+// wrappers must implement it to cover the complete current request.
 type MaintenanceRequestSizer interface {
 	RequestBudget() knowl.MaintenanceRequestBudget
 	RequestBytes(ctx context.Context, input knowl.MaintenanceInput) (int, error)
