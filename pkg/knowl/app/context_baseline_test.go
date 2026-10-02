@@ -107,7 +107,7 @@ func TestContextBaselineCatalogScaling(t *testing.T) {
 			t.Fatal("catalog/control Markdown leaked through factual pages")
 		}
 	}
-	if maintainer.input.Limits.Pages != 20 || maintainer.input.CatalogLimits.MaxCatalogs != 1024 || maintainer.input.ContractVersion != "source-maintenance-v4" {
+	if maintainer.input.Limits.Pages != 20 || maintainer.input.CatalogLimits.MaxCatalogs != 1024 || maintainer.input.ContractVersion != "source-maintenance-v5" {
 		t.Fatal("incorrect independent limits/contract")
 	}
 	for i, node := range maintainer.input.Catalogs {
