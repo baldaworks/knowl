@@ -797,7 +797,7 @@ Business endpoints:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/retrieve?query=...` | Retrieve bounded evidence with provenance |
-| `POST` | `/v1/ingest` | Submit one text or URI source |
+| `POST` | `/v1/ingest` | Submit text or store a URI reference |
 | `GET` | `/v1/operations/{operation_id}` | Read one durable public operation status |
 
 Operational endpoints:
@@ -832,7 +832,10 @@ curl -sS \
   "http://127.0.0.1:8080/v1/retrieve?query=Why%20was%20Badger%20chosen%3F"
 ```
 
-Ingest text:
+Ingest accepts exactly one nonempty `content` or `uri`. Both HTTP and MCP trim
+surrounding whitespace. Supplying both, or neither, is invalid.
+
+Ingest text (default media type `text/plain`):
 
 ```bash
 curl -sS \
@@ -846,7 +849,10 @@ curl -sS \
   }'
 ```
 
-Ingest URI:
+Store a URI reference:
+
+Knowl stores the URI string as the source body with default media type
+`text/uri-list`. It does not download the page or follow redirects.
 
 ```bash
 curl -sS \
@@ -858,7 +864,27 @@ curl -sS \
   }'
 ```
 
-Poll operation:
+Ingest page text that the caller has already obtained:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/v1/ingest \
+  -d '{
+    "content": "# Session storage\n\nSessions use Badger for local persistence.",
+    "media_type": "text/markdown",
+    "origin": "https://example.com/adr/session-memory-store",
+    "idempotency_key": "adr-session-store-v1"
+  }'
+```
+
+`origin` is a source identity hint, not a fetch instruction or automatically
+populated structured citation URI. Use an idempotency key for the specific
+source revision; changed content needs a different key.
+
+Ingest returns a durable `operation_id` and its current status. Maintenance
+runs in the background. Poll the returned ID until `completed` or `failed`:
 
 ```bash
 curl -sS \
@@ -883,6 +909,34 @@ The baseline server exposes exactly:
 - `knowl_operation`
 
 MCP and HTTP call the same underlying application services.
+
+For `knowl_ingest`, pass a URI reference as tool arguments:
+
+```json
+{
+  "uri": "https://example.com/adr/session-memory-store"
+}
+```
+
+To ingest the document's contents, pass its already obtained text instead:
+
+```json
+{
+  "content": "# Session storage\n\nSessions use Badger for local persistence.",
+  "media_type": "text/markdown",
+  "origin": "https://example.com/adr/session-memory-store",
+  "idempotency_key": "adr-session-store-v1"
+}
+```
+
+The same exactly-one-payload and no-download rules apply. Poll
+`knowl_operation` with the returned `operation_id`:
+
+```json
+{
+  "id": "op_01K..."
+}
+```
 
 ## Lifecycle and readiness
 

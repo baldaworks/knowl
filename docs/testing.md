@@ -44,6 +44,8 @@ to strict gates.
 | `catalog-scaling` | `TestContextBaselineCatalogScaling`: 32 actual catalogs including root, factual page bound 20; strict ingest and commit gate | REQ-CONTEXT-001; `.2` |
 | `aggregate-input`, `serialized-envelope`, `application-input-fitting` | `TestContextBaselineProviderInputBudget`: real filesystem reads, application fitting and actual RuntimeMaintainer SDK prompt; strict gates | REQ-BUDGET-001; `.4` |
 | `uri-reference-http`, `uri-reference-mcp` | Actual Host HTTP/MCP ingest; raw/provider reference equality and local HTTP fetch counter | REQ-URI-001; `.6` |
+| `http-content-origin`, `mcp-content-origin` | `TestContextBaselineURIReferenceThroughHTTPAndMCP`: supplied body, default media type, source identity, terminal replay and zero URL fetches | REQ-URI-001; `.6` |
+| Missing or conflicting ingest payloads | `TestPublicIngestRequiresExactlyOnePayload`: real HTTP machine-readable `invalid_request` and MCP typed `ErrInvalidArguments` | REQ-URI-001; `.6` |
 | Invalid structured output | Existing `TestRuntimeMaintainerRejectsUnsafeOutputAndLimits`, with classified errors | REQ-OUTPUT-001; `.8` |
 | `blocked-execution` | Actual scheduler cycle, existing controlled runner/claim seams and channel barriers | REQ-EXEC-001; `.9` |
 | `stale-write` | Existing `TestIngestRejectsStaleReviewedPlan`: real precondition rejection and preserved human edit | REQ-EXEC-001; `.9` |
@@ -108,8 +110,12 @@ concrete-stage/terminal replay recovery without new inference.
 Current default scheduler order is `first_started`, `first_released`,
 `second_started`. This records default serial execution; it does not establish
 future configured capacity-two behavior. Story `.9` owns that configuration and
-its strict progress/isolated-session test. URI references and stale-write
-safeguards pass their existing contracts. These fixtures measure specific
+its strict progress/isolated-session test. URI references and caller-supplied
+content with a URL origin preserve raw/provider content, default media types
+and source identity through both public transports. Terminal idempotent replay
+returns the same completed operation without new inference or a URL fetch.
+Missing and conflicting payloads fail through the transports' stable error
+contracts. Stale-write safeguards also pass their existing contracts. These fixtures measure specific
 limitations, not universal semantic recall or duplicate prevention.
 
 ## Generic lexical retrieval gates
