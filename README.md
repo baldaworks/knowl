@@ -38,6 +38,9 @@ or OKF bundle. Knowl preserves accepted source revisions, and the configured
 LLM maintainer proposes semantic updates to the wiki. Updates pass validation
 before they become part of the knowledge base.
 
+A URL submission stores a reference. To use the page's contents as a source,
+submit its text. See the [ingest examples](docs/operations.md#http-examples).
+
 Your agent retrieves relevant evidence and uses it to answer or act. You can
 also read the wiki directly, inspect its source references, or export it for
 publishing. See the [source-to-wiki example](examples/source-to-wiki/README.md)

@@ -23,7 +23,7 @@ Knowl supports these baseline use cases:
 
 1. Bootstrap an existing Markdown wiki, Obsidian vault, or OKF v0.2 bundle into
    a Knowl-owned workspace as the first production filesystem-source sync.
-2. Ingest one text or URI source through one canonical pipeline.
+2. Ingest supplied text or a URI reference through one canonical pipeline.
 3. Retrieve bounded evidence and provenance for a host query.
 4. Read durable ingest-operation status.
 
@@ -83,7 +83,15 @@ retrieval mode and reason.
 The detailed filesystem contract is in [workspace.md](workspace.md).
 
 An ingest-side connector may translate text, a URI, origin, and idempotency
-hints into one public ingest request. Separately, the built-in read-only
+hints into one public ingest request. Public ingest accepts exactly one nonempty
+`content` or `uri`: the latter stores the URI string as a reference with default
+media type `text/uri-list`, without downloading the document. To ingest document
+contents, the caller supplies the obtained text in `content`, optionally with
+`origin` as a source identity hint. Origin does not trigger a fetch or populate
+structured source-document URI metadata automatically. Both transports trim
+surrounding whitespace before normalization.
+
+Separately, the built-in read-only
 filesystem and remote Git source adapters list and fetch configured documents
 for the source reconciler. Git scans resolve a branch or tag once, consume only
 regular blobs from that immutable commit, and never execute repository content

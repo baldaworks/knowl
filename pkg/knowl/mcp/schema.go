@@ -1,11 +1,12 @@
 package mcp
 
 const (
-	schemaTypeKey       = "type"
-	schemaStringType    = "string"
-	schemaObjectType    = "object"
-	schemaPropertiesKey = "properties"
-	inlineSourceAdapter = "inline"
+	schemaTypeKey        = "type"
+	schemaStringType     = "string"
+	schemaObjectType     = "object"
+	schemaPropertiesKey  = "properties"
+	schemaDescriptionKey = "description"
+	inlineSourceAdapter  = "inline"
 )
 
 func objectSchema(required string) map[string]any {
@@ -36,10 +37,10 @@ func ingestSchema() map[string]any {
 	return map[string]any{
 		schemaTypeKey: schemaObjectType,
 		schemaPropertiesKey: map[string]any{
-			"content":         map[string]any{schemaTypeKey: schemaStringType},
-			"uri":             map[string]any{schemaTypeKey: schemaStringType},
+			"content":         map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: "Text already obtained by the caller. Supply exactly one of content or uri."},
+			"uri":             map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: "URI string stored as reference text, without downloading the document. Use content for document text; supply exactly one of content or uri."},
 			"media_type":      map[string]any{schemaTypeKey: schemaStringType},
-			"origin":          map[string]any{schemaTypeKey: schemaStringType},
+			"origin":          map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: "Source identity hint for supplied content, such as its original URL. Not fetched."},
 			"idempotency_key": map[string]any{schemaTypeKey: schemaStringType},
 		},
 	}
