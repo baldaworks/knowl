@@ -33,8 +33,8 @@ import (
 )
 
 const (
-	referenceModel    = "intfloat/multilingual-e5-small"
-	referenceRevision = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+	referenceModel    = "intfloat/multilingual-e5-base"
+	referenceRevision = "d128750597153bb5987e10b1c3493a34e5a4502a"
 )
 
 type qualityIndex interface {
@@ -131,7 +131,7 @@ func TestRealCPUModelRecallBothStores(t *testing.T) {
 		t.Fatal("explicit PostgreSQL fixture DSN required for the two-backend quality gate")
 	}
 	info := referenceInfo(t, endpoint)
-	space := app.EmbeddingSpace{Model: referenceModel, Revision: referenceRevision, Dimensions: 384, QueryPrefix: "query: ", PassagePrefix: "passage: "}
+	space := app.EmbeddingSpace{Model: referenceModel, Revision: referenceRevision, Dimensions: 768, QueryPrefix: "query: ", PassagePrefix: "passage: "}
 	client, err := provider.NewEmbeddingClient(provider.EmbeddingClientOptions{Endpoint: endpoint, Space: space})
 	if err != nil {
 		t.Fatal(err)
