@@ -85,11 +85,17 @@ paths:
     post:
       tags: [knowledge]
       operationId: ingestKnowledge
-      summary: Submit one bounded source to the trusted Knowl ingest pipeline
+      summary: Submit supplied text or a URI reference to the trusted ingest pipeline
       description: |
-        Accepts one text payload or one URI reference, then runs the canonical
-        ingest lifecycle until the durable operation reaches its public terminal
-        state.
+        Supply exactly one non-empty `content` or `uri`. URI input stores the
+        supplied URI string as reference text; Knowl does not download the
+        document at that address. To ingest document text already obtained by
+        your application, submit it through `content` and optionally use `origin`
+        as its source identity hint. Origin addresses are not fetched either.
+
+        Returns a durable operation ID and its current status. Queued work is
+        processed by the maintenance worker; poll `/v1/operations/{id}` for the
+        terminal outcome.
 
         Supplying a non-empty `scope` query parameter is forbidden and yields
         `scope_override_forbidden`.
@@ -540,14 +546,15 @@ components:
       properties:
         content:
           type: string
-          description: Raw source content.
+          description: Text already obtained by the caller. Supply exactly one of content or uri.
         uri:
           type: string
-          description: External source URI.
+          description: URI string stored as reference text, without downloading the document. Use content for document text; supply exactly one of content or uri.
         media_type:
           type: string
         origin:
           type: string
+          description: Source identity hint for supplied content, such as its original URL. Not fetched.
         idempotency_key:
           type: string
       additionalProperties: false

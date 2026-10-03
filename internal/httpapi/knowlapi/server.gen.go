@@ -148,13 +148,15 @@ type HealthResponseStatus string
 
 // IngestRequest defines model for IngestRequest.
 type IngestRequest struct {
-	// Content Raw source content.
+	// Content Text already obtained by the caller. Supply exactly one of content or uri.
 	Content        *string `json:"content,omitempty"`
 	IdempotencyKey *string `json:"idempotency_key,omitempty"`
 	MediaType      *string `json:"media_type,omitempty"`
-	Origin         *string `json:"origin,omitempty"`
 
-	// Uri External source URI.
+	// Origin Source identity hint for supplied content, such as its original URL. Not fetched.
+	Origin *string `json:"origin,omitempty"`
+
+	// Uri URI string stored as reference text, without downloading the document. Use content for document text; supply exactly one of content or uri.
 	Uri *string `json:"uri,omitempty"`
 }
 
@@ -362,7 +364,7 @@ type ServerInterface interface {
 	// Readiness probe
 	// (GET /readyz)
 	GetReady(w http.ResponseWriter, r *http.Request)
-	// Submit one bounded source to the trusted Knowl ingest pipeline
+	// Submit supplied text or a URI reference to the trusted ingest pipeline
 	// (POST /v1/ingest)
 	IngestKnowledge(w http.ResponseWriter, r *http.Request)
 	// Read one durable Knowl operation status
@@ -918,7 +920,7 @@ type StrictServerInterface interface {
 	// Readiness probe
 	// (GET /readyz)
 	GetReady(ctx context.Context, request GetReadyRequestObject) (GetReadyResponseObject, error)
-	// Submit one bounded source to the trusted Knowl ingest pipeline
+	// Submit supplied text or a URI reference to the trusted ingest pipeline
 	// (POST /v1/ingest)
 	IngestKnowledge(ctx context.Context, request IngestKnowledgeRequestObject) (IngestKnowledgeResponseObject, error)
 	// Read one durable Knowl operation status
