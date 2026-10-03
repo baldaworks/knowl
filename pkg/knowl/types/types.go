@@ -234,6 +234,8 @@ type Operation struct {
 	ReadyAt          time.Time               `json:"ready_at,omitempty"`
 	Failure          *Failure                `json:"failure,omitempty"`
 	Diagnostics      []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
+	Retrieval        *RetrievalReport        `json:"retrieval,omitempty"`
+	RetrievalAttempt int                     `json:"retrieval_attempt,omitempty"`
 	UpdatedAt        time.Time               `json:"updated_at"`
 }
 

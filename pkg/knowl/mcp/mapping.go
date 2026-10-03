@@ -31,11 +31,12 @@ func retrieveResult(result app.QueryResult) RetrieveResult {
 	}
 	citations := make([]app.Citation, len(result.Citations))
 	copy(citations, result.Citations)
-	return RetrieveResult{Query: result.Query, Evidence: evidence, Citations: citations}
+	return RetrieveResult{Retrieval: app.PublicRetrievalStatus(result.Retrieval), Query: result.Query, Evidence: evidence, Citations: citations}
 }
 
 func operationResult(operation knowl.Operation) OperationResult {
 	return OperationResult{
+		Retrieval: app.PublicRetrievalStatus(operation.Retrieval),
 		ID:        operation.ID,
 		Status:    publicOperationStatus(operation.Status),
 		UpdatedAt: operation.UpdatedAt,

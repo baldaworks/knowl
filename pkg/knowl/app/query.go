@@ -41,11 +41,12 @@ type Citation struct {
 
 // QueryResult is a bounded, read-only composition of wiki references and raw citations.
 type QueryResult struct {
-	Scope     knowl.ScopeRef        `json:"scope"`
-	Query     string                `json:"query"`
-	Pages     []knowl.PageReference `json:"pages"`
-	Links     []knowl.LinkReference `json:"links"`
-	Citations []Citation            `json:"citations"`
+	Retrieval *knowl.RetrievalReport `json:"retrieval,omitempty"`
+	Scope     knowl.ScopeRef         `json:"scope"`
+	Query     string                 `json:"query"`
+	Pages     []knowl.PageReference  `json:"pages"`
+	Links     []knowl.LinkReference  `json:"links"`
+	Citations []Citation             `json:"citations"`
 }
 
 // FilingRequest explicitly submits a query result and typed edit plan to the normal filing gate.
@@ -113,23 +114,39 @@ func reservedOKFPage(id knowl.PageID) bool {
 
 // Search returns bounded, untrusted page references from the projection.
 func (service *QueryService) Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
+	refs, _, err := service.searchWithReport(ctx, scope, query, limits, sources)
+	return refs, err
+}
+
+func (service *QueryService) searchWithReport(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, *knowl.RetrievalReport, error) {
 	ctx = nonNilContext(ctx)
 	if strings.TrimSpace(string(scope)) == "" || strings.TrimSpace(query) == "" {
-		return nil, ErrQueryInvalid
+		return nil, nil, ErrQueryInvalid
 	}
 	readLimits, err := service.limitsFor(limits)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	normalizedSources, err := NormalizeSourcesFilter(sources)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	readCtx, cancel := boundedReadContext(ctx, readLimits)
 	defer cancel()
-	references, err := service.index.Search(readCtx, scope, strings.TrimSpace(query), readLimits, normalizedSources)
+	var report *knowl.RetrievalReport
+	var references []knowl.PageReference
+	if reported, ok := service.index.(ReportedSearchIndex); ok {
+		var value knowl.RetrievalReport
+		references, value, err = reported.SearchWithReport(readCtx, scope, strings.TrimSpace(query), readLimits, normalizedSources)
+		if reportErr := ValidateRetrievalReport(value); reportErr != nil {
+			return nil, nil, reportErr
+		}
+		report = &value
+	} else {
+		references, err = service.index.Search(readCtx, scope, strings.TrimSpace(query), readLimits, normalizedSources)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("search wiki: %w", err)
+		return nil, report, fmt.Errorf("search wiki: %w", err)
 	}
 	if len(references) > readLimits.Pages {
 		references = references[:readLimits.Pages]
@@ -149,7 +166,7 @@ func (service *QueryService) Search(ctx context.Context, scope knowl.ScopeRef, q
 			references[index].SourceDocument = &document
 		}
 	}
-	return references, nil
+	return references, report, nil
 }
 
 func sortedSourceDocuments(documents []knowl.SourceDocument) []knowl.SourceDocument {
@@ -221,11 +238,11 @@ func (service *QueryService) Query(ctx context.Context, scope knowl.ScopeRef, qu
 	}
 	readCtx, cancel := boundedReadContext(ctx, readLimits)
 	defer cancel()
-	pages, err := service.Search(readCtx, scope, query, readLimits, sources)
+	pages, report, err := service.searchWithReport(readCtx, scope, query, readLimits, sources)
 	if err != nil {
-		return QueryResult{}, err
+		return QueryResult{Retrieval: report}, err
 	}
-	result := QueryResult{Scope: scope, Query: strings.TrimSpace(query), Pages: pages, Links: make([]knowl.LinkReference, 0), Citations: make([]Citation, 0)}
+	result := QueryResult{Retrieval: report, Scope: scope, Query: strings.TrimSpace(query), Pages: pages, Links: make([]knowl.LinkReference, 0), Citations: make([]Citation, 0)}
 	seenLinks := make(map[string]struct{})
 	seenCitations := make(map[string]struct{})
 	for _, page := range pages {

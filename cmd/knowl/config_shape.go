@@ -12,13 +12,14 @@ import (
 
 // AppConfig is the Knowl section of the Balda-compatible config document.
 type AppConfig struct {
-	Provider  string              `mapstructure:"provider"`
-	Workspace WorkspaceConfig     `mapstructure:"workspace"`
-	Storage   StorageConfig       `mapstructure:"storage"`
-	Scope     knowltypes.ScopeRef `mapstructure:"scope"`
-	Server    ServerConfig        `mapstructure:"server"`
-	Operator  OperatorConfig      `mapstructure:"operator"`
-	Sources   []SourceConfig      `mapstructure:"sources"`
+	Provider   string                 `mapstructure:"provider"`
+	Workspace  WorkspaceConfig        `mapstructure:"workspace"`
+	Storage    StorageConfig          `mapstructure:"storage"`
+	Scope      knowltypes.ScopeRef    `mapstructure:"scope"`
+	Server     ServerConfig           `mapstructure:"server"`
+	Operator   OperatorConfig         `mapstructure:"operator"`
+	Sources    []SourceConfig         `mapstructure:"sources"`
+	Embeddings knowl.EmbeddingsConfig `mapstructure:"embeddings"`
 }
 
 // WorkspaceConfig controls the workspace root used by Knowl.
@@ -159,15 +160,16 @@ type SourceSyncConfig struct {
 }
 
 type rawAppConfig struct {
-	Provider    string              `mapstructure:"provider"`
-	Workspace   WorkspaceConfig     `mapstructure:"workspace"`
-	Storage     StorageConfig       `mapstructure:"storage"`
-	Scope       knowltypes.ScopeRef `mapstructure:"scope"`
-	Server      ServerConfig        `mapstructure:"server"`
-	Operator    OperatorConfig      `mapstructure:"operator"`
-	Sources     []SourceConfig      `mapstructure:"sources"`
-	Ingest      map[string]any      `mapstructure:"ingest"`
-	Maintenance map[string]any      `mapstructure:"maintenance"`
+	Provider    string                 `mapstructure:"provider"`
+	Workspace   WorkspaceConfig        `mapstructure:"workspace"`
+	Storage     StorageConfig          `mapstructure:"storage"`
+	Scope       knowltypes.ScopeRef    `mapstructure:"scope"`
+	Server      ServerConfig           `mapstructure:"server"`
+	Operator    OperatorConfig         `mapstructure:"operator"`
+	Sources     []SourceConfig         `mapstructure:"sources"`
+	Embeddings  knowl.EmbeddingsConfig `mapstructure:"embeddings"`
+	Ingest      map[string]any         `mapstructure:"ingest"`
+	Maintenance map[string]any         `mapstructure:"maintenance"`
 }
 
 // Normalize validates the public config shape and rejects removed compatibility
@@ -179,13 +181,18 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 	if len(config.Maintenance) != 0 {
 		return AppConfig{}, fmt.Errorf("knowl.maintenance is not supported")
 	}
+	embeddings, err := config.Embeddings.Normalize()
+	if err != nil {
+		return AppConfig{}, err
+	}
 	return AppConfig{
-		Provider:  config.Provider,
-		Workspace: config.Workspace,
-		Storage:   config.Storage,
-		Scope:     config.Scope,
-		Server:    config.Server,
-		Operator:  config.Operator,
-		Sources:   config.Sources,
+		Embeddings: embeddings,
+		Provider:   config.Provider,
+		Workspace:  config.Workspace,
+		Storage:    config.Storage,
+		Scope:      config.Scope,
+		Server:     config.Server,
+		Operator:   config.Operator,
+		Sources:    config.Sources,
 	}, nil
 }

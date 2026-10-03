@@ -4,6 +4,9 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/searchtest"
 	"testing"
 	"time"
 
@@ -32,6 +35,17 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get PostgreSQL Testcontainer connection string: %v", err)
 	}
+	t.Run("hybrid", func(t *testing.T) {
+		searchtest.RunHybrid(t, func(t *testing.T, options ...app.EmbeddingOptions) searchtest.HybridIndex {
+			t.Helper()
+			store, err := Open(t.Context(), dsn, options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store
+		}, func(err error) bool { return errors.Is(err, ErrProjectionDrift) })
+	})
+	t.Run("embeddings", func(t *testing.T) { runEmbeddingPostgres(t, dsn) })
 	t.Run("generic", func(t *testing.T) { runGenericPostgres(t, dsn) })
 	runStoreContract(t, dsn)
 }

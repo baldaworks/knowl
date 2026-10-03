@@ -176,14 +176,22 @@ func runGenericPostgresMigration(t *testing.T, dsn string) {
 	}
 	legacy := &Store{db: db, dsn: migrationDSN}
 	key, meta := postgresExecutionFixture("generic", "upgrade", time.Unix(1, 0).UTC())
-	reservation, err := legacy.Reserve(ctx, key, meta)
+	operationID, err := app.SourceOperationID(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationBefore, err := legacy.Operation(ctx, key.Scope, reservation.ID)
+	acceptedDocument, err := encodeAcceptedSourceDocument(meta.AcceptedSource.SourceDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_operations(operation_id,scope,source_adapter,source_id,source_version,source_digest,schema_digest,status,created_at,updated_at,work_ready_at,accepted_media_type,source_manifest_ref,accepted_source_document,schema_version,schema_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$9,$10,$11,$12::jsonb,$13,$14)`, operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.Version.Digest, meta.SchemaDigest, knowl.StatusReceived, meta.CreatedAt, meta.AcceptedSource.MediaType, meta.AcceptedSource.ManifestRef, acceptedDocument, meta.Schema.Version, meta.Schema.Content); err != nil {
+		t.Fatal(err)
+	}
+	var historicalReadyAt, historicalUpdatedAt time.Time
+	if err := db.QueryRowContext(ctx, `SELECT work_ready_at,updated_at FROM knowl_operations WHERE operation_id=$1`, operationID).Scan(&historicalReadyAt, &historicalUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+	operationBefore := knowl.Operation{ID: operationID, Kind: knowl.WorkSourceMaintenance, Key: key, Status: knowl.StatusReceived, ReadyAt: historicalReadyAt, UpdatedAt: historicalUpdatedAt, Diagnostics: []knowl.MaintenanceDiagnostic{}}
 	seedGenericPostgresSource(t, legacy)
 	sourceBefore, err := legacy.SourceStatus(ctx, genericSourceScope, testSourceID)
 	if err != nil {
@@ -220,7 +228,7 @@ func runGenericPostgresMigration(t *testing.T, dsn string) {
 	if err := current.db.QueryRowContext(ctx, `SELECT title,body,digest FROM knowl_pages WHERE scope=$1 AND page_id=$2`, snapshot.Scope, page.ID).Scan(&title, &body, &digest); err != nil || title != page.Title || body != page.Body || digest != "original-digest" {
 		t.Fatalf("original changed: %q %q %q %v", title, body, digest, err)
 	}
-	operationAfter, err := current.Operation(ctx, key.Scope, reservation.ID)
+	operationAfter, err := current.Operation(ctx, key.Scope, operationID)
 	if err != nil || !reflect.DeepEqual(operationBefore, operationAfter) {
 		t.Fatalf("operation changed: %v", err)
 	}

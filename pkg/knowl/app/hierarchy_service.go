@@ -104,31 +104,7 @@ func (service *HierarchyService) runClaim(ctx context.Context, claim knowl.WorkC
 }
 
 func (service *HierarchyService) renewClaim(ctx context.Context, cancelExecution context.CancelFunc, claim knowl.WorkClaim) {
-	interval := service.leaseDuration / 3
-	if interval <= 0 {
-		interval = time.Nanosecond
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	currentToken := claim.Lease.Token
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			lease, err := newLease(time.Now().UTC(), service.leaseDuration)
-			if err != nil {
-				cancelExecution()
-				return
-			}
-			next := knowl.WorkLease(lease)
-			if err := service.operations.RenewClaim(ctx, claim.Descriptor.Schema.Scope, claim.Operation.ID, currentToken, next); err != nil {
-				cancelExecution()
-				return
-			}
-			currentToken = next.Token
-		}
-	}
+	_ = renewExecutionClaim(ctx, cancelExecution, service.operations, claim, service.leaseDuration)
 }
 
 // Reserve captures immutable execution identity without invoking the provider.

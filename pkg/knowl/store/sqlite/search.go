@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -14,9 +13,14 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+type projectionReader interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 // SelectContext returns source-relevant pages, one-hop context, the required
 // index control page, and only then deterministic recent fallback pages.
-func (store *Store) SelectContext(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, error) {
+func (store *Store) selectLexicalContext(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, error) {
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
@@ -32,14 +36,14 @@ func (store *Store) SelectContext(ctx context.Context, scope knowl.ScopeRef, sou
 	if err != nil {
 		return nil, err
 	}
-	neighbors, err := store.contextNeighbors(ctx, scope, candidates, max(0, limit-1))
+	neighbors, err := store.contextNeighbors(ctx, store.db, scope, candidates, max(0, limit-1))
 	if err != nil {
 		return nil, err
 	}
 	var recent []knowl.PageID
 	if len(contextpolicy.Merge(limit, candidates, neighbors, nil)) < limit {
 		excluded := append(append([]knowl.PageID(nil), candidates...), neighbors...)
-		recent, err = store.recentContext(ctx, scope, excluded, limit)
+		recent, err = store.recentContext(ctx, store.db, scope, excluded, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -62,7 +66,7 @@ func (store *Store) contextCandidates(ctx context.Context, scope knowl.ScopeRef,
 	return ids, nil
 }
 
-func (store *Store) contextNeighbors(ctx context.Context, scope knowl.ScopeRef, seeds []knowl.PageID, limit int) ([]knowl.PageID, error) {
+func (store *Store) contextNeighbors(ctx context.Context, reader projectionReader, scope knowl.ScopeRef, seeds []knowl.PageID, limit int) ([]knowl.PageID, error) {
 	if len(seeds) == 0 || limit <= 0 {
 		return nil, nil
 	}
@@ -90,7 +94,7 @@ func (store *Store) contextNeighbors(ctx context.Context, scope knowl.ScopeRef, 
 		GROUP BY neighbor.page_id, neighbor.path
 		ORDER BY MIN(seeds.ordinal) ASC, neighbor.path ASC
 		LIMIT ?`
-	rows, err := store.db.QueryContext(ctx, statement, arguments...)
+	rows, err := reader.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("select linked context: %w", err)
 	}
@@ -109,7 +113,7 @@ func (store *Store) contextNeighbors(ctx context.Context, scope knowl.ScopeRef, 
 	return neighbors, nil
 }
 
-func (store *Store) recentContext(ctx context.Context, scope knowl.ScopeRef, excluded []knowl.PageID, limit int) ([]knowl.PageID, error) {
+func (store *Store) recentContext(ctx context.Context, reader projectionReader, scope knowl.ScopeRef, excluded []knowl.PageID, limit int) ([]knowl.PageID, error) {
 	arguments := make([]any, 0, len(excluded)+2)
 	arguments = append(arguments, scope)
 	statement := `SELECT page_id FROM knowl_pages WHERE scope = ?`
@@ -123,7 +127,7 @@ func (store *Store) recentContext(ctx context.Context, scope knowl.ScopeRef, exc
 	}
 	statement += ` ORDER BY updated_at DESC, path ASC LIMIT ?`
 	arguments = append(arguments, limit)
-	rows, err := store.db.QueryContext(ctx, statement, arguments...)
+	rows, err := reader.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("select recent context: %w", err)
 	}
@@ -144,10 +148,15 @@ func (store *Store) recentContext(ctx context.Context, scope knowl.ScopeRef, exc
 
 // Search returns bounded, untrusted FTS references.
 func (store *Store) Search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
-	return store.search(ctx, scope, query, limits, sources)
+	refs, _, err := store.SearchWithReport(ctx, scope, query, limits, sources)
+	return refs, err
 }
 
 func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
+	return store.searchUsing(ctx, store.db, scope, query, limits, sources)
+}
+
+func (store *Store) searchUsing(ctx context.Context, reader projectionReader, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, error) {
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
@@ -164,7 +173,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 	}
 	limit := boundedLimit(limits.Pages)
 	encodedTerms := normalized.IndexTerms()
-	strict, err := store.searchPhase(ctx, scope, ftsQuery(encodedTerms, "AND"), limit, limits.Characters, normalized.Terms, sources)
+	strict, err := store.searchPhase(ctx, reader, scope, ftsQuery(encodedTerms, "AND"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +181,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 		return strict, nil
 	}
 
-	relaxed, err := store.searchPhase(ctx, scope, ftsQuery(encodedTerms, "OR"), limit, limits.Characters, normalized.Terms, sources)
+	relaxed, err := store.searchPhase(ctx, reader, scope, ftsQuery(encodedTerms, "OR"), limit, limits.Characters, normalized.Terms, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +204,7 @@ func (store *Store) search(ctx context.Context, scope knowl.ScopeRef, query stri
 	return references, nil
 }
 
-func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string, sources []knowl.SourceID) ([]knowl.PageReference, error) {
+func (store *Store) searchPhase(ctx context.Context, reader projectionReader, scope knowl.ScopeRef, match string, limit, maxCharacters int, terms []string, sources []knowl.SourceID) ([]knowl.PageReference, error) {
 	statement := `
 		SELECT p.page_id, p.path, p.title, p.tags, p.description, p.body, p.source_refs, p.source_document, p.source_documents,
 		       p.format, p.okf_metadata
@@ -220,50 +229,17 @@ func (store *Store) searchPhase(ctx context.Context, scope knowl.ScopeRef, match
 		ORDER BY bm25(knowl_pages_fts, 0.0, 0.0, 0.0, 10.0, 7.0, 4.0, 1.0, 0.0) ASC, p.path ASC
 		LIMIT ?`
 	arguments = append(arguments, maxPageLimit)
-	rows, err := store.db.QueryContext(ctx, statement, arguments...)
+	rows, err := reader.QueryContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("search pages: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var references []knowl.PageReference
 	for rows.Next() {
-		var reference knowl.PageReference
-		var tags, description, body, sourceRefs, sourceDocuments, format string
-		var sourceDocument, metadata sql.NullString
-		if err := rows.Scan(&reference.ID, &reference.Path, &reference.Title, &tags, &description, &body, &sourceRefs, &sourceDocument, &sourceDocuments, &format, &metadata); err != nil {
-			return nil, fmt.Errorf("scan search page: %w", err)
-		}
-		if err := json.Unmarshal([]byte(sourceRefs), &reference.SourceRefs); err != nil {
-			return nil, fmt.Errorf("decode page source refs: %w", err)
-		}
-		if sourceDocument.Valid {
-			document := new(knowl.SourceDocument)
-			if err := json.Unmarshal([]byte(sourceDocument.String), document); err != nil {
-				return nil, fmt.Errorf("decode page source document: %w", err)
-			}
-			reference.SourceDocument = document
-		}
-		if err := json.Unmarshal([]byte(sourceDocuments), &reference.SourceDocuments); err != nil {
-			return nil, fmt.Errorf("decode page source documents: %w", err)
-		}
-		if len(reference.SourceDocuments) == 0 && reference.SourceDocument != nil {
-			reference.SourceDocuments = []knowl.SourceDocument{*reference.SourceDocument}
-		}
-		if reference.SourceDocument == nil && len(reference.SourceDocuments) > 0 {
-			document := reference.SourceDocuments[0]
-			reference.SourceDocument = &document
-		}
-		var encodedMetadata []byte
-		if metadata.Valid {
-			encodedMetadata = []byte(metadata.String)
-		}
-		reference.OKF, err = projectionmeta.Decode(format, encodedMetadata)
+		reference, err := projectionmeta.Reference(rows, terms, maxCharacters)
 		if err != nil {
-			return nil, fmt.Errorf("decode page %q metadata: %w", reference.ID, err)
+			return nil, fmt.Errorf("decode search reference: %w", err)
 		}
-		fields := lexical.DocumentFields{Title: reference.Title, Tags: tags, Description: description, Body: body}
-		reference.Snippet = lexical.ExcerptFields("", fields, terms, maxCharacters)
-		reference.Untrusted = true
 		references = append(references, reference)
 		if len(references) == limit {
 			break

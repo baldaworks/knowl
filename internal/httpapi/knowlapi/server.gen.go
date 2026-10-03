@@ -74,6 +74,30 @@ const (
 	Ready    ReadyResponseStatus = "ready"
 )
 
+// Defines values for RetrievalStatusEffective.
+const (
+	Degraded RetrievalStatusEffective = "degraded"
+	Failed   RetrievalStatusEffective = "failed"
+	Hybrid   RetrievalStatusEffective = "hybrid"
+	Lexical  RetrievalStatusEffective = "lexical"
+)
+
+// Defines values for RetrievalStatusReason.
+const (
+	Deadline             RetrievalStatusReason = "deadline"
+	DimensionMismatch    RetrievalStatusReason = "dimension_mismatch"
+	InputLimit           RetrievalStatusReason = "input_limit"
+	InvalidConfiguration RetrievalStatusReason = "invalid_configuration"
+	InvalidInput         RetrievalStatusReason = "invalid_input"
+	InvalidResponse      RetrievalStatusReason = "invalid_response"
+	ModelMismatch        RetrievalStatusReason = "model_mismatch"
+	ProjectionCapacity   RetrievalStatusReason = "projection_capacity"
+	ProjectionDrift      RetrievalStatusReason = "projection_drift"
+	ProjectionNotReady   RetrievalStatusReason = "projection_not_ready"
+	ResponseLimit        RetrievalStatusReason = "response_limit"
+	Unavailable          RetrievalStatusReason = "unavailable"
+)
+
 // Citation defines model for Citation.
 type Citation struct {
 	Kind      CitationKind `json:"kind"`
@@ -137,6 +161,7 @@ type IngestRequest struct {
 // IngestResult defines model for IngestResult.
 type IngestResult struct {
 	OperationId string             `json:"operation_id"`
+	Retrieval   *RetrievalStatus   `json:"retrieval,omitempty"`
 	Status      IngestResultStatus `json:"status"`
 }
 
@@ -237,6 +262,7 @@ type OKFVerification struct {
 type OperationResult struct {
 	Failure   *Failure              `json:"failure,omitempty"`
 	Id        string                `json:"id"`
+	Retrieval *RetrievalStatus      `json:"retrieval,omitempty"`
 	Status    OperationResultStatus `json:"status"`
 	UpdatedAt time.Time             `json:"updated_at"`
 }
@@ -255,11 +281,24 @@ type ReadyResponse struct {
 // ReadyResponseStatus defines model for ReadyResponse.Status.
 type ReadyResponseStatus string
 
+// RetrievalStatus defines model for RetrievalStatus.
+type RetrievalStatus struct {
+	Effective RetrievalStatusEffective `json:"effective"`
+	Reason    *RetrievalStatusReason   `json:"reason,omitempty"`
+}
+
+// RetrievalStatusEffective defines model for RetrievalStatus.Effective.
+type RetrievalStatusEffective string
+
+// RetrievalStatusReason defines model for RetrievalStatus.Reason.
+type RetrievalStatusReason string
+
 // RetrieveResult defines model for RetrieveResult.
 type RetrieveResult struct {
-	Citations *[]Citation    `json:"citations,omitempty"`
-	Evidence  []EvidenceItem `json:"evidence"`
-	Query     string         `json:"query"`
+	Citations *[]Citation      `json:"citations,omitempty"`
+	Evidence  []EvidenceItem   `json:"evidence"`
+	Query     string           `json:"query"`
+	Retrieval *RetrievalStatus `json:"retrieval,omitempty"`
 }
 
 // SourceDocument defines model for SourceDocument.

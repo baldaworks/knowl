@@ -1,0 +1,2508 @@
+{
+  "model": {
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_sha": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "version": "1.9.0",
+    "model_dtype": "float32",
+    "auto_truncate": false
+  },
+  "corpus_sha256": "6a819b16cd0af057c0e26821e997100ad7c5248914365f8df4c24e372976bac3",
+  "runs": [
+    {
+      "backend": "sqlite",
+      "pass": 1,
+      "rebuild_ms": 373.249,
+      "cases": [
+        {
+          "case": "exact-body",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/dialogue-checkpoints",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/dialogue-checkpoints",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8617547657835323,
+          "query_ms": 12.046,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-base",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/bundles",
+            "decoys/uploads",
+            "decoys/rollout"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/bundles",
+            "decoys/uploads",
+            "decoys/rollout"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8479551530183786,
+          "query_ms": 11.825,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "generic-cyrillic-case",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "runbooks/rollback",
+            "decoys/bundles",
+            "decoys/rollout"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "runbooks/rollback",
+            "decoys/bundles",
+            "decoys/rollout"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8107154618771856,
+          "query_ms": 16.574,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "canonical-accent",
+          "expected": "concepts/canonical",
+          "lexical": [
+            "concepts/canonical"
+          ],
+          "hybrid": [
+            "concepts/canonical",
+            "concepts/mixed",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/lint"
+          ],
+          "direct_seeds": [
+            "concepts/canonical",
+            "concepts/mixed",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/lint"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8675879786638416,
+          "query_ms": 12.305,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-genitive",
+          "expected": "decisions/storage",
+          "lexical": [],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/permissions"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/permissions"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8374680943999206,
+          "query_ms": 11.27,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-instrumental",
+          "expected": "decisions/storage",
+          "lexical": [],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/uploads"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/uploads"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8366725407221807,
+          "query_ms": 9.598,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-english",
+          "expected": "decisions/archive",
+          "lexical": [],
+          "hybrid": [
+            "concepts/mixed",
+            "decisions/archive",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/permissions"
+          ],
+          "direct_seeds": [
+            "concepts/mixed",
+            "decisions/archive",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/permissions"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8283899769619494,
+          "query_ms": 10.095,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "mixed-language",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decisions/archive",
+            "decoys/bundles",
+            "runbooks/rollback"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decisions/archive",
+            "decoys/bundles",
+            "runbooks/rollback"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8787869705138941,
+          "query_ms": 12.293,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "semantic-duplicate",
+          "expected": "runbooks/recovery",
+          "lexical": [],
+          "hybrid": [
+            "decoys/compression",
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/dns",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "decoys/compression",
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/dns",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.824778044232156,
+          "query_ms": 11.335,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "english-paraphrase",
+          "expected": "concepts/dialogue-checkpoints",
+          "lexical": [],
+          "hybrid": [
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decisions/storage",
+            "decoys/compression"
+          ],
+          "direct_seeds": [
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decisions/storage",
+            "decoys/compression"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8475910424446891,
+          "distractor_cosine": 0.8225700373772957,
+          "relevant_full_rank": 2,
+          "distractor_full_rank": 3,
+          "query_ms": 11.446,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "russian-semantic-duplicate",
+          "expected": "runbooks/rollback",
+          "lexical": [],
+          "hybrid": [
+            "decoys/rollout",
+            "runbooks/rollback",
+            "decoys/lint",
+            "runbooks/recovery",
+            "decoys/format"
+          ],
+          "direct_seeds": [
+            "decoys/rollout",
+            "runbooks/rollback",
+            "decoys/lint",
+            "runbooks/recovery",
+            "decoys/format"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8632342378399618,
+          "distractor_cosine": 0.8649940678875572,
+          "relevant_full_rank": 2,
+          "distractor_full_rank": 1,
+          "query_ms": 11.642,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "exact-unique-title",
+          "expected": "concepts/dialogue-checkpoints",
+          "lexical": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue"
+          ],
+          "hybrid": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decoys/compression",
+            "decisions/storage",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decoys/compression",
+            "decisions/storage",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8816654496289137,
+          "query_ms": 11.094,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 2,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "mixed-technical-token",
+          "expected": "concepts/mixed",
+          "lexical": [
+            "concepts/mixed"
+          ],
+          "hybrid": [
+            "concepts/mixed",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/lint",
+            "decoys/bundles"
+          ],
+          "direct_seeds": [
+            "concepts/mixed",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/lint",
+            "decoys/bundles"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8706863220942067,
+          "query_ms": 10.11,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        }
+      ],
+      "golden": {
+        "Hits": 12,
+        "Total": 12,
+        "Misses": null
+      }
+    },
+    {
+      "backend": "sqlite",
+      "pass": 2,
+      "rebuild_ms": 397.947,
+      "cases": [
+        {
+          "case": "exact-body",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/dialogue-checkpoints",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/dialogue-checkpoints",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8617547657835323,
+          "query_ms": 12.174,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-base",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/bundles",
+            "decoys/uploads",
+            "decoys/rollout"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/bundles",
+            "decoys/uploads",
+            "decoys/rollout"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8479551530183786,
+          "query_ms": 10.503,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "generic-cyrillic-case",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "runbooks/rollback",
+            "decoys/bundles",
+            "decoys/rollout"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "runbooks/rollback",
+            "decoys/bundles",
+            "decoys/rollout"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8107154618771856,
+          "query_ms": 11.743,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "canonical-accent",
+          "expected": "concepts/canonical",
+          "lexical": [
+            "concepts/canonical"
+          ],
+          "hybrid": [
+            "concepts/canonical",
+            "concepts/mixed",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/lint"
+          ],
+          "direct_seeds": [
+            "concepts/canonical",
+            "concepts/mixed",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/lint"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8675879786638416,
+          "query_ms": 14.138,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-genitive",
+          "expected": "decisions/storage",
+          "lexical": [],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/permissions"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/permissions"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8374680943999206,
+          "query_ms": 10.119,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-instrumental",
+          "expected": "decisions/storage",
+          "lexical": [],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/uploads"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/uploads"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8366725407221807,
+          "query_ms": 14.157,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-english",
+          "expected": "decisions/archive",
+          "lexical": [],
+          "hybrid": [
+            "concepts/mixed",
+            "decisions/archive",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/permissions"
+          ],
+          "direct_seeds": [
+            "concepts/mixed",
+            "decisions/archive",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/permissions"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8283899769619494,
+          "query_ms": 9.927,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "mixed-language",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decisions/archive",
+            "decoys/bundles",
+            "runbooks/rollback"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decisions/archive",
+            "decoys/bundles",
+            "runbooks/rollback"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8787869705138941,
+          "query_ms": 10.8,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "semantic-duplicate",
+          "expected": "runbooks/recovery",
+          "lexical": [],
+          "hybrid": [
+            "decoys/compression",
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/dns",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "decoys/compression",
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/dns",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.824778044232156,
+          "query_ms": 15.702,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "english-paraphrase",
+          "expected": "concepts/dialogue-checkpoints",
+          "lexical": [],
+          "hybrid": [
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decisions/storage",
+            "decoys/compression"
+          ],
+          "direct_seeds": [
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decisions/storage",
+            "decoys/compression"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8475910424446891,
+          "distractor_cosine": 0.8225700373772957,
+          "relevant_full_rank": 2,
+          "distractor_full_rank": 3,
+          "query_ms": 13.537,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "russian-semantic-duplicate",
+          "expected": "runbooks/rollback",
+          "lexical": [],
+          "hybrid": [
+            "decoys/rollout",
+            "runbooks/rollback",
+            "decoys/lint",
+            "runbooks/recovery",
+            "decoys/format"
+          ],
+          "direct_seeds": [
+            "decoys/rollout",
+            "runbooks/rollback",
+            "decoys/lint",
+            "runbooks/recovery",
+            "decoys/format"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8632342378399618,
+          "distractor_cosine": 0.8649940678875572,
+          "relevant_full_rank": 2,
+          "distractor_full_rank": 1,
+          "query_ms": 12.634,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "exact-unique-title",
+          "expected": "concepts/dialogue-checkpoints",
+          "lexical": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue"
+          ],
+          "hybrid": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decoys/compression",
+            "decisions/storage",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decoys/compression",
+            "decisions/storage",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8816654496289137,
+          "query_ms": 14.766,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 2,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "mixed-technical-token",
+          "expected": "concepts/mixed",
+          "lexical": [
+            "concepts/mixed"
+          ],
+          "hybrid": [
+            "concepts/mixed",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/lint",
+            "decoys/bundles"
+          ],
+          "direct_seeds": [
+            "concepts/mixed",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/lint",
+            "decoys/bundles"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8706863220942067,
+          "query_ms": 10.83,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        }
+      ],
+      "golden": {
+        "Hits": 12,
+        "Total": 12,
+        "Misses": null
+      }
+    },
+    {
+      "backend": "postgres",
+      "pass": 1,
+      "rebuild_ms": 400.789,
+      "cases": [
+        {
+          "case": "exact-body",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/dialogue-checkpoints",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/dialogue-checkpoints",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8617547657835323,
+          "query_ms": 18.526,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-base",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/bundles",
+            "decoys/uploads",
+            "decoys/rollout"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/bundles",
+            "decoys/uploads",
+            "decoys/rollout"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8479551530183786,
+          "query_ms": 13.816,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "generic-cyrillic-case",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "runbooks/rollback",
+            "decoys/bundles",
+            "decoys/rollout"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "runbooks/rollback",
+            "decoys/bundles",
+            "decoys/rollout"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8107154618771856,
+          "query_ms": 14.832,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "canonical-accent",
+          "expected": "concepts/canonical",
+          "lexical": [
+            "concepts/canonical"
+          ],
+          "hybrid": [
+            "concepts/canonical",
+            "concepts/mixed",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/lint"
+          ],
+          "direct_seeds": [
+            "concepts/canonical",
+            "concepts/mixed",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/lint"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8675879786638416,
+          "query_ms": 12.214,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-genitive",
+          "expected": "decisions/storage",
+          "lexical": [],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/permissions"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/permissions"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8374680943999206,
+          "query_ms": 13.697,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-instrumental",
+          "expected": "decisions/storage",
+          "lexical": [],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/uploads"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/uploads"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8366725407221807,
+          "query_ms": 15.525,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-english",
+          "expected": "decisions/archive",
+          "lexical": [],
+          "hybrid": [
+            "concepts/mixed",
+            "decisions/archive",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/permissions"
+          ],
+          "direct_seeds": [
+            "concepts/mixed",
+            "decisions/archive",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/permissions"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8283899769619494,
+          "query_ms": 14.82,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "mixed-language",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decisions/archive",
+            "decoys/bundles",
+            "runbooks/rollback"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decisions/archive",
+            "decoys/bundles",
+            "runbooks/rollback"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8787869705138941,
+          "query_ms": 13.713,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "semantic-duplicate",
+          "expected": "runbooks/recovery",
+          "lexical": [],
+          "hybrid": [
+            "decoys/compression",
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/dns",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "decoys/compression",
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/dns",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.824778044232156,
+          "query_ms": 13.007,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "english-paraphrase",
+          "expected": "concepts/dialogue-checkpoints",
+          "lexical": [],
+          "hybrid": [
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decisions/storage",
+            "decoys/compression"
+          ],
+          "direct_seeds": [
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decisions/storage",
+            "decoys/compression"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8475910424446891,
+          "distractor_cosine": 0.8225700373772957,
+          "relevant_full_rank": 2,
+          "distractor_full_rank": 3,
+          "query_ms": 16.53,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "russian-semantic-duplicate",
+          "expected": "runbooks/rollback",
+          "lexical": [],
+          "hybrid": [
+            "decoys/rollout",
+            "runbooks/rollback",
+            "decoys/lint",
+            "runbooks/recovery",
+            "decoys/format"
+          ],
+          "direct_seeds": [
+            "decoys/rollout",
+            "runbooks/rollback",
+            "decoys/lint",
+            "runbooks/recovery",
+            "decoys/format"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8632342378399618,
+          "distractor_cosine": 0.8649940678875572,
+          "relevant_full_rank": 2,
+          "distractor_full_rank": 1,
+          "query_ms": 13.409,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "exact-unique-title",
+          "expected": "concepts/dialogue-checkpoints",
+          "lexical": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue"
+          ],
+          "hybrid": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decoys/compression",
+            "decisions/storage",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decoys/compression",
+            "decisions/storage",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8816654496289137,
+          "query_ms": 14.32,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 2,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "mixed-technical-token",
+          "expected": "concepts/mixed",
+          "lexical": [
+            "concepts/mixed"
+          ],
+          "hybrid": [
+            "concepts/mixed",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/lint",
+            "decoys/bundles"
+          ],
+          "direct_seeds": [
+            "concepts/mixed",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/lint",
+            "decoys/bundles"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8706863220942067,
+          "query_ms": 15.526,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        }
+      ],
+      "golden": {
+        "Hits": 12,
+        "Total": 12,
+        "Misses": null
+      }
+    },
+    {
+      "backend": "postgres",
+      "pass": 2,
+      "rebuild_ms": 391.175,
+      "cases": [
+        {
+          "case": "exact-body",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/dialogue-checkpoints",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/dialogue-checkpoints",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8617547657835323,
+          "query_ms": 13.262,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-base",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/bundles",
+            "decoys/uploads",
+            "decoys/rollout"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/bundles",
+            "decoys/uploads",
+            "decoys/rollout"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8479551530183786,
+          "query_ms": 12.304,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "generic-cyrillic-case",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "runbooks/rollback",
+            "decoys/bundles",
+            "decoys/rollout"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "runbooks/rollback",
+            "decoys/bundles",
+            "decoys/rollout"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8107154618771856,
+          "query_ms": 12.805,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "canonical-accent",
+          "expected": "concepts/canonical",
+          "lexical": [
+            "concepts/canonical"
+          ],
+          "hybrid": [
+            "concepts/canonical",
+            "concepts/mixed",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/lint"
+          ],
+          "direct_seeds": [
+            "concepts/canonical",
+            "concepts/mixed",
+            "decoys/bundles",
+            "runbooks/recovery",
+            "decoys/lint"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8675879786638416,
+          "query_ms": 12.233,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-genitive",
+          "expected": "decisions/storage",
+          "lexical": [],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/permissions"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/permissions"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8374680943999206,
+          "query_ms": 12.995,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-instrumental",
+          "expected": "decisions/storage",
+          "lexical": [],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/uploads"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decoys/rollout",
+            "decoys/bundles",
+            "decoys/uploads"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8366725407221807,
+          "query_ms": 14.359,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "word-form-english",
+          "expected": "decisions/archive",
+          "lexical": [],
+          "hybrid": [
+            "concepts/mixed",
+            "decisions/archive",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/permissions"
+          ],
+          "direct_seeds": [
+            "concepts/mixed",
+            "decisions/archive",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/permissions"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8283899769619494,
+          "query_ms": 11.255,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "mixed-language",
+          "expected": "decisions/storage",
+          "lexical": [
+            "decisions/storage"
+          ],
+          "hybrid": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decisions/archive",
+            "decoys/bundles",
+            "runbooks/rollback"
+          ],
+          "direct_seeds": [
+            "decisions/storage",
+            "concepts/mixed",
+            "decisions/archive",
+            "decoys/bundles",
+            "runbooks/rollback"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8787869705138941,
+          "query_ms": 16.128,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "semantic-duplicate",
+          "expected": "runbooks/recovery",
+          "lexical": [],
+          "hybrid": [
+            "decoys/compression",
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/dns",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "decoys/compression",
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/dns",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.824778044232156,
+          "query_ms": 15.259,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "english-paraphrase",
+          "expected": "concepts/dialogue-checkpoints",
+          "lexical": [],
+          "hybrid": [
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decisions/storage",
+            "decoys/compression"
+          ],
+          "direct_seeds": [
+            "runbooks/recovery",
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decisions/storage",
+            "decoys/compression"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8475910424446891,
+          "distractor_cosine": 0.8225700373772957,
+          "relevant_full_rank": 2,
+          "distractor_full_rank": 3,
+          "query_ms": 16.927,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "russian-semantic-duplicate",
+          "expected": "runbooks/rollback",
+          "lexical": [],
+          "hybrid": [
+            "decoys/rollout",
+            "runbooks/rollback",
+            "decoys/lint",
+            "runbooks/recovery",
+            "decoys/format"
+          ],
+          "direct_seeds": [
+            "decoys/rollout",
+            "runbooks/rollback",
+            "decoys/lint",
+            "runbooks/recovery",
+            "decoys/format"
+          ],
+          "LexicalRank": 0,
+          "HybridRank": 2,
+          "SourceRank": 2,
+          "expected_cosine": 0.8632342378399618,
+          "distractor_cosine": 0.8649940678875572,
+          "relevant_full_rank": 2,
+          "distractor_full_rank": 1,
+          "query_ms": 16.349,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 0,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "exact-unique-title",
+          "expected": "concepts/dialogue-checkpoints",
+          "lexical": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue"
+          ],
+          "hybrid": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decoys/compression",
+            "decisions/storage",
+            "decoys/pagination"
+          ],
+          "direct_seeds": [
+            "concepts/dialogue-checkpoints",
+            "decoys/ephemeral-dialogue",
+            "decoys/compression",
+            "decisions/storage",
+            "decoys/pagination"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8816654496289137,
+          "query_ms": 15.106,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 2,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        },
+        {
+          "case": "mixed-technical-token",
+          "expected": "concepts/mixed",
+          "lexical": [
+            "concepts/mixed"
+          ],
+          "hybrid": [
+            "concepts/mixed",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/lint",
+            "decoys/bundles"
+          ],
+          "direct_seeds": [
+            "concepts/mixed",
+            "decisions/storage",
+            "decoys/timezone",
+            "decoys/lint",
+            "decoys/bundles"
+          ],
+          "LexicalRank": 1,
+          "HybridRank": 1,
+          "SourceRank": 1,
+          "expected_cosine": 0.8706863220942067,
+          "query_ms": 17.665,
+          "report": {
+            "requested": "hybrid",
+            "effective": "hybrid",
+            "model_space": "42dab7cc4d71e581",
+            "lexical_candidates": 1,
+            "vector_candidates": 20,
+            "fused_candidates": 20,
+            "scanned_chunks": 29,
+            "query_omitted_runes": 0,
+            "index_omitted_chunks": 0,
+            "index_omitted_runes": 0
+          }
+        }
+      ],
+      "golden": {
+        "Hits": 12,
+        "Total": 12,
+        "Misses": null
+      }
+    }
+  ],
+  "api_request_ms": [
+    11.74,
+    12.656,
+    10.231,
+    10.007,
+    11.793,
+    10.575,
+    11.182,
+    12.678,
+    13.823,
+    10.384,
+    11.169,
+    10.725,
+    11.001,
+    14.14,
+    13.901,
+    13.309,
+    12.985,
+    11.872,
+    13.616,
+    14.93,
+    12.922,
+    12.428,
+    15.007,
+    10.392,
+    10.56,
+    12.12,
+    10.664,
+    9.482,
+    12.647,
+    9.946,
+    7.928,
+    9.213,
+    7.591,
+    14.495,
+    8.784,
+    10.175,
+    7.945,
+    8.591,
+    10.137,
+    7.513,
+    9.095,
+    7.91,
+    15.731,
+    9.355,
+    8.28,
+    8.914,
+    7.912,
+    9.014,
+    12.102,
+    11.069,
+    9.215,
+    12.276,
+    8.252,
+    8.533,
+    9.756,
+    7.958,
+    8.585,
+    34.511,
+    20.07,
+    9.451,
+    7.774,
+    8.295,
+    8.837,
+    7.365,
+    7.805,
+    11.099,
+    8.514,
+    8.137,
+    8.667,
+    9.325,
+    8.702,
+    35.573,
+    19.624,
+    12.964,
+    11.779,
+    8.303,
+    9.726,
+    9.401,
+    7.688,
+    9.821,
+    13.302,
+    7.362,
+    9.418,
+    9.206,
+    8.858,
+    11.525,
+    12.368,
+    11.243,
+    16.038,
+    11.539,
+    13.203,
+    11.712,
+    14.231,
+    11.711,
+    11.264,
+    11.911,
+    13.079,
+    10.479,
+    14.96,
+    13.759,
+    14.255,
+    11.974,
+    12.344,
+    12.494,
+    14.063,
+    12.888,
+    14.732,
+    16.089,
+    11.423,
+    10.963,
+    14.412,
+    14.429,
+    10.285,
+    12.641,
+    10.172,
+    10.51,
+    8.253,
+    8.543,
+    8.176,
+    8.019,
+    11.641,
+    10.695,
+    8.073,
+    7.882,
+    11.646,
+    7.829,
+    7.815,
+    8.638,
+    8.631,
+    7.37,
+    13.332,
+    9.706,
+    11.194,
+    9.951,
+    9.691,
+    9.876,
+    9.169,
+    10.672,
+    12.524,
+    8.201,
+    8.712,
+    9.809,
+    37.597,
+    22.794,
+    11.004,
+    7.741,
+    8.936,
+    9.119,
+    8.05,
+    9.307,
+    7.973,
+    12.688,
+    8.435,
+    8.67,
+    9.024,
+    9.662,
+    45.382,
+    25.024,
+    9.884,
+    7.859,
+    8.879,
+    7.884,
+    8.469,
+    7.742,
+    7.63,
+    7.999,
+    8.4,
+    8.479,
+    8.595,
+    8.672,
+    8.77,
+    8.409,
+    12.739,
+    11.348,
+    14.613,
+    11.331,
+    8.465,
+    10.359,
+    10.161,
+    10.494,
+    13.486,
+    11.448,
+    9.905,
+    12.083,
+    11.723,
+    10.031,
+    14.801,
+    13.546,
+    14.686,
+    11.19,
+    13.505,
+    12.254,
+    11.1,
+    14.517,
+    14.135,
+    14.697,
+    14.054,
+    13.083,
+    11.586,
+    11.037,
+    11.23,
+    18.15,
+    10.335,
+    16.934,
+    13.261,
+    9.167,
+    11.092,
+    10.672,
+    10.829,
+    12.825,
+    10.869,
+    15.419,
+    10.244,
+    11.011,
+    10.92,
+    12.429,
+    12.831,
+    14.163,
+    13.23,
+    13.695,
+    14.843,
+    11.877,
+    12.198,
+    16.126,
+    18.955,
+    12.265,
+    13.352,
+    14.954,
+    13.297,
+    9.045,
+    13.593,
+    13.879,
+    10.936,
+    13.515,
+    13.025,
+    8.964,
+    11.486,
+    10.866,
+    9.968,
+    17.522,
+    11.65,
+    10.53,
+    10.376,
+    10.4,
+    11.084,
+    12.902,
+    11.026,
+    12.843,
+    14.719,
+    12.384,
+    12.263,
+    10.479,
+    10.82,
+    10.663,
+    14.751,
+    10.716,
+    11.394,
+    11.991,
+    10.4,
+    8.921,
+    12.361,
+    7.642,
+    8.121,
+    7.901,
+    10.566,
+    9.099,
+    7.939,
+    7.429,
+    8.061,
+    8.216,
+    9.094,
+    10.468,
+    11.143,
+    10.362,
+    9.306,
+    7.683,
+    7.664,
+    7.796,
+    11.38,
+    10.514,
+    11.354,
+    8.833,
+    8.776,
+    12.335,
+    9.199,
+    9.387,
+    10.818,
+    10.85,
+    10.248,
+    44.361,
+    21.285,
+    10.106,
+    11.256,
+    10.6,
+    11.461,
+    8.493,
+    9.325,
+    8.421,
+    9.518,
+    10.497,
+    8.453,
+    8.45,
+    10.793,
+    39.185,
+    24.295,
+    8.971,
+    10.527,
+    12.805,
+    10.178,
+    10.571,
+    7.742,
+    8.077,
+    9.218,
+    10.81,
+    11.697,
+    10.124,
+    8.819,
+    10.679,
+    13.126,
+    13.605,
+    8.424,
+    10.927,
+    17.516,
+    11.072,
+    12.377,
+    10.754,
+    11.959,
+    11.037,
+    9.994,
+    12.959,
+    13.761,
+    11.375,
+    13.338,
+    10.978,
+    12.076,
+    11.786,
+    9.99,
+    10.714,
+    10.561,
+    15.464,
+    11.231,
+    11.851,
+    11.445,
+    10.226,
+    9.444,
+    11.998,
+    7.563,
+    7.491,
+    7.472,
+    7.933,
+    7.775,
+    8.329,
+    7.571,
+    9.209,
+    8.352,
+    15.58,
+    8.553,
+    7.866,
+    7.105,
+    7.823,
+    9.788,
+    9.168,
+    10.08,
+    7.757,
+    11.509,
+    12.541,
+    9.579,
+    10.511,
+    9.294,
+    11.593,
+    10.415,
+    11.627,
+    12.085,
+    11.348,
+    47.051,
+    23.852,
+    10.968,
+    8.454,
+    8.367,
+    9.603,
+    12.294,
+    7.849,
+    8.382,
+    8.636,
+    10.132,
+    12.905,
+    10.172,
+    15.147,
+    42.236,
+    20.346,
+    15.504,
+    10.162,
+    8.803,
+    9.637,
+    7.941,
+    10.033,
+    11.157,
+    8.362,
+    11.602,
+    8.138,
+    9.751,
+    11.808,
+    9.869,
+    11.719,
+    9.17,
+    10.518,
+    13.613,
+    10.07,
+    8.72,
+    9.54,
+    12.172,
+    11.941,
+    12.797,
+    11.28,
+    11.567,
+    12.039,
+    9.58,
+    10.667,
+    17.882,
+    13.434,
+    11.026,
+    11.463,
+    12.674,
+    14.574,
+    10.888,
+    10.721,
+    11.682,
+    14.994,
+    10.422,
+    14.163,
+    11.409,
+    12.304,
+    10.361,
+    12.661,
+    10.312,
+    9.308,
+    10.2,
+    9.546,
+    11.563,
+    10.689,
+    11.067,
+    11.997,
+    10.516,
+    11.419,
+    10.794,
+    10.275,
+    11.023,
+    13.523,
+    13,
+    13.952,
+    10.591,
+    16.082,
+    14.168,
+    11.795,
+    11.944,
+    10.882,
+    14.587,
+    11.153,
+    11.631,
+    12.135,
+    10.826,
+    10.69,
+    13.445,
+    9.998
+  ],
+  "environment": {
+    "image": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.0@sha256:bc7ad262695df5b7875b0c9c702deb8e9df3953bdf22c3d6068d9c0429b7b3f3",
+    "architecture": "x86_64",
+    "daemon_cpus": 4,
+    "daemon_memory_bytes": 33657823232,
+    "cpu_limit": 2,
+    "memory_limit_gib": 4,
+    "observed_memory": "1.313GiB / 4GiB",
+    "sidecar_startup": {
+      "warm_restart_seconds": 3.27926,
+      "cold_ready_seconds": 83.292542,
+      "cache_mib": 465,
+      "offline_network": "none",
+      "offline_inference_verified": true,
+      "vector_hashes_same_after_restart": true,
+      "cpu_limit": 2,
+      "memory_limit_gib": 4,
+      "measured_idle_memory_gib": 1.311
+    }
+  },
+  "gate": {
+    "passed": false,
+    "failed_case": "russian-semantic-duplicate",
+    "failed_condition": "expected relevant page must outrank designated distractor",
+    "native_protocol_and_projection_tests": "separate verification; quality not passed"
+  }
+}

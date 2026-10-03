@@ -90,6 +90,52 @@ Sync accepts raw revisions and reserves durable maintenance work; model-backed
 wiki changes complete asynchronously. Inspect bounded maintenance counts and
 operation-correlated samples with `knowl source status <source-id>`.
 
+## Optional CPU embeddings
+
+From this checkout, opt in with the separately checked-in
+[embedding config](../deploy/sidecar/embeddings.yaml) and
+[Compose overlay](../deploy/sidecar/embeddings.compose.yaml):
+
+```bash
+docker compose -f deploy/sidecar/compose.yaml \
+  -f deploy/sidecar/embeddings.compose.yaml up --build -d
+```
+
+The baseline/published quickstart remains lexical-only. Build the current
+checkout or use an image containing this configuration contract. The overlay
+uses the same maintainer/source setup as the baseline; embeddings do not replace
+maintainer credentials or source configuration.
+
+The private `tei` service runs the pinned linux/amd64 CPU TEI 1.9.0 image and
+E5-base revision `d128750597153bb5987e10b1c3493a34e5a4502a`, returning 768
+normalized dimensions. The exact image digest is in the overlay. It publishes no
+host port, uses no GPU and shares Knowl's private Compose network. Mean float32,
+required query/passage prefixes, no second server prompt and disabled auto
+truncation match the client contract. Other machines/profiles need their own
+runtime and quality validation.
+
+First startup explicitly downloads the model into the `tei-model-cache` named
+volume. Persist that volume for offline restarts. The reference allocates 2 CPU
+cores and 4 GiB to TEI with a 10-minute cold-start health allowance. Observed cold
+readiness was 194.5 seconds, cached restart 6.6 seconds, model cache 1,075 MiB and
+idle memory about 1.91 GiB on the recorded test machine. These are fixed-profile
+measurements, not hardware minima or latency guarantees. See the
+[actual quality record](testing.md#real-cpu-embedding-quality-gate).
+
+```bash
+docker compose -f deploy/sidecar/compose.yaml \
+  -f deploy/sidecar/embeddings.compose.yaml ps tei
+```
+
+The example permits Knowl to start during TEI cold loading using explicit
+lexical fallback. Check retrieval mode as well as `/readyz`. For
+`failure_policy: strict`, wait for TEI health and model loading before starting
+Knowl. After an unavailable/degraded startup, restart Knowl once TEI is healthy
+to rebuild dense state; queries do not repair it automatically. Stopping the
+stack with `down` preserves its named volumes. The
+[operations guide](operations.md#optional-embeddings) covers external APIs,
+credentials, budgets, strict failures and projection recovery.
+
 ## Health checks
 
 - `GET /healthz` means the process is serving HTTP.

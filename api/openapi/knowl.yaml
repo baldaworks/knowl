@@ -523,6 +523,8 @@ components:
       type: object
       required: [query, evidence]
       properties:
+        retrieval:
+          $ref: '#/components/schemas/RetrievalStatus'
         query:
           type: string
         evidence:
@@ -553,6 +555,8 @@ components:
       type: object
       required: [operation_id, status]
       properties:
+        retrieval:
+          $ref: '#/components/schemas/RetrievalStatus'
         operation_id:
           type: string
         status:
@@ -570,6 +574,8 @@ components:
       type: object
       required: [id, status, updated_at]
       properties:
+        retrieval:
+          $ref: '#/components/schemas/RetrievalStatus'
         id:
           type: string
         status:
@@ -580,3 +586,14 @@ components:
           format: date-time
         failure:
           $ref: '#/components/schemas/Failure'
+    RetrievalStatus:
+      type: object
+      additionalProperties: false
+      required: [effective]
+      properties:
+        effective:
+          type: string
+          enum: [lexical, hybrid, degraded, failed]
+        reason:
+          type: string
+          enum: [invalid_configuration, invalid_input, unavailable, deadline, input_limit, response_limit, invalid_response, model_mismatch, dimension_mismatch, projection_not_ready, projection_drift, projection_capacity]
