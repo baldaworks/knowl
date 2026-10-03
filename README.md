@@ -28,6 +28,7 @@ review it in Git, and export it as a portable bundle.
 | Keep project knowledge across tasks | An LLM-maintained wiki built from durable source revisions |
 | Understand where a result came from | Bounded evidence linked to its supporting sources |
 | Own and inspect your knowledge | Plain Markdown in an OKF-compatible workspace |
+| Find related evidence across different wording | Optional hybrid search through your own embedding API or CPU sidecar |
 | Choose where it runs | Local Codex, a self-hosted MCP/HTTP service, or an embedded Go runtime |
 
 ## From Sources to a Wiki
@@ -126,6 +127,17 @@ The same capabilities are available through HTTP. See
 Embed Knowl through `pkg/knowl`, or use `pkg/knowlfx` for Fx lifecycle
 integration. See the [product design](docs/design.md) for runtime composition
 and ownership boundaries.
+
+## Search Across Different Wording
+
+Enable optional embeddings to retrieve related evidence across paraphrases and
+word forms. Knowl combines semantic and keyword search while keeping the
+original page text and source references in its results.
+
+Use your own compatible embedding API or the
+[self-hosted CPU sidecar](docs/sidecar.md#optional-cpu-embeddings).
+Embeddings are off by default. Choose explicit keyword fallback or strict
+semantic availability in the [operations guide](docs/operations.md#optional-embeddings).
 
 ## Keep Your Knowledge Portable
 

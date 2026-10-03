@@ -53,8 +53,8 @@ to strict gates.
 The original golden corpus and its 11/12 threshold are unchanged. New fixtures
 have their own expectations. Russian word forms, English plurals and mixed text
 use one generic retrieval path. Controlled inference and fake vectors cannot
-prove embedding quality: Story `.10` requires evaluation with the selected real
-self-hosted multilingual model.
+prove embedding quality. The [real CPU quality gate](#real-cpu-embedding-quality-gate)
+evaluates the selected self-hosted multilingual model.
 
 ## Baseline observations and strict gates
 
@@ -78,7 +78,7 @@ no-op additions, raw catalog-edit rejection, final graph/combined plan bounds,
 stale preconditions and v1 queued/staged compatibility have behavioral gates.
 
 The original four-page UTF-8 fixture now fits: the shared Content-only wire
-is 2,230,845 bytes and the complete v5 SDK prompt is 2,239,474 bytes, below
+was measured at 2,230,845 bytes and the complete v5 SDK prompt at 2,239,474 bytes, below
 4,194,304. This is a strict success gate with exact measured/actual equality and
 typed envelope/provenance comparison. Setting the provider cap to the single-page
 envelope size, 558,270 bytes, must reject before runtime creation or inference
@@ -137,11 +137,111 @@ Two fresh native baseline runs produce identical nine decoded observations.
 `generic-cyrillic-case` and `canonical-accent` are strict `met` controls; inflected
 Russian words, the English plural and semantic paraphrase remain `gap` in this
 lexical implementation. They may improve without breaking tests. These results
-measure this fixed corpus; Story `.10` still requires the selected real
-self-hosted multilingual embedding model. The existing golden 11/12 gate stays
-unchanged. Genuine v1-v4 policy fixtures gate old queued rejection and concrete
-stage/terminal replay without inference. Exact source request sizes and
-whole-page authority regressions remain unchanged under contract v5.
+measure this fixed lexical corpus. The optional semantic profile is measured
+separately below. The existing golden 11/12 gate stays unchanged. Genuine v1-v5
+policy fixtures gate old queued rejection and concrete stage/terminal replay
+without embedding or maintainer inference. Complete request sizing and
+whole-page authority guards remain enforced under contract v6.
+
+## Real CPU embedding quality gate
+
+The integration-tagged `pkg/knowl/store/eval` runner calls the actual pinned
+TEI/E5-base API and exercises real SQLite and PostgreSQL. Its corpus was reviewed
+before model results: all nine baseline cases, two independently authored
+English/Russian positives with zero overlap under the actual lexical normalizer,
+exact-title and mixed-token controls, and 22 technical distractors including
+negation. Expected IDs and k remain fixed. Fake vectors and skipped integration
+tests are not model-quality proof.
+
+Every positive must appear in Query top five and the first five direct source
+relevance seeds (`SelectContext` with eight pages, before neighbor/root/recent
+fallback). Unique exact title must rank first; relevant evidence must outrank
+each designated distractor. Both stores repeat the corpus twice, comparing
+ordered IDs and original evidence/citations, filters, updates, deletion, foreign
+scope and cancellation. The separate unchanged golden corpus requires at least
+11/12. Existing native/backend tests cover protocol bounds, vector corruption,
+capacity, atomic publication, reports, generations and historical recovery.
+
+Recorded results from the same corpus:
+
+| Profile | Query/source top-five cases | Golden | Negated Russian rollout control |
+| --- | --- | --- | --- |
+| E5-small / 384 dimensions | 13/13 | 12/12 | Failed: rollback rank 2, distractor rank 1 |
+| E5-base / 768 dimensions | 13/13 | 12/12 | Passed: rollback rank 1, distractor rank 2 |
+
+E5-base passes all gates on both stores in both repeats. The
+[passing artifact](../pkg/knowl/store/eval/testdata/cpu-e5-base.json) records the
+exact image/model revision, immutable corpus hash, per-case lexical/hybrid/source
+ranks and cosines, request/rebuild timing, allocation, machine and memory data.
+The [failed small-model artifact](../pkg/knowl/store/eval/testdata/cpu-e5-small.json)
+is retained. The model was changed with explicit approval; the corpus, k,
+expected IDs and algorithm were preserved. These measurements do not establish
+universal recall, contradiction detection or semantic duplicate prevention.
+
+The selected reference is `intfloat/multilingual-e5-base`, revision
+`d128750597153bb5987e10b1c3493a34e5a4502a`, mean float32/normalized 768 dimensions,
+CPU TEI 1.9.0 at the digest in the Compose overlay. Service allocation was 2 CPU
+and 4 GiB; the daemon was x86_64 with four CPUs and 33,657,823,232 bytes RAM.
+Observed cold readiness was 194.5 seconds, cached restart 6.6 seconds, base model
+cache 1,075 MiB and idle memory about 1.91 GiB. Network-disabled cache startup,
+768-vector inference, token overflow/alias errors, restart equality and real
+fallback/strict outage behavior were also verified. Inspect per-run timings in
+the artifact rather than treating these values as deployment guarantees.
+
+For an already reachable selected reference service and disposable PostgreSQL
+fixture, run:
+
+```bash
+export KNOWL_EMBEDDING_EVAL_ENDPOINT='http://your-tei:80/v1/embeddings'
+export KNOWL_EMBEDDING_EVAL_POSTGRES_DSN='postgres://fixture-user:fixture-password@your-postgres/fixture-db?sslmode=disable'
+export KNOWL_EMBEDDING_EVAL_OUTPUT='/tmp/knowl-embedding-quality.json'
+go test -tags integration -count=1 -v ./pkg/knowl/store/eval \
+  -run 'TestQualityCorpus|TestRealCPUModel'
+```
+
+The reference gate verifies TEI `/info` identity and settings as well as vectors;
+this is separate from Knowl's generic embedding API protocol. An absent endpoint
+explicitly skips local model tests. A configured endpoint requires the PostgreSQL
+fixture. Skipping is never recorded as a passing model gate.
+
+The Compose profile exposes no TEI host port. To reproduce on its private network,
+start only TEI from this checkout and create a disposable database:
+
+```bash
+docker compose -p knowl-evaluation -f deploy/sidecar/compose.yaml \
+  -f deploy/sidecar/embeddings.compose.yaml up -d tei
+# Wait until `docker compose ... ps tei` reports healthy.
+docker run -d --name knowl-eval-postgres \
+  --network knowl-evaluation_default --network-alias postgres-eval \
+  -e POSTGRES_USER=knowl_eval -e POSTGRES_PASSWORD=knowl_eval_fixture \
+  -e POSTGRES_DB=knowl_eval postgres:16-alpine
+docker exec knowl-eval-postgres pg_isready -U knowl_eval -d knowl_eval
+
+CGO_ENABLED=0 go test -c -tags integration \
+  -o /tmp/knowl-embedding-eval.test ./pkg/knowl/store/eval
+mkdir -p .artifacts/embeddings
+TEI_IMAGE='ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.0@sha256:bc7ad262695df5b7875b0c9c702deb8e9df3953bdf22c3d6068d9c0429b7b3f3'
+docker run --rm --network knowl-evaluation_default \
+  --user "$(id -u):$(id -g)" \
+  -v /tmp/knowl-embedding-eval.test:/usr/local/bin/embedding-eval.test:ro \
+  -v "$PWD/.artifacts/embeddings:/results" \
+  -e KNOWL_EMBEDDING_EVAL_ENDPOINT=http://tei:80/v1/embeddings \
+  -e KNOWL_EMBEDDING_EVAL_POSTGRES_DSN='postgres://knowl_eval:knowl_eval_fixture@postgres-eval:5432/knowl_eval?sslmode=disable' \
+  -e KNOWL_EMBEDDING_EVAL_OUTPUT=/results/evaluation.json \
+  --entrypoint /usr/local/bin/embedding-eval.test "$TEI_IMAGE" \
+  -test.run 'TestQualityCorpus|TestRealCPUModel' -test.v -test.timeout 10m
+```
+
+The runner writes bounded safe numeric/identity results. For a comparable recorded
+artifact, add the actual image, machine, CPU/RAM allocation, memory/cache and
+cold/warm startup measurements; the two checked-in records include these
+observations. Clean up the fixture while preserving the model cache:
+
+```bash
+docker rm -f knowl-eval-postgres
+docker compose -p knowl-evaluation -f deploy/sidecar/compose.yaml \
+  -f deploy/sidecar/embeddings.compose.yaml down
+```
 
 ## Verification
 

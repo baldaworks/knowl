@@ -78,8 +78,8 @@ paths and filenames, OKF extensions, source references and documents, and other
 provenance or transport metadata from ranking and evidence snippets. SQLite FTS
 and PostgreSQL text search share literal matching, field priority, filters,
 strict-then-relaxed retrieval and path ties. Their native scores can order other
-results differently. The stored OKF object and public retrieval schema remain
-unchanged.
+results differently. The stored OKF object remains intact. Public results optionally expose a safe
+retrieval mode and reason.
 The detailed filesystem contract is in [workspace.md](workspace.md).
 
 An ingest-side connector may translate text, a URI, origin, and idempotency
@@ -116,8 +116,8 @@ no language detection, full case folding, accent stripping, stemming or
 transliteration. Ordinary English/Russian casing and composed/decomposed accents
 match: `CAFÉ` retrieves `Café`, while `cafe` remains distinct. Question words
 such as `what` and `why` participate like other words. Word forms and paraphrases
-remain lexical recall observations; self-hosted multilingual embeddings belong
-to Story `knowl-wxe.10`.
+remain limitations of the default lexical mode. Optional embeddings provide
+semantic candidates through the same generic retrieval path.
 
 The shared encoder represents supported normalized words as lowercase unpadded
 base32 of their UTF-8 bytes, prefixed with `k`. This private representation avoids
@@ -166,12 +166,68 @@ adapter are bounded fallback inputs only when semantic fields yield no usable
 terms. A query with no search hits does not switch to identity. Existing
 neighbor, root and recent-page merging, scope isolation and page limits remain
 in effect. There is one generic multilingual path; inflection and paraphrase
-recall are not guaranteed by this lexical policy. Embedding retrieval belongs
-to the later hybrid-search Story.
+recall are not guaranteed by this lexical policy. When enabled, embeddings use
+the bounded original semantic fields independently of lexical tokens, with
+identity fallback only when semantic text is empty.
 
-### Source maintenance contract v5
+### Optional hybrid retrieval
 
-`MaintenanceInput.contract_version` is `source-maintenance-v5`. Its `pages`
+`knowl.embeddings` selects a separate OpenAI-compatible embedding API or the
+inert default. The maintainer provider remains independent. Both SQLite and
+PostgreSQL use the same semantic preparation, max-cosine page scoring and
+reciprocal rank fusion with their existing lexical candidate order. There is no
+language-specific route, in-process model or ANN extension.
+
+Semantic inputs preserve original case and use NFC with normalized line endings.
+Fixed 384-rune chunks overlap by 64 runes; pages retain at most 16 chunks and
+queries or source signals at most four. Omitted coverage is reported. Model
+prefixes are applied once. Private lexical tokens, paths and provenance do not
+enter the model. Complete source and factual-page authority in maintenance stays
+unchanged; semantic chunks are only a retrieval projection.
+
+Network inference runs outside SQL locks and transactions. A rebuild commits
+lexical state first, invalidates dense readiness, then publishes the complete
+bounded vector projection only if its canonical snapshot still matches. SQLite
+stores little-endian float32 vectors in BLOBs; PostgreSQL uses BYTEA and the same
+scoped advisory lock for lexical replacement and dense publication. Migration
+16 adds these disposable projections and durable retrieval reports, without
+changing canonical Markdown or raw evidence.
+
+Enabled reads verify the complete projection, lexical candidates, filters and
+original references in one consistent read transaction. Each page contributes
+its maximum cosine across query windows and page chunks. Each channel keeps
+`min(100, max(20, 4*k))` candidates; equal-weight RRF uses ranks starting at one
+and constant 60, deduplicating pages per channel and breaking ties by page ID.
+The fused relevance seeds feed the existing neighbor/root/recent context policy.
+Lexical-only mode retains native ordering. Results retain original evidence and
+citations; semantic similarity does not establish factual agreement.
+
+Projection capacity is 8,192 chunks and 64 MiB per scope. Incompatible, incomplete
+or over-capacity dense state fails as a whole. `failure_policy: lexical` returns
+explicit degraded lexical results for classified embedding failures; `strict`
+returns a typed failure. Invalid input and caller cancellation never become
+successful fallback. Queries do not rebuild the projection. Startup retries a
+current degraded projection once; operators can restart after repairing the
+service or invoke the embedded `RebuildProjection` function.
+
+Go Query/Ingest results expose a per-call `RetrievalReport`. Maintenance persists
+a bounded report before maintainer inference, including failed selection, under
+the current operation attempt; historical reports retain their attempt origin.
+HTTP/MCP expose only optional `retrieval.effective` and safe `retrieval.reason`.
+Expanded plans and selected-context diagnostics remain separate work.
+
+A model-space fingerprint binds model, immutable revision, dimensions, prefixes,
+preprocessing and normalization. Source-maintenance-v6 additionally binds fusion,
+candidate/capacity and failure policy. Addresses, credentials and CPU settings do
+not identify the output policy. Changing the space requires a complete rebuild.
+Genuine historical staged recovery publishes lexical state without new
+inference; dense repair runs separately. Old unplanned generations reject before
+embedding or maintainer calls. See [configuration and recovery](operations.md#optional-embeddings)
+and the [real CPU quality measurements](testing.md#real-cpu-embedding-quality-gate).
+
+### Source maintenance contract v6
+
+`MaintenanceInput.contract_version` is `source-maintenance-v6`. Its `pages`
 contain selected ordinary factual snapshots. Its `catalogs` contain the complete
 bounded navigation graph as `HierarchyCatalog` values: canonical `path`,
 original `digest`, `title`, and sorted `children`. The root comes first;
@@ -224,9 +280,11 @@ session history and total workspace RAM. `IngestResult.Budget` is transient type
 byte/count evidence, not a public durable HTTP/MCP diagnostics contract.
 
 The contract version, schema digest, effective request cap/format identity and
-read, plan and catalog limits participate in the maintenance-policy generation. Incompatible unplanned work
+read, plan and catalog limits, plus the configured output-affecting retrieval
+policy, participate in the maintenance-policy generation. Incompatible unplanned work
 fails before inference with `maintenance_policy_mismatch`. Already validated
-v1/v2/v3/v4 concrete stages resume through canonical preconditions without inference;
+v1/v2/v3/v4/v5 concrete stages resume through canonical preconditions without
+embedding or maintainer inference;
 terminal operations remain replayable. See [operator bounds and upgrade
 recovery](operations.md#source-maintenance-context-and-navigation).
 

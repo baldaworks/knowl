@@ -190,6 +190,98 @@ Common `KNOWL_*` overrides include:
 - `KNOWL_SERVER_LISTEN_ADDR`
 - `KNOWL_OPERATOR_TOKEN`
 
+## Optional embeddings
+
+Embeddings are off by default. Disabled configuration creates no embedding
+client, reads no embedding credential and makes no model/readiness request.
+The maintainer selected by `knowl.provider` remains a separate requirement.
+
+This opt-in fragment matches the checked-in CPU sidecar profile:
+
+```yaml
+knowl:
+  embeddings:
+    enabled: true
+    endpoint: http://tei:80/v1/embeddings
+    model: intfloat/multilingual-e5-base
+    revision: d128750597153bb5987e10b1c3493a34e5a4502a
+    dimensions: 768
+    query_prefix: 'query: '
+    passage_prefix: 'passage: '
+    failure_policy: lexical
+```
+
+`endpoint` is the full URL for one OpenAI-compatible float embedding API. Use
+`api_key_env: YOUR_EMBEDDING_KEY` to read an optional bearer credential from the
+process environment. It names the variable, not its value; a missing configured
+credential fails startup. Enabled configuration requires model/revision and
+1–4,096 dimensions. Model/revision/prefix fields are bounded at 256 UTF-8 bytes;
+the endpoint at 2,048. Empty prefixes are supported for models that require none.
+Userinfo and fragments in endpoints are rejected. HTTPS uses normal TLS;
+private HTTP is supported. Redirects and inference retries are disabled.
+
+The operator must keep the declared immutable revision aligned with the served
+weights. The response model name and vector dimension are checked; the generic
+API cannot attest weight identity. Change the declared revision and rebuild
+when weights change. The pinned reference is
+[E5-base](https://huggingface.co/intfloat/multilingual-e5-base), served by the
+[CPU TEI sidecar](sidecar.md#optional-cpu-embeddings) with mean float32 output,
+required prefixes and server truncation disabled.
+
+| Setting or fixed bound | Behavior |
+| --- | --- |
+| `failure_policy: lexical` | Classified embedding failure returns lexical evidence with `degraded` mode and a safe reason |
+| `failure_policy: strict` | Missing/unavailable/incompatible dense retrieval returns a typed failure |
+| Request | At most 16 inputs, 2,048 UTF-8 bytes each including prefix, 64 KiB serialized body |
+| Response | At most 1 MiB; complete unique indices, exact model/dimensions, finite nonzero normalized vectors |
+| Inference | 10-second request bound or earlier caller deadline; four concurrent client requests, no hidden retry |
+| Semantic input | NFC/original case; 384 runes per chunk, 64 overlap; 16 chunks/page, four/query or source signals |
+| Projection | At most 8,192 chunks and 64 MiB per scope; 15-minute rebuild or earlier caller deadline |
+
+Rune limits are not tokenizer limits. The service must reject token overflow
+rather than silently truncate; the pinned TEI reports `input_limit`. Chunk/rune
+coverage omissions appear in the Go report. Lexical full-field indexing and
+maintenance's complete-page/request limits still apply. Larger corpora require a
+separately evaluated capacity design; these bounds are not throughput promises.
+
+HTTP/MCP results optionally include, for example:
+
+```json
+{"retrieval":{"effective":"degraded","reason":"unavailable"}}
+```
+
+Effective modes are `lexical`, `hybrid`, `degraded`, and `failed`. Go
+`QueryResult.Retrieval`, `IngestResult.Retrieval` and durable
+`Operation.Retrieval` additionally carry requested mode, model-space prefix,
+candidate/scanned-chunk counts and omitted coverage. Maintenance records its
+selection report before maintainer inference. `Operation.RetrievalAttempt`
+identifies its originating work attempt; terminal/legacy replay does not invent
+or replace historical reports. Reports omit text, endpoint URLs, credentials and
+upstream error bodies. Public transport exposes only effective mode and reason.
+
+A rebuild replaces lexical state first, then generates vectors without holding
+SQL locks. Complete dense publication checks the canonical snapshot again;
+concurrent change discards the stale build. A classified failure saves degraded
+state even under strict policy. With lexical fallback, startup may be ready
+while semantic retrieval is degraded; `/readyz` alone is not a hybrid guarantee.
+Read the retrieval status. Invalid input and caller cancellation never return
+successful fallback.
+
+Queries never trigger a rebuild or download a model. After repairing a degraded
+service, restart Knowl to retry the projection once during startup. Embedded
+applications can call `knowl.RebuildProjection(ctx, config, snapshot)` explicitly.
+Changing model/revision/dimensions/prefixes requires a complete projection rebuild
+and changes maintenance identity. A strict projection error can occur after a
+canonical commit: repair the derived projection, preserving the committed
+facts and raw evidence.
+
+Migration 16 adds disposable vector state and bounded operation reports in both
+stores. Down removes those additions, preserving canonical/raw content and
+older durable state. Stop writers and pair the schema with a compatible binary
+before rollback. Disabling embeddings retains the default lexical behavior and
+ignores derived vectors. See [pending-operation recovery](#upgrading-pending-operations)
+for generation changes.
+
 ## Supported operator workflow
 
 Local workspace bootstrap:
@@ -334,7 +426,7 @@ unchanged document eligible once under the new generation.
 
 ### Source maintenance context and navigation
 
-Source maintenance v5 separates complete catalog navigation from selected
+Source maintenance v6 separates complete catalog navigation from selected
 factual pages. The factual read limit defaults to 20 pages; catalog count does
 not consume that allowance. The model receives `catalogs` as compact
 path/digest/title/children nodes and `catalog_limits` as effective bounds.
@@ -365,7 +457,7 @@ For custom limits, supply all seven positive fields; partially populated values
 are invalid, and `MaxPathBytes` cannot exceed 2,048. The CLI uses the defaults;
 its YAML does not expose `knowl.ingest` or `knowl.maintenance` sections.
 
-Update custom maintainers and supplied-plan callers for `source-maintenance-v5`.
+Update custom maintainers and supplied-plan callers for `source-maintenance-v6`.
 Ordinary page edits still carry schema/source provenance and existing digests.
 Use `catalog_additions` for navigation. For example, this fragment adds a new
 subject catalog and links an ordinary page created in the same plan:
@@ -520,9 +612,9 @@ attached combining marks, normalized with NFC, generic lowercase, then NFC.
 English/Russian case and canonical accents match; accents remain distinct.
 `what` and `why` are ordinary searchable words. Full case folding, stemming,
 transliteration and language-specific paths are outside this literal policy.
-Inflection, plurals and paraphrases are measured limitations; normalization does
-not provide semantic recall. Self-hosted multilingual embedding retrieval is
-owned by Story `knowl-wxe.10`.
+Inflection, plurals and paraphrases are measured limitations of lexical-only
+retrieval. Normalization does not provide semantic recall; optional embeddings
+add a semantic candidate channel independently.
 
 Native indexes receive private reversible tokens for the normalized complete
 words. Original title, tags, description, body and provenance stay intact;
@@ -566,21 +658,24 @@ resuming. Preserve raw and operation history.
 
 #### Upgrading pending operations
 
-The v5 generic literal query/source-selection policy changes the maintenance
-generation from v4. The v4 source wire, complete request sizing and whole-page
-visibility guards remain in force. Changing the effective request cap or sizing format identity,
-contract, schema, read/plan/catalog limits changes the generation. Endpoints,
-credentials and per-source measured usage are excluded. Queued work that still
-needs a plan, including v1/v2/v3/v4 and
-legacy empty-generation work, fails before inference with class `maintenance_policy`
-and reason `maintenance_policy_mismatch`. It is a permanent failure; restart
-and automatic retry do not replan it under new rules. Stored execution metadata
-remains authoritative.
+Source-maintenance-v6 adds output-affecting retrieval policy to the maintenance
+generation. The complete source wire, request sizing and whole-page visibility
+guards remain in force. Contract, schema, effective request cap/format identity,
+read/plan/catalog limits, and embedding space/chunk/fusion/candidate/capacity/
+failure policy identify the generation. Endpoints, credentials, CPU/runtime
+settings and per-source measured usage are excluded.
 
-Already validated concrete stages can resume without inference, including v1
-stages containing catalog FileEdits and v2/v3/v4 stages. They still enforce schema,
-provenance, original digests and atomic commit. Terminal replay remains available. Stale or
-corrupt stages fail under the existing recovery rules.
+Queued work that still needs a plan, including genuine v1-v5 and legacy
+empty-generation work, fails before embedding or maintainer inference with class
+`maintenance_policy` and reason `maintenance_policy_mismatch`. Automatic retry
+and restart do not reinterpret its stored execution metadata.
+
+Already validated concrete stages resume without new inference, including v1
+catalog FileEdits and v2-v5 stages. Schema, provenance, original digests and
+atomic commit remain enforced. Their projection recovery publishes lexical
+state without calling embeddings; dense repair is separate. Terminal replay
+returns persisted outcomes and historical reports when present. Stale or corrupt
+stages still fail under existing recovery rules.
 
 For configured sources, inspect the mismatch and explicitly reserve work under
 the current policy through the existing retry command:
