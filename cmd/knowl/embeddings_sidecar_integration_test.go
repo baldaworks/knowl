@@ -78,7 +78,7 @@ func TestEmbeddingSidecarMergedComposeContract(t *testing.T) {
 		}
 		flags[flag] = tei.Command[i]
 	}
-	expectedFlags := map[string]string{"--model-id": sidecarEmbeddingModel, "--revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3", "--hostname": "0.0.0.0", "--served-model-name": sidecarEmbeddingModel, "--dtype": "float32", "--pooling": "mean", "--tokenization-workers": "2", "--max-concurrent-requests": "4", "--max-client-batch-size": "16", "--max-batch-requests": "8", "--max-batch-tokens": "8192", "--payload-limit": "65536"}
+	expectedFlags := map[string]string{"--model-id": sidecarEmbeddingModel, "--revision": "d128750597153bb5987e10b1c3493a34e5a4502a", "--hostname": "0.0.0.0", "--served-model-name": sidecarEmbeddingModel, "--dtype": "float32", "--pooling": "mean", "--tokenization-workers": "2", "--max-concurrent-requests": "4", "--max-client-batch-size": "16", "--max-batch-requests": "8", "--max-batch-tokens": "8192", "--payload-limit": "65536"}
 	if !reflect.DeepEqual(flags, expectedFlags) {
 		t.Fatalf("server contract=%v", flags)
 	}

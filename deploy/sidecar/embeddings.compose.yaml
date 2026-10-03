@@ -20,13 +20,13 @@ services:
     command:
       - --json-output
       - --model-id
-      - intfloat/multilingual-e5-small
+      - intfloat/multilingual-e5-base
       - --revision
-      - 614241f622f53c4eeff9890bdc4f31cfecc418b3
+      - d128750597153bb5987e10b1c3493a34e5a4502a
       - --hostname
       - 0.0.0.0
       - --served-model-name
-      - intfloat/multilingual-e5-small
+      - intfloat/multilingual-e5-base
       - --dtype
       - float32
       - --pooling

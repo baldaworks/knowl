@@ -9,9 +9,9 @@ knowl:
   embeddings:
     enabled: true
     endpoint: http://tei:80/v1/embeddings
-    model: intfloat/multilingual-e5-small
-    revision: 614241f622f53c4eeff9890bdc4f31cfecc418b3
-    dimensions: 384
+    model: intfloat/multilingual-e5-base
+    revision: d128750597153bb5987e10b1c3493a34e5a4502a
+    dimensions: 768
     query_prefix: 'query: '
     passage_prefix: 'passage: '
     failure_policy: lexical
