@@ -1,0 +1,279 @@
+{
+  "version": "v4",
+  "review_id": "debug",
+  "base_sha": "442d1ae5f87ff3881dd9338e6a4817fc1e7341a7",
+  "head_sha": "c02296561de0e5e230c92d51abd1871ec26763d2",
+  "language": "en",
+  "prompt": {
+    "prompt_id": "diffpal.review",
+    "prompt_version": "v1.5.1",
+    "purpose": "review_changed_diff",
+    "schema_version": "findings.v4"
+  },
+  "change_summary": [
+    "Debug harness rendered the review task without contacting a provider."
+  ],
+  "files": [
+    {
+      "path": ".beads/interactions.jsonl",
+      "status": "modified"
+    },
+    {
+      "path": ".config/diffpal/config.yaml",
+      "status": "added"
+    },
+    {
+      "path": ".config/diffpal/templates/hosted-openai-envsubst.yaml",
+      "status": "added"
+    },
+    {
+      "path": ".config/diffpal/templates/platform-auth.yaml",
+      "status": "added"
+    },
+    {
+      "path": ".config/diffpal/templates/profiles.yaml",
+      "status": "added"
+    },
+    {
+      "path": ".diffpalignore",
+      "status": "added"
+    },
+    {
+      "path": "docs/operations.md",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/git/adapter.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/git/adapter_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/git/cache.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/git/cache_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/reconcile/classify.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/reconcile/stages.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/reconcile/stages_git_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/reconcile/stages_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/execution_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/ingest.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/ingest_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/lint.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/lint_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/maintenance_diagnostic.go",
+      "status": "added"
+    },
+    {
+      "path": "pkg/knowl/app/maintenance_diagnostic_test.go",
+      "status": "added"
+    },
+    {
+      "path": "pkg/knowl/app/maintenance_policy.go",
+      "status": "added"
+    },
+    {
+      "path": "pkg/knowl/app/maintenance_policy_test.go",
+      "status": "added"
+    },
+    {
+      "path": "pkg/knowl/app/plan_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/ports.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/source.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/source_prepared.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/app/source_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/content/fs/commit.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/content/fs/hierarchy_stage.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/content/fs/manifest.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/content/fs/recovery.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/content/fs/source_stage.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/content/fs/stage.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/content/fs/validate.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/content/fs/workspace_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/llmstxt/render.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/llmstxt/render_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_run.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_source.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_source_git_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_source_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/internal/storetest/source_contract.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/internal/storetest/source_retry_contract.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/internal/storetest/work_contract.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/postgres/migrations/00013_maintenance_generation.sql",
+      "status": "added"
+    },
+    {
+      "path": "pkg/knowl/store/postgres/migrations/00014_maintenance_diagnostics.sql",
+      "status": "added"
+    },
+    {
+      "path": "pkg/knowl/store/postgres/operations.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/postgres/source_retry.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/postgres/source_state.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/postgres/store_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/postgres/work.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/sqlite/migrations/00013_maintenance_generation.sql",
+      "status": "added"
+    },
+    {
+      "path": "pkg/knowl/store/sqlite/migrations/00014_maintenance_diagnostics.sql",
+      "status": "added"
+    },
+    {
+      "path": "pkg/knowl/store/sqlite/operations.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/sqlite/source_retry.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/sqlite/source_state.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/sqlite/store_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/sqlite/work.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/types/source.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/types/source_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/types/types.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/wiki/wiki.go",
+      "status": "modified"
+    }
+  ],
+  "findings": []
+}

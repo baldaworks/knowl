@@ -1,0 +1,87 @@
+{
+  "version": "v4",
+  "review_id": "debug",
+  "base_sha": "fbb2a12b942c16304d3256695089a60f93aa9ef8",
+  "head_sha": "b4e0366ed9b5751714802c2d3a363e6e50f95641",
+  "language": "en",
+  "prompt": {
+    "prompt_id": "diffpal.review",
+    "prompt_version": "v1.5.1",
+    "purpose": "review_changed_diff",
+    "schema_version": "findings.v4"
+  },
+  "change_summary": [
+    "Debug harness rendered the review task without contacting a provider."
+  ],
+  "files": [
+    {
+      "path": ".beads/interactions.jsonl",
+      "status": "modified"
+    },
+    {
+      "path": ".config/diffpal/config.yaml",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/git/adapter.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/git/adapter_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/git/cache.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/git/cache_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/reconcile/stages.go",
+      "status": "modified"
+    },
+    {
+      "path": "internal/source/reconcile/stages_git_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/llmstxt/render.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/llmstxt/render_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_run.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_source_git_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_source_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/runtime_test.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/internal/storetest/source_contract.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/postgres/source_state.go",
+      "status": "modified"
+    },
+    {
+      "path": "pkg/knowl/store/sqlite/source_state.go",
+      "status": "modified"
+    }
+  ],
+  "findings": []
+}
