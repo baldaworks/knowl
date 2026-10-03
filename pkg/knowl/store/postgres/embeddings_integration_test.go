@@ -31,6 +31,8 @@ const (
 
 func runEmbeddingPostgres(t *testing.T, dsn string) {
 	t.Helper()
+	t.Run("RebuildDeadline", func(t *testing.T) { runPostgresRebuildDeadline(t, dsn) })
+	t.Run("InferenceFreeProjectionCancellation", func(t *testing.T) { runPostgresInferenceFreeProjectionCancellation(t, dsn) })
 	t.Run("EmbeddingPersistenceAndScope", func(t *testing.T) { runPostgresEmbeddingPersistenceAndScope(t, dsn) })
 	t.Run("EmbeddingPublicationRollsBackAndInvalidates", func(t *testing.T) { runPostgresEmbeddingPublicationRollsBackAndInvalidates(t, dsn) })
 	t.Run("EmbeddingCorruptionFailsClosed", func(t *testing.T) { runPostgresEmbeddingCorruptionFailsClosed(t, dsn) })

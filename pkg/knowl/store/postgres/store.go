@@ -10,11 +10,11 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
-	"sync"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/writelock"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )
@@ -43,7 +43,7 @@ type Store struct {
 	embedding *hybrid.Engine
 	db        *sql.DB
 	dsn       string
-	mu        sync.Mutex
+	mu        writelock.Mutex
 }
 
 var (

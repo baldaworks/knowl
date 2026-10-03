@@ -13,11 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/writelock"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )
@@ -46,7 +46,7 @@ type Store struct {
 	embedding *hybrid.Engine
 	db        *sql.DB
 	path      string
-	mu        sync.Mutex
+	mu        writelock.Mutex
 }
 
 var (

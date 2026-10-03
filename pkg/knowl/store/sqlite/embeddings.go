@@ -21,7 +21,9 @@ func (store *Store) publishEmbeddings(ctx context.Context, scope knowl.ScopeRef,
 	if err := hybrid.ValidateProjection(ctx, state, chunks); err != nil {
 		return err
 	}
-	store.mu.Lock()
+	if err := store.mu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer store.mu.Unlock()
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {

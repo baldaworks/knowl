@@ -26,7 +26,9 @@ func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.Workspace
 	if err := validateScope(snapshot.Scope); err != nil {
 		return err
 	}
-	store.mu.Lock()
+	if err := store.mu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer store.mu.Unlock()
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {

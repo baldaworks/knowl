@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
@@ -11,6 +12,15 @@ import (
 )
 
 func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
+	return store.rebuildWithTimeout(ctx, snapshot, hybrid.RebuildTimeout)
+}
+
+func (store *Store) rebuildWithTimeout(ctx context.Context, snapshot knowl.WorkspaceSnapshot, timeout time.Duration) error {
+	if store.embedding != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	if err := store.rebuildLexical(ctx, snapshot); err != nil {
 		return err
 	}
@@ -73,6 +83,11 @@ func (store *Store) MaintenanceRetrievalPolicy() *app.MaintenanceRetrievalPolicy
 // ProjectWithoutInference finishes an existing historical stage without calling
 // a model introduced by a newer policy. Its dense projection requires repair.
 func (store *Store) ProjectWithoutInference(ctx context.Context, commit knowl.ContentCommit) error {
+	if store.embedding != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, hybrid.RebuildTimeout)
+		defer cancel()
+	}
 	snapshot := commit.Snapshot
 	if err := store.rebuildLexical(ctx, snapshot); err != nil {
 		return err
