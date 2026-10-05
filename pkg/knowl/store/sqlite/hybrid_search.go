@@ -13,7 +13,10 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-var _ app.ReportedSearchIndex = (*Store)(nil)
+var (
+	_ app.ReportedSearchIndex    = (*Store)(nil)
+	_ app.DiagnosticContextIndex = (*Store)(nil)
+)
 
 func (store *Store) SearchWithReport(ctx context.Context, scope knowl.ScopeRef, query string, limits knowl.ReadLimits, sources []knowl.SourceID) ([]knowl.PageReference, knowl.RetrievalReport, error) {
 	report := store.embedding.Report()
@@ -44,7 +47,7 @@ func (store *Store) SearchWithReport(ctx context.Context, scope knowl.ScopeRef, 
 	if err != nil {
 		return nil, report, fmt.Errorf("prepare query: %w: %w", ErrInvalidQuery, err)
 	}
-	refs, _, report, err := store.retrieveHybrid(ctx, scope, query, prepared, limits, sources, false)
+	refs, _, report, _, err := store.retrieveHybrid(ctx, scope, query, prepared, limits, sources, false)
 	return refs, report, err
 }
 
@@ -54,37 +57,44 @@ func (store *Store) SelectContext(ctx context.Context, scope knowl.ScopeRef, sou
 }
 
 func (store *Store) SelectContextWithReport(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, knowl.RetrievalReport, error) {
+	ids, report, _, err := store.SelectContextWithDiagnostics(ctx, scope, source, limits)
+	return ids, report, err
+}
+
+// SelectContextWithDiagnostics reports facts from the same selection pass.
+func (store *Store) SelectContextWithDiagnostics(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, knowl.RetrievalReport, knowl.ContextSelectionDiagnostics, error) {
+	metadata := knowl.ContextSelectionDiagnostics{VectorProjection: &knowl.VectorProjectionStatus{State: knowl.VectorNotChecked}}
 	report := store.embedding.Report()
 	if store.embedding != nil {
 		report.Effective = knowl.RetrievalFailed
 		report.Reason = knowl.RetrievalInvalidInput
 	}
 	if store.embedding == nil {
-		ids, err := store.selectLexicalContext(ctx, scope, source, limits)
-		return ids, report, err
+		return store.selectLexicalContext(ctx, scope, source, limits)
 	}
 	if err := validateScope(scope); err != nil {
-		return nil, report, err
+		return nil, report, metadata, err
 	}
 	if err := ctx.Err(); err != nil {
 		report.Reason = knowl.RetrievalDeadline
-		return nil, report, err
+		return nil, report, metadata, err
 	}
 	query, err := contextpolicy.SourceQuery(source)
 	if err != nil {
-		return nil, report, fmt.Errorf("normalize source query: %w: %w", ErrInvalidQuery, err)
+		return nil, report, metadata, fmt.Errorf("normalize source query: %w: %w", ErrInvalidQuery, err)
 	}
 	prepared, err := hybrid.PrepareSource(ctx, source, store.embedding.Space)
 	if err != nil {
-		return nil, report, err
+		return nil, report, metadata, err
 	}
-	_, ids, report, err := store.retrieveHybrid(ctx, scope, strings.Join(query.Terms, " "), prepared, limits, nil, true)
-	return ids, report, err
+	_, ids, report, metadata, err := store.retrieveHybrid(ctx, scope, strings.Join(query.Terms, " "), prepared, limits, nil, true)
+	return ids, report, metadata, err
 }
 
 // retrieveHybrid invokes the model before opening one consistent SQL snapshot.
 // No query triggers a rebuild or downloads a model.
-func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, query string, prepared hybrid.PreparedText, limits knowl.ReadLimits, sources []knowl.SourceID, contextSelection bool) (resultRefs []knowl.PageReference, resultIDs []knowl.PageID, resultReport knowl.RetrievalReport, resultErr error) {
+func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, query string, prepared hybrid.PreparedText, limits knowl.ReadLimits, sources []knowl.SourceID, contextSelection bool) (resultRefs []knowl.PageReference, resultIDs []knowl.PageID, resultReport knowl.RetrievalReport, resultMetadata knowl.ContextSelectionDiagnostics, resultErr error) {
+	resultMetadata.VectorProjection = &knowl.VectorProjectionStatus{State: knowl.VectorNotChecked}
 	defer func() {
 		if resultErr != nil {
 			resultReport = app.FailedRetrievalReport(ctx, resultReport, resultErr)
@@ -97,12 +107,12 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	if err != nil {
 		report, err = engine.Failure(ctx, report, err)
 		if err != nil {
-			return nil, nil, report, err
+			return nil, nil, report, resultMetadata, err
 		}
 	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, nil, report, err
+		return nil, nil, report, resultMetadata, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	k := boundedLimit(limits.Pages)
@@ -116,7 +126,7 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	if strings.TrimSpace(query) != "" {
 		lexicalRefs, err = store.searchUsing(ctx, tx, scope, query, lexLimits, sources)
 		if err != nil {
-			return nil, nil, report, err
+			return nil, nil, report, resultMetadata, err
 		}
 	}
 	report.LexicalCandidates = len(lexicalRefs)
@@ -129,21 +139,24 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 			err = embeddingFailure(state.Reason)
 		}
 		if err != nil {
+			failed := app.FailedRetrievalReport(ctx, report, err)
+			resultMetadata.VectorProjection = &knowl.VectorProjectionStatus{State: knowl.VectorInvalid, Reason: failed.Reason}
 			report, err = engine.Failure(ctx, report, err)
 			if err != nil {
-				return nil, nil, report, err
+				return nil, nil, report, resultMetadata, err
 			}
 		} else {
+			resultMetadata.VectorProjection = &knowl.VectorProjectionStatus{State: knowl.VectorReady}
 			report.ScannedChunks = len(chunks)
 			report.IndexOmittedChunks = state.OmittedChunks
 			report.IndexOmittedRunes = state.OmittedRunes
 			chunks, err = filterEmbeddingChunks(ctx, tx, scope, chunks, sources)
 			if err != nil {
-				return nil, nil, report, err
+				return nil, nil, report, resultMetadata, err
 			}
 			dense, err = hybrid.Rank(ctx, vectors, chunks, channelLimit)
 			if err != nil {
-				return nil, nil, report, err
+				return nil, nil, report, resultMetadata, err
 			}
 			report.VectorCandidates = len(dense)
 		}
@@ -161,24 +174,27 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 		seeds := fused[:min(contextpolicy.CandidateLimit(k), len(fused))]
 		neighbors, err := store.contextNeighbors(ctx, tx, scope, seeds, max(0, k-1))
 		if err != nil {
-			return nil, nil, report, err
+			return nil, nil, report, resultMetadata, err
 		}
 		var recent []knowl.PageID
 		if len(contextpolicy.Merge(k, seeds, neighbors, nil)) < k {
 			recent, err = store.recentContext(ctx, tx, scope, append(append([]knowl.PageID(nil), seeds...), neighbors...), k)
 			if err != nil {
-				return nil, nil, report, err
+				return nil, nil, report, resultMetadata, err
 			}
 		}
-		return nil, contextpolicy.Merge(k, seeds, neighbors, recent), report, ctx.Err()
+		channels := contextpolicy.ChannelReasons(lexIDs, dense)
+		ids, reasons := contextpolicy.MergeWithReasons(k, seeds, neighbors, recent, channels)
+		resultMetadata.Reasons = reasons
+		return nil, ids, report, resultMetadata, ctx.Err()
 	}
 	ids := fused[:min(k, len(fused))]
 	if report.Effective == knowl.RetrievalDegraded {
-		return lexicalRefs[:min(k, len(lexicalRefs))], nil, report, ctx.Err()
+		return lexicalRefs[:min(k, len(lexicalRefs))], nil, report, resultMetadata, ctx.Err()
 	}
 	refs, err := readHybridReferences(ctx, tx, scope, ids, limits.Characters)
 	if err != nil {
-		return nil, nil, report, err
+		return nil, nil, report, resultMetadata, err
 	}
 	lexicalByID := make(map[knowl.PageID]knowl.PageReference, len(lexicalRefs))
 	for _, reference := range lexicalRefs {
@@ -189,7 +205,7 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 			refs[i] = lexicalReference
 		}
 	}
-	return refs, nil, report, ctx.Err()
+	return refs, nil, report, resultMetadata, ctx.Err()
 }
 
 func filterEmbeddingChunks(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, chunks []hybrid.Chunk, sources []knowl.SourceID) ([]hybrid.Chunk, error) {

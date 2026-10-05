@@ -16,7 +16,10 @@ import (
 )
 
 // HybridIndex is the observable store contract for enabled retrieval.
-const hybridTargetID = "semantic"
+const (
+	hybridTargetID    = "semantic"
+	hybridTargetTitle = "Canonical target"
+)
 
 type HybridIndex interface {
 	Index
@@ -90,7 +93,7 @@ func RunHybrid(t *testing.T, factory HybridFactory, projectionMismatch InvalidEr
 	space := app.EmbeddingSpace{Model: "fixture", Revision: "immutable-1", Dimensions: 2, QueryPrefix: "query: ", PassagePrefix: "passage: "}
 	snapshot := func(t *testing.T) knowl.WorkspaceSnapshot {
 		t.Helper()
-		return knowl.WorkspaceSnapshot{Scope: knowl.ScopeRef(t.Name()), SchemaDigest: "schema", Pages: []knowl.PageSnapshot{{ID: hybridTargetID, Path: "wiki/semantic.md", Title: "Canonical target", Body: "Original enduring evidence", Digest: "page-1", SourceRefs: []string{"raw:original@1"}}}}
+		return knowl.WorkspaceSnapshot{Scope: knowl.ScopeRef(t.Name()), SchemaDigest: "schema", Pages: []knowl.PageSnapshot{{ID: hybridTargetID, Path: "wiki/semantic.md", Title: hybridTargetTitle, Body: "Original enduring evidence", Digest: "page-1", SourceRefs: []string{"raw:original@1"}}}}
 	}
 	open := func(t *testing.T, p *controlledEmbeddings, policy app.EmbeddingFailurePolicy) HybridIndex {
 		t.Helper()
@@ -98,6 +101,63 @@ func RunHybrid(t *testing.T, factory HybridFactory, projectionMismatch InvalidEr
 		t.Cleanup(func() { _ = index.Close() })
 		return index
 	}
+	t.Run("actual vector hybrid projection and early failure diagnostics", func(t *testing.T) {
+		provider := &controlledEmbeddings{}
+		index := open(t, provider, app.EmbeddingStrict)
+		diagnostic, ok := index.(app.DiagnosticContextIndex)
+		if !ok {
+			t.Fatal("index lacks actual hybrid context diagnostics")
+		}
+		snap := snapshot(t)
+		if err := index.Rebuild(t.Context(), snap); err != nil {
+			t.Fatal(err)
+		}
+		for _, fixture := range []struct {
+			query  string
+			reason knowl.ContextSelectionReason
+		}{{"paraphrasedneedle", knowl.ContextVector}, {"Original enduring evidence", knowl.ContextHybrid}} {
+			calls := provider.count()
+			ids, report, metadata, err := diagnostic.SelectContextWithDiagnostics(t.Context(), snap.Scope, knowl.SourceSummary{Body: fixture.query}, knowl.ReadLimits{Pages: 1})
+			if err != nil || len(ids) != 1 || ids[0] != hybridTargetID || len(metadata.Reasons) != 1 || metadata.Reasons[hybridTargetID] != fixture.reason || metadata.VectorProjection == nil || metadata.VectorProjection.State != knowl.VectorReady || report.Effective != knowl.RetrievalHybrid || provider.count() != calls+1 {
+				t.Fatalf("actual hybrid facts: ids=%v report=%+v metadata=%+v calls=%d err=%v", ids, report, metadata, provider.count()-calls, err)
+			}
+		}
+		if err := index.ProjectWithoutInference(t.Context(), knowl.ContentCommit{Snapshot: snap}); err != nil {
+			t.Fatal(err)
+		}
+		ids, report, metadata, err := diagnostic.SelectContextWithDiagnostics(t.Context(), snap.Scope, knowl.SourceSummary{Body: hybridTargetTitle}, knowl.ReadLimits{Pages: 1})
+		if !errors.Is(err, app.ErrEmbedding) || len(ids) != 0 || report.Effective != knowl.RetrievalFailed || report.Reason != knowl.RetrievalProjectionNotReady || metadata.VectorProjection == nil || metadata.VectorProjection.State != knowl.VectorInvalid || metadata.VectorProjection.Reason != knowl.RetrievalProjectionNotReady {
+			t.Fatalf("strict observed check lost: ids=%v report=%+v metadata=%+v err=%v", ids, report, metadata, err)
+		}
+		provider.fail(&app.EmbeddingError{Code: knowl.RetrievalUnavailable})
+		_, _, metadata, err = diagnostic.SelectContextWithDiagnostics(t.Context(), snap.Scope, knowl.SourceSummary{Body: hybridTargetTitle}, knowl.ReadLimits{Pages: 1})
+		if !errors.Is(err, app.ErrEmbedding) || metadata.VectorProjection == nil || metadata.VectorProjection.State != knowl.VectorNotChecked {
+			t.Fatalf("upstream failure invented check: %+v %v", metadata, err)
+		}
+		fallbackProvider := &controlledEmbeddings{}
+		fallback := open(t, fallbackProvider, app.EmbeddingFallbackLexical)
+		snap.Scope += "-fallback"
+		if err := fallback.Rebuild(t.Context(), snap); err != nil {
+			t.Fatal(err)
+		}
+		if err := fallback.ProjectWithoutInference(t.Context(), knowl.ContentCommit{Snapshot: snap}); err != nil {
+			t.Fatal(err)
+		}
+		fallbackDiagnostic, ok := fallback.(app.DiagnosticContextIndex)
+		if !ok {
+			t.Fatal("fallback lacks diagnostics")
+		}
+		calls := fallbackProvider.count()
+		ids, report, metadata, err = fallbackDiagnostic.SelectContextWithDiagnostics(t.Context(), snap.Scope, knowl.SourceSummary{Body: hybridTargetTitle}, knowl.ReadLimits{Pages: 1})
+		if err != nil || len(ids) != 1 || metadata.Reasons[hybridTargetID] != knowl.ContextLexical || report.Effective != knowl.RetrievalDegraded || metadata.VectorProjection == nil || metadata.VectorProjection.State != knowl.VectorInvalid || metadata.VectorProjection.Reason != knowl.RetrievalProjectionNotReady || fallbackProvider.count() != calls+1 {
+			t.Fatalf("degraded projection facts: %v %+v %+v %v", ids, report, metadata, err)
+		}
+		fallbackProvider.fail(&app.EmbeddingError{Code: knowl.RetrievalUnavailable})
+		ids, _, metadata, err = fallbackDiagnostic.SelectContextWithDiagnostics(t.Context(), snap.Scope, knowl.SourceSummary{Body: hybridTargetTitle}, knowl.ReadLimits{Pages: 1})
+		if err != nil || len(ids) != 1 || metadata.Reasons[hybridTargetID] != knowl.ContextLexical || metadata.VectorProjection == nil || metadata.VectorProjection.State != knowl.VectorNotChecked {
+			t.Fatalf("API fallback invented projection check: %v %+v %v", ids, metadata, err)
+		}
+	})
 	t.Run("semantic query and direct source seed", func(t *testing.T) {
 		provider := &controlledEmbeddings{}
 		index := open(t, provider, app.EmbeddingFallbackLexical)
@@ -227,7 +287,7 @@ func RunHybrid(t *testing.T, factory HybridFactory, projectionMismatch InvalidEr
 				t.Fatal(err)
 			}
 			provider.fail(&app.EmbeddingError{Code: knowl.RetrievalUnavailable})
-			refs, report, err := index.SearchWithReport(t.Context(), snap.Scope, "Canonical target", knowl.ReadLimits{Pages: 1}, nil)
+			refs, report, err := index.SearchWithReport(t.Context(), snap.Scope, hybridTargetTitle, knowl.ReadLimits{Pages: 1}, nil)
 			if policy == app.EmbeddingStrict {
 				if !errors.Is(err, app.ErrEmbedding) || report.Effective != knowl.RetrievalFailed || len(refs) != 0 {
 					t.Fatalf("strict refs=%v report=%+v err=%v", refs, report, err)

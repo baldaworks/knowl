@@ -20,35 +20,41 @@ type projectionReader interface {
 
 // SelectContext returns source-relevant pages, one-hop context, the required
 // index control page, and only then deterministic recent fallback pages.
-func (store *Store) selectLexicalContext(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, error) {
+func (store *Store) selectLexicalContext(ctx context.Context, scope knowl.ScopeRef, source knowl.SourceSummary, limits knowl.ReadLimits) ([]knowl.PageID, knowl.RetrievalReport, knowl.ContextSelectionDiagnostics, error) {
+	report := store.embedding.Report()
+	metadata := knowl.ContextSelectionDiagnostics{VectorProjection: &knowl.VectorProjectionStatus{State: knowl.VectorNotChecked}}
 	if err := validateScope(scope); err != nil {
-		return nil, err
+		return nil, report, metadata, err
 	}
 	limit := boundedLimit(limits.Pages)
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, report, metadata, err
 	}
 	query, queryErr := contextpolicy.SourceQuery(source)
 	if queryErr != nil {
-		return nil, fmt.Errorf("normalize source query: %w: %w", ErrInvalidQuery, queryErr)
+		return nil, report, metadata, fmt.Errorf("normalize source query: %w: %w", ErrInvalidQuery, queryErr)
 	}
 	candidates, err := store.contextCandidates(ctx, scope, query.Terms, contextpolicy.CandidateLimit(limit))
 	if err != nil {
-		return nil, err
+		return nil, report, metadata, err
 	}
+	report.LexicalCandidates = len(candidates)
+	report.FusedCandidates = len(candidates)
 	neighbors, err := store.contextNeighbors(ctx, store.db, scope, candidates, max(0, limit-1))
 	if err != nil {
-		return nil, err
+		return nil, report, metadata, err
 	}
 	var recent []knowl.PageID
 	if len(contextpolicy.Merge(limit, candidates, neighbors, nil)) < limit {
 		excluded := append(append([]knowl.PageID(nil), candidates...), neighbors...)
 		recent, err = store.recentContext(ctx, store.db, scope, excluded, limit)
 		if err != nil {
-			return nil, err
+			return nil, report, metadata, err
 		}
 	}
-	return contextpolicy.Merge(limit, candidates, neighbors, recent), nil
+	ids, reasons := contextpolicy.MergeWithReasons(limit, candidates, neighbors, recent, contextpolicy.ChannelReasons(candidates, nil))
+	metadata.Reasons = reasons
+	return ids, report, metadata, nil
 }
 
 func (store *Store) contextCandidates(ctx context.Context, scope knowl.ScopeRef, terms []string, limit int) ([]knowl.PageID, error) {
