@@ -19,6 +19,8 @@ const maintenanceGenerationPrefixBytes = 16
 // MaintenancePolicy is the explicit non-secret input to source-maintenance
 // generation. It intentionally cannot carry provider or runtime configuration.
 type MaintenancePolicy struct {
+	Output               *knowl.OutputCorrectionPolicy
+	RequestReservedBytes int
 	Retrieval            *MaintenanceRetrievalPolicy
 	CatalogLimits        knowl.CatalogLimits
 	InputLimits          knowl.MaintenanceInputLimits
@@ -30,14 +32,16 @@ type MaintenancePolicy struct {
 }
 
 type maintenancePolicyPayload struct {
-	Retrieval            *MaintenanceRetrievalPolicy  `json:"retrieval,omitempty"`
-	CatalogLimits        knowl.CatalogLimits          `json:"catalog_limits"`
-	InputLimits          knowl.MaintenanceInputLimits `json:"input_limits"`
-	RequestFormatVersion string                       `json:"request_format_version"`
-	ContractVersion      string                       `json:"contract_version"`
-	SchemaDigest         string                       `json:"schema_digest"`
-	ReadLimits           maintenanceReadLimits        `json:"read_limits"`
-	PlanLimits           maintenancePlanLimits        `json:"plan_limits"`
+	Output               *knowl.OutputCorrectionPolicy `json:"output,omitempty"`
+	RequestReservedBytes int                           `json:"request_reserved_bytes,omitempty"`
+	Retrieval            *MaintenanceRetrievalPolicy   `json:"retrieval,omitempty"`
+	CatalogLimits        knowl.CatalogLimits           `json:"catalog_limits"`
+	InputLimits          knowl.MaintenanceInputLimits  `json:"input_limits"`
+	RequestFormatVersion string                        `json:"request_format_version"`
+	ContractVersion      string                        `json:"contract_version"`
+	SchemaDigest         string                        `json:"schema_digest"`
+	ReadLimits           maintenanceReadLimits         `json:"read_limits"`
+	PlanLimits           maintenancePlanLimits         `json:"plan_limits"`
 }
 
 type maintenanceReadLimits struct {
@@ -105,6 +109,9 @@ func MaintenanceGenerationPrefix(generation string) (string, error) {
 }
 
 func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayload, error) {
+	if err := validateOutputCorrectionPolicy(policy.Output); err != nil {
+		return maintenancePolicyPayload{}, err
+	}
 	if err := validateMaintenanceRetrievalPolicy(policy.Retrieval); err != nil {
 		return maintenancePolicyPayload{}, err
 	}
@@ -121,7 +128,7 @@ func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayl
 	if format == "" {
 		format = sourceEnvelopeFormatVersion
 	}
-	if inputErr != nil || !validRequestFormat(format) {
+	if inputErr != nil || !validRequestFormat(format) || policy.RequestReservedBytes < 0 || policy.RequestReservedBytes > MaxCorrectionFeedbackBytes || policy.RequestReservedBytes >= inputLimits.MaxRequestBytes {
 		return maintenancePolicyPayload{}, fmt.Errorf("invalid request policy: %w", ErrExecutionDescriptorUnavailable)
 	}
 	if readLimits == (knowl.ReadLimits{}) {
@@ -139,6 +146,8 @@ func normalizeMaintenancePolicy(policy MaintenancePolicy) (maintenancePolicyPayl
 		return maintenancePolicyPayload{}, fmt.Errorf("invalid maintenance policy: %w", ErrExecutionDescriptorUnavailable)
 	}
 	return maintenancePolicyPayload{
+		Output:               policy.Output,
+		RequestReservedBytes: policy.RequestReservedBytes,
 		Retrieval:            policy.Retrieval,
 		ContractVersion:      contractVersion,
 		CatalogLimits:        catalogLimits,

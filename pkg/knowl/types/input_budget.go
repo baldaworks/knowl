@@ -12,6 +12,8 @@ type MaintenanceInputLimits struct {
 type MaintenanceRequestBudget struct {
 	// MaxBytes must be positive; the app uses the smaller local/provider cap.
 	MaxBytes int
+	// ReservedBytes leaves room for bounded corrective feedback; zero is compatible.
+	ReservedBytes int
 	// FormatVersion must be nonempty printable text, at most 256 UTF-8 bytes.
 	FormatVersion string
 }

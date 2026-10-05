@@ -35,6 +35,7 @@ type Config struct {
 	WorkerQueueSize int
 	ShutdownTimeout time.Duration
 	Embeddings      EmbeddingsConfig
+	Output          domain.OutputSettings
 }
 
 // DefaultConfig returns conservative local defaults.
@@ -68,6 +69,9 @@ func (config Config) normalized() (Config, error) {
 	config.Workspace = filepath.Clean(workspace)
 	config.Embeddings, err = config.Embeddings.Normalize()
 	if err != nil {
+		return Config{}, err
+	}
+	if _, err := app.NormalizeOutputSettings(config.Output); err != nil {
 		return Config{}, err
 	}
 	config.Sources, err = normalizeSources(config.Workspace, "", config.Sources)

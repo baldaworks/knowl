@@ -34,10 +34,14 @@ func sourceRequestBudget(maintainer Maintainer, limits knowl.MaintenanceInputLim
 	sizer, ok := maintainer.(MaintenanceRequestSizer)
 	if ok {
 		declared := sizer.RequestBudget()
-		if declared.MaxBytes <= 0 || !validRequestFormat(declared.FormatVersion) {
+		if declared.MaxBytes <= 0 || !validRequestFormat(declared.FormatVersion) || declared.ReservedBytes < 0 || declared.ReservedBytes > MaxCorrectionFeedbackBytes {
 			return knowl.MaintenanceRequestBudget{}, nil, ErrMaintenanceInputInvalid
 		}
 		budget.MaxBytes = min(budget.MaxBytes, declared.MaxBytes)
+		budget.ReservedBytes = declared.ReservedBytes
+		if budget.ReservedBytes >= budget.MaxBytes {
+			return knowl.MaintenanceRequestBudget{}, nil, ErrMaintenanceInputInvalid
+		}
 		budget.FormatVersion = declared.FormatVersion
 	}
 	return budget, sizer, nil

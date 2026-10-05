@@ -7,19 +7,21 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowltypes "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // AppConfig is the Knowl section of the Balda-compatible config document.
 type AppConfig struct {
-	Provider   string                 `mapstructure:"provider"`
-	Workspace  WorkspaceConfig        `mapstructure:"workspace"`
-	Storage    StorageConfig          `mapstructure:"storage"`
-	Scope      knowltypes.ScopeRef    `mapstructure:"scope"`
-	Server     ServerConfig           `mapstructure:"server"`
-	Operator   OperatorConfig         `mapstructure:"operator"`
-	Sources    []SourceConfig         `mapstructure:"sources"`
-	Embeddings knowl.EmbeddingsConfig `mapstructure:"embeddings"`
+	Provider   string                    `mapstructure:"provider"`
+	Workspace  WorkspaceConfig           `mapstructure:"workspace"`
+	Storage    StorageConfig             `mapstructure:"storage"`
+	Scope      knowltypes.ScopeRef       `mapstructure:"scope"`
+	Server     ServerConfig              `mapstructure:"server"`
+	Operator   OperatorConfig            `mapstructure:"operator"`
+	Sources    []SourceConfig            `mapstructure:"sources"`
+	Embeddings knowl.EmbeddingsConfig    `mapstructure:"embeddings"`
+	Output     knowltypes.OutputSettings `mapstructure:"output"`
 }
 
 // WorkspaceConfig controls the workspace root used by Knowl.
@@ -168,8 +170,40 @@ type rawAppConfig struct {
 	Operator    OperatorConfig         `mapstructure:"operator"`
 	Sources     []SourceConfig         `mapstructure:"sources"`
 	Embeddings  knowl.EmbeddingsConfig `mapstructure:"embeddings"`
+	Output      rawOutputSettings      `mapstructure:"output"`
 	Ingest      map[string]any         `mapstructure:"ingest"`
 	Maintenance map[string]any         `mapstructure:"maintenance"`
+}
+
+type rawOutputSettings struct {
+	MaxCorrections any `mapstructure:"max_corrections"`
+}
+
+func (settings rawOutputSettings) Normalize() (knowltypes.OutputSettings, error) {
+	if settings.MaxCorrections == nil {
+		return knowltypes.OutputSettings{}, nil
+	}
+	var allowance int
+	switch value := settings.MaxCorrections.(type) {
+	case int:
+		allowance = value
+	case string:
+		switch value {
+		case "0":
+			allowance = 0
+		case "1":
+			allowance = 1
+		default:
+			return knowltypes.OutputSettings{}, app.ErrOutputCorrectionInvalid
+		}
+	default:
+		return knowltypes.OutputSettings{}, app.ErrOutputCorrectionInvalid
+	}
+	output := knowltypes.OutputSettings{MaxCorrections: &allowance}
+	if _, err := app.NormalizeOutputSettings(output); err != nil {
+		return knowltypes.OutputSettings{}, err
+	}
+	return output, nil
 }
 
 // Normalize validates the public config shape and rejects removed compatibility
@@ -185,7 +219,12 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 	if err != nil {
 		return AppConfig{}, err
 	}
+	output, err := config.Output.Normalize()
+	if err != nil {
+		return AppConfig{}, err
+	}
 	return AppConfig{
+		Output:     output,
 		Embeddings: embeddings,
 		Provider:   config.Provider,
 		Workspace:  config.Workspace,
