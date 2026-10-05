@@ -78,16 +78,19 @@ func (requiredInputLimitError) Retryable() bool       { return false }
 
 // fitSourcePages measures indispensable input first, then reads one whole candidate
 // at a time in the index's existing order. It never turns read errors into omissions.
-func (service *IngestService) fitSourcePages(ctx context.Context, input knowl.MaintenanceInput, ids []knowl.PageID) (knowl.MaintenanceInput, knowl.MaintenanceBudgetReport, error) {
-	report := knowl.MaintenanceBudgetReport{MaxBytes: service.requestBudget.MaxBytes}
+func (service *IngestService) fitSourcePages(ctx context.Context, input knowl.MaintenanceInput, ids []knowl.PageID, entries []knowl.ContextPage) (knowl.MaintenanceInput, sourceFittingEvidence, error) {
+	report := sourceFittingEvidence{Budget: knowl.ContextBudget{MaxBytes: service.requestBudget.MaxBytes}, Pages: entries}
 	used, err := service.requestBytes(ctx, input)
-	if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.MaxBytes) {
+	if err == nil {
+		measured := used
+		report.Budget.UsedBytes = &measured
+	}
+	if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes) {
 		return input, report, requiredInputLimitError{}
 	}
 	if err != nil {
 		return input, report, err
 	}
-	report.UsedBytes = used
 	seen := make(map[knowl.PageID]struct{})
 	for _, id := range ids {
 		if err := contextErr(ctx); err != nil {
@@ -112,17 +115,65 @@ func (service *IngestService) fitSourcePages(ctx context.Context, input knowl.Ma
 		}
 		input.Pages = append(input.Pages, pages[0])
 		used, err = service.requestBytes(ctx, input)
-		if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.MaxBytes) {
+		if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes) {
 			input.Pages[len(input.Pages)-1] = knowl.PageSnapshot{}
 			input.Pages = input.Pages[:len(input.Pages)-1]
-			report.OmittedCount++
+			report.Budget.OmittedCount++
+			report.disposition(id, knowl.ContextBudgetOmitted)
 			continue
 		}
 		if err != nil {
 			return input, report, err
 		}
-		report.UsedBytes = used
-		report.IncludedCount++
+		measured := used
+		report.Budget.UsedBytes = &measured
+		report.Budget.IncludedCount++
+		report.disposition(id, knowl.ContextIncluded)
 	}
 	return input, report, nil
+}
+
+type sourceFittingEvidence struct {
+	Budget knowl.ContextBudget
+	Pages  []knowl.ContextPage
+}
+
+func (e *sourceFittingEvidence) disposition(id knowl.PageID, disposition knowl.ContextDisposition) {
+	for i := range e.Pages {
+		if e.Pages[i].PageID == id {
+			e.Pages[i].Disposition = disposition
+			return
+		}
+	}
+}
+
+// pendingContext uses exactly the fitter's ordinary/unique allowance, and caps only telemetry.
+func pendingContext(ids []knowl.PageID, metadata knowl.ContextSelectionDiagnostics, attempt, limit int) (knowl.OperationContextReport, error) {
+	report := knowl.OperationContextReport{Version: 1, WorkAttempt: attempt, Outcome: knowl.ContextAssemblyFailed}
+	if metadata.VectorProjection != nil {
+		projection := *metadata.VectorProjection
+		report.VectorProjection = &projection
+	}
+	seen := make(map[knowl.PageID]bool)
+	for _, id := range ids {
+		if _, ordinary := wiki.PageIDFromPath("wiki/" + string(id) + ".md"); !ordinary || seen[id] {
+			continue
+		}
+		if len(seen) >= limit {
+			break
+		}
+		seen[id] = true
+		if !validContextPageID(id) || len(report.Pages) >= maxOperationContextPages {
+			report.EntriesOmitted++
+			continue
+		}
+		reason := metadata.Reasons[id]
+		if reason == "" {
+			reason = knowl.ContextUnknown
+		}
+		report.Pages = append(report.Pages, knowl.ContextPage{PageID: id, SelectionReason: reason, Disposition: knowl.ContextPending})
+	}
+	count := len(seen)
+	report.CandidateCount = &count
+	return BoundOperationContextReport(report)
 }

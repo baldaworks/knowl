@@ -160,13 +160,20 @@ func (store *Store) SavePlan(ctx context.Context, id knowl.OperationID, summary 
 	if strings.TrimSpace(summary.Digest) == "" {
 		return fmt.Errorf("plan digest is required: %w", ErrConflict)
 	}
+	if summary.FileCount < 0 || int64(summary.FileCount) > 2147483647 {
+		return fmt.Errorf("plan file count is invalid: %w", ErrConflict)
+	}
 	diagnostics, err := app.EncodeMaintenanceDiagnostics(summary.Diagnostics)
 	if err != nil {
 		return fmt.Errorf("maintenance diagnostics are invalid: %w", ErrConflict)
 	}
 	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
 		if current.status == knowl.StatusPlanned {
-			if current.planDigest == summary.Digest &&
+			var sameDigest bool
+			if err := tx.QueryRowContext(ctx, `SELECT plan_digest = ? FROM knowl_operations WHERE operation_id = ?`, summary.Digest, id).Scan(&sameDigest); err != nil {
+				return fmt.Errorf("compare plan digest: %w", err)
+			}
+			if sameDigest && (!current.planFileCount.Valid || current.planFileCount.Int64 == int64(summary.FileCount)) &&
 				(current.maintenanceDiagnostics == diagnostics || current.maintenanceDiagnostics == "" && diagnostics == "[]") {
 				return nil
 			}
@@ -175,7 +182,7 @@ func (store *Store) SavePlan(ctx context.Context, id knowl.OperationID, summary 
 		if current.status != knowl.StatusReceived {
 			return invalidTransition(current.status, knowl.StatusPlanned)
 		}
-		return updateOperationTx(ctx, tx, id, `status = ?, plan_digest = ?, maintenance_diagnostics = ?, updated_at = ?`, knowl.StatusPlanned, summary.Digest, diagnostics, nowString())
+		return updateOperationTx(ctx, tx, id, `status = ?, plan_digest = ?, maintenance_diagnostics = ?, updated_at = ?, plan_file_count = ?`, knowl.StatusPlanned, summary.Digest, diagnostics, nowString(), summary.FileCount)
 	})
 }
 
@@ -271,15 +278,17 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	var operation knowl.Operation
 	var sourceAdapter, sourceID, sourceVersion, sourceDigest, schemaDigest, maintenanceGeneration, maintenanceDiagnostics string
 	var kind, status, failureClass, failureReason, readyAt, updatedAt string
-	var retrievalReport sql.NullString
+	var retrievalReport, contextReport sql.NullString
+	var planDigest string
+	var planFileCount sql.NullInt64
 	err := store.db.QueryRowContext(ctx, `
 		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation,
 		       schema_digest, status, attempt, work_attempt, retry_attempt, manual_retry_count,
-		       failure_class, failure_reason, maintenance_diagnostics, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt
+		       failure_class, failure_reason, maintenance_diagnostics, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt, `+operationContextColumn+`, `+operationPlanDigestColumn+`, plan_file_count
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id).
 		Scan(&operation.ID, &kind, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest, &maintenanceGeneration,
 			&schemaDigest, &status, &operation.Attempt, &operation.WorkAttempt, &operation.RetryAttempt,
-			&operation.ManualRetryCount, &failureClass, &failureReason, &maintenanceDiagnostics, &readyAt, &updatedAt, &retrievalReport, &operation.RetrievalAttempt)
+			&operation.ManualRetryCount, &failureClass, &failureReason, &maintenanceDiagnostics, &readyAt, &updatedAt, &retrievalReport, &operation.RetrievalAttempt, &contextReport, &planDigest, &planFileCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.Operation{}, ErrNotFound
 	}
@@ -312,13 +321,16 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	if err != nil {
 		return knowl.Operation{}, err
 	}
+	if err := decodeOperationDetails(&operation, contextReport.String, planDigest, planFileCount); err != nil {
+		return knowl.Operation{}, err
+	}
 	_ = schemaDigest
 	return operation, nil
 }
 
 type operationRow struct {
 	status                 knowl.OperationStatus
-	planDigest             string
+	planFileCount          sql.NullInt64
 	commitGeneration       string
 	failureClass           string
 	failureReason          string
@@ -337,9 +349,9 @@ func (store *Store) transition(ctx context.Context, id knowl.OperationID, update
 	var current operationRow
 	var status string
 	if err := tx.QueryRowContext(ctx, `
-		SELECT status, plan_digest, commit_generation, failure_class, failure_reason, lease_expires_at, maintenance_diagnostics
+		SELECT status, commit_generation, failure_class, failure_reason, lease_expires_at, maintenance_diagnostics, plan_file_count
 		FROM knowl_operations WHERE operation_id = ?`, id).
-		Scan(&status, &current.planDigest, &current.commitGeneration, &current.failureClass, &current.failureReason, &current.leaseExpiresAt, &current.maintenanceDiagnostics); errors.Is(err, sql.ErrNoRows) {
+		Scan(&status, &current.commitGeneration, &current.failureClass, &current.failureReason, &current.leaseExpiresAt, &current.maintenanceDiagnostics, &current.planFileCount); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return fmt.Errorf("read operation transition: %w", err)

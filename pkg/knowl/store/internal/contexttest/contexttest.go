@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -85,6 +86,29 @@ func Run(t *testing.T, index Index) {
 		Source: knowl.SourceRef{Adapter: "fixture", ID: "decision-42"},
 		Title:  "Badger session",
 	}
+	t.Run("measured lexical neighbor and recent reasons", func(t *testing.T) {
+		diagnostic, ok := index.(app.DiagnosticContextIndex)
+		if !ok {
+			t.Fatal("index lacks actual context diagnostics")
+		}
+		ids, report, metadata, err := diagnostic.SelectContextWithDiagnostics(t.Context(), Scope, knowl.SourceSummary{Body: semanticTerm}, knowl.ReadLimits{Pages: 6})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertIDs(t, ids, relevantID, outgoingID, incomingID, controlID, "recent/new", "recent/old")
+		want := map[knowl.PageID]knowl.ContextSelectionReason{relevantID: knowl.ContextLexical, outgoingID: knowl.ContextNeighbor, incomingID: knowl.ContextNeighbor, "recent/new": knowl.ContextRecent, "recent/old": knowl.ContextRecent}
+		if len(metadata.Reasons) != len(want) {
+			t.Fatalf("reason count=%d want%d", len(metadata.Reasons), len(want))
+		}
+		for id, reason := range want {
+			if metadata.Reasons[id] != reason {
+				t.Fatalf("page=%s reason=%s want%s", id, metadata.Reasons[id], reason)
+			}
+		}
+		if report.Effective != knowl.RetrievalLexical || report.LexicalCandidates != 1 || report.VectorCandidates != 0 || metadata.VectorProjection == nil || metadata.VectorProjection.State != knowl.VectorNotChecked {
+			t.Fatalf("invented or lost retrieval evidence: %+v %+v", report, metadata)
+		}
+	})
 	t.Run("generic semantic signals and raw bounds", func(t *testing.T) {
 		fixture := Snapshot()
 		fixture.Pages = append(fixture.Pages, page("canonical", "wiki/canonical.md", "Café SDKхранилище2", "What is WHY", -40))

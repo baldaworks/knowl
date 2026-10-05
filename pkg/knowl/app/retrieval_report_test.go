@@ -35,7 +35,7 @@ func TestRetrievalReportTypedRoundTripAndLegacy(t *testing.T) {
 	if err != nil || got == nil || *got != report {
 		t.Fatalf("report round trip=%#v %v", got, err)
 	}
-	for _, legacy := range []string{"", "null"} {
+	for _, legacy := range []string{"", nullReportJSON} {
 		if got, err := DecodeRetrievalReport(legacy); err != nil || got != nil {
 			t.Fatalf("legacy report=%#v %v", got, err)
 		}

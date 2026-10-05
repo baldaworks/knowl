@@ -127,11 +127,12 @@ type httpIngestResponse struct {
 }
 
 type httpOperationResponse struct {
-	Retrieval *domain.RetrievalStatus `json:"retrieval,omitempty"`
-	ID        domain.OperationID      `json:"id"`
-	Status    string                  `json:"status"`
-	UpdatedAt time.Time               `json:"updated_at"`
-	Failure   *domain.Failure         `json:"failure,omitempty"`
+	Details   *domain.OperationDetails `json:"details,omitempty"`
+	Retrieval *domain.RetrievalStatus  `json:"retrieval,omitempty"`
+	ID        domain.OperationID       `json:"id"`
+	Status    string                   `json:"status"`
+	UpdatedAt time.Time                `json:"updated_at"`
+	Failure   *domain.Failure          `json:"failure,omitempty"`
 }
 
 func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
@@ -178,6 +179,7 @@ func httpIngestResult(operation domain.Operation) httpIngestResponse {
 
 func httpOperationResult(operation domain.Operation) httpOperationResponse {
 	return httpOperationResponse{
+		Details:   app.PublicOperationDetails(operation),
 		Retrieval: app.PublicRetrievalStatus(operation.Retrieval),
 		ID:        operation.ID,
 		Status:    httpOperationStatus(operation.Status),

@@ -573,6 +573,9 @@ components:
       type: object
       required: [class, operation_id]
       properties:
+        reason:
+          type: string
+          description: Stable application failure code when classified; no provider error text.
         class:
           type: string
         operation_id:
@@ -581,6 +584,8 @@ components:
       type: object
       required: [id, status, updated_at]
       properties:
+        details:
+          $ref: '#/components/schemas/OperationDetails'
         retrieval:
           $ref: '#/components/schemas/RetrievalStatus'
         id:
@@ -604,3 +609,200 @@ components:
         reason:
           type: string
           enum: [invalid_configuration, invalid_input, unavailable, deadline, input_limit, response_limit, invalid_response, model_mismatch, dimension_mismatch, projection_not_ready, projection_drift, projection_capacity]
+    DiagnosticCount:
+      type: integer
+      minimum: 0
+      maximum: 2147483647
+    RetrievalReason:
+      type: string
+      enum: [invalid_configuration, invalid_input, unavailable, deadline, input_limit, response_limit, invalid_response, model_mismatch, dimension_mismatch, projection_not_ready, projection_drift, projection_capacity]
+    OperationDetails:
+      type: object
+      additionalProperties: false
+      description: Bounded stored facts. Missing evidence is unavailable. Reads do not rerun selection or inference. Details serialize to less than 96 KiB.
+      properties:
+        context:
+          $ref: '#/components/schemas/OperationContextReport'
+        retrieval:
+          $ref: '#/components/schemas/RetrievalReport'
+        retrieval_attempt:
+          $ref: '#/components/schemas/DiagnosticCount'
+        plan:
+          $ref: '#/components/schemas/OperationPlanSummary'
+        warnings:
+          type: array
+          maxItems: 64
+          items:
+            $ref: '#/components/schemas/MaintenanceWarning'
+        warnings_omitted:
+          $ref: '#/components/schemas/DiagnosticCount'
+        execution:
+          $ref: '#/components/schemas/OperationExecutionDetails'
+    OperationContextReport:
+      type: object
+      additionalProperties: false
+      required: [version, work_attempt, outcome, entries_omitted]
+      description: One immutable snapshot per producing work attempt; at most 32 KiB. A crash before finalization can leave it absent.
+      properties:
+        version:
+          type: integer
+          enum: [1]
+        work_attempt:
+          $ref: '#/components/schemas/DiagnosticCount'
+        outcome:
+          type: string
+          enum: [assembled, selection_failed, assembly_failed]
+        candidate_count:
+          allOf:
+            - $ref: '#/components/schemas/DiagnosticCount'
+          description: Unique ordinary candidates eligible under the factual page allowance, excluding controls and duplicates. Not a wiki-wide omission count.
+        catalog_count:
+          allOf:
+            - $ref: '#/components/schemas/DiagnosticCount'
+          description: Number of catalogs observed when inspection succeeded.
+        pages:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ContextPage'
+        entries_omitted:
+          allOf:
+            - $ref: '#/components/schemas/DiagnosticCount'
+          description: Candidate entries omitted from this diagnostic list by its bounds; distinct from budget exclusions.
+        budget:
+          $ref: '#/components/schemas/ContextBudget'
+        vector_projection:
+          $ref: '#/components/schemas/VectorProjectionStatus'
+    ContextPage:
+      type: object
+      additionalProperties: false
+      required: [page_id, selection_reason, disposition]
+      properties:
+        page_id:
+          type: string
+          maxLength: 2048
+          description: Canonical relative ordinary page ID, additionally limited to 2048 UTF-8 bytes.
+        selection_reason:
+          type: string
+          enum: [lexical, vector, hybrid, neighbor, recent, unknown]
+          description: First actual selection phase; unsupported custom indexes report unknown.
+        disposition:
+          type: string
+          enum: [included, budget_omitted, pending]
+    ContextBudget:
+      type: object
+      additionalProperties: false
+      required: [max_bytes, included_count, omitted_count]
+      properties:
+        max_bytes:
+          type: integer
+          minimum: 1
+          maximum: 4194304
+        used_bytes:
+          allOf:
+            - $ref: '#/components/schemas/DiagnosticCount'
+          description: Serialized accepted request bytes, or last measured accepted prefix on partial failure. Absent when preflight stopped exact measurement; measured required overflow can exceed max_bytes.
+        included_count:
+          $ref: '#/components/schemas/DiagnosticCount'
+        omitted_count:
+          allOf:
+            - $ref: '#/components/schemas/DiagnosticCount'
+          description: Actual candidates omitted by the request byte budget; pending candidates are not counted.
+    VectorProjectionStatus:
+      type: object
+      additionalProperties: false
+      required: [state]
+      description: Check observed during the producing attempt, never current projection readiness at poll time.
+      properties:
+        state:
+          type: string
+          enum: [not_checked, ready, invalid]
+          x-enum-varnames: [VectorNotChecked, VectorReady, VectorInvalid]
+        reason:
+          $ref: '#/components/schemas/RetrievalReason'
+    RetrievalReport:
+      type: object
+      additionalProperties: false
+      required: [requested, effective, lexical_candidates, vector_candidates, fused_candidates, scanned_chunks, query_omitted_runes, index_omitted_chunks, index_omitted_runes]
+      properties:
+        requested:
+          type: string
+          enum: [lexical, hybrid]
+        effective:
+          type: string
+          enum: [lexical, hybrid, degraded, failed]
+        reason:
+          $ref: '#/components/schemas/RetrievalReason'
+        model_space:
+          type: string
+          pattern: '^[0-9a-f]{16}$'
+          description: Non-secret fingerprint, without model endpoint or credentials.
+        lexical_candidates:
+          type: integer
+          minimum: 0
+          maximum: 100
+        vector_candidates:
+          type: integer
+          minimum: 0
+          maximum: 100
+        fused_candidates:
+          type: integer
+          minimum: 0
+          maximum: 200
+        scanned_chunks:
+          type: integer
+          minimum: 0
+          maximum: 8192
+        query_omitted_runes:
+          $ref: '#/components/schemas/DiagnosticCount'
+        index_omitted_chunks:
+          $ref: '#/components/schemas/DiagnosticCount'
+        index_omitted_runes:
+          $ref: '#/components/schemas/DiagnosticCount'
+    OperationPlanSummary:
+      type: object
+      additionalProperties: false
+      required: [digest]
+      properties:
+        digest:
+          type: string
+          pattern: '^[0-9a-fA-F]{64}$'
+          description: Stored validated/staged SHA-256 digest, without edits or rationale.
+        file_count:
+          allOf:
+            - $ref: '#/components/schemas/DiagnosticCount'
+          description: Stored number of staged files when known. Legacy digest-only rows omit it.
+    MaintenanceWarning:
+      type: object
+      additionalProperties: false
+      required: [code, path]
+      properties:
+        code:
+          type: string
+          enum: [citation.unknown_source, link.original_unresolved, catalog.dependency_rejected]
+        path:
+          type: string
+          maxLength: 2048
+          description: Safe relative identifier, additionally limited to 2048 UTF-8 bytes.
+        target:
+          type: string
+          maxLength: 2048
+          description: Safe relative identifier when available; no URL or arbitrary message.
+    OperationExecutionDetails:
+      type: object
+      additionalProperties: false
+      required: [work_attempt, retry_attempt, manual_retry_count, apply_attempt]
+      properties:
+        work_attempt:
+          $ref: '#/components/schemas/DiagnosticCount'
+        retry_attempt:
+          $ref: '#/components/schemas/DiagnosticCount'
+        manual_retry_count:
+          $ref: '#/components/schemas/DiagnosticCount'
+        apply_attempt:
+          allOf:
+            - $ref: '#/components/schemas/DiagnosticCount'
+          description: Existing canonical apply-attempt counter, not inference calls.
+        ready_at:
+          type: string
+          format: date-time

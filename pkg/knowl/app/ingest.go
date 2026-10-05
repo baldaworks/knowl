@@ -63,6 +63,8 @@ type IngestResult struct {
 	Budget *knowl.MaintenanceBudgetReport
 	// Retrieval is transient when a custom operation store cannot persist reports.
 	Retrieval *knowl.RetrievalReport
+	// Context is transient when a custom operation store cannot persist snapshots.
+	Context *knowl.OperationContextReport
 }
 
 // IngestSubmission is the durable handoff from request-time source acceptance
@@ -414,7 +416,7 @@ func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.Wor
 	if err := ValidateExecutionDescriptor(operation.Key, descriptor); err != nil {
 		return IngestResult{}, err
 	}
-	result := IngestResult{Operation: operation, Retrieval: operation.Retrieval}
+	result := IngestResult{Operation: operation, Retrieval: operation.Retrieval, Context: operation.Context}
 	if terminalOperation(operation.Status) {
 		return result, nil
 	}
@@ -430,7 +432,7 @@ func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.Wor
 		}
 	case errors.Is(loadErr, ErrStageNotFound) && operation.Status == knowl.StatusReceived:
 		planned, planErr := service.prepareStage(ctx, submission, nil)
-		result.withRetrieval(planned, operation.WorkAttempt)
+		result.withPreparation(planned, operation.WorkAttempt)
 		if planErr != nil {
 			return service.failIngest(ctx, result, failureClass(planErr), planErr)
 		}
@@ -495,7 +497,7 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 	if err != nil {
 		return IngestResult{Operation: submission.Operation}, fmt.Errorf("read submitted operation: %w", err)
 	}
-	result := IngestResult{Operation: operation, Retrieval: operation.Retrieval}
+	result := IngestResult{Operation: operation, Retrieval: operation.Retrieval, Context: operation.Context}
 	switch operation.Status {
 	case knowl.StatusCommitted, knowl.StatusAwaitingReview, knowl.StatusApplying, knowl.StatusFailed:
 		return result, nil
@@ -524,7 +526,7 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 		claim, claimErr := service.operations.ClaimOperation(ctx, operation.Key.Scope, operation.ID, knowl.WorkLease(lease))
 		if errors.Is(claimErr, ErrNoReadyOperation) {
 			current, readErr := service.operations.Operation(ctx, operation.Key.Scope, operation.ID)
-			return IngestResult{Operation: current, Retrieval: current.Retrieval}, readErr
+			return IngestResult{Operation: current, Retrieval: current.Retrieval, Context: current.Context}, readErr
 		}
 		if claimErr != nil {
 			return result, claimErr
@@ -552,7 +554,7 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 		ctx = executionCtx
 		var err error
 		prepared, err = service.prepareStage(ctx, submission, suppliedPlan)
-		result.withRetrieval(prepared, operation.WorkAttempt)
+		result.withPreparation(prepared, operation.WorkAttempt)
 		if err != nil {
 			return service.failIngest(ctx, result, failureClass(err), err)
 		}
@@ -600,16 +602,24 @@ type preparedStage struct {
 	Budget             *knowl.MaintenanceBudgetReport
 	Retrieval          *knowl.RetrievalReport
 	RetrievalPersisted bool
+	Context            *knowl.OperationContextReport
+	ContextPersisted   bool
 }
 
-func (result *IngestResult) withRetrieval(prepared preparedStage, attempt int) {
-	if prepared.Retrieval == nil {
-		return
+func (result *IngestResult) withPreparation(prepared preparedStage, attempt int) {
+	result.Budget = prepared.Budget
+	if prepared.Retrieval != nil {
+		result.Retrieval = prepared.Retrieval
 	}
-	result.Retrieval = prepared.Retrieval
-	if prepared.RetrievalPersisted {
+	if prepared.RetrievalPersisted && prepared.Retrieval != nil {
 		result.Operation.Retrieval = prepared.Retrieval
 		result.Operation.RetrievalAttempt = attempt
+	}
+	if prepared.Context != nil {
+		result.Context = prepared.Context
+	}
+	if prepared.ContextPersisted {
+		result.Operation.Context = prepared.Context
 	}
 }
 
@@ -638,9 +648,38 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 	}
 	summary.Source, summary.Version = submission.accepted.Source, submission.accepted.Version
 	var pageIDs []knowl.PageID
-	if index, ok := service.index.(ReportedSearchIndex); ok {
-		var report knowl.RetrievalReport
+	var metadata knowl.ContextSelectionDiagnostics
+	var report knowl.RetrievalReport
+	var reported bool
+	if index, ok := service.index.(DiagnosticContextIndex); ok {
+		pageIDs, report, metadata, err = index.SelectContextWithDiagnostics(readCtx, submission.accepted.Scope, summary, service.readLimits)
+		reported = true
+	} else if index, ok := service.index.(ReportedSearchIndex); ok {
 		pageIDs, report, err = index.SelectContextWithReport(readCtx, submission.accepted.Scope, summary, service.readLimits)
+		reported = true
+	} else {
+		pageIDs, err = service.index.SelectContext(readCtx, submission.accepted.Scope, summary, service.readLimits)
+	}
+	if err == nil || len(pageIDs) > 0 {
+		snapshot, snapshotErr := pendingContext(pageIDs, metadata, submission.Operation.WorkAttempt, service.readLimits.Pages)
+		if snapshotErr != nil {
+			return prepared, errors.Join(err, snapshotErr)
+		}
+		if err != nil {
+			snapshot.Outcome = knowl.ContextSelectionFailed
+		}
+		prepared.Context = &snapshot
+	} else if metadata.VectorProjection != nil {
+		projection := *metadata.VectorProjection
+		prepared.Context = &knowl.OperationContextReport{Version: 1, WorkAttempt: submission.Operation.WorkAttempt, Outcome: knowl.ContextSelectionFailed, VectorProjection: &projection}
+	}
+	finalized := false
+	defer func() {
+		if !finalized && prepared.Context != nil {
+			preparationErr = errors.Join(preparationErr, service.saveContextReport(ctx, submission, &prepared))
+		}
+	}()
+	if reported {
 		if reportErr := ValidateRetrievalReport(report); reportErr != nil {
 			return prepared, errors.Join(err, reportErr)
 		}
@@ -654,8 +693,6 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 			}
 			prepared.RetrievalPersisted = true
 		}
-	} else {
-		pageIDs, err = service.index.SelectContext(readCtx, submission.accepted.Scope, summary, service.readLimits)
 	}
 	if err != nil {
 		cancel()
@@ -666,6 +703,8 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		cancel()
 		return prepared, fmt.Errorf("catalogs: %w", err)
 	}
+	catalogCount := len(inspection.Catalogs)
+	prepared.Context.CatalogCount = &catalogCount
 	catalogs, err := catalogGraph(inspection.Catalogs, service.catalogLimits)
 	if err != nil {
 		cancel()
@@ -677,12 +716,21 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 		Scope:       submission.accepted.Scope, Schema: submission.schema, Source: submission.accepted,
 		SourceText: string(sourceText), Catalogs: catalogs, Limits: service.readLimits,
 	}
-	input, budget, err := service.fitSourcePages(readCtx, input, pageIDs)
+	input, evidence, err := service.fitSourcePages(readCtx, input, pageIDs, prepared.Context.Pages)
+	prepared.Context.Pages, prepared.Context.Budget = evidence.Pages, &evidence.Budget
+	if evidence.Budget.UsedBytes != nil {
+		prepared.Budget = &knowl.MaintenanceBudgetReport{MaxBytes: evidence.Budget.MaxBytes, UsedBytes: *evidence.Budget.UsedBytes, IncludedCount: evidence.Budget.IncludedCount, OmittedCount: evidence.Budget.OmittedCount}
+	}
 	cancel()
 	if err != nil {
 		return prepared, fmt.Errorf("input_assembly: %w", err)
 	}
+	prepared.Context.Outcome = knowl.ContextAssembled
 	if err := contextErr(ctx); err != nil {
+		return prepared, err
+	}
+	finalized = true
+	if err := service.saveContextReport(ctx, submission, &prepared); err != nil {
 		return prepared, err
 	}
 	var modelPlan knowl.ModelEditPlan
@@ -703,8 +751,27 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 	if err != nil {
 		return prepared, fmt.Errorf("staging: %w", err)
 	}
-	prepared.Plan, prepared.Staged, prepared.Budget = validated, staged, &budget
+	prepared.Plan, prepared.Staged = validated, staged
 	return prepared, nil
+}
+
+func (service *IngestService) saveContextReport(ctx context.Context, submission IngestSubmission, prepared *preparedStage) error {
+	bounded, err := BoundOperationContextReport(*prepared.Context)
+	if err != nil {
+		return err
+	}
+	prepared.Context = &bounded
+	store, ok := service.operations.(OperationContextReportStore)
+	if !ok {
+		return nil
+	}
+	stateCtx, cancel := context.WithTimeout(durableContext(ctx), 5*time.Second)
+	defer cancel()
+	if err := store.SaveOperationContextReport(stateCtx, submission.accepted.Scope, submission.Operation.ID, submission.Operation.WorkAttempt, bounded); err != nil {
+		return fmt.Errorf("context_report: %w", err)
+	}
+	prepared.ContextPersisted = true
+	return nil
 }
 
 func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {
@@ -890,7 +957,7 @@ func (service *IngestService) advancedIngest(ctx context.Context, scope knowl.Sc
 	if operation.Status == knowl.StatusReceived || operation.Status == knowl.StatusPlanned {
 		return false, IngestResult{}, nil
 	}
-	return true, IngestResult{Operation: operation, Retrieval: operation.Retrieval}, nil
+	return true, IngestResult{Operation: operation, Retrieval: operation.Retrieval, Context: operation.Context}, nil
 }
 
 func (service *IngestService) boundedContext(ctx context.Context) (context.Context, context.CancelFunc) {
