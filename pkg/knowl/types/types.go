@@ -236,6 +236,8 @@ type Operation struct {
 	Diagnostics      []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
 	Retrieval        *RetrievalReport        `json:"retrieval,omitempty"`
 	RetrievalAttempt int                     `json:"retrieval_attempt,omitempty"`
+	Context          *OperationContextReport `json:"context,omitempty"`
+	Plan             *OperationPlanSummary   `json:"plan,omitempty"`
 	UpdatedAt        time.Time               `json:"updated_at"`
 }
 

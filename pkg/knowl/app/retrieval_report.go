@@ -12,7 +12,10 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-const maxRetrievalReportBytes = 2048
+const (
+	maxRetrievalReportBytes = 2048
+	nullReportJSON          = "null"
+)
 
 // PublicRetrievalStatus excludes internal selection counts and model identity.
 // Missing legacy evidence remains missing; invalid evidence is never published.
@@ -104,7 +107,7 @@ func DecodeRetrievalReport(encoded string) (*knowl.RetrievalReport, error) {
 	if len(encoded) > maxRetrievalReportBytes {
 		return nil, ErrRetrievalReportInvalid
 	}
-	if strings.TrimSpace(encoded) == "" || strings.TrimSpace(encoded) == "null" {
+	if strings.TrimSpace(encoded) == "" || strings.TrimSpace(encoded) == nullReportJSON {
 		return nil, nil
 	}
 	decoder := json.NewDecoder(bytes.NewBufferString(encoded))
