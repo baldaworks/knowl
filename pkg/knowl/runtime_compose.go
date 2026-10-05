@@ -139,7 +139,7 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 			}
 		}
 	}
-	runtime.scheduler, err = newOperationScheduler(runtime.operations, runner, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize})
+	runtime.scheduler, err = newOperationScheduler(runtime.operations, runner, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize, slots: slots})
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose operation scheduler: %w", err)
 	}

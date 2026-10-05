@@ -56,6 +56,10 @@ func newExecutionSlots(owners []*executionSlot) *executionSlots {
 }
 
 func (pool *executionSlots) acquire(ctx context.Context) (*executionUse, error) {
+	return pool.acquireUntil(ctx, nil)
+}
+
+func (pool *executionSlots) acquireUntil(ctx context.Context, stop <-chan struct{}) (*executionUse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -64,6 +68,8 @@ func (pool *executionSlots) acquire(ctx context.Context) (*executionUse, error) 
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-pool.stopping:
+		return nil, ErrHostClosed
+	case <-stop:
 		return nil, ErrHostClosed
 	case slot = <-pool.available:
 	}
