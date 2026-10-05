@@ -2,6 +2,7 @@ package knowl
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -145,13 +146,25 @@ func TestHostComposesDistinctRuntimeSessions(t *testing.T) {
 	if err := host.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if factory.closes.Load() != 2 {
+	if factory.closes.Load() != 2 || factory.calls.Load() != 4 {
 		t.Fatalf("provider closes=%d", factory.closes.Load())
 	}
+	encoded, err := json.Marshal(struct {
+		CaseID      string `json:"case_id"`
+		Owners      int32  `json:"owners"`
+		Bindings    int32  `json:"bindings"`
+		Closes      int32  `json:"closes"`
+		SourceCalls int32  `json:"source_calls"`
+		Outcome     string `json:"outcome"`
+	}{"isolated-runtime-owners", factory.builds.Load(), factory.bindings.Load(), factory.closes.Load(), factory.calls.Load(), "met"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(string(encoded))
 }
 
 type slotRuntimeFactory struct {
-	builds, bindings, closes atomic.Int32
+	builds, bindings, closes, calls atomic.Int32
 }
 
 func (factory *slotRuntimeFactory) Build(_ context.Context, request agentfactory.BuildRequest) (adkagent.Agent, error) {
@@ -161,6 +174,7 @@ func (factory *slotRuntimeFactory) Build(_ context.Context, request agentfactory
 	}
 	agent, err := adkagent.New(adkagent.Config{Name: fmt.Sprintf("owner_%d", owner), Run: func(ctx adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
 		return func(yield func(*session.Event, error) bool) {
+			factory.calls.Add(1)
 			binding, err := ctx.Session().State().Get("owner_binding")
 			if errors.Is(err, session.ErrStateKeyNotExist) {
 				factory.bindings.Add(1)

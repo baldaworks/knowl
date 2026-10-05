@@ -3,6 +3,7 @@ package app_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -93,7 +94,8 @@ func TestApplyCoordinatorOrdersCompleteProjectionTails(t *testing.T) {
 func TestConcurrentPreparedSourcePlansFailSafely(t *testing.T) {
 	workspace, store, _, _ := newWorkflow(t, false, nil)
 	gate := newTestApplyCoordinator()
-	service, err := app.NewIngestService(workspace, store, store, applyFactMaintainer{}, app.IngestOptions{ApplyCoordinator: gate})
+	var calls atomic.Int32
+	service, err := app.NewIngestService(workspace, store, store, applyFactMaintainer{calls: &calls}, app.IngestOptions{ApplyCoordinator: gate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +131,10 @@ func TestConcurrentPreparedSourcePlansFailSafely(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace.Root(), "wiki/entities/source-2.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale factual page committed: %v", err)
 	}
+	if calls.Load() != 2 {
+		t.Fatalf("conflict replanned source %d times", calls.Load())
+	}
+	logConflictObservation(t, "source-source-conflict", calls.Load(), 0, result.Operation)
 }
 
 func TestCanceledApplyCoordinatorWaitCannotCommit(t *testing.T) {
@@ -205,9 +211,12 @@ func (index *delayedApplyIndex) Project(ctx context.Context, commit knowl.Conten
 	return index.SearchIndex.Project(ctx, commit)
 }
 
-type applyFactMaintainer struct{}
+type applyFactMaintainer struct{ calls *atomic.Int32 }
 
-func (applyFactMaintainer) Plan(_ context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
+func (maintainer applyFactMaintainer) Plan(_ context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
+	if maintainer.calls != nil {
+		maintainer.calls.Add(1)
+	}
 	id := input.Source.Source.ID
 	ref := app.SourceRefKey(input.Source)
 	content := fmt.Sprintf("---\ntype: entity\ntitle: %s\nknowl:\n  id: entities/%s\n  source_refs: [%s]\n---\n# %s\n\nRecorded fact.\n", id, id, ref, id)
@@ -241,7 +250,8 @@ func TestOverlappingSourceAndHierarchyPreserveFirstCommit(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	source, err := app.NewIngestService(workspace, store, store, applyFactMaintainer{}, app.IngestOptions{AutoApply: true, ApplyCoordinator: gate})
+	var calls atomic.Int32
+	source, err := app.NewIngestService(workspace, store, store, applyFactMaintainer{calls: &calls}, app.IngestOptions{AutoApply: true, ApplyCoordinator: gate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,14 +286,20 @@ func TestOverlappingSourceAndHierarchyPreserveFirstCommit(t *testing.T) {
 	if err := workspace.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if calls.Load() != 1 || maintainer.calls.Load() != 1 {
+		t.Fatalf("conflict calls source%d hierarchy%d", calls.Load(), maintainer.calls.Load())
+	}
+	logConflictObservation(t, "source-hierarchy-conflict", calls.Load(), maintainer.calls.Load(), stale.result.Operation)
 }
 
 type blockedApplyHierarchy struct {
 	ready, resume chan struct{}
 	delegate      hierarchyMaintainer
+	calls         atomic.Int32
 }
 
 func (maintainer *blockedApplyHierarchy) PlanHierarchy(ctx context.Context, input knowl.HierarchyInput) (knowl.HierarchyModelPlan, error) {
+	maintainer.calls.Add(1)
 	plan, err := maintainer.delegate.PlanHierarchy(ctx, input)
 	if err != nil {
 		return plan, err
@@ -362,4 +378,21 @@ func (maintainer preserveApplyHierarchy) PlanHierarchy(_ context.Context, input 
 		plan.Catalogs = append(plan.Catalogs, knowl.HierarchyCatalogSpec{Path: catalog.Path, Title: title, Children: catalog.Children})
 	}
 	return plan, nil
+}
+
+func logConflictObservation(t *testing.T, id string, sourceCalls, hierarchyCalls int32, operation knowl.Operation) {
+	t.Helper()
+	encoded, err := json.Marshal(struct {
+		CaseID         string                `json:"case_id"`
+		SourceCalls    int32                 `json:"source_calls"`
+		HierarchyCalls int32                 `json:"hierarchy_calls"`
+		Status         knowl.OperationStatus `json:"status"`
+		FailureClass   string                `json:"failure_class"`
+		FailureReason  string                `json:"failure_reason"`
+		Outcome        string                `json:"outcome"`
+	}{id, sourceCalls, hierarchyCalls, operation.Status, operation.Failure.Class, operation.Failure.Reason, "met"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log(string(encoded))
 }

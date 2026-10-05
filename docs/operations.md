@@ -18,6 +18,59 @@ Knowl is a standalone knowledge service with:
 Baseline deployment is service/sidecar mode. Fx embedding is the alternative
 for Go applications that want the same runtime in-process.
 
+## Maintenance workers
+
+`knowl.workers` defaults to `1`; set it to `2` to allow a second maintenance
+operation to infer while the first waits for its model. Only integer `1` and `2`
+are supported. Omitted means one; explicit zero, strings, fractions and larger
+values fail preflight. This setting applies to serving and `knowl run` alike.
+
+```yaml
+knowl:
+  workers: 2
+```
+
+Each worker owns an independent maintainer runtime and session. Two workers can
+double the configured provider tree's process count, memory and inference cost.
+A provider tree can itself contain multiple processes. Concurrent operations
+may finish in a different order; this setting makes no throughput guarantee.
+Programmatic `Options.Maintainer` is a singleton and requires capacity one.
+A supplied `RuntimeFactory` must build a fresh agent for each owner.
+
+The asynchronous scheduler, synchronous Drain/RunOnce, explicit hierarchy and
+optional model-lint calls share the same execution capacity. There is no live
+resizing. Direct hierarchy and model-lint admission include waiting in a total
+five-minute bound, shortened by the caller's deadline and existing read limits.
+Concurrent Drain invocations wait cancelably; each reports only its own claims.
+Wake hints are bounded and lossy; accepted operations remain in durable storage
+and periodic scans recover missed hints. Work is claimed only after admission.
+
+Inference runs outside the canonical write lock. A shared publication gate
+orders commit, full-snapshot projection and durable outcome across source
+maintenance, hierarchy and source synchronization. Catalog and log preconditions
+can conflict even when operations edit different factual pages. A stale plan
+fails permanently with class `canonical_conflict` and reason
+`precondition_failed`, preserving the first commit. Knowl does not automatically
+rebase, replan or spend an output-correction turn on this conflict. Review the
+current workspace before an explicit retry.
+
+Stop first closes admission and new claims, then allows active owners to drain
+within the active shutdown caller's bound. When that bound expires, Stop cancels
+active executions and returns the context error. A concurrent Stop waiting for
+shutdown serialization honors its own deadline and returns its context error
+without canceling the first caller's graceful drain. Stop retains resources still
+in use; a subsequent Stop joins exited owners and retries failed cleanup before
+closing the store.
+Providers and custom maintainers must cooperate with context cancellation.
+A provider or custom maintainer that ignores cancellation can delay final
+cleanup; the host does not force-close its live resources. Startup recovery
+precedes worker admission.
+Stop all writers before standalone projection rebuilds, migrations or backups.
+
+To roll back capacity, stop and drain the old host, set `workers: 1`, then
+restart. Preserve the complete workspace, immutable raw revisions, operational
+database and recovery journal. Interrupted operations use normal durable recovery.
+
 ## Configuration
 
 The CLI loads `.config/knowl/config.yaml` by default. `--config-dir` selects an
@@ -40,6 +93,7 @@ runtime:
 
 knowl:
   provider: opencode
+  workers: 1
   output:
     max_corrections: 1
   workspace:

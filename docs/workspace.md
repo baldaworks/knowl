@@ -267,8 +267,8 @@ Startup recovery runs before projection readiness:
 - a `committed` journal is cleaned after the canonical files are complete;
 - incomplete staging is discarded as uncommitted work.
 
-The host repeats recovery during shutdown so interrupted operations remain
-inspectable through redacted operation status. Do not hand-edit staging or
+Shutdown preserves interrupted operations for startup recovery and inspection
+through redacted operation status. Do not hand-edit staging or
 recovery files while a host is running. For a backup, stop the host first and
 copy the complete workspace; the SQL projection can be rebuilt from its
 Markdown snapshot.

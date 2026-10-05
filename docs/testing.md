@@ -47,7 +47,7 @@ to strict gates.
 | `http-content-origin`, `mcp-content-origin` | `TestContextBaselineURIReferenceThroughHTTPAndMCP`: supplied body, default media type, source identity, terminal replay and zero URL fetches | REQ-URI-001; `.6` |
 | Missing or conflicting ingest payloads | `TestPublicIngestRequiresExactlyOnePayload`: real HTTP machine-readable `invalid_request` and MCP typed `ErrInvalidArguments` | REQ-URI-001; `.6` |
 | Bounded structured output correction | `TestRuntimeCorrectionSequence` and actual runtime/application fixtures; strict gates | REQ-OUTPUT-001; `.8` |
-| `blocked-execution` | Actual scheduler cycle, existing controlled runner/claim seams and channel barriers | REQ-EXEC-001; `.9` |
+| `blocked-execution` | Actual configured scheduler at capacity one/two, controlled runner/claims and channel barriers; strict order gates | REQ-EXEC-001; `.9` |
 | `stale-write` | Existing `TestIngestRejectsStaleReviewedPlan`: real precondition rejection and preserved human edit | REQ-EXEC-001; `.9` |
 | Cancellation, shutdown, atomic recovery | Existing scheduler renewal-loss/shutdown tests and filesystem recovery suites | REQ-EXEC/EVAL-001; `.9` |
 | Knowledge loop, idempotency, provenance, replay, restart | Existing `TestHostGoldenKnowledgeLoopThroughMCPAndHTTP`, `TestHostGoldenAcceptedOperationResumesAcrossRestart`, store golden projection contracts | REQ-EVAL-001; all Stories |
@@ -107,10 +107,11 @@ policy generations before reservation. Frozen historical policy payloads from
 v1 (`9e9edf0`), v2 (`fddb1a3`) and v3 (`0a1d133`) and v4 (`c929d69`) drive queued rejection and
 concrete-stage/terminal replay recovery without new inference.
 
-Current default scheduler order is `first_started`, `first_released`,
-`second_started`. This records default serial execution; it does not establish
-future configured capacity-two behavior. Story `.9` owns that configuration and
-its strict progress/isolated-session test. URI references and caller-supplied
+Default scheduler order is `first_started`, `first_released`, `second_started`.
+Configured capacity two requires `first_started`, `second_started`,
+`first_released`. Both orders are strict gates repeated with controlled barriers.
+Independent runtime agents/session bindings and finite owner counts are also
+measured through the actual runtime factory. URI references and caller-supplied
 content with a URL origin preserve raw/provider content, default media types
 and source identity through both public transports. Terminal idempotent replay
 returns the same completed operation without new inference or a URL fetch.
@@ -355,3 +356,44 @@ They do not rely on nanosecond delays or weaken canonical/idempotency assertions
 Run the full native/race/lint/architecture suites, repeat generation and tagged
 PostgreSQL contracts before delivery. No runtime dependency upgrade or real
 embedding experiment is needed for these output-policy changes.
+
+## Bounded maintenance execution gates
+
+Run the fixed concurrency evaluation twice:
+
+```sh
+go test -count=2 -json ./pkg/knowl ./pkg/knowl/app \
+  -run 'TestContextBaselineBlockedExecution|TestHostComposesDistinctRuntimeSessions|TestConcurrentPreparedSourcePlansFailSafely|TestOverlappingSourceAndHierarchyPreserveFirstCommit' \
+  > /tmp/knowl-concurrency-eval.jsonl
+```
+
+Decoded observations report capacity and event order for `blocked-execution`,
+measured owners/session bindings/close counts/source calls for
+`isolated-runtime-owners`, and actual model call counts plus safe status/failure
+fields for `source-source-conflict` and `source-hierarchy-conflict`. Repeated
+observations must agree; timestamps and elapsed time are not benchmarks. Default
+one deliberately retains serial order (`gap` for parallel progress); configured
+two requires `met`. Conflicts preserve first-committed facts/log and make exactly
+two source calls or one source plus one hierarchy call, without automatic replanning.
+
+| Contract | Behavioral coverage | Requirement |
+|---|---|---|
+| Supported config and no startup on rejection | Actual CLI decoder and native host preflight | REQ-WORK-CAPACITY/ISOLATION |
+| Two active owners; third remains unclaimed | Real SQLite scheduler, async and Drain, exact WorkAttempt counts | REQ-WORK-CAPACITY/CLAIMS |
+| Independent sessions and bounded runtimes | Actual ADK factory/state sentinels, repeated binding reuse and close counts | REQ-WORK-ISOLATION |
+| Shared entry points and truthful shutdown | Real background/hierarchy with pending Drain/lint; timeout retains live owners, later Stop joins/closes | REQ-WORK-LIFECYCLE/COMPATIBILITY |
+| Independent leases and recovery | Shared SQLite/PostgreSQL work contract; owner-specific renewal loss fixture | REQ-WORK-CLAIMS |
+| Canonical conflicts and projection order | Real app/workspace stale source/source and source/hierarchy plans; delayed projection; source-sync canceled gate and recovery | REQ-WORK-INTEGRITY |
+| Durable reports/public compatibility | Existing actual HTTP/MCP operation-details, correction, golden replay and authenticated-stage recovery fixtures | REQ-WORK-COMPATIBILITY |
+| Failed setup/close ownership | Actual provider factory/setup/cleanup errors; Build blocked until cleanup, retry only failed components | REQ-WORK-LIFECYCLE |
+
+The complete native/race/lint suite, architecture constraints and real tagged
+PostgreSQL contract are delivery gates. PostgreSQL containers remain opt-in:
+
+```sh
+go test -tags integration ./pkg/knowl/store/postgres \
+  -run TestStoreContractWithTestcontainers -count=1
+```
+
+These controlled fixtures establish execution and integrity contracts. They do
+not promise production throughput or two successful commits from overlapping plans.

@@ -95,7 +95,9 @@ The quickstart uses the hosted `openai` maintainer provider. Other
 configurations may use `opencode_acp`, which requires `opencode acp` on `PATH`
 and an authenticated OpenCode session. See
 [configuration and operations](docs/operations.md) for provider and source
-settings.
+settings. Maintenance runs sequentially by default; opt into
+[two isolated workers](docs/operations.md#maintenance-workers) when a blocked
+model call should allow another operation to progress.
 
 ## Connect an Agent
 

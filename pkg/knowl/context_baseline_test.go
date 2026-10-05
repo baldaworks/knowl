@@ -3,6 +3,7 @@ package knowl
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"sync"
@@ -14,35 +15,45 @@ import (
 )
 
 func TestContextBaselineBlockedExecution(t *testing.T) {
-	var previous []string
-	for pass := range 2 {
-		sequence := observeBlockedBaseline(t)
-		if pass == 1 && !reflect.DeepEqual(previous, sequence) {
-			t.Fatal("execution sequence changed between controlled runs")
-		}
-		previous = sequence
-		outcome := "gap"
-		if slices.Index(sequence, "second_started") < slices.Index(sequence, "first_released") {
-			outcome = "met"
-		}
-		encoded, err := json.Marshal(struct {
-			CaseID   string   `json:"case_id"`
-			Sequence []string `json:"sequence"`
-			Outcome  string   `json:"outcome"`
-		}{"blocked-execution", sequence, outcome})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Log(string(encoded))
+	for _, capacity := range []int{1, 2} {
+		t.Run(fmt.Sprintf("workers%d", capacity), func(t *testing.T) {
+			var previous []string
+			for pass := range 2 {
+				sequence := observeBlockedBaseline(t, capacity)
+				if pass == 1 && !reflect.DeepEqual(previous, sequence) {
+					t.Fatal("execution sequence changed between controlled runs")
+				}
+				previous = sequence
+				want := []string{"first_started", "first_released", "second_started"}
+				outcome := "gap"
+				if capacity == 2 {
+					want = []string{"first_started", "second_started", "first_released"}
+					outcome = "met"
+				}
+				if !reflect.DeepEqual(sequence, want) {
+					t.Fatalf("capacity%d sequence=%v want%v", capacity, sequence, want)
+				}
+				encoded, err := json.Marshal(struct {
+					CaseID   string   `json:"case_id"`
+					Capacity int      `json:"capacity"`
+					Sequence []string `json:"sequence"`
+					Outcome  string   `json:"outcome"`
+				}{"blocked-execution", capacity, sequence, outcome})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Log(string(encoded))
+			}
+		})
 	}
 }
 
-func observeBlockedBaseline(t *testing.T) []string {
+func observeBlockedBaseline(t *testing.T, capacity int) []string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	store := &schedulerStore{claims: []domain.WorkClaim{schedulerClaim("first"), schedulerClaim("second")}}
-	started, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	started, secondStarted, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var mu sync.Mutex
 	var sequence []string
 	record := func(event string) {
@@ -62,35 +73,50 @@ func observeBlockedBaseline(t *testing.T) []string {
 				return app.IngestResult{Operation: claim.Operation}, ctx.Err()
 			}
 		case "second":
+			select {
+			case <-started:
+			case <-ctx.Done():
+				return app.IngestResult{}, ctx.Err()
+			}
 			record("second_started")
+			close(secondStarted)
 		}
 		claim.Operation.Status = domain.StatusCommitted
 		return app.IngestResult{Operation: claim.Operation}, nil
-	}), schedulerOptions{claimBatch: 2})
-	go func() {
-		scheduler.cycle(ctx)
-		close(done)
-	}()
-	// On any assertion failure cancel the blocked runner and join the actual cycle.
+	}), schedulerOptions{claimBatch: 2, slots: newExecutionSlots(baselineOwners(capacity))})
+	if err := scheduler.start(ctx); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		cancel()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Error("baseline scheduler did not terminate after cancellation")
+		if err := scheduler.stop(context.Background()); err != nil {
+			t.Error(err)
 		}
 	}()
+
 	select {
 	case <-started:
 	case <-ctx.Done():
 		t.Fatal("first operation never started")
 	}
 	scheduler.Wake("second")
+	if capacity == 2 {
+		select {
+		case <-secondStarted:
+		case <-ctx.Done():
+			t.Fatal("second owner did not start before releasing first")
+		}
+	}
 	close(release)
-	select {
-	case <-done:
-	case <-ctx.Done():
-		t.Fatal("baseline scheduler did not complete released work")
+	if capacity == 1 {
+		select {
+		case <-secondStarted:
+		case <-ctx.Done():
+			t.Fatal("default serial work did not progress")
+		}
+	}
+	if err := scheduler.stop(ctx); err != nil {
+		t.Fatal(err)
 	}
 	if store.claimCount() != 0 || len(store.recordedFailures()) != 0 || len(store.recordedClaimFailures()) != 0 || len(store.recordedRetries()) != 0 {
 		t.Fatal("scheduler lost queued work or unexpectedly failed/retried")
@@ -101,4 +127,12 @@ func observeBlockedBaseline(t *testing.T) []string {
 		t.Fatal("scheduler omitted or duplicated a controlled execution event")
 	}
 	return slices.Clone(sequence)
+}
+
+func baselineOwners(capacity int) []*executionSlot {
+	owners := make([]*executionSlot, capacity)
+	for i := range owners {
+		owners[i] = &executionSlot{}
+	}
+	return owners
 }
