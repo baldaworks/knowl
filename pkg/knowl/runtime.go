@@ -33,6 +33,7 @@ type Host struct {
 	workspace        *contentfs.Workspace
 	closer           io.Closer
 	maintainerCloser io.Closer
+	slots            *executionSlots
 
 	operations  app.OperationStore
 	index       app.SearchIndex
