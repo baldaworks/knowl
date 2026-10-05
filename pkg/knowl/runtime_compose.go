@@ -112,7 +112,7 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 	runtime.sourceState = store.sources
 	runtime.closer = store.closer
 	maintainer := slots.all[0].maintainer
-	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, runtime.workspace, runtime.operations, runtime.index, store.checker, maintainer)
+	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, runtime.workspace, runtime.operations, runtime.index, store.checker, maintainer, slots)
 	if err != nil {
 		return composedRuntime{}, err
 	}
@@ -205,6 +205,7 @@ func composeServices(
 	index app.SearchIndex,
 	checker projectionChecker,
 	maintainer app.Maintainer,
+	slots *executionSlots,
 ) (*app.IngestService, *app.QueryService, *app.LintService, error) {
 	ingestOptions := hostIngestOptions(config)
 	service, err := app.NewIngestService(workspace, operations, index, maintainer, ingestOptions)
@@ -225,7 +226,11 @@ func composeServices(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("compose query service: %w", err)
 	}
-	lint, err := app.NewLintService(workspace, index, app.LintOptions{ReadLimits: config.ReadLimits, Maintainer: maintainer})
+	var lintMaintainer app.Maintainer
+	if maintainer != nil {
+		lintMaintainer = slotLintMaintainer{slots: slots}
+	}
+	lint, err := app.NewLintService(workspace, index, app.LintOptions{ReadLimits: config.ReadLimits, Maintainer: lintMaintainer})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("compose lint service: %w", err)
 	}

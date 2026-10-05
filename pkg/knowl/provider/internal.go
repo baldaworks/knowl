@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/normahq/runtime/v2/agentfactory"
 	"github.com/normahq/runtime/v2/structuredagent"
@@ -213,6 +212,9 @@ func newRuntimeMaintainer(factory RuntimeFactory, providerID, workspace string, 
 }
 
 func (maintainer *RuntimeMaintainer) ensureRuntime(ctx context.Context) (*maintainerRuntime, error) {
+	if len(maintainer.cleanup) != 0 {
+		return nil, permanentProviderFailure(reasonProviderSetup)
+	}
 	if maintainer.runtime != nil {
 		return maintainer.runtime, nil
 	}
@@ -235,16 +237,16 @@ func (maintainer *RuntimeMaintainer) ensureRuntime(ctx context.Context) (*mainta
 		MCPServerIDs:     []string{},
 	})
 	if err != nil {
-		closeAgent(agent)
+		maintainer.discardAgent(agent)
 		return nil, transientProviderFailure(reasonProviderBuild)
 	}
 	if err := correctionContextError(ctx); err != nil {
-		closeAgent(agent)
+		maintainer.discardAgent(agent)
 		return nil, err
 	}
 	sessions := maintainer.newSession()
 	if sessions == nil {
-		closeAgent(agent)
+		maintainer.discardAgent(agent)
 		return nil, permanentProviderFailure(reasonProviderSetup)
 	}
 	wrapped, err := structuredagent.NewAgent(
@@ -259,13 +261,13 @@ func (maintainer *RuntimeMaintainer) ensureRuntime(ctx context.Context) (*mainta
 		structuredagent.WithOutputValidationRetries(0),
 	)
 	if err != nil {
-		closeAgent(agent)
+		maintainer.discardAgent(agent)
 		return nil, permanentProviderFailure(reasonProviderSetup)
 	}
 	wrapped = preserveSessionState(wrapped)
 	runtimeRunner, err := maintainer.newRunner(wrapped, sessions)
 	if err != nil {
-		closeAgent(agent)
+		maintainer.discardAgent(agent)
 		return nil, permanentProviderFailure(reasonProviderSetup)
 	}
 	if _, err := sessions.Create(ctx, &session.CreateRequest{
@@ -273,16 +275,15 @@ func (maintainer *RuntimeMaintainer) ensureRuntime(ctx context.Context) (*mainta
 		UserID:    maintainerUserID,
 		SessionID: maintainerSessionID,
 	}); err != nil {
-		closeAgent(agent)
+		maintainer.discardAgent(agent)
 		return nil, transientProviderFailure(reasonProviderSession)
 	}
 	if !stopSetupCancellation() || correctionContextError(ctx) != nil {
-		closeAgent(agent)
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = sessions.Delete(cleanupCtx, &session.DeleteRequest{AppName: maintainerAppName, UserID: maintainerUserID, SessionID: maintainerSessionID})
+		closer, _ := agent.(io.Closer)
+		maintainer.discardRuntime(&maintainerRuntime{closer: closer, sessions: sessions, sessionID: maintainerSessionID})
 		return nil, correctionContextError(ctx)
 	}
+
 	setupComplete = true
 	closer, _ := agent.(io.Closer)
 	maintainer.runtime = &maintainerRuntime{

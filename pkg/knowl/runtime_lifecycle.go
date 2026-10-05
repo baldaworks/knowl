@@ -159,6 +159,7 @@ func (host *Host) Stop(ctx context.Context) error {
 	}
 	host.closed = true
 	host.ready.Store(false)
+	host.slots.stopAdmission()
 	server := host.server
 	cancel := host.cancel
 	host.mu.Unlock()
@@ -167,8 +168,15 @@ func (host *Host) Stop(ctx context.Context) error {
 		component string
 		err       error
 	}
-	results := make(chan shutdownResult, 3)
-	components := 2
+	results := make(chan shutdownResult, 4)
+	components := 3
+	go func() {
+		err := host.slots.wait(ctx)
+		if err != nil {
+			host.slots.cancel()
+		}
+		results <- shutdownResult{component: "execution owners", err: err}
+	}()
 	go func() { results <- shutdownResult{component: "scheduler", err: host.scheduler.stop(ctx)} }()
 	go func() { results <- shutdownResult{component: "source scheduler", err: host.sourceJobs.stop(ctx)} }()
 	if server != nil {
@@ -192,7 +200,7 @@ func (host *Host) Stop(ctx context.Context) error {
 	}
 	if host.maintainerCloser != nil {
 		if err := host.maintainerCloser.Close(); err != nil {
-			shutdownErrs = append(shutdownErrs, fmt.Errorf("close Knowl maintainer: %w", err))
+			return fmt.Errorf("close Knowl maintainer: %w", err)
 		}
 	}
 	if err := host.closer.Close(); err != nil {

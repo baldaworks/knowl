@@ -36,6 +36,7 @@ type RuntimeMaintainer struct {
 
 	mu      chan struct{}
 	runtime *maintainerRuntime
+	cleanup []*maintainerRuntime
 	closed  bool
 }
 
