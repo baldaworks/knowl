@@ -266,3 +266,80 @@ func TestHostMixedEntriesShareOwnersAndShutdown(t *testing.T) {
 		t.Fatalf("final owner counts builds%d closes%d", factory.builds.Load(), factory.closes.Load())
 	}
 }
+
+func TestConcurrentStopWaitHonorsCallerBound(t *testing.T) {
+	config := DefaultConfig()
+	config.Workspace = t.TempDir()
+	factory := &lifecycleRuntimeFactory{entered: make(chan struct{}, 1), canceled: make(chan struct{}, 1), release: make(chan struct{})}
+	host, err := New(t.Context(), Options{Config: config, Maintainer: &lifecycleLintMaintainer{factory: factory}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	lintDone := make(chan error, 1)
+	go func() { _, runErr := host.Lint().Lint(ctx, config.Scope); lintDone <- runErr }()
+	select {
+	case <-factory.entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	firstStop := make(chan error, 1)
+	go func() { firstStop <- host.Stop(context.Background()) }()
+	select {
+	case <-host.slots.stopping:
+	case <-ctx.Done():
+		t.Fatal("first stop did not close admission")
+	}
+	secondCtx, secondCancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer secondCancel()
+	secondStop := make(chan error, 1)
+	go func() { secondStop <- host.Stop(secondCtx) }()
+	released := false
+	defer func() {
+		cancel()
+		if !released {
+			close(factory.release)
+		}
+		_ = host.Stop(context.Background())
+	}()
+	select {
+	case err = <-secondStop:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("waiting stop ignored deadline=%v", err)
+		}
+	case <-time.After(time.Second):
+		close(factory.release)
+		released = true
+		<-lintDone
+		<-firstStop
+		<-secondStop
+		t.Fatal("concurrent Stop waited beyond its deadline")
+	}
+	if factory.closes.Load() != 0 {
+		t.Fatal("waiting Stop closed live resource")
+	}
+	select {
+	case <-factory.canceled:
+		t.Fatal("waiting Stop canceled first caller's graceful drain")
+	default:
+	}
+	close(factory.release)
+	released = true
+	select {
+	case <-lintDone:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	select {
+	case err = <-firstStop:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err = host.Stop(ctx); err != nil || factory.closes.Load() != 1 {
+		t.Fatalf("joined cleanup=%v closes%d", err, factory.closes.Load())
+	}
+}

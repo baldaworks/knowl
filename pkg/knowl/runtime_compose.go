@@ -255,6 +255,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		sources:          cloneSources(runtime.sources),
 		sourceByID:       sourceIndex(runtime.sources),
 		sourceJobs:       sourceJobs,
+		stopGate:         make(chan struct{}, 1),
 		scheduler:        runtime.scheduler,
 		service:          runtime.service,
 		hierarchy:        runtime.hierarchy,

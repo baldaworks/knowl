@@ -150,8 +150,15 @@ func (host *Host) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	host.stopMu.Lock()
-	defer host.stopMu.Unlock()
+	select {
+	case host.stopGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-host.stopGate }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	host.mu.Lock()
 	if host.resourcesClosed {
 		host.mu.Unlock()
