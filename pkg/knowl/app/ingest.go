@@ -31,6 +31,7 @@ const (
 
 // IngestOptions configures bounded planning and the review gate.
 type IngestOptions struct {
+	ApplyCoordinator ApplyCoordinator
 	// CatalogLimits bounds complete navigation independently of ReadLimits.Pages.
 	// An entirely zero value selects defaults; custom values must set every field.
 	CatalogLimits knowl.CatalogLimits
@@ -127,19 +128,20 @@ type ApplyResult struct {
 
 // IngestService coordinates source acceptance, planning, review, commit, and projection.
 type IngestService struct {
-	outputPolicy    knowl.OutputCorrectionPolicy
-	retrievalPolicy *MaintenanceRetrievalPolicy
-	content         ContentStore
-	operations      OperationStore
-	index           SearchIndex
-	maintainer      Maintainer
-	requestSizer    MaintenanceRequestSizer
-	requestBudget   knowl.MaintenanceRequestBudget
-	catalogLimits   knowl.CatalogLimits
-	planLimits      PlanLimits
-	readLimits      knowl.ReadLimits
-	leaseDuration   time.Duration
-	autoApply       bool
+	applyCoordinator ApplyCoordinator
+	outputPolicy     knowl.OutputCorrectionPolicy
+	retrievalPolicy  *MaintenanceRetrievalPolicy
+	content          ContentStore
+	operations       OperationStore
+	index            SearchIndex
+	maintainer       Maintainer
+	requestSizer     MaintenanceRequestSizer
+	requestBudget    knowl.MaintenanceRequestBudget
+	catalogLimits    knowl.CatalogLimits
+	planLimits       PlanLimits
+	readLimits       knowl.ReadLimits
+	leaseDuration    time.Duration
+	autoApply        bool
 }
 
 var _ interface {
@@ -198,19 +200,20 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 		retrievalPolicy = &copied
 	}
 	return &IngestService{
-		outputPolicy:    outputPolicy,
-		retrievalPolicy: retrievalPolicy,
-		content:         content,
-		operations:      operations,
-		index:           index,
-		maintainer:      maintainer,
-		requestSizer:    requestSizer,
-		requestBudget:   requestBudget,
-		catalogLimits:   options.CatalogLimits,
-		planLimits:      options.PlanLimits,
-		readLimits:      options.ReadLimits,
-		leaseDuration:   options.LeaseDuration,
-		autoApply:       options.AutoApply,
+		applyCoordinator: options.ApplyCoordinator,
+		outputPolicy:     outputPolicy,
+		retrievalPolicy:  retrievalPolicy,
+		content:          content,
+		operations:       operations,
+		index:            index,
+		maintainer:       maintainer,
+		requestSizer:     requestSizer,
+		requestBudget:    requestBudget,
+		catalogLimits:    options.CatalogLimits,
+		planLimits:       options.PlanLimits,
+		readLimits:       options.ReadLimits,
+		leaseDuration:    options.LeaseDuration,
+		autoApply:        options.AutoApply,
 	}, nil
 }
 
@@ -838,6 +841,11 @@ func (service *IngestService) Recover(ctx context.Context) ([]knowl.RecoveryResu
 }
 
 func (service *IngestService) apply(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, staged knowl.StagedChange) (ApplyResult, error) {
+	release, err := acquireApply(ctx, service.applyCoordinator)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	defer release()
 	if err := service.requireMaintainer(); err != nil {
 		return ApplyResult{}, err
 	}

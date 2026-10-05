@@ -124,12 +124,13 @@ func defaultRunID() knowl.SyncRunID {
 
 // Dependencies binds the validated application ports consumed by the service.
 type Dependencies struct {
-	Adapters      map[knowl.SourceType]app.SourceAdapter
-	State         app.SourceStateStore
-	Content       app.ContentStore
-	SourceContent app.SourceContentStore
-	Search        app.SearchIndex
-	Maintenance   app.SourceMaintenanceQueue
+	ApplyCoordinator app.ApplyCoordinator
+	Adapters         map[knowl.SourceType]app.SourceAdapter
+	State            app.SourceStateStore
+	Content          app.ContentStore
+	SourceContent    app.SourceContentStore
+	Search           app.SearchIndex
+	Maintenance      app.SourceMaintenanceQueue
 }
 
 // Result is the redacted observable outcome of one source synchronization attempt.
@@ -148,12 +149,13 @@ type AllResult struct {
 
 // Service coordinates bounded idempotent source reconciliation.
 type Service struct {
-	adapters      map[knowl.SourceType]app.SourceAdapter
-	state         app.SourceStateStore
-	content       app.ContentStore
-	sourceContent app.SourceContentStore
-	search        app.SearchIndex
-	maintenance   app.SourceMaintenanceQueue
+	applyCoordinator app.ApplyCoordinator
+	adapters         map[knowl.SourceType]app.SourceAdapter
+	state            app.SourceStateStore
+	content          app.ContentStore
+	sourceContent    app.SourceContentStore
+	search           app.SearchIndex
+	maintenance      app.SourceMaintenanceQueue
 
 	options Options
 
@@ -201,14 +203,15 @@ func NewService(dependencies Dependencies, options Options) (*Service, error) {
 		return nil, err
 	}
 	service := &Service{
-		adapters:      make(map[knowl.SourceType]app.SourceAdapter, len(dependencies.Adapters)),
-		state:         dependencies.State,
-		content:       dependencies.Content,
-		sourceContent: dependencies.SourceContent,
-		search:        dependencies.Search,
-		maintenance:   dependencies.Maintenance,
-		options:       normalized,
-		leases:        make(map[leaseKey]struct{}),
+		applyCoordinator: dependencies.ApplyCoordinator,
+		adapters:         make(map[knowl.SourceType]app.SourceAdapter, len(dependencies.Adapters)),
+		state:            dependencies.State,
+		content:          dependencies.Content,
+		sourceContent:    dependencies.SourceContent,
+		search:           dependencies.Search,
+		maintenance:      dependencies.Maintenance,
+		options:          normalized,
+		leases:           make(map[leaseKey]struct{}),
 	}
 	for sourceType, adapter := range dependencies.Adapters {
 		service.adapters[sourceType] = adapter

@@ -441,6 +441,52 @@ func RunWorkContract(t *testing.T, harness WorkHarness) {
 		}
 	})
 
+	t.Run("two_active_claims_renew_and_expire_independently", func(t *testing.T) {
+		ctx := t.Context()
+		scope := childScope(harness.Scope, "two-workers")
+		for _, id := range []string{"first", "second"} {
+			key, meta := Fixture(scope, id, time.Unix(10, 0))
+			if _, err := harness.Store.Reserve(ctx, key, meta); err != nil {
+				t.Fatal(err)
+			}
+		}
+		peer := harness.OpenPeer(t)
+		first, err := harness.Store.ClaimReady(ctx, scope, futureLease("two-first"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := peer.ClaimReady(ctx, scope, futureLease("two-second"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.Operation.ID == second.Operation.ID || first.Lease.Token == second.Lease.Token {
+			t.Fatal("owners overlap")
+		}
+		if _, err = peer.ClaimReady(ctx, scope, futureLease("third")); !errors.Is(err, app.ErrNoReadyOperation) {
+			t.Fatalf("duplicate admission=%v", err)
+		}
+		if err = peer.RenewClaim(ctx, scope, first.Operation.ID, second.Lease.Token, futureLease("cross-owner")); !errors.Is(err, app.ErrWorkLeaseConflict) {
+			t.Fatalf("cross owner renewal=%v", err)
+		}
+		if err = harness.Store.RenewClaim(ctx, scope, first.Operation.ID, first.Lease.Token, futureLease("two-first-renewed")); err != nil {
+			t.Fatal(err)
+		}
+		if err = peer.RenewClaim(ctx, scope, second.Operation.ID, second.Lease.Token, futureLease("two-second-renewed")); err != nil {
+			t.Fatal(err)
+		}
+		harness.Expire(t, scope, first.Operation.ID)
+		reclaimed, err := peer.ClaimReady(ctx, scope, futureLease("two-recovered"))
+		if err != nil || reclaimed.Operation.ID != first.Operation.ID || reclaimed.Operation.WorkAttempt != 2 {
+			t.Fatalf("recovery=%#v %v", reclaimed, err)
+		}
+		if err = peer.RenewClaim(ctx, scope, second.Operation.ID, "two-second-renewed", futureLease("two-second-still-owned")); err != nil {
+			t.Fatalf("sibling ownership lost=%v", err)
+		}
+		if harness.WorkAttempts(t, scope, second.Operation.ID) != 1 {
+			t.Fatal("sibling attempt changed")
+		}
+	})
+
 	t.Run("concurrent_exclusion_scope_and_terminal_filtering", func(t *testing.T) {
 		ctx := context.Background()
 		scope := childScope(harness.Scope, "concurrency")

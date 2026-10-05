@@ -25,7 +25,18 @@ func (host *Host) ReconcileHierarchy(ctx context.Context) (app.IngestResult, err
 	if service == nil {
 		return app.IngestResult{}, app.ErrMaintainerUnavailable
 	}
-	result, err := service.Reconcile(ctx, scope)
+	bounded, cancel := context.WithTimeout(ctx, app.MaxCorrectionDeadline)
+	defer cancel()
+	use, err := host.slots.acquire(bounded)
+	if err != nil {
+		return app.IngestResult{}, err
+	}
+	defer use.release()
+	service = use.slot.hierarchy
+	if service == nil {
+		return app.IngestResult{}, app.ErrMaintainerUnavailable
+	}
+	result, err := service.Reconcile(use.ctx, scope)
 	if err != nil {
 		return result, fmt.Errorf("reconcile Knowl hierarchy: %w", err)
 	}

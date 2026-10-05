@@ -28,6 +28,7 @@ type composedRuntime struct {
 	workspace        *contentfs.Workspace
 	closer           io.Closer
 	maintainerCloser io.Closer
+	slots            *executionSlots
 	operations       app.OperationStore
 	index            app.SearchIndex
 	sourceState      app.SourceStateStore
@@ -52,18 +53,16 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	maintainer, maintainerCloser, err := options.maintainer(config)
+	slots, err := options.executionSlots(config)
 	if err != nil {
 		return nil, err
 	}
 	adapters, err := composeSourceAdapters(config.Workspace, options.SourceAdapters)
 	if err != nil {
-		if maintainerCloser != nil {
-			_ = maintainerCloser.Close()
-		}
+		_ = slots.Close()
 		return nil, err
 	}
-	runtime, err := composeRuntime(ctx, config, maintainer, maintainerCloser, adapters, options.SourceObserver)
+	runtime, err := composeRuntime(ctx, config, slots, adapters, options.SourceObserver)
 	if err != nil {
 		return nil, err
 	}
@@ -80,10 +79,12 @@ func New(ctx context.Context, options Options) (*Host, error) {
 	return host, nil
 }
 
-func composeRuntime(ctx context.Context, config Config, maintainer app.Maintainer, maintainerCloser io.Closer, adapters map[domain.SourceType]app.SourceAdapter, observer SourceObserver) (_ composedRuntime, err error) {
+func composeRuntime(ctx context.Context, config Config, slots *executionSlots, adapters map[domain.SourceType]app.SourceAdapter, observer SourceObserver) (_ composedRuntime, err error) {
+	config.IngestOptions.ApplyCoordinator = newHostApplyCoordinator()
 	runtime := composedRuntime{
 		config:           config,
-		maintainerCloser: maintainerCloser,
+		maintainerCloser: slots,
+		slots:            slots,
 		sourceObserver:   observer,
 	}
 	defer func() {
@@ -110,25 +111,41 @@ func composeRuntime(ctx context.Context, config Config, maintainer app.Maintaine
 	runtime.index = store.index
 	runtime.sourceState = store.sources
 	runtime.closer = store.closer
-	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, runtime.workspace, runtime.operations, runtime.index, store.checker, maintainer)
+	maintainer := slots.all[0].maintainer
+	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, runtime.workspace, runtime.operations, runtime.index, store.checker, maintainer, slots)
 	if err != nil {
 		return composedRuntime{}, err
 	}
 	runtime.sources = cloneSources(config.Sources)
 	runner := terminalRunner(runtime.service)
 	if hierarchyMaintainer, ok := maintainer.(app.HierarchyMaintainer); ok {
-		runtime.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, hierarchyMaintainer, app.HierarchyOptions{Output: config.Output})
+		runtime.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, hierarchyMaintainer, hostHierarchyOptions(config))
 		if err != nil {
 			return composedRuntime{}, fmt.Errorf("compose hierarchy service: %w", err)
 		}
 		runner = terminalRouter{source: runtime.service, hierarchy: runtime.hierarchy}
 	}
-	runtime.scheduler, err = newOperationScheduler(runtime.operations, runner, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize})
+	slots.all[0].source = runtime.service
+	slots.all[0].hierarchy = runtime.hierarchy
+	for _, slot := range slots.all[1:] {
+		slot.source, err = app.NewIngestService(runtime.workspace, runtime.operations, runtime.index, slot.maintainer, hostIngestOptions(config))
+		if err != nil {
+			return composedRuntime{}, err
+		}
+		if maintainer, ok := slot.maintainer.(app.HierarchyMaintainer); ok {
+			slot.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, maintainer, hostHierarchyOptions(config))
+			if err != nil {
+				return composedRuntime{}, err
+			}
+		}
+	}
+	runtime.scheduler, err = newOperationScheduler(runtime.operations, runner, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize, slots: slots})
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose operation scheduler: %w", err)
 	}
 	runtime.sourceSync, err = reconcile.NewService(reconcile.Dependencies{
-		Adapters: adapters, State: runtime.sourceState, Content: runtime.workspace,
+		ApplyCoordinator: config.IngestOptions.ApplyCoordinator,
+		Adapters:         adapters, State: runtime.sourceState, Content: runtime.workspace,
 		SourceContent: runtime.workspace, Search: runtime.index,
 		Maintenance: sourceMaintenanceQueue{service: runtime.service, waker: runtime.scheduler},
 	}, reconcile.Options{})
@@ -188,12 +205,9 @@ func composeServices(
 	index app.SearchIndex,
 	checker projectionChecker,
 	maintainer app.Maintainer,
+	slots *executionSlots,
 ) (*app.IngestService, *app.QueryService, *app.LintService, error) {
-	ingestOptions := config.IngestOptions
-	ingestOptions.Output = config.Output
-	if ingestOptions.ReadLimits == (domain.ReadLimits{}) {
-		ingestOptions.ReadLimits = config.ReadLimits
-	}
+	ingestOptions := hostIngestOptions(config)
 	service, err := app.NewIngestService(workspace, operations, index, maintainer, ingestOptions)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("compose ingest service: %w", err)
@@ -212,7 +226,11 @@ func composeServices(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("compose query service: %w", err)
 	}
-	lint, err := app.NewLintService(workspace, index, app.LintOptions{ReadLimits: config.ReadLimits, Maintainer: maintainer})
+	var lintMaintainer app.Maintainer
+	if maintainer != nil {
+		lintMaintainer = slotLintMaintainer{slots: slots}
+	}
+	lint, err := app.NewLintService(workspace, index, app.LintOptions{ReadLimits: config.ReadLimits, Maintainer: lintMaintainer})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("compose lint service: %w", err)
 	}
@@ -229,6 +247,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		workspace:        runtime.workspace,
 		closer:           runtime.closer,
 		maintainerCloser: runtime.maintainerCloser,
+		slots:            runtime.slots,
 		operations:       runtime.operations,
 		index:            runtime.index,
 		sourceState:      runtime.sourceState,
@@ -236,6 +255,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		sources:          cloneSources(runtime.sources),
 		sourceByID:       sourceIndex(runtime.sources),
 		sourceJobs:       sourceJobs,
+		stopGate:         make(chan struct{}, 1),
 		scheduler:        runtime.scheduler,
 		service:          runtime.service,
 		hierarchy:        runtime.hierarchy,
@@ -296,6 +316,9 @@ func nilSourceAdapter(adapter app.SourceAdapter) bool {
 
 func (options Options) maintainer(config Config) (app.Maintainer, io.Closer, error) {
 	if !nilMaintainer(options.Maintainer) {
+		if config.Workers != 1 {
+			return nil, nil, ErrWorkerConfigInvalid
+		}
 		closer, _ := options.Maintainer.(io.Closer)
 		return options.Maintainer, closer, nil
 	}
@@ -332,4 +355,17 @@ func nilMaintainer(maintainer app.Maintainer) bool {
 	default:
 		return false
 	}
+}
+
+func hostIngestOptions(config Config) app.IngestOptions {
+	options := config.IngestOptions
+	options.Output = config.Output
+	if options.ReadLimits == (domain.ReadLimits{}) {
+		options.ReadLimits = config.ReadLimits
+	}
+	return options
+}
+
+func hostHierarchyOptions(config Config) app.HierarchyOptions {
+	return app.HierarchyOptions{Output: config.Output, ApplyCoordinator: config.IngestOptions.ApplyCoordinator}
 }

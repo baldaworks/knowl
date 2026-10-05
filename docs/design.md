@@ -433,8 +433,8 @@ separation, initializes the local workspace/config, constructs one deterministic
 filesystem source, and calls `Host.SyncSource` once. Bootstrap remains optional.
 Ordinary sync has no freshness rule: it persists immutable raw evidence,
 reserves idempotent maintenance work for changed text, and never copies source
-content into `wiki/`. The sequential operation scheduler asks the maintainer to
-create or update root-reachable semantic entities, concepts, and syntheses.
+content into `wiki/`. The operation scheduler uses one worker by default, or two isolated maintainer
+owners when configured, to create or update root-reachable semantic entities, concepts, and syntheses.
 Sidecar and embedded callers use this same Host engine and durable recovery
 order.
 
@@ -466,3 +466,27 @@ hypothetical reuse. `.go-arch-lint.yml` protects these top-level boundaries.
 - Knowl does not promise automatic crawling or research, vector DB as
   canonical storage, implicit forgetting, binary/image understanding, Git
   push/sync, a broad CRUD/admin API, or shared multi-tenant security.
+
+### Maintenance execution ownership
+
+`knowl.workers` selects one or two fixed execution owners. Each has an independent
+RuntimeMaintainer, agent, session service and source/hierarchy services; policy
+identity and canonical storage remain shared. A finite dispatcher drives bounded
+worker loops. Admission precedes durable claims, and each active claim renews its
+own lease. Background workers, joined Drain invocations, direct hierarchy and
+optional model-lint all use the same owner pool.
+
+Inference and output correction hold only their owner. One host publication gate
+then serializes canonical commit, snapshot projection and outcome, including
+source-sync saga recovery and hierarchy no-op finalization. Filesystem locks,
+expected digests, provenance validation and journal recovery remain intact.
+Stale log/catalog/page preimages fail with a permanent typed conflict; no automatic
+replanning occurs. Explicit rebuilds remain preflight or stopped-writer operations.
+
+Shutdown closes admission before joining users. When the active shutdown caller's
+bound expires, it cancels execution lifetimes and retains live resources for a
+later Stop. Concurrent Stop callers wait cancelably without interrupting that
+caller's graceful drain. Provider cleanup
+retains failed components and does not repeat successful cleanup. Failed setup
+cannot allocate another runtime while its prior cleanup remains unresolved.
+See [maintenance workers](operations.md#maintenance-workers) for operational limits.

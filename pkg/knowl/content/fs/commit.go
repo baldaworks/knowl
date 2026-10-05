@@ -72,6 +72,21 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	if manifest.SchemaDigest != "" && digestBytes(schema) != manifest.SchemaDigest {
 		return knowl.ContentCommit{}, fmt.Errorf("schema changed after staging: %w", ErrPrecondition)
 	}
+	logPath := filepath.Join(workspace.root, workspaceWikiDir, "log.md")
+	if err := rejectSymlinkPath(workspace.root, logPath); err != nil {
+		return knowl.ContentCommit{}, err
+	}
+	logBefore, err := os.ReadFile(logPath)
+	if err != nil {
+		return knowl.ContentCommit{}, fmt.Errorf("read canonical log: %w", err)
+	}
+	// Authenticate the stage first, then reject a changed canonical preimage
+	// before validating the obsolete proposed graph against newer facts.
+	logDigest := digestBytes(logBefore)
+	if logDigest != manifest.LogExpectedDigest &&
+		(logDigest != manifest.LogDigest || !canonicalEntriesMatch(workspace.root, manifest.Entries)) {
+		return knowl.ContentCommit{}, fmt.Errorf("canonical log changed after staging: %w", ErrPrecondition)
+	}
 	stagedEdits, err := readStagedPlanEdits(stageDir, manifest.Entries)
 	if err != nil {
 		return knowl.ContentCommit{}, err
@@ -88,14 +103,6 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	}
 	if !slices.Equal(persistedLinkDiagnostics, derivedDiagnostics) {
 		return knowl.ContentCommit{}, ErrPlanConflict
-	}
-	logPath := filepath.Join(workspace.root, workspaceWikiDir, "log.md")
-	if err := rejectSymlinkPath(workspace.root, logPath); err != nil {
-		return knowl.ContentCommit{}, err
-	}
-	logBefore, err := os.ReadFile(logPath)
-	if err != nil {
-		return knowl.ContentCommit{}, fmt.Errorf("read canonical log: %w", err)
 	}
 	logAfter, err := appendLogEntry(logBefore, manifest, generation)
 	if err != nil {

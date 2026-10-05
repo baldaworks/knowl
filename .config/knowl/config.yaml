@@ -6,6 +6,7 @@ runtime:
         model: gemini-3.8-flash-medium
 
 knowl:
+  workers: 1
   provider: antigravity
   output:
     max_corrections: 1

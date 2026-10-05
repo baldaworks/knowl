@@ -63,6 +63,7 @@ func (router terminalRouter) RunToTerminal(ctx context.Context, claim domain.Wor
 }
 
 type schedulerOptions struct {
+	slots                  *executionSlots
 	wakeSize               int
 	claimBatch             int
 	descriptorFailureBatch int
@@ -80,6 +81,9 @@ type schedulerOptions struct {
 type operationScheduler struct {
 	operations app.OperationStore
 	runner     terminalRunner
+	slots      *executionSlots
+	work       chan struct{}
+	drainGate  chan struct{}
 	scope      domain.ScopeRef
 	options    schedulerOptions
 	wake       chan struct{}
@@ -100,9 +104,15 @@ func newOperationScheduler(operations app.OperationStore, runner terminalRunner,
 		return nil, fmt.Errorf("scheduler operations, runner, and scope are required")
 	}
 	options = normalizeSchedulerOptions(options)
+	if options.slots == nil {
+		options.slots = newExecutionSlots([]*executionSlot{{}})
+	}
 	return &operationScheduler{
 		operations: operations,
 		runner:     runner,
+		slots:      options.slots,
+		work:       make(chan struct{}, len(options.slots.all)),
+		drainGate:  make(chan struct{}, 1),
 		scope:      scope,
 		options:    options,
 		wake:       make(chan struct{}, options.wakeSize),
@@ -188,7 +198,10 @@ func (scheduler *operationScheduler) start(ctx context.Context) error {
 	scheduler.started = true
 	scheduler.initialDone = make(chan struct{})
 	initial := make(chan error, 1)
-	scheduler.wg.Add(1)
+	scheduler.wg.Add(1 + len(scheduler.slots.all))
+	for range scheduler.slots.all {
+		go scheduler.worker(runCtx)
+	}
 	go scheduler.run(runCtx, initial)
 	scheduler.mu.Unlock()
 
@@ -242,8 +255,8 @@ func (scheduler *operationScheduler) stop(ctx context.Context) error {
 	}
 }
 
-// Drain synchronously claims and executes all ready operations until none remain
-// or context expires. It does not start background tickers or goroutines.
+// Drain joins bounded synchronous workers without starting periodic jobs.
+// Concurrent drains wait cancelably; background work shares the same slots.
 func (scheduler *operationScheduler) Drain(ctx context.Context) (DrainResult, error) {
 	if scheduler == nil {
 		return DrainResult{}, nil
@@ -251,6 +264,52 @@ func (scheduler *operationScheduler) Drain(ctx context.Context) (DrainResult, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	scheduler.mu.Lock()
+	if scheduler.stopped {
+		scheduler.mu.Unlock()
+		return DrainResult{}, nil
+	}
+	scheduler.wg.Add(1)
+	scheduler.mu.Unlock()
+	defer scheduler.wg.Done()
+	select {
+	case scheduler.drainGate <- struct{}{}:
+	case <-ctx.Done():
+		return DrainResult{}, ctx.Err()
+	case <-scheduler.stopClaims:
+		return DrainResult{}, nil
+	}
+	defer func() { <-scheduler.drainGate }()
+	if len(scheduler.slots.all) == 1 {
+		return scheduler.drainWorker(ctx)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type outcome struct {
+		result DrainResult
+		err    error
+	}
+	finished := make(chan outcome, len(scheduler.slots.all))
+	for range scheduler.slots.all {
+		go func() { result, err := scheduler.drainWorker(runCtx); finished <- outcome{result, err} }()
+	}
+	var total DrainResult
+	var failures []error
+	for range scheduler.slots.all {
+		done := <-finished
+		total.Completed += done.result.Completed
+		total.Failed += done.result.Failed
+		total.Retried += done.result.Retried
+		total.Total += done.result.Total
+		if done.err != nil {
+			failures = append(failures, done.err)
+			cancel()
+		}
+	}
+	return total, errors.Join(failures...)
+}
+
+func (scheduler *operationScheduler) drainWorker(ctx context.Context) (DrainResult, error) {
 	var result DrainResult
 	for {
 		if ctx.Err() != nil {
@@ -266,16 +325,30 @@ func (scheduler *operationScheduler) Drain(ctx context.Context) (DrainResult, er
 		if !ready {
 			return result, nil
 		}
-		claim, claimErr := scheduler.claim(ctx)
+		use, acquireErr := scheduler.slots.acquireUntil(ctx, scheduler.stopClaims)
+		if acquireErr != nil {
+			if errors.Is(acquireErr, ErrHostClosed) {
+				return result, nil
+			}
+			return result, acquireErr
+		}
+		if scheduler.isStopping() {
+			use.release()
+			return result, nil
+		}
+		claim, claimErr := scheduler.claim(use.ctx)
 		if errors.Is(claimErr, app.ErrNoReadyOperation) {
+			use.release()
 			return result, nil
 		}
 		if claimErr != nil {
+			use.release()
 			return result, claimErr
 		}
 
-		opResult, leaseToken, runErr := scheduler.runClaim(ctx, claim)
-		nextRetryAt, transitionErr := scheduler.handleTransientFailure(ctx, claim, leaseToken, &opResult, runErr)
+		opResult, leaseToken, runErr := scheduler.runClaimUsing(use.ctx, claim, scheduler.slotRunner(use.slot))
+		nextRetryAt, transitionErr := scheduler.handleTransientFailure(use.ctx, claim, leaseToken, &opResult, runErr)
+		use.release()
 		result.Total++
 
 		failureClass := ""
@@ -355,11 +428,51 @@ func (scheduler *operationScheduler) run(ctx context.Context, initial chan<- err
 		case <-scheduler.stopClaims:
 			return
 		case <-scheduler.wake:
-			scheduler.cycle(ctx)
+			scheduler.dispatch(ctx)
 		case <-scanTicks:
+			scheduler.dispatch(ctx)
+		}
+	}
+}
+
+func (scheduler *operationScheduler) dispatch(ctx context.Context) {
+	ready, err := scheduler.inspect(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Error().Str("class", schedulerScanFailureClass).Msg("knowl scheduler scan failed")
+		}
+		return
+	}
+	if !ready {
+		return
+	}
+	for range scheduler.slots.all {
+		select {
+		case scheduler.work <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (scheduler *operationScheduler) worker(ctx context.Context) {
+	defer scheduler.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-scheduler.stopClaims:
+			return
+		case <-scheduler.work:
 			scheduler.cycle(ctx)
 		}
 	}
+}
+
+func (scheduler *operationScheduler) slotRunner(slot *executionSlot) terminalRunner {
+	if slot.source == nil {
+		return scheduler.runner
+	}
+	return terminalRouter{source: slot.source, hierarchy: slot.hierarchy}
 }
 
 func (scheduler *operationScheduler) inspect(ctx context.Context) (bool, error) {
@@ -395,19 +508,30 @@ func (scheduler *operationScheduler) cycle(ctx context.Context) {
 	}
 	claimed := 0
 	for claimed < scheduler.options.claimBatch && ctx.Err() == nil && !scheduler.isStopping() {
-		claim, claimErr := scheduler.claim(ctx)
+		use, acquireErr := scheduler.slots.acquireUntil(ctx, scheduler.stopClaims)
+		if acquireErr != nil {
+			return
+		}
+		if scheduler.isStopping() {
+			use.release()
+			return
+		}
+		claim, claimErr := scheduler.claim(use.ctx)
 		if errors.Is(claimErr, app.ErrNoReadyOperation) {
+			use.release()
 			return
 		}
 		if claimErr != nil {
+			use.release()
 			if !errors.Is(claimErr, context.Canceled) {
 				log.Error().Str("class", schedulerScanFailureClass).Msg("knowl scheduler claim failed")
 			}
 			return
 		}
 		claimed++
-		result, leaseToken, runErr := scheduler.runClaim(ctx, claim)
-		nextRetryAt, transitionErr := scheduler.handleTransientFailure(ctx, claim, leaseToken, &result, runErr)
+		result, leaseToken, runErr := scheduler.runClaimUsing(use.ctx, claim, scheduler.slotRunner(use.slot))
+		nextRetryAt, transitionErr := scheduler.handleTransientFailure(use.ctx, claim, leaseToken, &result, runErr)
+		use.release()
 		failureClass := ""
 		failureReason := ""
 		failureDetail := ""
@@ -476,14 +600,14 @@ func (scheduler *operationScheduler) claim(ctx context.Context) (domain.WorkClai
 	})
 }
 
-func (scheduler *operationScheduler) runClaim(ctx context.Context, claim domain.WorkClaim) (app.IngestResult, string, error) {
+func (scheduler *operationScheduler) runClaimUsing(ctx context.Context, claim domain.WorkClaim, runner terminalRunner) (app.IngestResult, string, error) {
 	executionCtx, cancelExecution := context.WithCancel(ctx)
 	stopRenewal := make(chan struct{})
 	renewalDone := make(chan string, 1)
 	go func() {
 		renewalDone <- scheduler.renew(ctx, stopRenewal, cancelExecution, claim)
 	}()
-	result, err := scheduler.runner.RunToTerminal(executionCtx, claim)
+	result, err := runner.RunToTerminal(executionCtx, claim)
 	close(stopRenewal)
 	leaseToken := <-renewalDone
 	cancelExecution()

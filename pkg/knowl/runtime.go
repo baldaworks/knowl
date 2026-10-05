@@ -33,6 +33,7 @@ type Host struct {
 	workspace        *contentfs.Workspace
 	closer           io.Closer
 	maintainerCloser io.Closer
+	slots            *executionSlots
 
 	operations  app.OperationStore
 	index       app.SearchIndex
@@ -50,7 +51,7 @@ type Host struct {
 	handler     http.Handler
 
 	ready           atomic.Bool
-	stopMu          sync.Mutex
+	stopGate        chan struct{}
 	mu              sync.Mutex
 	server          *http.Server
 	listener        net.Listener

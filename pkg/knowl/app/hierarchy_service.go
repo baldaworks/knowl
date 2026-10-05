@@ -17,22 +17,24 @@ const DefaultHierarchyPlannerVersion = "hierarchy-v3"
 
 // HierarchyOptions configures explicit hierarchy reconciliation.
 type HierarchyOptions struct {
-	Output         knowl.OutputSettings
-	Limits         knowl.HierarchyLimits
-	PlannerVersion string
-	LeaseDuration  time.Duration
+	ApplyCoordinator ApplyCoordinator
+	Output           knowl.OutputSettings
+	Limits           knowl.HierarchyLimits
+	PlannerVersion   string
+	LeaseDuration    time.Duration
 }
 
 // HierarchyService coordinates durable, explicit catalog-only reconciliation.
 type HierarchyService struct {
-	outputPolicy  knowl.OutputCorrectionPolicy
-	content       ContentStore
-	operations    OperationStore
-	index         SearchIndex
-	maintainer    HierarchyMaintainer
-	limits        knowl.HierarchyLimits
-	planner       string
-	leaseDuration time.Duration
+	applyCoordinator ApplyCoordinator
+	outputPolicy     knowl.OutputCorrectionPolicy
+	content          ContentStore
+	operations       OperationStore
+	index            SearchIndex
+	maintainer       HierarchyMaintainer
+	limits           knowl.HierarchyLimits
+	planner          string
+	leaseDuration    time.Duration
 }
 
 func NewHierarchyService(content ContentStore, operations OperationStore, index SearchIndex, maintainer HierarchyMaintainer, options HierarchyOptions) (*HierarchyService, error) {
@@ -64,8 +66,9 @@ func NewHierarchyService(content ContentStore, operations OperationStore, index 
 		options.LeaseDuration = defaultLeaseDuration
 	}
 	return &HierarchyService{
-		outputPolicy: outputPolicy,
-		content:      content, operations: operations, index: index, maintainer: maintainer,
+		applyCoordinator: options.ApplyCoordinator,
+		outputPolicy:     outputPolicy,
+		content:          content, operations: operations, index: index, maintainer: maintainer,
 		limits: options.Limits, planner: options.PlannerVersion, leaseDuration: options.LeaseDuration,
 	}, nil
 }
@@ -251,6 +254,11 @@ func (service *HierarchyService) savePlan(ctx context.Context, id knowl.Operatio
 }
 
 func (service *HierarchyService) commitNoOp(ctx context.Context, result IngestResult, scope knowl.ScopeRef, digest string) (IngestResult, error) {
+	release, err := acquireApply(ctx, service.applyCoordinator)
+	if err != nil {
+		return result, err
+	}
+	defer release()
 	id := result.Operation.ID
 	if result.Operation.Status == knowl.StatusReceived {
 		if err := service.savePlan(ctx, id, digest, 0); err != nil {
@@ -273,6 +281,11 @@ func (service *HierarchyService) commitNoOp(ctx context.Context, result IngestRe
 }
 
 func (service *HierarchyService) apply(ctx context.Context, result IngestResult, scope knowl.ScopeRef, id knowl.OperationID) (IngestResult, error) {
+	release, err := acquireApply(ctx, service.applyCoordinator)
+	if err != nil {
+		return result, err
+	}
+	defer release()
 	lease, err := newLease(time.Now().UTC(), service.leaseDuration)
 	if err != nil {
 		return result, err

@@ -13,6 +13,7 @@ import (
 
 // AppConfig is the Knowl section of the Balda-compatible config document.
 type AppConfig struct {
+	Workers    int                       `mapstructure:"workers"`
 	Provider   string                    `mapstructure:"provider"`
 	Workspace  WorkspaceConfig           `mapstructure:"workspace"`
 	Storage    StorageConfig             `mapstructure:"storage"`
@@ -162,6 +163,7 @@ type SourceSyncConfig struct {
 }
 
 type rawAppConfig struct {
+	Workers     any                    `mapstructure:"workers"`
 	Provider    string                 `mapstructure:"provider"`
 	Workspace   WorkspaceConfig        `mapstructure:"workspace"`
 	Storage     StorageConfig          `mapstructure:"storage"`
@@ -209,6 +211,14 @@ func (settings rawOutputSettings) Normalize() (knowltypes.OutputSettings, error)
 // Normalize validates the public config shape and rejects removed compatibility
 // sections.
 func (config rawAppConfig) Normalize() (AppConfig, error) {
+	workers := 1
+	if config.Workers != nil {
+		value, ok := config.Workers.(int)
+		if !ok || value < 1 || value > 2 {
+			return AppConfig{}, knowl.ErrWorkerConfigInvalid
+		}
+		workers = value
+	}
 	if len(config.Ingest) != 0 {
 		return AppConfig{}, fmt.Errorf("knowl.ingest is not supported")
 	}
@@ -224,6 +234,7 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 		return AppConfig{}, err
 	}
 	return AppConfig{
+		Workers:    workers,
 		Output:     output,
 		Embeddings: embeddings,
 		Provider:   config.Provider,
