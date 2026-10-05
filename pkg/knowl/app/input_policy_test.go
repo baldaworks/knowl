@@ -59,6 +59,9 @@ func TestIngestRejectsInvalidInputPolicyBeforeAcceptance(t *testing.T) {
 		{MaxBytes: 0, FormatVersion: "fixture"}, {MaxBytes: -1, FormatVersion: "fixture"},
 		{MaxBytes: 100, FormatVersion: ""}, {MaxBytes: 100, FormatVersion: "hidden\x01format"},
 		{MaxBytes: 100, FormatVersion: strings.Repeat("x", 257)},
+		{MaxBytes: 1000, FormatVersion: testSourceAdapter, ReservedBytes: -1},
+		{MaxBytes: 1000, FormatVersion: testSourceAdapter, ReservedBytes: 129},
+		{MaxBytes: 100, FormatVersion: testSourceAdapter, ReservedBytes: 100},
 	} {
 		workspace, store, _, _ := newBaselineIngest(t)
 		m := &declaredBudgetMaintainer{declaration: budget}

@@ -116,6 +116,36 @@ inject an explicit maintainer instead. Host construction fails before readiness
 when neither is present. Provider code receives bounded untrusted context and
 structured-output constraints, never unrestricted filesystem authority.
 
+### Bounded output correction
+
+`knowl.output.max_corrections` defaults to one replacement and accepts only zero
+or one. The built-in runtime owns one loop shared by structured/schema/branch
+and full application validation. Optional `ValidatingMaintainer` and
+`ValidatingHierarchyMaintainer` capabilities receive synchronous validators
+over the captured source/context/inspection or hierarchy snapshot. The app
+defensively validates the returned candidate again before staging. Base custom
+adapters remain single-call; supplied `FilePlan` invokes no provider.
+
+All turns share a 1 MiB raw collector-text bound and a five-minute context,
+including exclusive-runtime wait and lazy setup. Earlier caller stops win.
+Wrapper retries remain zero; transport retries belong to the scheduler. Safe
+feedback is a single typed code over the unchanged original input, with a
+128-byte reservation inside the complete request cap. Initial usage excludes
+the reserve. Invalid output, error strings and rationale are not copied into
+feedback. Output limits, timeout, transport failure and canonical conflicts
+cannot trigger another generation.
+
+One validated content-free correction report is finalized per work attempt
+before staging or when planning fails, with a five-second durable store-write
+timeout. A failed accepted-report write stops staging; failed error-report
+persistence preserves the original classified cause. Reports include known
+physical turns/corrections/prefix bytes, allowance/limits, outcome and the last
+safe validation code. Unknown measurements are absent. Effective support and
+limits fingerprint source generation and hierarchy planner identity. Old
+unplanned descriptors cannot run under new policy; authenticated stages recover
+without inference before the current planner fence, under existing canonical
+preconditions. See [operator configuration](operations.md#bounded-output-correction).
+
 ### Generic literal retrieval
 
 One scanner finds Unicode letter/number words with attached combining marks.
@@ -333,6 +363,14 @@ never alter model pages or measured counts. Downgrade discards only the new cont
 and file-count evidence, retaining existing operational fields and canonical data.
 See [operation inspection](operations.md#operation-details) for partial, historical
 and unavailable values.
+
+Migration 18 adds nullable `correction_report` to both stores, without backfill.
+Its strict codec and bounded SQL reads reject corrupt/future attempt evidence
+before claim counters can legitimize it. Identical writes are idempotent;
+scope/current-attempt/terminal guards protect immutable facts. The common
+HTTP/MCP allowlist publishes at most 1 KiB of correction evidence, preserving
+the combined 96 KiB ceiling and historical attempt identity. Downgrade drops
+only this new observational column; raw, canonical content and stages remain.
 
 OKF Attested Computation declarations are data, not an execution interface.
 Knowl preserves and exposes their runtime, parameters, computation, executor,

@@ -125,6 +125,10 @@ The same capabilities are available through HTTP. See
 [service operations](docs/operations.md#http-contract), and the
 [OpenAPI contract](api/openapi/knowl.yaml).
 
+Knowl can request one corrected plan when generated output fails validation.
+Inspect the result through operation status, or
+[disable correction](docs/operations.md#bounded-output-correction) in your config.
+
 ### Go applications
 
 Embed Knowl through `pkg/knowl`, or use `pkg/knowlfx` for Fx lifecycle

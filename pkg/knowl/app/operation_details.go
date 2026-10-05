@@ -9,6 +9,11 @@ import (
 // PublicOperationDetails publishes only validated, bounded application facts.
 func PublicOperationDetails(operation knowl.Operation) *knowl.OperationDetails {
 	details := &knowl.OperationDetails{}
+	if operation.Correction != nil {
+		if encoded, err := EncodeOperationCorrectionReport(*operation.Correction); err == nil {
+			details.Correction, _ = DecodeOperationCorrectionReport(encoded, operation.WorkAttempt)
+		}
+	}
 	if operation.Context != nil {
 		if encoded, err := EncodeOperationContextReport(*operation.Context); err == nil {
 			details.Context, _ = DecodeOperationContextReport(encoded, operation.WorkAttempt)

@@ -93,7 +93,30 @@ const (
 
 // Defines values for OperationContextReportVersion.
 const (
-	N1 OperationContextReportVersion = 1
+	OperationContextReportVersionN1 OperationContextReportVersion = 1
+)
+
+// Defines values for OperationCorrectionReportOutcome.
+const (
+	OperationCorrectionReportOutcomeAccepted       OperationCorrectionReportOutcome = "accepted"
+	OperationCorrectionReportOutcomeCanceled       OperationCorrectionReportOutcome = "canceled"
+	OperationCorrectionReportOutcomeDeadline       OperationCorrectionReportOutcome = "deadline"
+	OperationCorrectionReportOutcomeExhausted      OperationCorrectionReportOutcome = "exhausted"
+	OperationCorrectionReportOutcomeOutputLimit    OperationCorrectionReportOutcome = "output_limit"
+	OperationCorrectionReportOutcomeProviderFailed OperationCorrectionReportOutcome = "provider_failed"
+	OperationCorrectionReportOutcomeUnavailable    OperationCorrectionReportOutcome = "unavailable"
+)
+
+// Defines values for OperationCorrectionReportValidationCode.
+const (
+	HierarchyPlanInvalid    OperationCorrectionReportValidationCode = "hierarchy_plan_invalid"
+	SourcePlanInvalid       OperationCorrectionReportValidationCode = "source_plan_invalid"
+	StructuredOutputInvalid OperationCorrectionReportValidationCode = "structured_output_invalid"
+)
+
+// Defines values for OperationCorrectionReportVersion.
+const (
+	OperationCorrectionReportVersionN1 OperationCorrectionReportVersion = 1
 )
 
 // Defines values for OperationResultStatus.
@@ -150,18 +173,18 @@ const (
 
 // Defines values for RetrievalStatusReason.
 const (
-	RetrievalStatusReasonDeadline             RetrievalStatusReason = "deadline"
-	RetrievalStatusReasonDimensionMismatch    RetrievalStatusReason = "dimension_mismatch"
-	RetrievalStatusReasonInputLimit           RetrievalStatusReason = "input_limit"
-	RetrievalStatusReasonInvalidConfiguration RetrievalStatusReason = "invalid_configuration"
-	RetrievalStatusReasonInvalidInput         RetrievalStatusReason = "invalid_input"
-	RetrievalStatusReasonInvalidResponse      RetrievalStatusReason = "invalid_response"
-	RetrievalStatusReasonModelMismatch        RetrievalStatusReason = "model_mismatch"
-	RetrievalStatusReasonProjectionCapacity   RetrievalStatusReason = "projection_capacity"
-	RetrievalStatusReasonProjectionDrift      RetrievalStatusReason = "projection_drift"
-	RetrievalStatusReasonProjectionNotReady   RetrievalStatusReason = "projection_not_ready"
-	RetrievalStatusReasonResponseLimit        RetrievalStatusReason = "response_limit"
-	RetrievalStatusReasonUnavailable          RetrievalStatusReason = "unavailable"
+	Deadline             RetrievalStatusReason = "deadline"
+	DimensionMismatch    RetrievalStatusReason = "dimension_mismatch"
+	InputLimit           RetrievalStatusReason = "input_limit"
+	InvalidConfiguration RetrievalStatusReason = "invalid_configuration"
+	InvalidInput         RetrievalStatusReason = "invalid_input"
+	InvalidResponse      RetrievalStatusReason = "invalid_response"
+	ModelMismatch        RetrievalStatusReason = "model_mismatch"
+	ProjectionCapacity   RetrievalStatusReason = "projection_capacity"
+	ProjectionDrift      RetrievalStatusReason = "projection_drift"
+	ProjectionNotReady   RetrievalStatusReason = "projection_not_ready"
+	ResponseLimit        RetrievalStatusReason = "response_limit"
+	Unavailable          RetrievalStatusReason = "unavailable"
 )
 
 // Defines values for VectorProjectionStatusState.
@@ -409,10 +432,36 @@ type OperationContextReportOutcome string
 // OperationContextReportVersion defines model for OperationContextReport.Version.
 type OperationContextReportVersion int
 
+// OperationCorrectionReport One immutable report per producing work attempt; at most 1 KiB. Counters measure actual generation turns and accepted-prefix output text across all turns. Unavailable counters are absent. A crash before finalization can leave the report absent.
+type OperationCorrectionReport struct {
+	Corrections    *int                                     `json:"corrections,omitempty"`
+	DeadlineNanos  int64                                    `json:"deadline_nanos"`
+	MaxCorrections int                                      `json:"max_corrections"`
+	MaxOutputBytes int                                      `json:"max_output_bytes"`
+	Outcome        OperationCorrectionReportOutcome         `json:"outcome"`
+	OutputBytes    *int                                     `json:"output_bytes,omitempty"`
+	Turns          *int                                     `json:"turns,omitempty"`
+	ValidationCode *OperationCorrectionReportValidationCode `json:"validation_code,omitempty"`
+	Version        OperationCorrectionReportVersion         `json:"version"`
+	WorkAttempt    DiagnosticCount                          `json:"work_attempt"`
+}
+
+// OperationCorrectionReportOutcome defines model for OperationCorrectionReport.Outcome.
+type OperationCorrectionReportOutcome string
+
+// OperationCorrectionReportValidationCode defines model for OperationCorrectionReport.ValidationCode.
+type OperationCorrectionReportValidationCode string
+
+// OperationCorrectionReportVersion defines model for OperationCorrectionReport.Version.
+type OperationCorrectionReportVersion int
+
 // OperationDetails Bounded stored facts. Missing evidence is unavailable. Reads do not rerun selection or inference. Details serialize to less than 96 KiB.
 type OperationDetails struct {
 	// Context One immutable snapshot per producing work attempt; at most 32 KiB. A crash before finalization can leave it absent.
-	Context          *OperationContextReport    `json:"context,omitempty"`
+	Context *OperationContextReport `json:"context,omitempty"`
+
+	// Correction One immutable report per producing work attempt; at most 1 KiB. Counters measure actual generation turns and accepted-prefix output text across all turns. Unavailable counters are absent. A crash before finalization can leave the report absent.
+	Correction       *OperationCorrectionReport `json:"correction,omitempty"`
 	Execution        *OperationExecutionDetails `json:"execution,omitempty"`
 	Plan             *OperationPlanSummary      `json:"plan,omitempty"`
 	Retrieval        *RetrievalReport           `json:"retrieval,omitempty"`

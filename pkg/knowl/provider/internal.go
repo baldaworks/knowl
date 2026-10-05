@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/normahq/runtime/v2/agentfactory"
 	"github.com/normahq/runtime/v2/structuredagent"
@@ -62,7 +63,7 @@ Every ordinary page must be reachable from the root. Every returned catalog must
 When input.min_root_catalogs is positive, the root must link at least that many semantic child catalogs and must not directly enumerate the complete page set.
 Preserve suitable current catalog paths and unrelated semantic membership when possible. Use stable semantic paths and titles; paths, titles, children, and secondary membership must be deterministic for the same input.
 Return the complete final catalog graph, not commentary, alternatives, or an incremental patch.`
-	maintainerInstruction  = sourceMaintainerInstruction + "\n" + hierarchyMaintainerInstruction
+	maintainerInstruction  = sourceMaintainerInstruction + "\n" + hierarchyMaintainerInstruction + "\nWhen validation_feedback is present, return a fresh complete candidate satisfying the original contract and the declared validation code. Do not return a patch or repeat commentary."
 	maintainerOutputSchema = `{
   "type": "object",
   "properties": {
@@ -134,6 +135,7 @@ Return the complete final catalog graph, not commentary, alternatives, or an inc
     "required_schema_digest": {"type": "string", "minLength": 1},
 	"required_source_ref": {"type": "string", "minLength": 1},
 	"required_snapshot_digest": {"type": "string", "minLength": 1}
+	,"validation_feedback": {"type": "object", "properties": {"code": {"type": "string", "enum": ["structured_output_invalid", "source_plan_invalid", "hierarchy_plan_invalid"]}}, "required": ["code"], "additionalProperties": false}
   },
 	"required": ["operation", "input", "required_schema_digest"],
 	"oneOf": [
@@ -197,6 +199,7 @@ func newRuntimeMaintainer(factory RuntimeFactory, providerID, workspace string, 
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
 	return &RuntimeMaintainer{
+		mu:         make(chan struct{}, 1),
 		factory:    factory,
 		providerID: providerID,
 		workspace:  workspace,
@@ -209,11 +212,21 @@ func newRuntimeMaintainer(factory RuntimeFactory, providerID, workspace string, 
 	}, nil
 }
 
-func (maintainer *RuntimeMaintainer) ensureRuntime(_ context.Context) (*maintainerRuntime, error) {
+func (maintainer *RuntimeMaintainer) ensureRuntime(ctx context.Context) (*maintainerRuntime, error) {
 	if maintainer.runtime != nil {
 		return maintainer.runtime, nil
 	}
-	agent, err := maintainer.factory.Build(maintainer.lifetime, agentfactory.BuildRequest{
+	// Bound setup while keeping the successfully cached provider host-owned.
+	setupCtx, cancelSetup := context.WithCancel(maintainer.lifetime)
+	stopSetupCancellation := context.AfterFunc(ctx, cancelSetup)
+	defer stopSetupCancellation()
+	setupComplete := false
+	defer func() {
+		if !setupComplete {
+			cancelSetup()
+		}
+	}()
+	agent, err := maintainer.factory.Build(setupCtx, agentfactory.BuildRequest{
 		AgentID:          maintainer.providerID,
 		Name:             "knowl_maintainer",
 		Description:      "Produces structured, data-only Knowl maintenance plans.",
@@ -222,7 +235,12 @@ func (maintainer *RuntimeMaintainer) ensureRuntime(_ context.Context) (*maintain
 		MCPServerIDs:     []string{},
 	})
 	if err != nil {
+		closeAgent(agent)
 		return nil, transientProviderFailure(reasonProviderBuild)
+	}
+	if err := correctionContextError(ctx); err != nil {
+		closeAgent(agent)
+		return nil, err
 	}
 	sessions := maintainer.newSession()
 	if sessions == nil {
@@ -250,7 +268,7 @@ func (maintainer *RuntimeMaintainer) ensureRuntime(_ context.Context) (*maintain
 		closeAgent(agent)
 		return nil, permanentProviderFailure(reasonProviderSetup)
 	}
-	if _, err := sessions.Create(maintainer.lifetime, &session.CreateRequest{
+	if _, err := sessions.Create(ctx, &session.CreateRequest{
 		AppName:   maintainerAppName,
 		UserID:    maintainerUserID,
 		SessionID: maintainerSessionID,
@@ -258,6 +276,14 @@ func (maintainer *RuntimeMaintainer) ensureRuntime(_ context.Context) (*maintain
 		closeAgent(agent)
 		return nil, transientProviderFailure(reasonProviderSession)
 	}
+	if !stopSetupCancellation() || correctionContextError(ctx) != nil {
+		closeAgent(agent)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = sessions.Delete(cleanupCtx, &session.DeleteRequest{AppName: maintainerAppName, UserID: maintainerUserID, SessionID: maintainerSessionID})
+		return nil, correctionContextError(ctx)
+	}
+	setupComplete = true
 	closer, _ := agent.(io.Closer)
 	maintainer.runtime = &maintainerRuntime{
 		agent:     agent,

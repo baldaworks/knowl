@@ -46,7 +46,7 @@ to strict gates.
 | `uri-reference-http`, `uri-reference-mcp` | Actual Host HTTP/MCP ingest; raw/provider reference equality and local HTTP fetch counter | REQ-URI-001; `.6` |
 | `http-content-origin`, `mcp-content-origin` | `TestContextBaselineURIReferenceThroughHTTPAndMCP`: supplied body, default media type, source identity, terminal replay and zero URL fetches | REQ-URI-001; `.6` |
 | Missing or conflicting ingest payloads | `TestPublicIngestRequiresExactlyOnePayload`: real HTTP machine-readable `invalid_request` and MCP typed `ErrInvalidArguments` | REQ-URI-001; `.6` |
-| Invalid structured output | Existing `TestRuntimeMaintainerRejectsUnsafeOutputAndLimits`, with classified errors | REQ-OUTPUT-001; `.8` |
+| Bounded structured output correction | `TestRuntimeCorrectionSequence` and actual runtime/application fixtures; strict gates | REQ-OUTPUT-001; `.8` |
 | `blocked-execution` | Actual scheduler cycle, existing controlled runner/claim seams and channel barriers | REQ-EXEC-001; `.9` |
 | `stale-write` | Existing `TestIngestRejectsStaleReviewedPlan`: real precondition rejection and preserved human edit | REQ-EXEC-001; `.9` |
 | Cancellation, shutdown, atomic recovery | Existing scheduler renewal-loss/shutdown tests and filesystem recovery suites | REQ-EXEC/EVAL-001; `.9` |
@@ -303,6 +303,11 @@ error boundary instead of publishing invented zero-valued facts.
 reopens the database and reads both generated HTTP responses and MCP tool results.
 Queued, committed, provider-failed and required-overflow operations must agree on
 context, retrieval, plan, warning and execution fields, including `failure.reason`.
+The committed fixture also exercises application-invalid then valid output and
+retains the correction report after database reopen. Generated HTTP models and
+MCP preserve two physical turns versus one scheduler attempt. Custom fallback
+omits physical measurements, preplanning/legacy facts remain absent, and both
+ports reject missing/null required correction fields with safe errors.
 Repeated polling and terminal replay cannot invoke inference or change canonical
 pages. Distinct source, query, rationale and upstream-error sentinels are checked
 in parsed public JSON values.
@@ -319,3 +324,34 @@ Run the repository's full native tests, race tests, lint and architecture checks
 repeat OpenAPI generation to confirm no drift, and run the tagged PostgreSQL
 contracts before delivery. Closure requires all required checks to pass on the
 exact PR head and all Story changes to merge.
+
+## Bounded output correction gates
+
+The ordinary offline test suite uses the pinned structured runner with controlled
+agent output and real application/filesystem/SQLite boundaries. The table-driven
+`TestRuntimeCorrectionSequence` evaluator emits decoded JSON observations with
+case ID, measured report and `met` outcome after its assertions pass. All cases
+are strict gates, rather than quality observations requiring a model service.
+
+```sh
+go test -count=1 -json ./pkg/knowl/... ./internal/httpapi/server \
+  -run 'TestRuntimeCorrection|TestIngestCorrection|TestHierarchyCorrection|TestSourceCorrectionPolicy|TestIngestReservesFeedback|TestHostOutputConfiguration|TestPublicOperationCorrection|TestOperationDetails' \
+  > /tmp/knowl-output-correction.jsonl
+```
+
+| Behavior | Gate |
+| --- | --- |
+| Valid first; malformed/schema/branch/application rejection then valid; zero; exhaustion; mixed layers | Runtime sequence evaluator with exact physical calls and one shared allowance. |
+| Full validation before artifacts | Actual runner-to-app schema/provenance/mixed cases and source/hierarchy callback observers. Invalid intermediate candidates cannot stage or save a plan. |
+| Aggregate output and safe feedback | Exact/overflow, partial/final and thought/error-event fixtures; parsed unchanged requests and allowlisted feedback codes with no private output/error text. |
+| Total deadline and cancellation | Runtime wait/build/session and across-turn deadlines; caller cancellation before/between/after accepted output and report attribution. |
+| Transport separation | Transport/late-error fixtures remain retryable with one generation; exhausted output is permanent. Scheduler counters retain their existing meaning. |
+| Reserve and recovery | Complete-page exact-fit reserve versus actual usage; old unplanned descriptors reject policy changes while authenticated stages replay without inference. |
+| Durable and public evidence | Shared SQLite/PostgreSQL contracts, restart/claim/current/historical/terminal corruption guards, generated HTTP/MCP parity and actual maximum combined details below 96 KiB. |
+
+Planning fixtures make readiness explicit through real SQLite reservation, and
+recovery fixtures mark leases explicitly expired through the real store API.
+They do not rely on nanosecond delays or weaken canonical/idempotency assertions.
+Run the full native/race/lint/architecture suites, repeat generation and tagged
+PostgreSQL contracts before delivery. No runtime dependency upgrade or real
+embedding experiment is needed for these output-policy changes.

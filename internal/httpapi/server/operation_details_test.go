@@ -28,6 +28,8 @@ const (
 	detailsAbsentLegacyScenario = "absent_legacy_facts"
 	detailsOpaqueLegacyScenario = "opaque_legacy_plan"
 	detailsOverflowScenario     = "required_overflow"
+	detailsProviderScenario     = "provider_failure"
+	detailsExhaustedScenario    = "correction_exhausted"
 	detailsSourceSecret         = "SOURCE_BODY_SECRET_731"
 	detailsQuerySecret          = "QUERY_TEXT_SECRET_932"
 	detailsRationaleSecret      = "PLAN_RATIONALE_SECRET_514"
@@ -38,6 +40,41 @@ type detailsMaintainer struct {
 	calls      int
 	requestCap int
 	failure    error
+}
+
+type detailsCorrectionMaintainer struct {
+	*detailsMaintainer
+	exhausted bool
+}
+
+func (m detailsCorrectionMaintainer) PlanValidated(ctx context.Context, input domain.MaintenanceInput, limits domain.OutputCorrectionLimits, validate func(domain.ModelEditPlan) error) (domain.ModelEditPlan, domain.OperationCorrectionReport, error) {
+	used := 0
+	for turn := 1; turn <= 2; turn++ {
+		plan, err := m.Plan(ctx, input)
+		if err != nil {
+			return plan, domain.OperationCorrectionReport{}, err
+		}
+		if turn == 1 || m.exhausted {
+			plan.SchemaDigest = "incorrect"
+		}
+		encoded, _ := json.Marshal(plan)
+		used += len(encoded)
+		err = validate(plan)
+		if turn == 1 {
+			if !errors.Is(err, app.ErrSchemaMismatch) {
+				return plan, domain.OperationCorrectionReport{}, errors.New("first candidate was not rejected")
+			}
+			continue
+		}
+		turns, corrections := 2, 1
+		report := domain.OperationCorrectionReport{Version: 1, MaxCorrections: limits.MaxCorrections, MaxOutputBytes: limits.MaxOutputBytes, DeadlineNanos: limits.DeadlineNanos, Outcome: domain.CorrectionAccepted, Turns: &turns, Corrections: &corrections, OutputBytes: &used, ValidationCode: domain.SourcePlanInvalid}
+		if m.exhausted && errors.Is(err, app.ErrSchemaMismatch) {
+			report.Outcome = domain.CorrectionExhausted
+			err = app.ErrOutputCorrectionExhausted
+		}
+		return plan, report, err
+	}
+	return domain.ModelEditPlan{}, domain.OperationCorrectionReport{}, app.ErrOutputCorrectionExhausted
 }
 
 func (m *detailsMaintainer) RequestBudget() domain.MaintenanceRequestBudget {
@@ -67,7 +104,7 @@ type detailsWireOperation struct {
 }
 
 func TestOperationDetailsHTTPAndMCPDurableParity(t *testing.T) {
-	for _, scenario := range []string{httpQueuedStatus, detailsCommittedScenario, "provider_failure", detailsOverflowScenario} {
+	for _, scenario := range []string{httpQueuedStatus, detailsCommittedScenario, detailsExhaustedScenario, detailsProviderScenario, detailsOverflowScenario} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
 			workspace, err := contentfs.New(t.TempDir())
@@ -84,13 +121,18 @@ func TestOperationDetailsHTTPAndMCPDurableParity(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = store.Close() })
 			maintainer := &detailsMaintainer{requestCap: app.MaxMaintenanceRequestBytes}
+			var selectedMaintainer app.Maintainer = maintainer
+			corrected := scenario == detailsCommittedScenario || scenario == detailsExhaustedScenario
+			if corrected {
+				selectedMaintainer = detailsCorrectionMaintainer{detailsMaintainer: maintainer, exhausted: scenario == detailsExhaustedScenario}
+			}
 			if scenario == detailsOverflowScenario {
 				maintainer.requestCap = 100
 			}
-			if scenario == "provider_failure" {
+			if scenario == detailsProviderScenario {
 				maintainer.failure = errors.New(detailsProviderSecret)
 			}
-			ingest, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{})
+			ingest, err := app.NewIngestService(workspace, store, store, selectedMaintainer, app.IngestOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +167,7 @@ func TestOperationDetailsHTTPAndMCPDurableParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ingest, err = app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{})
+			ingest, err = app.NewIngestService(workspace, store, store, selectedMaintainer, app.IngestOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,6 +195,13 @@ func TestOperationDetailsHTTPAndMCPDurableParity(t *testing.T) {
 				var generated knowlapi.OperationResult
 				if err := json.Unmarshal(response.Body.Bytes(), &generated); err != nil {
 					t.Fatal(err)
+				}
+				expectedOutcome := domain.CorrectionAccepted
+				if scenario == detailsExhaustedScenario {
+					expectedOutcome = domain.CorrectionExhausted
+				}
+				if corrected && (generated.Details == nil || generated.Details.Correction == nil || generated.Details.Correction.Outcome != knowlapi.OperationCorrectionReportOutcome(expectedOutcome) || generated.Details.Correction.Turns == nil || *generated.Details.Correction.Turns != 2) {
+					t.Fatal("generated HTTP model lost corrected physical evidence")
 				}
 				var httpValue detailsWireOperation
 				if err := json.Unmarshal(response.Body.Bytes(), &httpValue); err != nil {
@@ -185,7 +234,7 @@ func TestOperationDetailsHTTPAndMCPDurableParity(t *testing.T) {
 			}
 			details := previous.Details
 			if scenario == httpQueuedStatus {
-				if previous.Status != httpQueuedStatus || details.Context != nil || details.Retrieval != nil || details.Plan != nil || details.Execution.WorkAttempt != 0 {
+				if previous.Status != httpQueuedStatus || details.Context != nil || details.Retrieval != nil || details.Correction != nil || details.Plan != nil || details.Execution.WorkAttempt != 0 {
 					t.Fatalf("queued evidence invented: %+v", details)
 				}
 			} else {
@@ -193,18 +242,27 @@ func TestOperationDetailsHTTPAndMCPDurableParity(t *testing.T) {
 					t.Fatalf("attempt evidence missing: %+v", details)
 				}
 				if scenario == detailsOverflowScenario {
-					if previous.Failure == nil || previous.Failure.Reason != "required_input_limit" || details.Context.Outcome != domain.ContextAssemblyFailed || details.Context.Budget == nil || details.Context.Budget.UsedBytes != nil || details.Plan != nil || calls != 0 {
+					if previous.Failure == nil || previous.Failure.Reason != "required_input_limit" || details.Context.Outcome != domain.ContextAssemblyFailed || details.Context.Budget == nil || details.Context.Budget.UsedBytes != nil || details.Correction != nil || details.Plan != nil || calls != 0 {
 						t.Fatalf("overflow evidence: %+v failure=%+v", details, previous.Failure)
 					}
-				} else if details.Context.Outcome != domain.ContextAssembled || details.Context.Budget == nil || details.Context.Budget.UsedBytes == nil || calls != 1 {
+				} else if details.Context.Outcome != domain.ContextAssembled || details.Context.Budget == nil || details.Context.Budget.UsedBytes == nil || (corrected && calls != 2) || (!corrected && calls != 1) {
 					t.Fatalf("assembled evidence missing: %+v", details)
 				}
 				if scenario == detailsCommittedScenario {
+					if details.Correction == nil || details.Correction.WorkAttempt != 1 || details.Correction.Outcome != domain.CorrectionAccepted || details.Correction.Turns == nil || *details.Correction.Turns != 2 || *details.Correction.Corrections != 1 || details.Correction.ValidationCode != domain.SourcePlanInvalid || details.Execution.RetryAttempt != 1 {
+						t.Fatalf("correction counters or attribution lost: %+v", details)
+					}
 					if previous.Status != string(knowlapi.OperationResultStatusCompleted) || details.Plan == nil || details.Plan.Digest != staged.Digest || details.Plan.FileCount == nil || *details.Plan.FileCount != len(staged.Files) || details.Execution.ApplyAttempt != 1 || len(details.Warnings) != 1 || details.Warnings[0].Code != domain.DiagnosticOriginalLinkUnresolved {
 						t.Fatalf("staged summary mismatch: %+v stage=%+v", details, staged)
 					}
 				} else if details.Plan != nil || details.Execution.ApplyAttempt != 0 {
 					t.Fatal("failed inference invented a plan/apply")
+				}
+				if scenario == detailsProviderScenario && (details.Correction == nil || details.Correction.Outcome != domain.CorrectionUnavailable || details.Correction.Turns != nil || details.Correction.Corrections != nil || details.Correction.OutputBytes != nil) {
+					t.Fatal("custom adapter invented physical measurements")
+				}
+				if scenario == detailsExhaustedScenario && (previous.Status != string(knowlapi.OperationResultStatusFailed) || previous.Failure == nil || previous.Failure.Reason != "provider_output_exhausted" || details.Correction == nil || details.Correction.Outcome != domain.CorrectionExhausted || *details.Correction.Turns != 2 || *details.Correction.Corrections != 1 || details.Execution.RetryAttempt != 1) {
+					t.Fatalf("exhaustion lost its stable cause or counters: %+v", previous)
 				}
 				replay, err := ingest.Submit(ctx, envelope)
 				if err != nil || replay.Operation.ID != submission.Operation.ID || replay.NeedsExecution() {
@@ -296,9 +354,13 @@ func TestOperationDetailsPortsPreserveBoundsAndHistoricalUnknowns(t *testing.T) 
 		t.Fatal(err)
 	}
 	maxCount := 2147483647
+	limits, _ := app.NormalizeOutputSettings(domain.OutputSettings{})
+	turns, corrections, outputBytes := 2, 1, limits.MaxOutputBytes
+	correction := domain.OperationCorrectionReport{Version: 1, WorkAttempt: maxCount, MaxCorrections: 1, MaxOutputBytes: limits.MaxOutputBytes, DeadlineNanos: limits.DeadlineNanos, Outcome: domain.CorrectionProviderFailed, Turns: &turns, Corrections: &corrections, OutputBytes: &outputBytes, ValidationCode: domain.StructuredOutputInvalid}
 	operation := domain.Operation{ID: "details-max", Key: domain.OperationKey{Scope: httpTestScope, Source: domain.SourceRef{ID: detailsSourceSecret}, Version: domain.SourceVersion{Version: detailsQuerySecret}}, Status: domain.StatusCommitted, UpdatedAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC), Context: &report, WorkAttempt: maxCount, RetryAttempt: maxCount, ManualRetryCount: maxCount, Attempt: maxCount, ReadyAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC), RetrievalAttempt: 1,
-		Plan:      &domain.OperationPlanSummary{Digest: strings.Repeat("f", 64), FileCount: &maxCount},
-		Retrieval: &domain.RetrievalReport{Requested: domain.RetrievalHybrid, Effective: domain.RetrievalHybrid, ModelSpace: strings.Repeat("f", 16), LexicalCandidates: 100, VectorCandidates: 100, FusedCandidates: 200, ScannedChunks: 8192, QueryOmittedRunes: maxCount, IndexOmittedRunes: maxCount, IndexOmittedChunks: maxCount},
+		Correction: &correction,
+		Plan:       &domain.OperationPlanSummary{Digest: strings.Repeat("f", 64), FileCount: &maxCount},
+		Retrieval:  &domain.RetrievalReport{Requested: domain.RetrievalHybrid, Effective: domain.RetrievalHybrid, ModelSpace: strings.Repeat("f", 16), LexicalCandidates: 100, VectorCandidates: 100, FusedCandidates: 200, ScannedChunks: 8192, QueryOmittedRunes: maxCount, IndexOmittedRunes: maxCount, IndexOmittedChunks: maxCount},
 	}
 	for i := range 7 {
 		operation.Diagnostics = append(operation.Diagnostics, domain.MaintenanceDiagnostic{Code: domain.DiagnosticOriginalLinkUnresolved, Path: fmt.Sprintf("wiki/%03d", i) + strings.Repeat("x", 2000), Target: "pages/" + strings.Repeat("x", 2000)})
@@ -311,6 +373,7 @@ func TestOperationDetailsPortsPreserveBoundsAndHistoricalUnknowns(t *testing.T) 
 				current.Plan = &domain.OperationPlanSummary{Digest: detailsRationaleSecret}
 			}
 			if scenario == detailsAbsentLegacyScenario {
+				current.Correction = nil
 				current.Context = nil
 				current.Plan = nil
 				current.Retrieval = nil
@@ -363,7 +426,7 @@ func TestOperationDetailsPortsPreserveBoundsAndHistoricalUnknowns(t *testing.T) 
 				t.Fatal("read reconstructed execution")
 			}
 			if scenario == detailsAbsentLegacyScenario {
-				if details.Context != nil || details.Retrieval != nil || details.RetrievalAttempt != nil || details.Plan != nil || len(details.Warnings) != 0 {
+				if details.Context != nil || details.Correction != nil || details.Retrieval != nil || details.RetrievalAttempt != nil || details.Plan != nil || len(details.Warnings) != 0 {
 					t.Fatal("invented legacy evidence")
 				}
 				return
@@ -375,6 +438,9 @@ func TestOperationDetailsPortsPreserveBoundsAndHistoricalUnknowns(t *testing.T) 
 				t.Fatal("opaque legacy plan leaked")
 			}
 			if scenario == "maximum" {
+				if details.Correction == nil || details.Correction.WorkAttempt != maxCount || *details.Correction.OutputBytes != limits.MaxOutputBytes {
+					t.Fatal("maximum correction evidence lost")
+				}
 				if details.Plan == nil || details.Plan.FileCount == nil || *details.Plan.FileCount != maxCount {
 					t.Fatal("known file count lost")
 				}
@@ -435,49 +501,66 @@ func TestOperationDetailsCorruptRequiredEvidenceFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"work_attempt", "entries_omitted", "budget.included_count", "budget.omitted_count"} {
-		for _, missing := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s/missing=%t", field, missing), func(t *testing.T) {
-				var root map[string]any
-				if err := json.Unmarshal([]byte(valid), &root); err != nil {
-					t.Fatal(err)
-				}
-				object := root
-				parent, name, nested := strings.Cut(field, ".")
-				if nested {
-					object = root[parent].(map[string]any)
-				} else {
-					name = parent
-				}
-				if missing {
-					delete(object, name)
-				} else {
-					object[name] = nil
-				}
-				payload, err := json.Marshal(root)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := db.ExecContext(ctx, `UPDATE knowl_operations SET context_report=? WHERE operation_id=?`, string(payload), submission.Operation.ID); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := store.Operation(ctx, httpTestScope, submission.Operation.ID); !errors.Is(err, app.ErrOperationContextReportInvalid) {
-					t.Fatalf("stored corruption accepted: %v", err)
-				}
-				response := httptest.NewRecorder()
-				handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/operations/"+string(submission.Operation.ID), nil))
-				var failure knowlapi.ErrorResponse
-				if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil {
-					t.Fatal(err)
-				}
-				if response.Code != http.StatusUnprocessableEntity || failure.Error != "operation_failed" {
-					t.Fatalf("unsafe HTTP error: %d %+v", response.Code, failure)
-				}
-				assertDetailsSecretsAbsent(t, response.Body.Bytes())
-				if _, err := mcpServer.Call(ctx, "knowl_operation", map[string]any{"id": string(submission.Operation.ID)}); !errors.Is(err, app.ErrOperationContextReportInvalid) {
-					t.Fatalf("MCP corruption accepted: %v", err)
-				}
-			})
+	limits, _ := app.NormalizeOutputSettings(domain.OutputSettings{})
+	correction, err := app.EncodeOperationCorrectionReport(domain.OperationCorrectionReport{Version: 1, MaxCorrections: limits.MaxCorrections, MaxOutputBytes: limits.MaxOutputBytes, DeadlineNanos: limits.DeadlineNanos, Outcome: domain.CorrectionProviderFailed, Turns: &zero, Corrections: &zero, OutputBytes: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []struct {
+		column, payload string
+		fields          []string
+		failure         error
+	}{
+		{"context_report", valid, []string{"work_attempt", "entries_omitted", "budget.included_count", "budget.omitted_count"}, app.ErrOperationContextReportInvalid},
+		{"correction_report", correction, []string{"work_attempt", "max_corrections", "turns", "corrections", "output_bytes"}, app.ErrOperationCorrectionReportInvalid},
+	} {
+		for _, field := range fixture.fields {
+			for _, missing := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%s/%s/missing=%t", fixture.column, field, missing), func(t *testing.T) {
+					var root map[string]any
+					if err := json.Unmarshal([]byte(fixture.payload), &root); err != nil {
+						t.Fatal(err)
+					}
+					object := root
+					parent, name, nested := strings.Cut(field, ".")
+					if nested {
+						object = root[parent].(map[string]any)
+					} else {
+						name = parent
+					}
+					if missing {
+						delete(object, name)
+					} else {
+						object[name] = nil
+					}
+					payload, err := json.Marshal(root)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := db.ExecContext(ctx, `UPDATE knowl_operations SET context_report=NULL, correction_report=NULL WHERE operation_id=?`, submission.Operation.ID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := db.ExecContext(ctx, `UPDATE knowl_operations SET `+fixture.column+`=? WHERE operation_id=?`, string(payload), submission.Operation.ID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := store.Operation(ctx, httpTestScope, submission.Operation.ID); !errors.Is(err, fixture.failure) {
+						t.Fatalf("stored corruption accepted: %v", err)
+					}
+					response := httptest.NewRecorder()
+					handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/operations/"+string(submission.Operation.ID), nil))
+					var failure knowlapi.ErrorResponse
+					if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil {
+						t.Fatal(err)
+					}
+					if response.Code != http.StatusUnprocessableEntity || failure.Error != "operation_failed" {
+						t.Fatalf("unsafe HTTP error: %d %+v", response.Code, failure)
+					}
+					assertDetailsSecretsAbsent(t, response.Body.Bytes())
+					if _, err := mcpServer.Call(ctx, "knowl_operation", map[string]any{"id": string(submission.Operation.ID)}); !errors.Is(err, fixture.failure) {
+						t.Fatalf("MCP corruption accepted: %v", err)
+					}
+				})
+			}
 		}
 	}
 }

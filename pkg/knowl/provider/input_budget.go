@@ -15,7 +15,7 @@ import (
 // when instruction/input/output schemas are all nonempty. Actual-wrapper
 // behavioral tests and the inner-agent guard protect against formatter drift.
 const sourceWrapperFrameBytes = 703
-const sourceRequestFormatVersion = "source-json-v1/structuredagent-v2.0.10-v1"
+const sourceRequestFormatVersion = "source-json-v1/structuredagent-v2.0.10-correction-v1"
 
 type sourceRequestBudgetKey struct{}
 
@@ -24,7 +24,7 @@ func (m *RuntimeMaintainer) RequestBudget() knowl.MaintenanceRequestBudget {
 	if m == nil {
 		return knowl.MaintenanceRequestBudget{}
 	}
-	return knowl.MaintenanceRequestBudget{MaxBytes: min(m.maxInput, app.MaxMaintenanceRequestBytes), FormatVersion: sourceRequestFormatVersion}
+	return knowl.MaintenanceRequestBudget{MaxBytes: min(m.maxInput, app.MaxMaintenanceRequestBytes), FormatVersion: sourceRequestFormatVersion, ReservedBytes: app.MaxCorrectionFeedbackBytes}
 }
 
 // RequestBytes measures the exact source envelope plus the pinned wrapper.
@@ -48,6 +48,10 @@ type sourceRequestGuard struct{ adkagent.Agent }
 
 func (a *sourceRequestGuard) Run(ctx adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
+		if err := correctionContextError(ctx); err != nil {
+			yield(nil, err)
+			return
+		}
 		if limit, ok := ctx.Value(sourceRequestBudgetKey{}).(int); ok {
 			used := 0
 			if content := ctx.UserContent(); content != nil {
@@ -62,7 +66,23 @@ func (a *sourceRequestGuard) Run(ctx adkagent.InvocationContext) iter.Seq2[*sess
 				}
 			}
 		}
+		evidence, _ := ctx.Value(correctionEvidenceKey{}).(*correctionEvidence)
+		if evidence != nil {
+			evidence.turns++
+		}
 		for event, err := range a.Agent.Run(ctx) {
+			if err == nil && evidence != nil && event != nil && event.Content != nil && strings.TrimSpace(event.ErrorCode) == "" && strings.TrimSpace(event.ErrorMessage) == "" {
+				for _, part := range event.Content.Parts {
+					if part == nil || part.Thought {
+						continue
+					}
+					if len(part.Text) > evidence.limit-evidence.bytes {
+						yield(nil, app.ErrCorrectionOutputLimit)
+						return
+					}
+					evidence.bytes += len(part.Text)
+				}
+			}
 			if !yield(event, err) {
 				return
 			}

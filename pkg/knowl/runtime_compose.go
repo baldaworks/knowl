@@ -117,7 +117,7 @@ func composeRuntime(ctx context.Context, config Config, maintainer app.Maintaine
 	runtime.sources = cloneSources(config.Sources)
 	runner := terminalRunner(runtime.service)
 	if hierarchyMaintainer, ok := maintainer.(app.HierarchyMaintainer); ok {
-		runtime.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, hierarchyMaintainer, app.HierarchyOptions{})
+		runtime.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, hierarchyMaintainer, app.HierarchyOptions{Output: config.Output})
 		if err != nil {
 			return composedRuntime{}, fmt.Errorf("compose hierarchy service: %w", err)
 		}
@@ -190,6 +190,7 @@ func composeServices(
 	maintainer app.Maintainer,
 ) (*app.IngestService, *app.QueryService, *app.LintService, error) {
 	ingestOptions := config.IngestOptions
+	ingestOptions.Output = config.Output
 	if ingestOptions.ReadLimits == (domain.ReadLimits{}) {
 		ingestOptions.ReadLimits = config.ReadLimits
 	}

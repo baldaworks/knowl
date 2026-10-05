@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"sync"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/normahq/runtime/v2/agentfactory"
@@ -35,7 +34,7 @@ type RuntimeMaintainer struct {
 	newSession func() session.Service
 	newRunner  runnerFactory
 
-	mu      sync.Mutex
+	mu      chan struct{}
 	runtime *maintainerRuntime
 	closed  bool
 }

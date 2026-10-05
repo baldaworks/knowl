@@ -15,15 +15,14 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-func runOperationDetailsPostgres(t *testing.T, dsn string) {
-
+func runCorrectionReportPostgres(t *testing.T, dsn string) {
 	store, err := Open(t.Context(), dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	storetest.RunOperationDetails(t, storetest.OperationDetailsHarness{
-		Store: store, Scope: knowl.ScopeRef("details_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())), Conflict: ErrConflict, InvalidState: ErrInvalidState,
+	storetest.RunCorrectionReports(t, storetest.CorrectionReportHarness{
+		Store: store, Scope: "correction-reports", Conflict: ErrConflict, InvalidState: ErrInvalidState,
 		OpenPeer: func(t *testing.T) app.OperationStore {
 			t.Helper()
 			peer, err := Open(t.Context(), dsn)
@@ -33,30 +32,18 @@ func runOperationDetailsPostgres(t *testing.T, dsn string) {
 			t.Cleanup(func() { _ = peer.Close() })
 			return peer
 		},
-		ContextPayload: func(t *testing.T, id knowl.OperationID, payload *string) {
+		Payload: func(t *testing.T, id knowl.OperationID, payload *string) {
 			t.Helper()
-			if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_operations SET context_report=$1 WHERE operation_id=$2`, payload, id); err != nil {
-				t.Fatal(err)
-			}
-		},
-		LegacyPlan: func(t *testing.T, id knowl.OperationID) {
-			t.Helper()
-			if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_operations SET plan_file_count=NULL WHERE operation_id=$1`, id); err != nil {
-				t.Fatal(err)
-			}
-		},
-		ReadyAt: func(t *testing.T, id knowl.OperationID, readyAt time.Time) {
-			t.Helper()
-			if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_operations SET work_ready_at=$1 WHERE operation_id=$2 AND work_lease_token=''`, readyAt.UTC().Format(time.RFC3339Nano), id); err != nil {
+			if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_operations SET correction_report=$1 WHERE operation_id=$2`, payload, id); err != nil {
 				t.Fatal(err)
 			}
 		},
 	})
 }
 
-func runOperationDetailsMigrationPostgres(t *testing.T, dsn string) {
+func runCorrectionReportMigrationPostgres(t *testing.T, dsn string) {
 	store, snapshot, _, _ := embeddingFixture(t, dsn)
-	key, meta := storetest.Fixture(snapshot.Scope, "details-migration", time.Unix(1, 0).UTC())
+	key, meta := storetest.Fixture(snapshot.Scope, "correction-migration", time.Unix(1, 0).UTC())
 	reserved, err := store.Reserve(t.Context(), key, meta)
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +52,8 @@ func runOperationDetailsMigrationPostgres(t *testing.T, dsn string) {
 	if err := store.SavePlan(t.Context(), reserved.ID, summary); err != nil {
 		t.Fatal(err)
 	}
-	report := knowl.OperationContextReport{Version: 1, Outcome: knowl.ContextSelectionFailed}
-	if err := store.SaveOperationContextReport(t.Context(), key.Scope, reserved.ID, 0, report); err != nil {
+	report := knowl.OperationCorrectionReport{Version: 1, MaxOutputBytes: app.MaxCorrectionOutputBytes, DeadlineNanos: int64(app.MaxCorrectionDeadline), Outcome: knowl.CorrectionUnavailable}
+	if err := store.SaveOperationCorrectionReport(t.Context(), key.Scope, reserved.ID, 0, report); err != nil {
 		t.Fatal(err)
 	}
 	directory, err := fs.Sub(migrationFiles, "migrations")
@@ -77,7 +64,7 @@ func runOperationDetailsMigrationPostgres(t *testing.T, dsn string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.DownTo(t.Context(), 16); err != nil {
+	if _, err := provider.DownTo(t.Context(), 17); err != nil {
 		t.Fatal(err)
 	}
 	var digest string
@@ -100,7 +87,7 @@ func runOperationDetailsMigrationPostgres(t *testing.T, dsn string) {
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	operation, err := reopened.Operation(t.Context(), key.Scope, reserved.ID)
-	if err != nil || operation.Context != nil || operation.Plan == nil || operation.Plan.FileCount != nil || operation.Plan.Digest != summary.Digest || operation.Status != knowl.StatusPlanned {
+	if err != nil || operation.Correction != nil || operation.Plan == nil || operation.Plan.FileCount == nil || *operation.Plan.FileCount != 3 || operation.Plan.Digest != summary.Digest || operation.Status != knowl.StatusPlanned {
 		t.Fatalf("legacy migration read: %+v %v", operation, err)
 	}
 	descriptor, err := reopened.Execution(t.Context(), key.Scope, reserved.ID)

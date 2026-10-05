@@ -34,10 +34,14 @@ func sourceRequestBudget(maintainer Maintainer, limits knowl.MaintenanceInputLim
 	sizer, ok := maintainer.(MaintenanceRequestSizer)
 	if ok {
 		declared := sizer.RequestBudget()
-		if declared.MaxBytes <= 0 || !validRequestFormat(declared.FormatVersion) {
+		if declared.MaxBytes <= 0 || !validRequestFormat(declared.FormatVersion) || declared.ReservedBytes < 0 || declared.ReservedBytes > MaxCorrectionFeedbackBytes {
 			return knowl.MaintenanceRequestBudget{}, nil, ErrMaintenanceInputInvalid
 		}
 		budget.MaxBytes = min(budget.MaxBytes, declared.MaxBytes)
+		budget.ReservedBytes = declared.ReservedBytes
+		if budget.ReservedBytes >= budget.MaxBytes {
+			return knowl.MaintenanceRequestBudget{}, nil, ErrMaintenanceInputInvalid
+		}
 		budget.FormatVersion = declared.FormatVersion
 	}
 	return budget, sizer, nil
@@ -85,7 +89,7 @@ func (service *IngestService) fitSourcePages(ctx context.Context, input knowl.Ma
 		measured := used
 		report.Budget.UsedBytes = &measured
 	}
-	if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes) {
+	if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes-service.requestBudget.ReservedBytes) {
 		return input, report, requiredInputLimitError{}
 	}
 	if err != nil {
@@ -115,7 +119,7 @@ func (service *IngestService) fitSourcePages(ctx context.Context, input knowl.Ma
 		}
 		input.Pages = append(input.Pages, pages[0])
 		used, err = service.requestBytes(ctx, input)
-		if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes) {
+		if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes-service.requestBudget.ReservedBytes) {
 			input.Pages[len(input.Pages)-1] = knowl.PageSnapshot{}
 			input.Pages = input.Pages[:len(input.Pages)-1]
 			report.Budget.OmittedCount++

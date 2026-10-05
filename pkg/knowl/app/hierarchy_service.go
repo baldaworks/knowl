@@ -17,6 +17,7 @@ const DefaultHierarchyPlannerVersion = "hierarchy-v3"
 
 // HierarchyOptions configures explicit hierarchy reconciliation.
 type HierarchyOptions struct {
+	Output         knowl.OutputSettings
 	Limits         knowl.HierarchyLimits
 	PlannerVersion string
 	LeaseDuration  time.Duration
@@ -24,6 +25,7 @@ type HierarchyOptions struct {
 
 // HierarchyService coordinates durable, explicit catalog-only reconciliation.
 type HierarchyService struct {
+	outputPolicy  knowl.OutputCorrectionPolicy
 	content       ContentStore
 	operations    OperationStore
 	index         SearchIndex
@@ -49,11 +51,21 @@ func NewHierarchyService(content ContentStore, operations OperationStore, index 
 	if !validStoredText(options.PlannerVersion, maxPlannerVersionBytes, false) {
 		return nil, ErrExecutionDescriptorUnavailable
 	}
+	_, supported := maintainer.(ValidatingHierarchyMaintainer)
+	outputPolicy, err := EffectiveOutputCorrectionPolicy(options.Output, supported)
+	if err != nil {
+		return nil, err
+	}
+	options.PlannerVersion, err = HierarchyOutputPlannerVersion(options.PlannerVersion, outputPolicy)
+	if err != nil {
+		return nil, err
+	}
 	if options.LeaseDuration <= 0 {
 		options.LeaseDuration = defaultLeaseDuration
 	}
 	return &HierarchyService{
-		content: content, operations: operations, index: index, maintainer: maintainer,
+		outputPolicy: outputPolicy,
+		content:      content, operations: operations, index: index, maintainer: maintainer,
 		limits: options.Limits, planner: options.PlannerVersion, leaseDuration: options.LeaseDuration,
 	}, nil
 }
@@ -158,9 +170,6 @@ func (service *HierarchyService) RunToTerminal(ctx context.Context, claim knowl.
 	if terminalOperation(operation.Status) {
 		return result, nil
 	}
-	if descriptor.Hierarchy.PlannerVersion != service.planner {
-		return service.fail(ctx, result, "descriptor", ErrExecutionDescriptorUnavailable)
-	}
 	schema, err := service.content.Schema(ctx, scope)
 	if err != nil || schema.Digest != descriptor.Schema.Digest {
 		return service.fail(ctx, result, "precondition", errors.Join(ErrHierarchyDigestMismatch, err))
@@ -177,11 +186,18 @@ func (service *HierarchyService) RunToTerminal(ctx context.Context, claim knowl.
 	case !errors.Is(loadErr, ErrStageNotFound):
 		return service.fail(ctx, result, "staging", loadErr)
 	default:
+		if descriptor.Hierarchy.PlannerVersion != service.planner {
+			return service.fail(ctx, result, "descriptor", ErrExecutionDescriptorUnavailable)
+		}
 		snapshotDigest, snapshotErr := service.content.HierarchySnapshotDigest(ctx, scope)
 		if snapshotErr != nil || snapshotDigest != descriptor.Hierarchy.SnapshotDigest {
 			return service.fail(ctx, result, "precondition", errors.Join(ErrHierarchyDigestMismatch, snapshotErr))
 		}
-		validated, planErr := service.plan(ctx, scope, descriptor)
+		validated, report, persisted, planErr := service.plan(ctx, scope, descriptor, operation.WorkAttempt)
+		result.Correction = report
+		if persisted {
+			result.Operation.Correction = report
+		}
 		if planErr != nil {
 			return service.fail(ctx, result, failureClass(planErr), planErr)
 		}
@@ -204,28 +220,30 @@ func (service *HierarchyService) RunToTerminal(ctx context.Context, claim knowl.
 	return service.apply(ctx, result, scope, id)
 }
 
-func (service *HierarchyService) plan(ctx context.Context, scope knowl.ScopeRef, descriptor knowl.ExecutionDescriptor) (knowl.ValidatedHierarchyPlan, error) {
+func (service *HierarchyService) plan(ctx context.Context, scope knowl.ScopeRef, descriptor knowl.ExecutionDescriptor, attempt int) (knowl.ValidatedHierarchyPlan, *knowl.OperationCorrectionReport, bool, error) {
 	inspection, err := service.content.Inspect(ctx, scope)
 	if err != nil {
-		return knowl.ValidatedHierarchyPlan{}, fmt.Errorf("inspection: %w", err)
+		return knowl.ValidatedHierarchyPlan{}, nil, false, fmt.Errorf("inspection: %w", err)
 	}
 	input, forbidden, err := hierarchyInputFromInspection(inspection, descriptor.Schema, descriptor.Hierarchy.SnapshotDigest, service.limits)
 	if err != nil {
-		return knowl.ValidatedHierarchyPlan{}, fmt.Errorf("descriptor: %w", err)
+		return knowl.ValidatedHierarchyPlan{}, nil, false, fmt.Errorf("descriptor: %w", err)
 	}
 	input, err = NormalizeHierarchyInput(input)
 	if err != nil {
-		return knowl.ValidatedHierarchyPlan{}, fmt.Errorf("descriptor: %w", err)
+		return knowl.ValidatedHierarchyPlan{}, nil, false, fmt.Errorf("descriptor: %w", err)
 	}
-	model, err := service.maintainer.PlanHierarchy(ctx, input)
+	validated, report, err := service.generateHierarchyPlan(ctx, input, forbidden)
+	report.WorkAttempt = attempt
+	saveErr := saveCorrectionReport(ctx, service.operations, scope, descriptor.OperationID, service.outputPolicy, report)
+	persisted := saveErr == nil && supportsCorrectionReports(service.operations)
 	if err != nil {
-		return knowl.ValidatedHierarchyPlan{}, fmt.Errorf("provider: %w", err)
+		return knowl.ValidatedHierarchyPlan{}, &report, persisted, err
 	}
-	validated, err := ValidateHierarchyPlan(ctx, input, model, HierarchyValidationOptions{ForbiddenCatalogTerms: forbidden})
-	if err != nil {
-		return knowl.ValidatedHierarchyPlan{}, fmt.Errorf("plan_validation: %w", err)
+	if saveErr != nil {
+		return knowl.ValidatedHierarchyPlan{}, &report, false, fmt.Errorf("correction_report: %w", saveErr)
 	}
-	return validated, nil
+	return validated, &report, persisted, nil
 }
 
 func (service *HierarchyService) savePlan(ctx context.Context, id knowl.OperationID, digest string, files int) error {
@@ -289,11 +307,12 @@ func (service *HierarchyService) fail(ctx context.Context, result IngestResult, 
 	if retryableExecutionError(cause) {
 		return result, cause
 	}
-	if err := service.operations.Fail(durableContext(ctx), result.Operation.ID, knowl.Failure{Class: class, OperationID: string(result.Operation.ID)}); err != nil {
+	failure := executionFailure(class, result.Operation.ID, cause)
+	if err := service.operations.Fail(durableContext(ctx), result.Operation.ID, failure); err != nil {
 		return result, errors.Join(cause, err)
 	}
 	result.Operation.Status = knowl.StatusFailed
-	result.Operation.Failure = &knowl.Failure{Class: class, OperationID: string(result.Operation.ID)}
+	result.Operation.Failure = &failure
 	return result, fmt.Errorf("%s: %w", class, cause)
 }
 

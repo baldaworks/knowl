@@ -7,6 +7,8 @@ runtime:
 
 knowl:
   provider: antigravity
+  output:
+    max_corrections: 1
   workspace:
     path: ./knowledge
   storage:

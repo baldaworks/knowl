@@ -34,6 +34,7 @@ type IngestOptions struct {
 	// CatalogLimits bounds complete navigation independently of ReadLimits.Pages.
 	// An entirely zero value selects defaults; custom values must set every field.
 	CatalogLimits knowl.CatalogLimits
+	Output        knowl.OutputSettings
 	// InputLimits bounds the complete source request; zero selects 4 MiB.
 	InputLimits   knowl.MaintenanceInputLimits
 	PlanLimits    PlanLimits
@@ -64,7 +65,8 @@ type IngestResult struct {
 	// Retrieval is transient when a custom operation store cannot persist reports.
 	Retrieval *knowl.RetrievalReport
 	// Context is transient when a custom operation store cannot persist snapshots.
-	Context *knowl.OperationContextReport
+	Context    *knowl.OperationContextReport
+	Correction *knowl.OperationCorrectionReport
 }
 
 // IngestSubmission is the durable handoff from request-time source acceptance
@@ -125,6 +127,7 @@ type ApplyResult struct {
 
 // IngestService coordinates source acceptance, planning, review, commit, and projection.
 type IngestService struct {
+	outputPolicy    knowl.OutputCorrectionPolicy
 	retrievalPolicy *MaintenanceRetrievalPolicy
 	content         ContentStore
 	operations      OperationStore
@@ -163,6 +166,11 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 		return nil, err
 	}
 	options.CatalogLimits = catalogLimits
+	_, supported := maintainer.(ValidatingMaintainer)
+	outputPolicy, err := EffectiveOutputCorrectionPolicy(options.Output, supported)
+	if err != nil {
+		return nil, err
+	}
 	if options.PlanLimits == (PlanLimits{}) {
 		options.PlanLimits = DefaultPlanLimits()
 	}
@@ -190,6 +198,7 @@ func NewIngestService(content ContentStore, operations OperationStore, index Sea
 		retrievalPolicy = &copied
 	}
 	return &IngestService{
+		outputPolicy:    outputPolicy,
 		retrievalPolicy: retrievalPolicy,
 		content:         content,
 		operations:      operations,
@@ -310,6 +319,8 @@ func (service *IngestService) maintenanceGeneration(schema knowl.SchemaDocument)
 	policy.CatalogLimits = service.catalogLimits
 	policy.InputLimits = knowl.MaintenanceInputLimits{MaxRequestBytes: service.requestBudget.MaxBytes}
 	policy.RequestFormatVersion = service.requestBudget.FormatVersion
+	policy.RequestReservedBytes = service.requestBudget.ReservedBytes
+	policy.Output = &service.outputPolicy
 	generation, err := MaintenancePolicyGeneration(policy)
 	if err != nil {
 		return "", fmt.Errorf("compute maintenance policy generation: %w", err)
@@ -597,16 +608,22 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 }
 
 type preparedStage struct {
-	Plan               knowl.ValidatedEditPlan
-	Staged             knowl.StagedChange
-	Budget             *knowl.MaintenanceBudgetReport
-	Retrieval          *knowl.RetrievalReport
-	RetrievalPersisted bool
-	Context            *knowl.OperationContextReport
-	ContextPersisted   bool
+	Correction          *knowl.OperationCorrectionReport
+	CorrectionPersisted bool
+	Plan                knowl.ValidatedEditPlan
+	Staged              knowl.StagedChange
+	Budget              *knowl.MaintenanceBudgetReport
+	Retrieval           *knowl.RetrievalReport
+	RetrievalPersisted  bool
+	Context             *knowl.OperationContextReport
+	ContextPersisted    bool
 }
 
 func (result *IngestResult) withPreparation(prepared preparedStage, attempt int) {
+	result.Correction = prepared.Correction
+	if prepared.CorrectionPersisted {
+		result.Operation.Correction = prepared.Correction
+	}
 	result.Budget = prepared.Budget
 	if prepared.Retrieval != nil {
 		result.Retrieval = prepared.Retrieval
@@ -733,16 +750,23 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 	if err := service.saveContextReport(ctx, submission, &prepared); err != nil {
 		return prepared, err
 	}
-	var modelPlan knowl.ModelEditPlan
+	var validated knowl.ValidatedEditPlan
 	if suppliedPlan != nil {
-		modelPlan = *suppliedPlan
+		validated, err = ValidateMaintenancePlan(ctx, input, *suppliedPlan, inspection, service.catalogLimits, service.planLimits)
 	} else {
-		modelPlan, err = service.maintainer.Plan(ctx, input)
+		var report knowl.OperationCorrectionReport
+		validated, report, err = service.generateSourcePlan(ctx, input, inspection)
+		report.WorkAttempt = submission.Operation.WorkAttempt
+		prepared.Correction = &report
+		saveErr := saveCorrectionReport(ctx, service.operations, submission.accepted.Scope, submission.Operation.ID, service.outputPolicy, report)
+		prepared.CorrectionPersisted = saveErr == nil && supportsCorrectionReports(service.operations)
 		if err != nil {
-			return prepared, fmt.Errorf("provider: %w", err)
+			return prepared, err
+		}
+		if saveErr != nil {
+			return prepared, fmt.Errorf("correction_report: %w", saveErr)
 		}
 	}
-	validated, err := ValidateMaintenancePlan(ctx, input, modelPlan, inspection, service.catalogLimits, service.planLimits)
 	if err != nil {
 		return prepared, fmt.Errorf("plan_validation: %w", err)
 	}
