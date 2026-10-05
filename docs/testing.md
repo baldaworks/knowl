@@ -294,6 +294,10 @@ repeats, concurrent conflicting writes, reopen, work claims, malformed/oversized
 stored values and migration 17 up/down. Known zero staged file counts and unknown
 legacy counts remain distinct; opaque legacy digests stay readable but private.
 Bounded allocation checks catch loading oversized new report/digest columns.
+Missing or null required report counters/attempt fields must fail with the
+invalid-report sentinel through codec and both stores, preserving explicit zero.
+Actual HTTP/MCP operation reads reject these corrupt rows through their safe
+error boundary instead of publishing invented zero-valued facts.
 
 `TestOperationDetailsHTTPAndMCPDurableParity` uses real filesystem/SQLite ingest,
 reopens the database and reads both generated HTTP responses and MCP tool results.
