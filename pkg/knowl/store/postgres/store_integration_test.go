@@ -35,6 +35,8 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get PostgreSQL Testcontainer connection string: %v", err)
 	}
+	t.Run("operation-details", func(t *testing.T) { runOperationDetailsPostgres(t, dsn) })
+	t.Run("operation-details-migration", func(t *testing.T) { runOperationDetailsMigrationPostgres(t, dsn) })
 	t.Run("hybrid", func(t *testing.T) {
 		searchtest.RunHybrid(t, func(t *testing.T, options ...app.EmbeddingOptions) searchtest.HybridIndex {
 			t.Helper()
