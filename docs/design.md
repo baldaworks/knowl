@@ -221,8 +221,9 @@ service or invoke the embedded `RebuildProjection` function.
 Go Query/Ingest results expose a per-call `RetrievalReport`. Maintenance persists
 a bounded report before maintainer inference, including failed selection, under
 the current operation attempt; historical reports retain their attempt origin.
-HTTP/MCP expose only optional `retrieval.effective` and safe `retrieval.reason`.
-Expanded plans and selected-context diagnostics remain separate work.
+HTTP/MCP retain the optional `retrieval.effective` and safe `retrieval.reason`
+summary. Operation reads also expose bounded stored `details`, including the
+full safe retrieval report and its producing attempt.
 
 A model-space fingerprint binds model, immutable revision, dimensions, prefixes,
 preprocessing and normalization. Source-maintenance-v6 additionally binds fusion,
@@ -284,8 +285,9 @@ port assumes the shared JSON envelope only; a custom wrapper must implement
 sizing for its complete request. The built-in runtime also checks the actual
 current prompt before the inner agent runs, preventing overflow if SDK framing
 drifts. This contract excludes token capacity, remote HTTP serialization,
-session history and total workspace RAM. `IngestResult.Budget` is transient typed
-byte/count evidence, not a public durable HTTP/MCP diagnostics contract.
+session history and total workspace RAM. `IngestResult.Budget` remains transient
+typed byte/count evidence; the operation context report stores measured fitting
+facts for HTTP/MCP inspection.
 
 The contract version, schema digest, effective request cap/format identity and
 read, plan and catalog limits, plus the configured output-affecting retrieval
@@ -295,6 +297,42 @@ v1/v2/v3/v4/v5 concrete stages resume through canonical preconditions without
 embedding or maintainer inference;
 terminal operations remain replayable. See [operator bounds and upgrade
 recovery](operations.md#source-maintenance-context-and-navigation).
+
+### Durable operation details
+
+Source maintenance finalizes one immutable context snapshot per work attempt:
+after successful assembly, before inference, or before returning a measured
+selection/catalog/assembly failure. It records eligible unique ordinary IDs,
+their first actual selection phase, fitting dispositions, observed catalog count,
+serialized request budget and any projection check from that same pass. A fully
+assembled request remains `assembled` if later cancellation or inference fails.
+Source/policy failures before selection have no context report. A crash before
+finalization can also leave it absent; reads never reconstruct missing facts.
+
+Two optional application capabilities preserve base embedded interfaces:
+`DiagnosticContextIndex` returns same-pass metadata, and
+`OperationContextReportStore` writes attempt-bound snapshots. Custom indexes
+without metadata use `unknown` reasons. Custom stores without the writer retain
+only transient `IngestResult.Context`. Built-in stores fail closed when a report
+cannot be saved, preventing new inference. When assembly and persistence both
+fail, the original classified assembly reason remains authoritative.
+
+Migration 17 adds nullable `context_report` and `plan_file_count` to SQLite and
+PostgreSQL. Existing digest, retrieval report, warnings and execution counters
+remain the sources for the public summary. Scope/current-attempt/terminal guards
+protect writes; an identical repeat is idempotent. Older report attempts remain
+explicit. Legacy null file counts stay unknown, and an opaque legacy digest
+remains readable without being published as a SHA-256 plan summary.
+
+HTTP and MCP use one allowlisted projection, with no source/query/prompt text,
+edits, rationale, credentials, endpoints or upstream messages. Context is bounded
+to 32 KiB and 100 entries with identifiers limited to 2,048 UTF-8 bytes; retrieval
+and warnings retain their existing bounds. These finite components keep serialized
+details below 96 KiB without another response-fitting algorithm. Reporting limits
+never alter model pages or measured counts. Downgrade discards only the new context
+and file-count evidence, retaining existing operational fields and canonical data.
+See [operation inspection](operations.md#operation-details) for partial, historical
+and unavailable values.
 
 OKF Attested Computation declarations are data, not an execution interface.
 Knowl preserves and exposes their runtime, parameters, computation, executor,

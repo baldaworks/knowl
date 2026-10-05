@@ -538,11 +538,14 @@ before invoking its inner agent; unexpected wrapper overflow remains a safe
 `provider_input_limit` failure.
 
 `IngestResult.Budget` carries transient typed `MaxBytes`, `UsedBytes`,
-`IncludedCount` and `OmittedCount` for a successful planning call. It contains no
-raw text or prompt. Saved-stage/terminal replay need not reconstruct it, and it
-is not added to durable HTTP/MCP operation diagnostics. The budget bounds the
-current request, not total process memory: workspace inspection still snapshots
-canonical content and encoding uses temporary allocations.
+`IncludedCount` and `OmittedCount` when exact accepted-request or partial-prefix
+usage was measured, including failed preparation or provider calls. It contains
+no raw text or prompt. Saved-stage/terminal replay need not reconstruct this
+compatibility field. The stored `details.context.budget` exposes measured fitting
+facts through HTTP/MCP and can represent an unknown exact size; see
+[operation details](#operation-details). The budget bounds the current request,
+not total process memory: workspace inspection still snapshots canonical content
+and encoding uses temporary allocations.
 
 #### Source signals
 
@@ -891,6 +894,58 @@ curl -sS \
   -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
   http://127.0.0.1:8080/v1/operations/op_01K...
 ```
+
+### Operation details
+
+`GET /v1/operations/{operation_id}` and MCP `knowl_operation` return matching
+optional `details`. Existing `id`, `status`, `updated_at`, `failure` and top-level
+`retrieval` fields remain available; statuses are still `queued`, `running`,
+`completed` and `failed`. A classified failure can additionally include a stable
+`failure.reason`, such as `required_input_limit`, without provider error text.
+
+| Field | Meaning |
+| --- | --- |
+| `context.work_attempt`, `outcome` | Producing work attempt and measured result: `assembled`, `selection_failed` or `assembly_failed`. |
+| `context.candidate_count` | Unique ordinary candidates eligible within the factual page allowance. Excludes controls and duplicates; does not count every unselected wiki page. |
+| `context.catalog_count` | Catalogs observed after successful workspace inspection. |
+| `context.pages` | Canonical page IDs, first actual selection reason (`lexical`, `vector`, `hybrid`, `neighbor`, `recent`, `unknown`) and disposition (`included`, `budget_omitted`, `pending`). |
+| `context.entries_omitted` | Entries left out of the diagnostic list because of reporting bounds. This does not remove pages from the model input. |
+| `context.budget` | Serialized request `max_bytes`, measured `used_bytes` when known, and actual `included_count`/`omitted_count`. Pending candidates are not budget omissions. |
+| `context.vector_projection` | `not_checked`, `ready` or `invalid` as observed during that attempt, with a safe reason when applicable. It is not current projection readiness. |
+| `retrieval`, `retrieval_attempt` | Actual requested/effective modes, safe reason, candidate/scan/omission counts, optional model-space fingerprint and producing attempt. |
+| `plan` | Stored validated/staged SHA-256 digest and `file_count` when known; no edits or rationale. |
+| `warnings`, `warnings_omitted` | Bounded application warning codes and safe relative identifiers; omitted warnings are counted separately. |
+| `execution` | Stored `work_attempt`, `retry_attempt`, `manual_retry_count`, `apply_attempt` and optional scheduling `ready_at`. Apply attempts are not inference-call counts. |
+
+The context snapshot is finalized once per work attempt, after assembly and
+before inference, or before returning a measured selection/assembly failure.
+`assembled` means the request was assembled; inference, validation or commit may
+still fail afterward. A read failure midway through fitting retains the last
+successfully measured accepted prefix and leaves unprocessed entries `pending`.
+Measured indispensable-input overflow may show `used_bytes` above the cap. If
+serializer preflight stopped exact measurement, `used_bytes` is absent.
+
+Missing values mean unavailable, including old rows, unsupported custom adapters,
+failures before selection and crashes before snapshot finalization. A queued
+operation can have zero execution counters without context or a plan. Retries can
+retain a snapshot from an older attempt; compare its `work_attempt` and
+`retrieval_attempt` with `execution.work_attempt`. Polling and terminal replay read
+stored facts without selection, embeddings or inference.
+
+Context reports are limited to 32 KiB and 100 listed candidates. Identifiers are
+limited to 2,048 UTF-8 bytes. Retrieval retains its 2 KiB bound; warnings retain
+their 64-entry/32 KiB bound. Complete serialized details stay below 96 KiB.
+Canonical page names are visible to callers already authorized for the trusted
+scope. Source bodies, queries, prompts, edits, rationale, provider messages,
+credentials and endpoints are excluded.
+
+SQLite and PostgreSQL retain these facts across restart. Preserve the operational
+database for historical diagnostics. Migration 17 adds nullable context and file
+count columns; its downgrade drops those new facts while retaining plan digests,
+existing reports/counters and canonical content. Old digest-only rows have an
+unknown file count. Opaque legacy digests remain readable but have no public plan
+summary. A failed context-report write stops new inference; if assembly also
+failed, its original classified failure reason is preserved.
 
 ## MCP contract
 

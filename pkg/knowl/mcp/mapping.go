@@ -36,6 +36,7 @@ func retrieveResult(result app.QueryResult) RetrieveResult {
 
 func operationResult(operation knowl.Operation) OperationResult {
 	return OperationResult{
+		Details:   app.PublicOperationDetails(operation),
 		Retrieval: app.PublicRetrievalStatus(operation.Retrieval),
 		ID:        operation.ID,
 		Status:    publicOperationStatus(operation.Status),

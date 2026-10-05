@@ -40,9 +40,10 @@ type IngestResult struct {
 
 // OperationResult is the simplified MCP-facing durable operation model.
 type OperationResult struct {
-	Retrieval *knowl.RetrievalStatus `json:"retrieval,omitempty"`
-	ID        knowl.OperationID      `json:"id"`
-	Status    string                 `json:"status"`
-	UpdatedAt time.Time              `json:"updated_at"`
-	Failure   *knowl.Failure         `json:"failure,omitempty"`
+	Details   *knowl.OperationDetails `json:"details,omitempty"`
+	Retrieval *knowl.RetrievalStatus  `json:"retrieval,omitempty"`
+	ID        knowl.OperationID       `json:"id"`
+	Status    string                  `json:"status"`
+	UpdatedAt time.Time               `json:"updated_at"`
+	Failure   *knowl.Failure          `json:"failure,omitempty"`
 }

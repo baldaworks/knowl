@@ -276,3 +276,42 @@ go test -race -count=1 ./pkg/knowl/store/sqlite \
 go test -race -tags integration -count=1 ./pkg/knowl/store/postgres \
   -run TestStoreContractWithTestcontainers
 ```
+
+
+## Durable operation diagnostics gates
+
+The app fixtures capture the actual maintainer input and serialized request
+size, including whole-page budget exclusions, exact and unknown required overflow,
+partial reads/cancellation, a failed provider, and a refused report write.
+A cancellation after successful fitting must retain `assembled` evidence with
+zero inference. Twenty long but valid candidate IDs force report-list truncation
+while preserving every actual model page and the complete fitting counts.
+Strict projection failures retain the original check without invented assembly.
+
+Shared SQLite and integration-tagged PostgreSQL contracts cover immutable
+per-attempt snapshots, current/older attempts, scope, terminal guards, identical
+repeats, concurrent conflicting writes, reopen, work claims, malformed/oversized
+stored values and migration 17 up/down. Known zero staged file counts and unknown
+legacy counts remain distinct; opaque legacy digests stay readable but private.
+Bounded allocation checks catch loading oversized new report/digest columns.
+
+`TestOperationDetailsHTTPAndMCPDurableParity` uses real filesystem/SQLite ingest,
+reopens the database and reads both generated HTTP responses and MCP tool results.
+Queued, committed, provider-failed and required-overflow operations must agree on
+context, retrieval, plan, warning and execution fields, including `failure.reason`.
+Repeated polling and terminal replay cannot invoke inference or change canonical
+pages. Distinct source, query, rationale and upstream-error sentinels are checked
+in parsed public JSON values.
+
+The bounded/historical port fixture exercises JSON-escaped candidate IDs, maximum
+safe counters, truncation, a producing attempt older than the current work attempt,
+legacy missing facts and private opaque digests. Its actual generated HTTP/MCP
+serialization must preserve typed facts and keep details below 96 KiB. The index
+rejects any search or selection during operation reads. These are interface and
+storage checks; no documentation/source substring tests or new embedding-quality
+experiment are required.
+
+Run the repository's full native tests, race tests, lint and architecture checks,
+repeat OpenAPI generation to confirm no drift, and run the tagged PostgreSQL
+contracts before delivery. Closure requires all required checks to pass on the
+exact PR head and all Story changes to merge.

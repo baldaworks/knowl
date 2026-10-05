@@ -57,7 +57,7 @@ func NewServer(query *app.QueryService, ingest *app.IngestService, waker Waker, 
 	server.tools = []Tool{
 		{Name: "knowl_retrieve", Description: "Retrieve bounded evidence from the trusted Knowl scope", ReadOnly: true, InputSchema: retrieveSchema()},
 		{Name: "knowl_ingest", Description: "Submit supplied text or store a URI reference in the trusted Knowl scope. Supply exactly one non-empty content or uri; URI and origin addresses are not downloaded. Use content for document text already obtained by the caller. Returns a durable operation ID and current status for polling with knowl_operation.", ReadOnly: false, InputSchema: ingestSchema()},
-		{Name: "knowl_operation", Description: "Read one durable Knowl operation status", ReadOnly: true, InputSchema: objectSchema("id")},
+		{Name: "knowl_operation", Description: "Read one durable Knowl operation status and bounded context, retrieval, plan and execution details from its original attempts. Unavailable evidence stays absent.", ReadOnly: true, InputSchema: objectSchema("id")},
 	}
 	return server, nil
 }

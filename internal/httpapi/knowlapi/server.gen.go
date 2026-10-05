@@ -26,6 +26,23 @@ const (
 	Wiki CitationKind = "wiki"
 )
 
+// Defines values for ContextPageDisposition.
+const (
+	BudgetOmitted ContextPageDisposition = "budget_omitted"
+	Included      ContextPageDisposition = "included"
+	Pending       ContextPageDisposition = "pending"
+)
+
+// Defines values for ContextPageSelectionReason.
+const (
+	ContextPageSelectionReasonHybrid   ContextPageSelectionReason = "hybrid"
+	ContextPageSelectionReasonLexical  ContextPageSelectionReason = "lexical"
+	ContextPageSelectionReasonNeighbor ContextPageSelectionReason = "neighbor"
+	ContextPageSelectionReasonRecent   ContextPageSelectionReason = "recent"
+	ContextPageSelectionReasonUnknown  ContextPageSelectionReason = "unknown"
+	ContextPageSelectionReasonVector   ContextPageSelectionReason = "vector"
+)
+
 // Defines values for HealthResponseStatus.
 const (
 	Ok HealthResponseStatus = "ok"
@@ -37,6 +54,13 @@ const (
 	IngestResultStatusFailed    IngestResultStatus = "failed"
 	IngestResultStatusQueued    IngestResultStatus = "queued"
 	IngestResultStatusRunning   IngestResultStatus = "running"
+)
+
+// Defines values for MaintenanceWarningCode.
+const (
+	CatalogDependencyRejected MaintenanceWarningCode = "catalog.dependency_rejected"
+	CitationUnknownSource     MaintenanceWarningCode = "citation.unknown_source"
+	LinkOriginalUnresolved    MaintenanceWarningCode = "link.original_unresolved"
 )
 
 // Defines values for OKFMetadataEffectiveStatus.
@@ -60,6 +84,18 @@ const (
 	Unverified       OKFMetadataTrustTier = "unverified"
 )
 
+// Defines values for OperationContextReportOutcome.
+const (
+	Assembled       OperationContextReportOutcome = "assembled"
+	AssemblyFailed  OperationContextReportOutcome = "assembly_failed"
+	SelectionFailed OperationContextReportOutcome = "selection_failed"
+)
+
+// Defines values for OperationContextReportVersion.
+const (
+	N1 OperationContextReportVersion = 1
+)
+
 // Defines values for OperationResultStatus.
 const (
 	OperationResultStatusCompleted OperationResultStatus = "completed"
@@ -74,28 +110,65 @@ const (
 	Ready    ReadyResponseStatus = "ready"
 )
 
+// Defines values for RetrievalReason.
+const (
+	RetrievalReasonDeadline             RetrievalReason = "deadline"
+	RetrievalReasonDimensionMismatch    RetrievalReason = "dimension_mismatch"
+	RetrievalReasonInputLimit           RetrievalReason = "input_limit"
+	RetrievalReasonInvalidConfiguration RetrievalReason = "invalid_configuration"
+	RetrievalReasonInvalidInput         RetrievalReason = "invalid_input"
+	RetrievalReasonInvalidResponse      RetrievalReason = "invalid_response"
+	RetrievalReasonModelMismatch        RetrievalReason = "model_mismatch"
+	RetrievalReasonProjectionCapacity   RetrievalReason = "projection_capacity"
+	RetrievalReasonProjectionDrift      RetrievalReason = "projection_drift"
+	RetrievalReasonProjectionNotReady   RetrievalReason = "projection_not_ready"
+	RetrievalReasonResponseLimit        RetrievalReason = "response_limit"
+	RetrievalReasonUnavailable          RetrievalReason = "unavailable"
+)
+
+// Defines values for RetrievalReportEffective.
+const (
+	RetrievalReportEffectiveDegraded RetrievalReportEffective = "degraded"
+	RetrievalReportEffectiveFailed   RetrievalReportEffective = "failed"
+	RetrievalReportEffectiveHybrid   RetrievalReportEffective = "hybrid"
+	RetrievalReportEffectiveLexical  RetrievalReportEffective = "lexical"
+)
+
+// Defines values for RetrievalReportRequested.
+const (
+	RetrievalReportRequestedHybrid  RetrievalReportRequested = "hybrid"
+	RetrievalReportRequestedLexical RetrievalReportRequested = "lexical"
+)
+
 // Defines values for RetrievalStatusEffective.
 const (
-	Degraded RetrievalStatusEffective = "degraded"
-	Failed   RetrievalStatusEffective = "failed"
-	Hybrid   RetrievalStatusEffective = "hybrid"
-	Lexical  RetrievalStatusEffective = "lexical"
+	RetrievalStatusEffectiveDegraded RetrievalStatusEffective = "degraded"
+	RetrievalStatusEffectiveFailed   RetrievalStatusEffective = "failed"
+	RetrievalStatusEffectiveHybrid   RetrievalStatusEffective = "hybrid"
+	RetrievalStatusEffectiveLexical  RetrievalStatusEffective = "lexical"
 )
 
 // Defines values for RetrievalStatusReason.
 const (
-	Deadline             RetrievalStatusReason = "deadline"
-	DimensionMismatch    RetrievalStatusReason = "dimension_mismatch"
-	InputLimit           RetrievalStatusReason = "input_limit"
-	InvalidConfiguration RetrievalStatusReason = "invalid_configuration"
-	InvalidInput         RetrievalStatusReason = "invalid_input"
-	InvalidResponse      RetrievalStatusReason = "invalid_response"
-	ModelMismatch        RetrievalStatusReason = "model_mismatch"
-	ProjectionCapacity   RetrievalStatusReason = "projection_capacity"
-	ProjectionDrift      RetrievalStatusReason = "projection_drift"
-	ProjectionNotReady   RetrievalStatusReason = "projection_not_ready"
-	ResponseLimit        RetrievalStatusReason = "response_limit"
-	Unavailable          RetrievalStatusReason = "unavailable"
+	RetrievalStatusReasonDeadline             RetrievalStatusReason = "deadline"
+	RetrievalStatusReasonDimensionMismatch    RetrievalStatusReason = "dimension_mismatch"
+	RetrievalStatusReasonInputLimit           RetrievalStatusReason = "input_limit"
+	RetrievalStatusReasonInvalidConfiguration RetrievalStatusReason = "invalid_configuration"
+	RetrievalStatusReasonInvalidInput         RetrievalStatusReason = "invalid_input"
+	RetrievalStatusReasonInvalidResponse      RetrievalStatusReason = "invalid_response"
+	RetrievalStatusReasonModelMismatch        RetrievalStatusReason = "model_mismatch"
+	RetrievalStatusReasonProjectionCapacity   RetrievalStatusReason = "projection_capacity"
+	RetrievalStatusReasonProjectionDrift      RetrievalStatusReason = "projection_drift"
+	RetrievalStatusReasonProjectionNotReady   RetrievalStatusReason = "projection_not_ready"
+	RetrievalStatusReasonResponseLimit        RetrievalStatusReason = "response_limit"
+	RetrievalStatusReasonUnavailable          RetrievalStatusReason = "unavailable"
+)
+
+// Defines values for VectorProjectionStatusState.
+const (
+	VectorInvalid    VectorProjectionStatusState = "invalid"
+	VectorNotChecked VectorProjectionStatusState = "not_checked"
+	VectorReady      VectorProjectionStatusState = "ready"
 )
 
 // Citation defines model for Citation.
@@ -110,6 +183,38 @@ type Citation struct {
 
 // CitationKind defines model for Citation.Kind.
 type CitationKind string
+
+// ContextBudget defines model for ContextBudget.
+type ContextBudget struct {
+	IncludedCount DiagnosticCount `json:"included_count"`
+	MaxBytes      int             `json:"max_bytes"`
+
+	// OmittedCount Actual candidates omitted by the request byte budget; pending candidates are not counted.
+	OmittedCount DiagnosticCount `json:"omitted_count"`
+
+	// UsedBytes Serialized accepted request bytes, or last measured accepted prefix on partial failure. Absent when preflight stopped exact measurement; measured required overflow can exceed max_bytes.
+	UsedBytes *DiagnosticCount `json:"used_bytes,omitempty"`
+}
+
+// ContextPage defines model for ContextPage.
+type ContextPage struct {
+	Disposition ContextPageDisposition `json:"disposition"`
+
+	// PageId Canonical relative ordinary page ID, additionally limited to 2048 UTF-8 bytes.
+	PageId string `json:"page_id"`
+
+	// SelectionReason First actual selection phase; unsupported custom indexes report unknown.
+	SelectionReason ContextPageSelectionReason `json:"selection_reason"`
+}
+
+// ContextPageDisposition defines model for ContextPage.Disposition.
+type ContextPageDisposition string
+
+// ContextPageSelectionReason First actual selection phase; unsupported custom indexes report unknown.
+type ContextPageSelectionReason string
+
+// DiagnosticCount defines model for DiagnosticCount.
+type DiagnosticCount = int
 
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
@@ -135,6 +240,9 @@ type EvidenceItem struct {
 type Failure struct {
 	Class       string `json:"class"`
 	OperationId string `json:"operation_id"`
+
+	// Reason Stable application failure code when classified; no provider error text.
+	Reason *string `json:"reason,omitempty"`
 }
 
 // HealthResponse defines model for HealthResponse.
@@ -169,6 +277,20 @@ type IngestResult struct {
 
 // IngestResultStatus defines model for IngestResult.Status.
 type IngestResultStatus string
+
+// MaintenanceWarning defines model for MaintenanceWarning.
+type MaintenanceWarning struct {
+	Code MaintenanceWarningCode `json:"code"`
+
+	// Path Safe relative identifier, additionally limited to 2048 UTF-8 bytes.
+	Path string `json:"path"`
+
+	// Target Safe relative identifier when available; no URL or arbitrary message.
+	Target *string `json:"target,omitempty"`
+}
+
+// MaintenanceWarningCode defines model for MaintenanceWarning.Code.
+type MaintenanceWarningCode string
 
 // OKFAttester defines model for OKFAttester.
 type OKFAttester struct {
@@ -260,8 +382,68 @@ type OKFVerification struct {
 	Extensions *OKFExtensions `json:"extensions,omitempty"`
 }
 
+// OperationContextReport One immutable snapshot per producing work attempt; at most 32 KiB. A crash before finalization can leave it absent.
+type OperationContextReport struct {
+	Budget *ContextBudget `json:"budget,omitempty"`
+
+	// CandidateCount Unique ordinary candidates eligible under the factual page allowance, excluding controls and duplicates. Not a wiki-wide omission count.
+	CandidateCount *DiagnosticCount `json:"candidate_count,omitempty"`
+
+	// CatalogCount Number of catalogs observed when inspection succeeded.
+	CatalogCount *DiagnosticCount `json:"catalog_count,omitempty"`
+
+	// EntriesOmitted Candidate entries omitted from this diagnostic list by its bounds; distinct from budget exclusions.
+	EntriesOmitted DiagnosticCount               `json:"entries_omitted"`
+	Outcome        OperationContextReportOutcome `json:"outcome"`
+	Pages          *[]ContextPage                `json:"pages,omitempty"`
+
+	// VectorProjection Check observed during the producing attempt, never current projection readiness at poll time.
+	VectorProjection *VectorProjectionStatus       `json:"vector_projection,omitempty"`
+	Version          OperationContextReportVersion `json:"version"`
+	WorkAttempt      DiagnosticCount               `json:"work_attempt"`
+}
+
+// OperationContextReportOutcome defines model for OperationContextReport.Outcome.
+type OperationContextReportOutcome string
+
+// OperationContextReportVersion defines model for OperationContextReport.Version.
+type OperationContextReportVersion int
+
+// OperationDetails Bounded stored facts. Missing evidence is unavailable. Reads do not rerun selection or inference. Details serialize to less than 96 KiB.
+type OperationDetails struct {
+	// Context One immutable snapshot per producing work attempt; at most 32 KiB. A crash before finalization can leave it absent.
+	Context          *OperationContextReport    `json:"context,omitempty"`
+	Execution        *OperationExecutionDetails `json:"execution,omitempty"`
+	Plan             *OperationPlanSummary      `json:"plan,omitempty"`
+	Retrieval        *RetrievalReport           `json:"retrieval,omitempty"`
+	RetrievalAttempt *DiagnosticCount           `json:"retrieval_attempt,omitempty"`
+	Warnings         *[]MaintenanceWarning      `json:"warnings,omitempty"`
+	WarningsOmitted  *DiagnosticCount           `json:"warnings_omitted,omitempty"`
+}
+
+// OperationExecutionDetails defines model for OperationExecutionDetails.
+type OperationExecutionDetails struct {
+	// ApplyAttempt Existing canonical apply-attempt counter, not inference calls.
+	ApplyAttempt     DiagnosticCount `json:"apply_attempt"`
+	ManualRetryCount DiagnosticCount `json:"manual_retry_count"`
+	ReadyAt          *time.Time      `json:"ready_at,omitempty"`
+	RetryAttempt     DiagnosticCount `json:"retry_attempt"`
+	WorkAttempt      DiagnosticCount `json:"work_attempt"`
+}
+
+// OperationPlanSummary defines model for OperationPlanSummary.
+type OperationPlanSummary struct {
+	// Digest Stored validated/staged SHA-256 digest, without edits or rationale.
+	Digest string `json:"digest"`
+
+	// FileCount Stored number of staged files when known. Legacy digest-only rows omit it.
+	FileCount *DiagnosticCount `json:"file_count,omitempty"`
+}
+
 // OperationResult defines model for OperationResult.
 type OperationResult struct {
+	// Details Bounded stored facts. Missing evidence is unavailable. Reads do not rerun selection or inference. Details serialize to less than 96 KiB.
+	Details   *OperationDetails     `json:"details,omitempty"`
 	Failure   *Failure              `json:"failure,omitempty"`
 	Id        string                `json:"id"`
 	Retrieval *RetrievalStatus      `json:"retrieval,omitempty"`
@@ -282,6 +464,32 @@ type ReadyResponse struct {
 
 // ReadyResponseStatus defines model for ReadyResponse.Status.
 type ReadyResponseStatus string
+
+// RetrievalReason defines model for RetrievalReason.
+type RetrievalReason string
+
+// RetrievalReport defines model for RetrievalReport.
+type RetrievalReport struct {
+	Effective          RetrievalReportEffective `json:"effective"`
+	FusedCandidates    int                      `json:"fused_candidates"`
+	IndexOmittedChunks DiagnosticCount          `json:"index_omitted_chunks"`
+	IndexOmittedRunes  DiagnosticCount          `json:"index_omitted_runes"`
+	LexicalCandidates  int                      `json:"lexical_candidates"`
+
+	// ModelSpace Non-secret fingerprint, without model endpoint or credentials.
+	ModelSpace        *string                  `json:"model_space,omitempty"`
+	QueryOmittedRunes DiagnosticCount          `json:"query_omitted_runes"`
+	Reason            *RetrievalReason         `json:"reason,omitempty"`
+	Requested         RetrievalReportRequested `json:"requested"`
+	ScannedChunks     int                      `json:"scanned_chunks"`
+	VectorCandidates  int                      `json:"vector_candidates"`
+}
+
+// RetrievalReportEffective defines model for RetrievalReport.Effective.
+type RetrievalReportEffective string
+
+// RetrievalReportRequested defines model for RetrievalReport.Requested.
+type RetrievalReportRequested string
 
 // RetrievalStatus defines model for RetrievalStatus.
 type RetrievalStatus struct {
@@ -310,6 +518,15 @@ type SourceDocument struct {
 	SourceId   string `json:"source_id"`
 	Uri        string `json:"uri"`
 }
+
+// VectorProjectionStatus Check observed during the producing attempt, never current projection readiness at poll time.
+type VectorProjectionStatus struct {
+	Reason *RetrievalReason            `json:"reason,omitempty"`
+	State  VectorProjectionStatusState `json:"state"`
+}
+
+// VectorProjectionStatusState defines model for VectorProjectionStatus.State.
+type VectorProjectionStatusState string
 
 // OperationID defines model for OperationID.
 type OperationID = string
