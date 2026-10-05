@@ -632,7 +632,12 @@ func TestRunToTerminalPreservesTransientClassifiedFailure(t *testing.T) {
 func TestRunToTerminalRetriesAfterCanonicalProjectionFailure(t *testing.T) {
 	ctx := context.Background()
 	index := &failOnceProjectionIndex{}
-	workspace, store, service, maintainer := newWorkflowWithOptions(t, app.IngestOptions{LeaseDuration: time.Nanosecond}, index)
+	workspace, store, _, maintainer := newWorkflowWithOptions(t, app.IngestOptions{}, index)
+	operations := expiredApplyLeaseOperations{OperationStore: store}
+	service, err := app.NewIngestService(workspace, operations, index, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	submission, err := service.Submit(ctx, sourceEnvelope([]byte("retry projection")))
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -653,7 +658,7 @@ func TestRunToTerminalRetriesAfterCanonicalProjectionFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen workspace: %v", err)
 	}
-	restartedService, err := app.NewIngestService(restartedWorkspace, store, index, maintainer, app.IngestOptions{LeaseDuration: time.Nanosecond})
+	restartedService, err := app.NewIngestService(restartedWorkspace, operations, index, maintainer, app.IngestOptions{})
 	if err != nil {
 		t.Fatalf("recreate ingest service: %v", err)
 	}
@@ -1240,8 +1245,8 @@ func TestExecuteKeepsReadDeadlineOutOfMaintainerPlan(t *testing.T) {
 	if !content.sourceHasDeadline {
 		t.Fatal("source read did not receive the read deadline")
 	}
-	if maintainer.hasDeadline {
-		t.Fatal("maintainer plan inherited the read deadline")
+	if !maintainer.hasDeadline || !maintainer.deadline.After(content.sourceDeadline) || time.Until(maintainer.deadline) <= time.Minute || time.Until(maintainer.deadline) > app.MaxCorrectionDeadline {
+		t.Fatal("maintainer did not receive its separate bounded planning deadline")
 	}
 }
 
@@ -1271,6 +1276,7 @@ type countingMaintainer struct {
 
 type deadlineContentStore struct {
 	*contentfs.Workspace
+	sourceDeadline    time.Time
 	schemaHasDeadline bool
 	sourceHasDeadline bool
 }
@@ -1314,12 +1320,13 @@ func (store *deadlineContentStore) Schema(ctx context.Context, scope knowl.Scope
 }
 
 func (store *deadlineContentStore) ReadSource(ctx context.Context, source knowl.AcceptedSource, limits knowl.ReadLimits) ([]byte, error) {
-	_, store.sourceHasDeadline = ctx.Deadline()
+	store.sourceDeadline, store.sourceHasDeadline = ctx.Deadline()
 	return store.Workspace.ReadSource(ctx, source, limits)
 }
 
 type deadlineMaintainer struct {
 	hasDeadline bool
+	deadline    time.Time
 }
 
 type classifiedFailureMaintainer struct{ err error }
@@ -1340,7 +1347,7 @@ func (failure classifiedTestError) FailureReason() string { return failure.reaso
 func (failure classifiedTestError) Retryable() bool       { return failure.retryable }
 
 func (maintainer *deadlineMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
-	_, maintainer.hasDeadline = ctx.Deadline()
+	maintainer.deadline, maintainer.hasDeadline = ctx.Deadline()
 	return withRootCatalog(input, knowl.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest,
 		SourceRefs:   []string{testSourceRef},

@@ -89,7 +89,7 @@ func (service *IngestService) fitSourcePages(ctx context.Context, input knowl.Ma
 		measured := used
 		report.Budget.UsedBytes = &measured
 	}
-	if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes) {
+	if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes-service.requestBudget.ReservedBytes) {
 		return input, report, requiredInputLimitError{}
 	}
 	if err != nil {
@@ -119,7 +119,7 @@ func (service *IngestService) fitSourcePages(ctx context.Context, input knowl.Ma
 		}
 		input.Pages = append(input.Pages, pages[0])
 		used, err = service.requestBytes(ctx, input)
-		if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes) {
+		if errors.Is(err, ErrMaintenanceInputLimit) || (err == nil && used > report.Budget.MaxBytes-service.requestBudget.ReservedBytes) {
 			input.Pages[len(input.Pages)-1] = knowl.PageSnapshot{}
 			input.Pages = input.Pages[:len(input.Pages)-1]
 			report.Budget.OmittedCount++
