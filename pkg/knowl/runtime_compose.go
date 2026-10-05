@@ -296,6 +296,9 @@ func nilSourceAdapter(adapter app.SourceAdapter) bool {
 
 func (options Options) maintainer(config Config) (app.Maintainer, io.Closer, error) {
 	if !nilMaintainer(options.Maintainer) {
+		if config.Workers != 1 {
+			return nil, nil, ErrWorkerConfigInvalid
+		}
 		closer, _ := options.Maintainer.(io.Closer)
 		return options.Maintainer, closer, nil
 	}

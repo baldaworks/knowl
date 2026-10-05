@@ -1,6 +1,7 @@
 package knowl
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -10,6 +11,9 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
+
+// ErrWorkerConfigInvalid identifies unsupported maintenance capacity or ownership.
+var ErrWorkerConfigInvalid = errors.New("invalid maintenance worker configuration")
 
 const (
 	StoreSQLite   = "sqlite"
@@ -30,6 +34,8 @@ type Config struct {
 	OperatorToken string
 	ReadLimits    domain.ReadLimits
 	IngestOptions app.IngestOptions
+	// Workers bounds simultaneous owned maintenance execution; zero defaults to one.
+	Workers int
 	// WorkerQueueSize bounds only coalesced in-memory wake hints. Accepted work
 	// remains durable and is recovered by scheduler scans when hints are lost.
 	WorkerQueueSize int
@@ -47,6 +53,7 @@ func DefaultConfig() Config {
 		ListenAddr:      DefaultListen,
 		ReadLimits:      limits,
 		IngestOptions:   app.IngestOptions{ReadLimits: limits},
+		Workers:         1,
 		WorkerQueueSize: 16,
 		ShutdownTimeout: 10 * time.Second,
 	}
@@ -59,6 +66,12 @@ func (config Config) Validate() error {
 }
 
 func (config Config) normalized() (Config, error) {
+	if config.Workers == 0 {
+		config.Workers = 1
+	}
+	if config.Workers < 1 || config.Workers > 2 {
+		return Config{}, ErrWorkerConfigInvalid
+	}
 	if strings.TrimSpace(config.Workspace) == "" {
 		return Config{}, fmt.Errorf("workspace path is required")
 	}
