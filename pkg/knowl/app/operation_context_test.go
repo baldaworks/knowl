@@ -58,6 +58,47 @@ func TestOperationContextRoundTripAndUnknownEvidence(t *testing.T) {
 	}
 }
 
+func TestOperationContextRequiresMeasuredZeroFields(t *testing.T) {
+	report := knowl.OperationContextReport{Version: 1, Outcome: knowl.ContextAssemblyFailed, CandidateCount: contextCount(0), Budget: &knowl.ContextBudget{MaxBytes: 4096}}
+	encoded, err := EncodeOperationContextReport(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeOperationContextReport(encoded, 0)
+	if err != nil || !reflect.DeepEqual(got, &report) {
+		t.Fatalf("explicit zero evidence lost: %+v %v", got, err)
+	}
+	for _, field := range []string{"work_attempt", "entries_omitted", "budget.included_count", "budget.omitted_count"} {
+		for _, missing := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/missing=%t", field, missing), func(t *testing.T) {
+				var root map[string]any
+				if err := json.Unmarshal([]byte(encoded), &root); err != nil {
+					t.Fatal(err)
+				}
+				object := root
+				parent, name, nested := strings.Cut(field, ".")
+				if nested {
+					object = object[parent].(map[string]any)
+				} else {
+					name = parent
+				}
+				if missing {
+					delete(object, name)
+				} else {
+					object[name] = nil
+				}
+				payload, err := json.Marshal(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := DecodeOperationContextReport(string(payload), 0); !errors.Is(err, ErrOperationContextReportInvalid) {
+					t.Fatalf("unmeasured required field accepted: %v", err)
+				}
+			})
+		}
+	}
+}
+
 // A hidden diagnostic entry cannot account for two completed candidates beside a pending page.
 func TestOperationContextRejectsContradictoryPartialCounts(t *testing.T) {
 	report := assembledContextFixture()
