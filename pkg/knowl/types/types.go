@@ -223,22 +223,23 @@ const (
 
 // Operation is a redacted operation read model.
 type Operation struct {
-	ID               OperationID             `json:"id"`
-	Kind             WorkKind                `json:"kind,omitempty"`
-	Key              OperationKey            `json:"key,omitzero"`
-	Status           OperationStatus         `json:"status"`
-	Attempt          int                     `json:"attempt"`
-	WorkAttempt      int                     `json:"work_attempt"`
-	RetryAttempt     int                     `json:"retry_attempt"`
-	ManualRetryCount int                     `json:"manual_retry_count"`
-	ReadyAt          time.Time               `json:"ready_at,omitempty"`
-	Failure          *Failure                `json:"failure,omitempty"`
-	Diagnostics      []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
-	Retrieval        *RetrievalReport        `json:"retrieval,omitempty"`
-	RetrievalAttempt int                     `json:"retrieval_attempt,omitempty"`
-	Context          *OperationContextReport `json:"context,omitempty"`
-	Plan             *OperationPlanSummary   `json:"plan,omitempty"`
-	UpdatedAt        time.Time               `json:"updated_at"`
+	ID               OperationID                `json:"id"`
+	Kind             WorkKind                   `json:"kind,omitempty"`
+	Key              OperationKey               `json:"key,omitzero"`
+	Status           OperationStatus            `json:"status"`
+	Attempt          int                        `json:"attempt"`
+	WorkAttempt      int                        `json:"work_attempt"`
+	RetryAttempt     int                        `json:"retry_attempt"`
+	ManualRetryCount int                        `json:"manual_retry_count"`
+	ReadyAt          time.Time                  `json:"ready_at,omitempty"`
+	Failure          *Failure                   `json:"failure,omitempty"`
+	Diagnostics      []MaintenanceDiagnostic    `json:"diagnostics,omitempty"`
+	Retrieval        *RetrievalReport           `json:"retrieval,omitempty"`
+	RetrievalAttempt int                        `json:"retrieval_attempt,omitempty"`
+	Context          *OperationContextReport    `json:"context,omitempty"`
+	Correction       *OperationCorrectionReport `json:"correction,omitempty"`
+	Plan             *OperationPlanSummary      `json:"plan,omitempty"`
+	UpdatedAt        time.Time                  `json:"updated_at"`
 }
 
 // PlanSummary is the durable redacted summary of a model plan.

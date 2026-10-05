@@ -26,24 +26,37 @@ func (store *Store) SaveOperationContextReport(ctx context.Context, scope knowl.
 	if report.WorkAttempt != attempt {
 		return ErrLeaseConflict
 	}
+	return store.saveAttemptReport(ctx, scope, id, attempt, encoded, operationContextColumn, "context_report", func(payload string, currentAttempt int) (int, error) {
+		previous, err := app.DecodeOperationContextReport(payload, currentAttempt)
+		if err != nil {
+			return -1, err
+		}
+		if previous == nil {
+			return -1, nil
+		}
+		return previous.WorkAttempt, nil
+	})
+}
+
+func (store *Store) saveAttemptReport(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, attempt int, encoded, projection, column string, decodeAttempt func(string, int) (int, error)) error {
 	return store.transition(ctx, id, func(tx *sql.Tx, current operationRow) error {
 		var stored sql.NullString
 		var workAttempt int
-		err := tx.QueryRowContext(ctx, `SELECT work_attempt, `+operationContextColumn+` FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id).Scan(&workAttempt, &stored)
+		err := tx.QueryRowContext(ctx, `SELECT work_attempt, `+projection+` FROM knowl_operations WHERE scope = $1 AND operation_id = $2`, scope, id).Scan(&workAttempt, &stored)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
-			return fmt.Errorf("read operation context: %w", err)
+			return fmt.Errorf("read operation report: %w", err)
 		}
 		if attempt != workAttempt {
 			return ErrLeaseConflict
 		}
-		previous, err := app.DecodeOperationContextReport(stored.String, workAttempt)
+		previousAttempt, err := decodeAttempt(stored.String, workAttempt)
 		if err != nil {
 			return err
 		}
-		if previous != nil && previous.WorkAttempt == attempt {
+		if previousAttempt == attempt {
 			if stored.String == encoded {
 				return nil
 			}
@@ -52,13 +65,17 @@ func (store *Store) SaveOperationContextReport(ctx context.Context, scope knowl.
 		if current.status == knowl.StatusCommitted || current.status == knowl.StatusFailed {
 			return ErrInvalidState
 		}
-		return updateOperationTx(ctx, tx, id, `context_report = $1`, encoded)
+		return updateOperationTx(ctx, tx, id, column+" = $1", encoded)
 	})
 }
 
-func decodeOperationDetails(operation *knowl.Operation, contextReport, planDigest string, planFileCount sql.NullInt64) error {
+func decodeOperationDetails(operation *knowl.Operation, reportAttempt int, contextReport, correctionReport, planDigest string, planFileCount sql.NullInt64) error {
 	var err error
-	operation.Context, err = app.DecodeOperationContextReport(contextReport, operation.WorkAttempt)
+	operation.Context, err = app.DecodeOperationContextReport(contextReport, reportAttempt)
+	if err != nil {
+		return err
+	}
+	operation.Correction, err = app.DecodeOperationCorrectionReport(correctionReport, reportAttempt)
 	if err != nil {
 		return err
 	}

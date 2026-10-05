@@ -278,17 +278,17 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	var operation knowl.Operation
 	var sourceAdapter, sourceID, sourceVersion, sourceDigest, schemaDigest, maintenanceGeneration, maintenanceDiagnostics string
 	var kind, status, failureClass, failureReason, readyAt, updatedAt string
-	var retrievalReport, contextReport sql.NullString
+	var retrievalReport, contextReport, correctionReport sql.NullString
 	var planDigest string
 	var planFileCount sql.NullInt64
 	err := store.db.QueryRowContext(ctx, `
 		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation,
 		       schema_digest, status, attempt, work_attempt, retry_attempt, manual_retry_count,
-		       failure_class, failure_reason, maintenance_diagnostics, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt, `+operationContextColumn+`, `+operationPlanDigestColumn+`, plan_file_count
+		       failure_class, failure_reason, maintenance_diagnostics, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt, `+operationContextColumn+`, `+operationCorrectionColumn+`, `+operationPlanDigestColumn+`, plan_file_count
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id).
 		Scan(&operation.ID, &kind, &sourceAdapter, &sourceID, &sourceVersion, &sourceDigest, &maintenanceGeneration,
 			&schemaDigest, &status, &operation.Attempt, &operation.WorkAttempt, &operation.RetryAttempt,
-			&operation.ManualRetryCount, &failureClass, &failureReason, &maintenanceDiagnostics, &readyAt, &updatedAt, &retrievalReport, &operation.RetrievalAttempt, &contextReport, &planDigest, &planFileCount)
+			&operation.ManualRetryCount, &failureClass, &failureReason, &maintenanceDiagnostics, &readyAt, &updatedAt, &retrievalReport, &operation.RetrievalAttempt, &contextReport, &correctionReport, &planDigest, &planFileCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return knowl.Operation{}, ErrNotFound
 	}
@@ -321,7 +321,7 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	if err != nil {
 		return knowl.Operation{}, err
 	}
-	if err := decodeOperationDetails(&operation, contextReport.String, planDigest, planFileCount); err != nil {
+	if err := decodeOperationDetails(&operation, operation.WorkAttempt, contextReport.String, correctionReport.String, planDigest, planFileCount); err != nil {
 		return knowl.Operation{}, err
 	}
 	_ = schemaDigest

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,11 @@ import (
 var ErrOperationCorrectionReportInvalid = errors.New("invalid operation correction report")
 
 const MaxOperationCorrectionReportBytes = 1024
+
+// OperationCorrectionReportStore preserves one finalized report per work attempt.
+type OperationCorrectionReportStore interface {
+	SaveOperationCorrectionReport(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, attempt int, report knowl.OperationCorrectionReport) error
+}
 
 // EncodeOperationCorrectionReport validates content-free evidence before storage.
 func EncodeOperationCorrectionReport(report knowl.OperationCorrectionReport) (string, error) {
