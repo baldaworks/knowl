@@ -6,100 +6,30 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
-	"github.com/normahq/runtime/v2/structuredagent"
-	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
-	"google.golang.org/genai"
 )
 
-// Plan asks the selected runtime provider for one bounded structured edit
-// plan. Provider output is validated again by pkg/knowl/app after this method.
+// Plan preserves the base API's single-generation behavior.
 func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
-	if err := validatePlanContext(ctx); err != nil {
-		return knowl.ModelEditPlan{}, err
-	}
-	if input.ContractVersion != app.SourceMaintenanceContractVersion {
-		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
-	}
-	limits, err := app.NormalizeMaintenanceInputLimits(input.InputLimits)
-	if err != nil {
-		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
-	}
-	input.InputLimits = limits
-	envelope, err := app.EncodeSourceMaintenanceRequest(ctx, input)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return knowl.ModelEditPlan{}, ctxErr
-		}
-		if errors.Is(err, app.ErrMaintenanceInputLimit) {
-			return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInputLimit)
-		}
-		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInput)
-	}
-	limit := min(limits.MaxRequestBytes, maintainer.RequestBudget().MaxBytes)
-	if sourceWrappedBytes(len(envelope)) > limit {
-		return knowl.ModelEditPlan{}, permanentProviderFailure(reasonProviderInputLimit)
-	}
-	ctx = context.WithValue(ctx, sourceRequestBudgetKey{}, limit)
-	var plan knowl.ModelEditPlan
-	err = maintainer.runStructuredPlan(ctx, envelope, "maintainer", func(candidate string) error {
-		if branchErr := validateOutputBranch(candidate, []string{"source_refs", "edits"}, []string{"snapshot_digest", "catalogs"}); branchErr != nil {
-			return branchErr
-		}
-		var decoded maintainerPlanOutput
-		if decodeErr := json.Unmarshal([]byte(candidate), &decoded); decodeErr != nil {
-			return decodeErr
-		}
-		plan = decoded.modelPlan()
-		return nil
-	})
-	if err != nil {
-		return knowl.ModelEditPlan{}, err
-	}
-	return plan, nil
+	limits, _ := app.NormalizeOutputSettings(knowl.OutputSettings{})
+	limits.MaxCorrections = 0
+	plan, _, err := maintainer.planSource(ctx, input, limits, nil)
+	return plan, legacyCorrectionError(err)
 }
 
-// PlanHierarchy asks the selected runtime provider for a catalog graph only.
-// The same lazy runtime and ADK session are shared with source maintenance.
+// PlanHierarchy preserves single-generation and generic hierarchy validation.
 func (maintainer *RuntimeMaintainer) PlanHierarchy(ctx context.Context, input knowl.HierarchyInput) (knowl.HierarchyModelPlan, error) {
-	if err := validatePlanContext(ctx); err != nil {
-		return knowl.HierarchyModelPlan{}, err
+	limits, _ := app.NormalizeOutputSettings(knowl.OutputSettings{})
+	limits.MaxCorrections = 0
+	plan, _, err := maintainer.planHierarchy(ctx, input, limits, nil)
+	if err != nil {
+		return knowl.HierarchyModelPlan{}, legacyCorrectionError(err)
 	}
 	normalized, err := app.NormalizeHierarchyInput(input)
-	if err != nil {
-		return knowl.HierarchyModelPlan{}, err
-	}
-	payload, err := json.Marshal(normalized)
-	if err != nil {
-		return knowl.HierarchyModelPlan{}, permanentProviderFailure(reasonProviderInput)
-	}
-	if len(payload) > maintainer.maxInput {
-		return knowl.HierarchyModelPlan{}, permanentProviderFailure(reasonProviderInputLimit)
-	}
-	envelope, err := json.Marshal(struct {
-		Operation              string          `json:"operation"`
-		Input                  json.RawMessage `json:"input"`
-		RequiredSchemaDigest   string          `json:"required_schema_digest"`
-		RequiredSnapshotDigest string          `json:"required_snapshot_digest"`
-	}{
-		Operation:              "hierarchy",
-		Input:                  payload,
-		RequiredSchemaDigest:   normalized.SchemaDigest,
-		RequiredSnapshotDigest: normalized.SnapshotDigest,
-	})
-	if err != nil {
-		return knowl.HierarchyModelPlan{}, permanentProviderFailure(reasonProviderInput)
-	}
-	var plan knowl.HierarchyModelPlan
-	err = maintainer.runStructuredPlan(ctx, envelope, "hierarchy", func(candidate string) error {
-		if branchErr := validateOutputBranch(candidate, []string{"snapshot_digest", "catalogs"}, []string{"source_refs", "edits", "rationale", "catalog_additions"}); branchErr != nil {
-			return branchErr
-		}
-		return json.Unmarshal([]byte(candidate), &plan)
-	})
 	if err != nil {
 		return knowl.HierarchyModelPlan{}, err
 	}
@@ -107,6 +37,45 @@ func (maintainer *RuntimeMaintainer) PlanHierarchy(ctx context.Context, input kn
 		return knowl.HierarchyModelPlan{}, fmt.Errorf("validate hierarchy provider plan: %w", err)
 	}
 	return plan, nil
+}
+
+func sourceRequest(ctx context.Context, input knowl.MaintenanceInput, maxInput int) ([]byte, int, error) {
+	if input.ContractVersion != app.SourceMaintenanceContractVersion {
+		return nil, 0, permanentProviderFailure(reasonProviderInput)
+	}
+	limits, err := app.NormalizeMaintenanceInputLimits(input.InputLimits)
+	if err != nil {
+		return nil, 0, permanentProviderFailure(reasonProviderInput)
+	}
+	input.InputLimits = limits
+	envelope, err := app.EncodeSourceMaintenanceRequest(ctx, input)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, 0, correctionContextError(ctx)
+		}
+		if errors.Is(err, app.ErrMaintenanceInputLimit) {
+			return nil, 0, permanentProviderFailure(reasonProviderInputLimit)
+		}
+		return nil, 0, permanentProviderFailure(reasonProviderInput)
+	}
+	return envelope, min(limits.MaxRequestBytes, maxInput), nil
+}
+
+func hierarchyRequest(input knowl.HierarchyInput) ([]byte, error) {
+	normalized, err := app.NormalizeHierarchyInput(input)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, permanentProviderFailure(reasonProviderInput)
+	}
+	return json.Marshal(struct {
+		Operation              string          `json:"operation"`
+		Input                  json.RawMessage `json:"input"`
+		RequiredSchemaDigest   string          `json:"required_schema_digest"`
+		RequiredSnapshotDigest string          `json:"required_snapshot_digest"`
+	}{"hierarchy", payload, normalized.SchemaDigest, normalized.SnapshotDigest})
 }
 
 func validateOutputBranch(candidate string, required, forbidden []string) error {
@@ -135,69 +104,13 @@ func validatePlanContext(ctx context.Context) error {
 }
 
 func (maintainer *RuntimeMaintainer) runStructuredPlan(ctx context.Context, envelope []byte, operation string, decode func(string) error) error {
-	maintainer.mu.Lock()
-	defer maintainer.mu.Unlock()
-	if maintainer.closed {
-		return fmt.Errorf("maintainer is closed")
-	}
-	runtime, err := maintainer.ensureRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	var (
-		planFound   bool
-		outputBytes int
-		decodeErr   error
-	)
-	for event, runErr := range runtime.runner.Run(
-		ctx,
-		maintainerUserID,
-		runtime.sessionID,
-		genai.NewContentFromText(string(envelope), genai.RoleUser),
-		adkagent.RunConfig{},
-	) {
-		if runErr != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			if errors.Is(runErr, app.ErrMaintenanceInputLimit) {
-				return permanentProviderFailure(reasonProviderInputLimit)
-			}
-			if errors.Is(runErr, structuredagent.ErrStructuredInputSchemaValidation) {
-				return permanentProviderFailure(reasonProviderInput)
-			}
-			if errors.Is(runErr, structuredagent.ErrStructuredOutputSchemaValidation) {
-				return permanentProviderFailure(reasonProviderOutputInvalid)
-			}
-			return transientProviderFailure(reasonProviderRun)
-		}
-		if event == nil || event.Content == nil {
-			continue
-		}
-		candidate := planEventText(event)
-		if candidate == "" {
-			continue
-		}
-		outputBytes += len(candidate)
-		if outputBytes > maintainer.maxOutput {
-			return permanentProviderFailure(reasonProviderOutputLimit)
-		}
-		if err := decode(candidate); err != nil {
-			decodeErr = err
-			continue
-		}
-		planFound = true
-	}
-	if planFound {
-		return nil
-	}
-	if outputBytes == 0 {
-		return permanentProviderFailure(reasonProviderOutputEmpty)
-	}
-	if decodeErr != nil {
-		return permanentProviderFailure(reasonProviderOutputInvalid)
-	}
-	return permanentProviderFailure(reasonProviderOutputInvalid)
+	limits, _ := app.NormalizeOutputSettings(knowl.OutputSettings{})
+	limits.MaxCorrections = 0
+	limits.MaxOutputBytes = min(limits.MaxOutputBytes, maintainer.maxOutput)
+	bounded, cancel := context.WithTimeoutCause(ctx, time.Duration(limits.DeadlineNanos), app.ErrCorrectionDeadline)
+	defer cancel()
+	_, err := maintainer.runCorrectedPlan(bounded, envelope, operation, limits, decode, nil, "")
+	return legacyCorrectionError(err)
 }
 
 type maintainerPlanOutput struct {

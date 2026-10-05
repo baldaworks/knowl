@@ -15,8 +15,8 @@ func (maintainer *RuntimeMaintainer) Close() error {
 	if maintainer == nil {
 		return nil
 	}
-	maintainer.mu.Lock()
-	defer maintainer.mu.Unlock()
+	maintainer.mu <- struct{}{}
+	defer func() { <-maintainer.mu }()
 	if maintainer.closed {
 		return nil
 	}
