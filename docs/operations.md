@@ -40,6 +40,8 @@ runtime:
 
 knowl:
   provider: opencode
+  output:
+    max_corrections: 1
   workspace:
     path: .
   storage:
@@ -376,8 +378,8 @@ JSON. A changed result includes its generation and affected catalog/log files;
 a converged replay returns `"changed":false` and leaves the canonical digest
 unchanged.
 
-Planner identity `hierarchy-v3` makes this subject-first contract a new durable
-operation identity. The maintainer is called once with deterministically ordered,
+Planner identity includes `hierarchy-v3` and the effective output policy in the
+durable operation identity. Planning uses deterministically ordered,
 bounded page metadata, excerpts, current memberships, and the schema digest;
 schema content, raw source bodies, provenance, and source-native paths are not
 taxonomy input. The digest binds the operation to the current operator policy;
@@ -385,6 +387,7 @@ it does not cause hierarchy planning to interpret that policy. The maintainer
 treats type and technology as supporting signals, recursively
 decomposes broad heterogeneous subjects, permits sparse secondary membership for
 cross-cutting pages, and tries to reuse suitable current semantic structure.
+The same bounded output correction applies as for source planning.
 Semantic quality remains provider-dependent. Only this explicit command can
 apply the result; startup and source synchronization do not reconcile catalogs.
 
@@ -494,7 +497,8 @@ this includes the JSON envelope, full source, schema (including base64 for its
 byte content), catalog graph, selected page metadata/provenance, instructions,
 input/output schemas and structured-wrapper framing. JSON escaping counts.
 This is not a token limit, backend HTTP payload measurement or session-history
-capacity guarantee. Hierarchy has its separate existing bounds.
+capacity guarantee. Hierarchy has separate graph bounds and checks its complete
+provider request, including correction feedback, against the runtime's input cap.
 
 Embedded Go callers may set `knowl.Config.IngestOptions.InputLimits`, using
 `pkg/knowl/types.MaintenanceInputLimits{MaxRequestBytes: ...}`. Zero selects the
@@ -502,8 +506,13 @@ default; custom values must be positive and at most 4,194,304. The effective cap
 is the minimum of this value and the maintainer's declared capacity. The CLI
 uses defaults and exposes no input-budget YAML option.
 
+The built-in runtime reserves **128 bytes** within this cap for correction
+feedback, including when extra turns are disabled. Initial request bytes plus
+the reserve must fit. Diagnostics report the actual initial `used_bytes` and
+the original full `max_bytes`; the reserve is not counted as bytes sent.
 The application measures complete indispensable source/schema/catalog input
-first. If it cannot fit, the operation fails permanently with class
+first. If it cannot fit with the declared reserve, the operation fails permanently
+with class
 `input_budget` and reason `required_input_limit` before factual reads, inference
 or staging. Immutable raw is retained; canonical files are unchanged. Increase
 a smaller embedded cap within the supported ceiling or reduce the indispensable
@@ -526,7 +535,8 @@ human edit. Omission can reduce recall and does not guarantee semantic duplicate
 or contradiction detection.
 
 The built-in runtime implements the optional `app.MaintenanceRequestSizer` port.
-`RequestBudget()` declares positive `MaxBytes` and non-secret, nonempty printable
+`RequestBudget()` declares positive `MaxBytes`, bounded `ReservedBytes` and a
+non-secret, nonempty printable
 `FormatVersion` of at most 256 UTF-8 bytes, captured once at service construction.
 `RequestBytes(ctx, input)` must measure the complete current request without
 building a runtime, downloading or inferring. Invalid declarations fail before
@@ -661,8 +671,10 @@ resuming. Preserve raw and operation history.
 
 #### Upgrading pending operations
 
-Source-maintenance-v6 adds output-affecting retrieval policy to the maintenance
-generation. The complete source wire, request sizing and whole-page visibility
+Source-maintenance-v6 includes output-affecting retrieval policy in the maintenance
+generation. Bounded correction additionally fingerprints effective support,
+allowance, output/deadline limits and request reservation. The complete source
+wire, request sizing and whole-page visibility
 guards remain in force. Contract, schema, effective request cap/format identity,
 read/plan/catalog limits, and embedding space/chunk/fusion/candidate/capacity/
 failure policy identify the generation. Endpoints, credentials, CPU/runtime
@@ -674,7 +686,10 @@ empty-generation work, fails before embedding or maintainer inference with class
 and restart do not reinterpret its stored execution metadata.
 
 Already validated concrete stages resume without new inference, including v1
-catalog FileEdits and v2-v5 stages. Schema, provenance, original digests and
+catalog FileEdits and older policy stages. This also applies to authenticated
+hierarchy stages after a planner/output-policy change; old hierarchy work without
+a stage fails the descriptor guard before inference. Schema, provenance, original
+digests and
 atomic commit remain enforced. Their projection recovery publishes lexical
 state without calling embeddings; dense repair is separate. Terminal replay
 returns persisted outcomes and historical reports when present. Stale or corrupt
@@ -711,14 +726,59 @@ commit and index the remaining safe subset. If no safe edit remains, or a
 plan-wide/schema/path/bound/graph invariant fails, the operation fails without
 publishing canonical content.
 
+#### Bounded output correction
+
+`knowl.output.max_corrections` accepts integer **0** or **1**. Omission defaults
+to **1**; **0** permits only the initial generation. The same setting governs
+source maintenance and explicit hierarchy planning. For example:
+
+```yaml
+knowl:
+  output:
+    max_corrections: 0
+```
+
+The built-in runtime can request one fresh complete replacement after malformed
+JSON, schema/operation-branch rejection or full application-plan rejection.
+These causes share one allowance: a valid first response uses one turn; a
+replacement can make the total two. Every candidate passes the complete
+application validator before staging. Correction uses the original captured
+input and only one safe feedback code: `structured_output_invalid`,
+`source_plan_invalid` or `hierarchy_plan_invalid`. Candidate text and validator
+error messages are not copied into feedback. Existing validated safe-subset
+behavior for document-specific warnings remains in force.
+
+All turns share **1,048,576 output bytes (1 MiB)** and **five minutes** of total
+planning time, including waiting for the runtime, lazy setup and inference.
+These limits do not reset for a replacement. Earlier caller deadlines and
+cancellation take precedence. Output accounting charges collector text across
+turns, including streamed partial and final text; thought text is excluded.
+Overflow reports only the accepted prefix. Input/transport/setup failures,
+output overflow, timeout and cancellation do not trigger correction. Canonical
+conflicts require existing explicit recovery; no automatic replan occurs.
+
+Exhaustion, aggregate output overflow and the internal planning deadline are
+permanent failures with reasons `provider_output_exhausted`,
+`provider_output_limit` and `provider_output_deadline`. Earlier caller stops
+retain their existing recoverability. Setting zero changes new-planning policy
+identity; already authenticated stages still recover without inference.
+
+Embedded callers use `Config.Output` or direct service options with
+`types.OutputSettings`. Custom maintainers retain a single base call and report
+`unavailable` physical counters unless they implement `app.ValidatingMaintainer`
+or `app.ValidatingHierarchyMaintainer`. Supplied `FilePlan` is validated directly
+and never invokes correction. See [operation details](#operation-details) for
+durable evidence.
+
 Transient provider build, transport, and execution failures are retried by the
 operation scheduler. Each automatic retry cycle is limited to three total work
 attempts. The first retry waits at least 30 seconds; later delays grow
 exponentially with deterministic bounded positive jitter and never exceed five
 minutes. The deadline and attempt counters are durable, so restarting Knowl does
-not make work eligible early or reset its budget. Invalid, empty, oversized, or
-undecodable provider output is a permanent contract failure and is not retried
-automatically.
+not make work eligible early or reset its budget. Output correction happens
+within one work attempt and does not increment scheduler retry counters.
+Rejected output after the correction allowance is exhausted remains terminal;
+the scheduler does not restart the correction sequence automatically.
 
 `maintenance.counts.queued` covers non-terminal work that is ready now or is
 currently claimed. `maintenance.counts.retrying` covers unleased non-terminal
@@ -913,6 +973,7 @@ optional `details`. Existing `id`, `status`, `updated_at`, `failure` and top-lev
 | `context.budget` | Serialized request `max_bytes`, measured `used_bytes` when known, and actual `included_count`/`omitted_count`. Pending candidates are not budget omissions. |
 | `context.vector_projection` | `not_checked`, `ready` or `invalid` as observed during that attempt, with a safe reason when applicable. It is not current projection readiness. |
 | `retrieval`, `retrieval_attempt` | Actual requested/effective modes, safe reason, candidate/scan/omission counts, optional model-space fingerprint and producing attempt. |
+| `correction` | Producing `work_attempt`, `max_corrections`, `max_output_bytes`, `deadline_nanos`, outcome and optional measured `turns`, `corrections`, `output_bytes`, last `validation_code`. |
 | `plan` | Stored validated/staged SHA-256 digest and `file_count` when known; no edits or rationale. |
 | `warnings`, `warnings_omitted` | Bounded application warning codes and safe relative identifiers; omitted warnings are counted separately. |
 | `execution` | Stored `work_attempt`, `retry_attempt`, `manual_retry_count`, `apply_attempt` and optional scheduling `ready_at`. Apply attempts are not inference-call counts. |
@@ -932,9 +993,22 @@ retain a snapshot from an older attempt; compare its `work_attempt` and
 `retrieval_attempt` with `execution.work_attempt`. Polling and terminal replay read
 stored facts without selection, embeddings or inference.
 
+The correction report is finalized once before an accepted plan is staged, or
+before returning a planning failure. Outcomes are `accepted`, `exhausted`,
+`output_limit`, `deadline`, `canceled`, `provider_failed` and `unavailable`.
+`turns` counts actual inner generation calls, `corrections` counts started calls
+after the first, and `output_bytes` counts accepted-prefix text across those
+calls. A measured setup failure can have zero turns; a custom adapter with no
+measurements omits all three counters. Compare its producing `work_attempt`
+with `execution.work_attempt` when a historical report survives recovery.
+A crash before finalization can leave correction absent. The built-in store
+write has a five-second durable timeout; an accepted-report write failure stops
+staging, and a rejected-report write failure preserves the original planning error.
+
 Context reports are limited to 32 KiB and 100 listed candidates. Identifiers are
 limited to 2,048 UTF-8 bytes. Retrieval retains its 2 KiB bound; warnings retain
 their 64-entry/32 KiB bound. Complete serialized details stay below 96 KiB.
+Correction adds at most 1 KiB of content-free facts within that combined bound.
 Canonical page names are visible to callers already authorized for the trusted
 scope. Source bodies, queries, prompts, edits, rationale, provider messages,
 credentials and endpoints are excluded.
@@ -946,6 +1020,11 @@ existing reports/counters and canonical content. Old digest-only rows have an
 unknown file count. Opaque legacy digests remain readable but have no public plan
 summary. A failed context-report write stops new inference; if assembly also
 failed, its original classified failure reason is preserved.
+
+Migration 18 adds nullable `correction_report` with no historical backfill.
+Its downgrade drops only these correction facts. Retain the database and use
+the [pending-operation policy guards](#upgrading-pending-operations) when
+rolling back; raw, canonical Markdown and authenticated stages are preserved.
 
 ## MCP contract
 

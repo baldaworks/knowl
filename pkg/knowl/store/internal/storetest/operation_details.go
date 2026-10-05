@@ -18,6 +18,7 @@ type OperationDetailsHarness struct {
 	OpenPeer       func(*testing.T) app.OperationStore
 	ContextPayload func(*testing.T, knowl.OperationID, *string)
 	LegacyPlan     func(*testing.T, knowl.OperationID)
+	ReadyAt        func(*testing.T, knowl.OperationID, time.Time)
 	Conflict       error
 	InvalidState   error
 	Scope          knowl.ScopeRef
@@ -276,6 +277,8 @@ func runBoundedOperationDetails(t *testing.T, h OperationDetailsHarness) {
 	})
 	h.ContextPayload(t, reserved.ID, nil)
 	boundedAllocations(t, "claim beside opaque digest", func(b *testing.T) {
+		// Allocation coverage must not depend on ReleaseClaim's wall-clock timestamp.
+		h.ReadyAt(b, reserved.ID, time.Unix(1, 0).UTC())
 		claim, err := h.Store.ClaimOperation(ctx, scope, reserved.ID, futureLease("bounded-claim"))
 		if err != nil || claim.Operation.Plan != nil {
 			b.Fatalf("bounded claim: %+v %v", claim.Operation.Plan, err)
@@ -285,6 +288,7 @@ func runBoundedOperationDetails(t *testing.T, h OperationDetailsHarness) {
 		}
 	})
 	boundedAllocations(t, "ready claim beside opaque digest", func(b *testing.T) {
+		h.ReadyAt(b, reserved.ID, time.Unix(1, 0).UTC())
 		claim, err := h.Store.ClaimReady(ctx, scope, futureLease("bounded-ready"))
 		if err != nil || claim.Operation.ID != reserved.ID || claim.Operation.Plan != nil {
 			b.Fatalf("bounded ready claim: %+v %v", claim.Operation.Plan, err)

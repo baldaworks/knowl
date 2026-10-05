@@ -98,6 +98,7 @@ type OperationExecutionDetails struct {
 
 // OperationDetails is the explicitly allowlisted public operation projection.
 type OperationDetails struct {
+	Correction       *OperationCorrectionReport `json:"correction,omitempty"`
 	Context          *OperationContextReport    `json:"context,omitempty"`
 	Retrieval        *RetrievalReport           `json:"retrieval,omitempty"`
 	RetrievalAttempt *int                       `json:"retrieval_attempt,omitempty"`

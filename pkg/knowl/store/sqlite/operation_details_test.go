@@ -43,6 +43,12 @@ func TestOperationDetailsPersistence(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		ReadyAt: func(t *testing.T, id knowl.OperationID, readyAt time.Time) {
+			t.Helper()
+			if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_operations SET work_ready_at=? WHERE operation_id=? AND work_lease_token=''`, readyAt.UTC().Format(time.RFC3339Nano), id); err != nil {
+				t.Fatal(err)
+			}
+		},
 	})
 }
 

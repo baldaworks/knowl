@@ -621,6 +621,8 @@ components:
       additionalProperties: false
       description: Bounded stored facts. Missing evidence is unavailable. Reads do not rerun selection or inference. Details serialize to less than 96 KiB.
       properties:
+        correction:
+          $ref: '#/components/schemas/OperationCorrectionReport'
         context:
           $ref: '#/components/schemas/OperationContextReport'
         retrieval:
@@ -638,6 +640,48 @@ components:
           $ref: '#/components/schemas/DiagnosticCount'
         execution:
           $ref: '#/components/schemas/OperationExecutionDetails'
+    OperationCorrectionReport:
+      type: object
+      additionalProperties: false
+      required: [version, work_attempt, max_corrections, max_output_bytes, deadline_nanos, outcome]
+      description: One immutable report per producing work attempt; at most 1 KiB. Counters measure actual generation turns and accepted-prefix output text across all turns. Unavailable counters are absent. A crash before finalization can leave the report absent.
+      properties:
+        version:
+          type: integer
+          enum: [1]
+        work_attempt:
+          $ref: '#/components/schemas/DiagnosticCount'
+        max_corrections:
+          type: integer
+          minimum: 0
+          maximum: 1
+        max_output_bytes:
+          type: integer
+          minimum: 1
+          maximum: 1048576
+        deadline_nanos:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 300000000000
+        outcome:
+          type: string
+          enum: [accepted, exhausted, output_limit, deadline, canceled, provider_failed, unavailable]
+        turns:
+          type: integer
+          minimum: 0
+          maximum: 2
+        corrections:
+          type: integer
+          minimum: 0
+          maximum: 1
+        output_bytes:
+          type: integer
+          minimum: 0
+          maximum: 1048576
+        validation_code:
+          type: string
+          enum: [structured_output_invalid, source_plan_invalid, hierarchy_plan_invalid]
     OperationContextReport:
       type: object
       additionalProperties: false

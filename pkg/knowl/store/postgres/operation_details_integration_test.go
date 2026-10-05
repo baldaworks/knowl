@@ -45,6 +45,12 @@ func runOperationDetailsPostgres(t *testing.T, dsn string) {
 				t.Fatal(err)
 			}
 		},
+		ReadyAt: func(t *testing.T, id knowl.OperationID, readyAt time.Time) {
+			t.Helper()
+			if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_operations SET work_ready_at=$1 WHERE operation_id=$2 AND work_lease_token=''`, readyAt.UTC().Format(time.RFC3339Nano), id); err != nil {
+				t.Fatal(err)
+			}
+		},
 	})
 }
 

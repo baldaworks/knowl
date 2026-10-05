@@ -101,6 +101,15 @@ func TestRuntimeCorrectionSequence(t *testing.T) {
 					t.Fatal("feedback exceeded reserve")
 				}
 			}
+			observation, err := json.Marshal(struct {
+				CaseID  string                          `json:"case_id"`
+				Report  knowl.OperationCorrectionReport `json:"report"`
+				Outcome string                          `json:"outcome"`
+			}{fixture.name, report, "met"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s", observation)
 		})
 	}
 }
