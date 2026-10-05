@@ -27,6 +27,13 @@ const (
 // nonterminal so a later invocation converges from durable state. Committed or
 // projected runs resume at their persisted stage without rewriting content.
 func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, sourceID knowl.SourceID, input sagaInput) (Result, error) {
+	if service.applyCoordinator != nil {
+		release, err := service.applyCoordinator.Acquire(ctx)
+		if err != nil {
+			return sagaResult(sourceID, input.run, input), failStage(classCommit, err)
+		}
+		defer release()
+	}
 	run := input.run
 	var (
 		generation     string

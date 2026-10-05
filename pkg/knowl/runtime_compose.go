@@ -80,6 +80,7 @@ func New(ctx context.Context, options Options) (*Host, error) {
 }
 
 func composeRuntime(ctx context.Context, config Config, slots *executionSlots, adapters map[domain.SourceType]app.SourceAdapter, observer SourceObserver) (_ composedRuntime, err error) {
+	config.IngestOptions.ApplyCoordinator = newHostApplyCoordinator()
 	runtime := composedRuntime{
 		config:           config,
 		maintainerCloser: slots,
@@ -118,7 +119,7 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 	runtime.sources = cloneSources(config.Sources)
 	runner := terminalRunner(runtime.service)
 	if hierarchyMaintainer, ok := maintainer.(app.HierarchyMaintainer); ok {
-		runtime.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, hierarchyMaintainer, app.HierarchyOptions{Output: config.Output})
+		runtime.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, hierarchyMaintainer, hostHierarchyOptions(config))
 		if err != nil {
 			return composedRuntime{}, fmt.Errorf("compose hierarchy service: %w", err)
 		}
@@ -132,7 +133,7 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 			return composedRuntime{}, err
 		}
 		if maintainer, ok := slot.maintainer.(app.HierarchyMaintainer); ok {
-			slot.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, maintainer, app.HierarchyOptions{Output: config.Output})
+			slot.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, maintainer, hostHierarchyOptions(config))
 			if err != nil {
 				return composedRuntime{}, err
 			}
@@ -143,7 +144,8 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 		return composedRuntime{}, fmt.Errorf("compose operation scheduler: %w", err)
 	}
 	runtime.sourceSync, err = reconcile.NewService(reconcile.Dependencies{
-		Adapters: adapters, State: runtime.sourceState, Content: runtime.workspace,
+		ApplyCoordinator: config.IngestOptions.ApplyCoordinator,
+		Adapters:         adapters, State: runtime.sourceState, Content: runtime.workspace,
 		SourceContent: runtime.workspace, Search: runtime.index,
 		Maintenance: sourceMaintenanceQueue{service: runtime.service, waker: runtime.scheduler},
 	}, reconcile.Options{})
@@ -356,4 +358,8 @@ func hostIngestOptions(config Config) app.IngestOptions {
 		options.ReadLimits = config.ReadLimits
 	}
 	return options
+}
+
+func hostHierarchyOptions(config Config) app.HierarchyOptions {
+	return app.HierarchyOptions{Output: config.Output, ApplyCoordinator: config.IngestOptions.ApplyCoordinator}
 }

@@ -304,3 +304,19 @@ type MaintenanceRequestSizer interface {
 	RequestBudget() knowl.MaintenanceRequestBudget
 	RequestBytes(ctx context.Context, input knowl.MaintenanceInput) (int, error)
 }
+
+// ApplyCoordinator orders canonical commit and full projection publication.
+// Standalone services may omit it; hosts share one coordinator between writers.
+type ApplyCoordinator interface {
+	Acquire(ctx context.Context) (release func(), err error)
+}
+
+func acquireApply(ctx context.Context, coordinator ApplyCoordinator) (func(), error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	if coordinator == nil {
+		return func() {}, nil
+	}
+	return coordinator.Acquire(ctx)
+}
