@@ -101,10 +101,23 @@ func RunOperationDetails(t *testing.T, h OperationDetailsHarness) {
 	if err := writer.SaveOperationContextReport(ctx, key.Scope, id, 1, changed); !errors.Is(err, h.InvalidState) {
 		t.Fatalf("terminal absent write: %v", err)
 	}
-	for _, payload := range []string{`{"version":99}`, `{"version":1,"work_attempt":2,"outcome":"selection_failed","entries_omitted":0}`} {
+	for _, payload := range []string{
+		`{"version":99}`, `{"version":1,"work_attempt":2,"outcome":"selection_failed","entries_omitted":0}`,
+		`{"version":1,"outcome":"selection_failed","entries_omitted":0}`,
+		`{"version":1,"work_attempt":null,"outcome":"selection_failed","entries_omitted":0}`,
+		`{"version":1,"work_attempt":1,"outcome":"selection_failed"}`,
+		`{"version":1,"work_attempt":1,"outcome":"selection_failed","entries_omitted":null}`,
+		`{"version":1,"work_attempt":1,"outcome":"assembly_failed","candidate_count":0,"entries_omitted":0,"budget":{"max_bytes":4096,"omitted_count":0}}`,
+		`{"version":1,"work_attempt":1,"outcome":"assembly_failed","candidate_count":0,"entries_omitted":0,"budget":{"max_bytes":4096,"included_count":null,"omitted_count":0}}`,
+		`{"version":1,"work_attempt":1,"outcome":"assembly_failed","candidate_count":0,"entries_omitted":0,"budget":{"max_bytes":4096,"included_count":0}}`,
+		`{"version":1,"work_attempt":1,"outcome":"assembly_failed","candidate_count":0,"entries_omitted":0,"budget":{"max_bytes":4096,"included_count":0,"omitted_count":null}}`,
+	} {
 		h.ContextPayload(t, id, &payload)
 		if _, err := peer.Operation(ctx, key.Scope, id); !errors.Is(err, app.ErrOperationContextReportInvalid) {
 			t.Fatalf("corruption: %v", err)
+		}
+		if err := peerWriter.SaveOperationContextReport(ctx, key.Scope, id, 1, changed); !errors.Is(err, app.ErrOperationContextReportInvalid) {
+			t.Fatalf("corrupt state write accepted: %v", err)
 		}
 	}
 	payload, err := app.EncodeOperationContextReport(changed)

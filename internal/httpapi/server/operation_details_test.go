@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -383,5 +384,100 @@ func TestOperationDetailsPortsPreserveBoundsAndHistoricalUnknowns(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func TestOperationDetailsCorruptRequiredEvidenceFailsClosed(t *testing.T) {
+	ctx := t.Context()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(workspace.Root(), "details.db")
+	store, err := sqlite.Open(ctx, storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ingest, err := app.NewIngestService(workspace, store, store, provider.Fixture{}, app.IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceText := detailsSourceSecret
+	envelope, err := httpIngestEnvelope(httpTestScope, knowlapi.IngestRequest{Content: &sourceText})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submission, err := ingest.Submit(ctx, envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := app.NewQueryService(workspace, store, detailsReadOnlyIndex{store}, nil, app.QueryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(Dependencies{Scope: httpTestScope, Ingest: ingest, Query: query})
+	mcpServer, err := mcp.NewServer(query, ingest, &httpRecordingWaker{}, httpTestScope, app.DefaultReadLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	zero := 0
+	report := domain.OperationContextReport{Version: 1, Outcome: domain.ContextAssemblyFailed, CandidateCount: &zero, Budget: &domain.ContextBudget{MaxBytes: 4096}}
+	valid, err := app.EncodeOperationContextReport(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"work_attempt", "entries_omitted", "budget.included_count", "budget.omitted_count"} {
+		for _, missing := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/missing=%t", field, missing), func(t *testing.T) {
+				var root map[string]any
+				if err := json.Unmarshal([]byte(valid), &root); err != nil {
+					t.Fatal(err)
+				}
+				object := root
+				parent, name, nested := strings.Cut(field, ".")
+				if nested {
+					object = root[parent].(map[string]any)
+				} else {
+					name = parent
+				}
+				if missing {
+					delete(object, name)
+				} else {
+					object[name] = nil
+				}
+				payload, err := json.Marshal(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.ExecContext(ctx, `UPDATE knowl_operations SET context_report=? WHERE operation_id=?`, string(payload), submission.Operation.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.Operation(ctx, httpTestScope, submission.Operation.ID); !errors.Is(err, app.ErrOperationContextReportInvalid) {
+					t.Fatalf("stored corruption accepted: %v", err)
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/operations/"+string(submission.Operation.ID), nil))
+				var failure knowlapi.ErrorResponse
+				if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil {
+					t.Fatal(err)
+				}
+				if response.Code != http.StatusUnprocessableEntity || failure.Error != "operation_failed" {
+					t.Fatalf("unsafe HTTP error: %d %+v", response.Code, failure)
+				}
+				assertDetailsSecretsAbsent(t, response.Body.Bytes())
+				if _, err := mcpServer.Call(ctx, "knowl_operation", map[string]any{"id": string(submission.Operation.ID)}); !errors.Is(err, app.ErrOperationContextReportInvalid) {
+					t.Fatalf("MCP corruption accepted: %v", err)
+				}
+			})
+		}
 	}
 }

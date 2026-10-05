@@ -54,12 +54,35 @@ func DecodeOperationContextReport(payload string, workAttempt int) (*knowl.Opera
 	}
 	decoder := json.NewDecoder(bytes.NewBufferString(payload))
 	decoder.DisallowUnknownFields()
-	var report knowl.OperationContextReport
-	if err := decoder.Decode(&report); err != nil {
+	// Required zero-valued evidence must be explicitly present on the wire.
+	var decoded struct {
+		knowl.OperationContextReport
+		WorkAttempt    *int `json:"work_attempt"`
+		EntriesOmitted *int `json:"entries_omitted"`
+		Budget         *struct {
+			knowl.ContextBudget
+			IncludedCount *int `json:"included_count"`
+			OmittedCount  *int `json:"omitted_count"`
+		} `json:"budget"`
+	}
+	if err := decoder.Decode(&decoded); err != nil {
 		return nil, ErrOperationContextReportInvalid
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, ErrOperationContextReportInvalid
+	}
+	if decoded.WorkAttempt == nil || decoded.EntriesOmitted == nil {
+		return nil, ErrOperationContextReportInvalid
+	}
+	report := decoded.OperationContextReport
+	report.WorkAttempt, report.EntriesOmitted = *decoded.WorkAttempt, *decoded.EntriesOmitted
+	if decoded.Budget != nil {
+		if decoded.Budget.IncludedCount == nil || decoded.Budget.OmittedCount == nil {
+			return nil, ErrOperationContextReportInvalid
+		}
+		budget := decoded.Budget.ContextBudget
+		budget.IncludedCount, budget.OmittedCount = *decoded.Budget.IncludedCount, *decoded.Budget.OmittedCount
+		report.Budget = &budget
 	}
 	if report.WorkAttempt > workAttempt {
 		return nil, ErrOperationContextReportInvalid
