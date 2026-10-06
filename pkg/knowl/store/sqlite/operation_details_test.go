@@ -71,7 +71,7 @@ func TestOperationDetailsMigrationPreservesLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, directory)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatal(err)
 	}

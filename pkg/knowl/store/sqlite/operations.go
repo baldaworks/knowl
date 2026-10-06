@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/operationlist"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/operationpayload"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -50,7 +51,7 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 			return app.OperationReservation{}, ErrConflict
 		}
 		if encodedSourceDocument != "" && existingSourceDocument == "" {
-			if _, updateErr := store.db.ExecContext(ctx, `UPDATE knowl_operations SET accepted_source_document = ? WHERE operation_id = ? AND accepted_source_document = ''`, encodedSourceDocument, existingID); updateErr != nil {
+			if _, updateErr := store.db.ExecContext(ctx, `UPDATE knowl_operations SET accepted_source_document = ?, configured_source_id = ? WHERE operation_id = ? AND accepted_source_document = ''`, encodedSourceDocument, operationlist.SourceID(encodedSourceDocument), existingID); updateErr != nil {
 				return app.OperationReservation{}, fmt.Errorf("enrich operation source document: %w", updateErr)
 			}
 		}
@@ -78,12 +79,12 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
 			schema_digest, status, created_at, updated_at, accepted_media_type,
 			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at,
-			maintenance_generation
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			maintenance_generation, configured_source_id, created_at_sort
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		operationID, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version, key.Version.Digest,
 		meta.SchemaDigest, knowl.StatusReceived, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 		descriptor.Source.MediaType, descriptor.Source.ManifestRef, encodedSourceDocument, descriptor.Schema.Version,
-		nullBytes(descriptor.Schema.Content), now.Format(time.RFC3339Nano), key.MaintenanceGeneration)
+		nullBytes(descriptor.Schema.Content), now.Format(time.RFC3339Nano), key.MaintenanceGeneration, operationlist.SourceID(encodedSourceDocument), operationlist.SortTime(now))
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
 	}
@@ -120,16 +121,17 @@ func (store *Store) ReserveOperation(ctx context.Context, identity knowl.Operati
 	if !errors.Is(err, sql.ErrNoRows) {
 		return app.OperationReservation{}, fmt.Errorf("inspect generic operation: %w", err)
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	createdAt := time.Now().UTC()
+	now := createdAt.Format(time.RFC3339Nano)
 	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO knowl_operations (
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
 			schema_digest, status, created_at, updated_at, accepted_media_type,
 			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at,
-			work_kind, execution_payload
-		) VALUES (?, ?, '', '', ?, '', ?, ?, ?, ?, '', '', '', ?, ?, ?, ?, ?)`,
+			work_kind, execution_payload, created_at_sort
+		) VALUES (?, ?, '', '', ?, '', ?, ?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?)`,
 		id, identity.Scope, id, descriptor.Schema.Digest, knowl.StatusReceived, now, now,
-		descriptor.Schema.Version, descriptor.Schema.Content, now, identity.Kind, payload)
+		descriptor.Schema.Version, descriptor.Schema.Content, now, identity.Kind, payload, operationlist.SortTime(createdAt))
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve generic operation: %w", err)
 	}

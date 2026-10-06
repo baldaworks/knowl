@@ -95,7 +95,7 @@ func (store *Store) configure(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open embedded postgres migrations: %w", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, directory)
+	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		return fmt.Errorf("create postgres migration provider: %w", err)
 	}

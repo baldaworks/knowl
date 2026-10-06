@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/operationlist"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/operationpayload"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -53,13 +54,13 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
 			schema_digest, status, created_at, updated_at, accepted_media_type,
 			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at,
-			maintenance_generation
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $9, $15)
+			maintenance_generation, configured_source_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $9, $15, $16)
 		ON CONFLICT (scope, source_adapter, source_id, source_version, maintenance_generation) DO NOTHING`,
 		operationIDValue, key.Scope, key.Source.Adapter, key.Source.ID, key.Version.Version,
 		key.Version.Digest, meta.SchemaDigest, knowl.StatusReceived, now,
 		descriptor.Source.MediaType, descriptor.Source.ManifestRef, encodedSourceDocument, descriptor.Schema.Version,
-		nullBytes(descriptor.Schema.Content), key.MaintenanceGeneration)
+		nullBytes(descriptor.Schema.Content), key.MaintenanceGeneration, operationlist.SourceID(encodedSourceDocument))
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve operation: %w", err)
 	}
@@ -86,7 +87,7 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 		return app.OperationReservation{}, ErrConflict
 	}
 	if encodedSourceDocument != "" && existingSourceDocument == "" {
-		if _, err := tx.ExecContext(ctx, `UPDATE knowl_operations SET accepted_source_document = $1 WHERE operation_id = $2 AND accepted_source_document = ''`, encodedSourceDocument, existingID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE knowl_operations SET accepted_source_document = $1, configured_source_id = $3 WHERE operation_id = $2 AND accepted_source_document = ''`, encodedSourceDocument, existingID, operationlist.SourceID(encodedSourceDocument)); err != nil {
 			return app.OperationReservation{}, fmt.Errorf("enrich operation source document: %w", err)
 		}
 	}
