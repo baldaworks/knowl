@@ -30,85 +30,121 @@ func (host *Host) PrepareReadOnly() error {
 // StartOperationWorker starts only durable operation processing. It does not
 // bind an HTTP listener or start periodic source synchronization.
 func (host *Host) StartOperationWorker(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	host.mu.Lock()
-	defer host.mu.Unlock()
-	if host.closed {
-		return fmt.Errorf("host is closed")
-	}
-	if host.started {
-		if host.operationOnly {
-			return nil
-		}
-		return fmt.Errorf("host HTTP lifecycle is already started")
-	}
-	workerCtx, cancel := context.WithCancel(ctx)
-	host.cancel = cancel
-	if err := host.scheduler.start(workerCtx); err != nil {
-		cancel()
-		host.cancel = nil
-		return fmt.Errorf("start Knowl operation worker: %w", err)
-	}
-	host.started = true
-	host.operationOnly = true
-	host.ready.Store(true)
-	return nil
+	return host.start(ctx, true)
 }
 
 // Start binds the loopback HTTP listener and marks the host ready after preflight.
 // The context is used for the start operation; Stop owns the server lifetime.
 func (host *Host) Start(ctx context.Context) error {
+	return host.start(ctx, false)
+}
+
+func (host *Host) start(ctx context.Context, operationOnly bool) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := host.acquireStartup(ctx); err != nil {
+		return err
+	}
+	defer func() { <-host.startGate }()
+	host.mu.Lock()
+	if host.closed {
+		host.mu.Unlock()
+		return ErrHostClosed
+	}
+	if host.started {
+		matches := host.operationOnly == operationOnly
+		host.mu.Unlock()
+		if !matches {
+			return fmt.Errorf("host lifecycle is already started in another mode")
+		}
+		return nil
+	}
+	parent := context.Background()
+	if operationOnly {
+		parent = ctx
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	host.cancel = cancel
+	host.mu.Unlock()
+
+	var listener net.Listener
+	var server *http.Server
+	started := false
+	defer func() {
+		if started {
+			return
+		}
+		cancel()
+		if listener != nil {
+			_ = listener.Close()
+		}
+		host.mu.Lock()
+		host.listener = nil
+		host.server = nil
+		host.cancel = nil
+		host.mu.Unlock()
+	}()
+	if !operationOnly {
+		var err error
+		listener, err = new(net.ListenConfig).Listen(ctx, "tcp", host.config.ListenAddr)
+		if err != nil {
+			return fmt.Errorf("listen Knowl HTTP endpoint: %w", err)
+		}
+		server = &http.Server{Handler: host.handler, ReadHeaderTimeout: host.config.ReadLimits.Deadline}
+		host.mu.Lock()
+		if host.closed {
+			host.mu.Unlock()
+			return ErrHostClosed
+		}
+		host.listener = listener
+		host.server = server
+		host.mu.Unlock()
+	}
+	if err := host.scheduler.start(runCtx); err != nil {
+		return fmt.Errorf("start Knowl scheduler: %w", err)
+	}
+	if !operationOnly {
+		if err := host.sourceJobs.start(runCtx); err != nil {
+			cancel()
+			_ = host.scheduler.stop(ctx)
+			return fmt.Errorf("start Knowl source scheduler: %w", err)
+		}
 	}
 	host.mu.Lock()
 	defer host.mu.Unlock()
 	if host.closed {
-		return fmt.Errorf("host is closed")
-	}
-	if host.started {
-		if host.operationOnly {
-			return fmt.Errorf("host operation-only lifecycle is already started")
-		}
-		return nil
-	}
-	listener, err := net.Listen("tcp", host.config.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("listen Knowl HTTP endpoint: %w", err)
-	}
-	serverCtx, cancel := context.WithCancel(context.Background())
-	host.listener = listener
-	host.server = &http.Server{Handler: host.handler, ReadHeaderTimeout: host.config.ReadLimits.Deadline}
-	host.cancel = cancel
-	if err := host.scheduler.start(serverCtx); err != nil {
-		cancel()
-		_ = listener.Close()
-		host.listener = nil
-		host.server = nil
-		host.cancel = nil
-		return fmt.Errorf("start Knowl scheduler: %w", err)
-	}
-	if err := host.sourceJobs.start(serverCtx); err != nil {
-		_ = host.scheduler.stop(ctx)
-		cancel()
-		_ = listener.Close()
-		host.listener = nil
-		host.server = nil
-		host.cancel = nil
-		return fmt.Errorf("start Knowl source scheduler: %w", err)
+		return ErrHostClosed
 	}
 	host.started = true
+	host.operationOnly = operationOnly
 	host.ready.Store(true)
-	go func() {
-		err := host.server.Serve(listener)
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			host.ready.Store(false)
-			host.serverErr <- err
-		}
-	}()
+	started = true
+	if server != nil {
+		go func() {
+			err := server.Serve(listener)
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				host.ready.Store(false)
+				host.serverErr <- err
+			}
+		}()
+	}
 	return nil
+}
+
+// acquireStartup serializes startup without holding the state mutex across I/O.
+// Stop also acquires this gate before closing resources used during startup.
+func (host *Host) acquireStartup(ctx context.Context) error {
+	select {
+	case host.startGate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-host.startGate
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Run starts the host and blocks until ctx is canceled or the HTTP server fails.
@@ -175,8 +211,15 @@ func (host *Host) Stop(ctx context.Context) error {
 		component string
 		err       error
 	}
-	results := make(chan shutdownResult, 4)
-	components := 3
+	results := make(chan shutdownResult, 5)
+	components := 4
+	go func() {
+		err := host.acquireStartup(ctx)
+		if err == nil {
+			<-host.startGate
+		}
+		results <- shutdownResult{component: "startup", err: err}
+	}()
 	go func() {
 		err := host.slots.wait(ctx)
 		if err != nil {
