@@ -30,7 +30,7 @@ func TestBrowserOperationsSources(t *testing.T) {
 	}
 	h.dependencies.Operator = operator
 	h.dependencies.Operation = func(_ context.Context, id string) (knowlapi.OperationResult, error) {
-		return knowlapi.OperationResult{Id: id, Status: operationStatus.Load().(knowlapi.OperationResultStatus), UpdatedAt: time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC), Details: &knowlapi.OperationDetails{Execution: &knowlapi.OperationExecutionDetails{WorkAttempt: 2, RetryAttempt: 1}, Context: &knowlapi.OperationContextReport{Version: 1, WorkAttempt: 1, Outcome: knowlapi.Assembled, EntriesOmitted: 4, Budget: &knowlapi.ContextBudget{MaxBytes: 4096, IncludedCount: 3, OmittedCount: 2}}, Correction: &knowlapi.OperationCorrectionReport{WorkAttempt: 1, Outcome: "accepted", MaxCorrections: 2}, Plan: &knowlapi.OperationPlanSummary{Digest: screenSnapshot}}}, nil
+		return knowlapi.OperationResult{Id: id, Status: operationStatus.Load().(knowlapi.OperationResultStatus), UpdatedAt: time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC), Details: &knowlapi.OperationDetails{Retrieval: &knowlapi.RetrievalReport{Effective: "lexical"}, Execution: &knowlapi.OperationExecutionDetails{WorkAttempt: 2, RetryAttempt: 1}, Context: &knowlapi.OperationContextReport{Version: 1, WorkAttempt: 1, Outcome: knowlapi.Assembled, EntriesOmitted: 4, Budget: &knowlapi.ContextBudget{MaxBytes: 4096, IncludedCount: 3, OmittedCount: 2}}, Correction: &knowlapi.OperationCorrectionReport{WorkAttempt: 1, Outcome: "accepted", MaxCorrections: 2}, Plan: &knowlapi.OperationPlanSummary{Digest: screenSnapshot}}}, nil
 	}
 	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/fixture/status" {

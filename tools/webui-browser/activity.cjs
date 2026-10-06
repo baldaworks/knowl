@@ -28,6 +28,7 @@ const {chromium}=require(process.env.KNOWL_PLAYWRIGHT_MODULE||'playwright');
  assert.equal(await page.locator('#operation-detail').getAttribute('aria-busy'),'true');
  assert.equal(await page.locator('.operation-select').first().getAttribute('aria-current'),'true');
  assert.equal(await page.locator('.operation-detail').count(),0);release();await done();await settle();assert.equal(requests,1);
+ await readable(page,'.diagnostic-row>span:last-child');
  await readable(page,'.subtle-note,.table-subtitle,.table th,.status-badge,.execution-facts span,.diagnostic-note,.section-label,.plan-facts dt');
  await page.clock.runFor(1999);assert.equal(requests,1);await refresh(1);assert.equal(requests,2,'selected active operation polls at 2 seconds');
  // Hold a real handler response: elapsed intervals must not start overlapping reads.
@@ -52,6 +53,7 @@ const {chromium}=require(process.env.KNOWL_PLAYWRIGHT_MODULE||'playwright');
  // Screen exit clears the polling lifecycle.
  await page.locator('[data-screen="sources"]').click();await page.locator('.source-select').first().waitFor();count=requests;await page.clock.runFor(60000);assert.equal(requests,count);
  await page.locator('.source-select').first().click();await page.locator('.source-documents').waitFor();await page.clock.runFor(20);await readable(page,'.adapter-type,.source-card-facts dt,.source-card-facts dd,.processing-strip,.source-flow span,.source-flow strong,.subtle-note');assert.equal(await page.locator('[data-fact="last-success"]').last().textContent(),'2026-01-02 00:00 UTC');
+ await readable(page,'[data-open-operation].link-button');
  // Hold a second real source response while old documents are removed.
  let detailReady,detailRelease;const detailHeld=new Promise(resolve=>{detailReady=resolve;});const detailGate=new Promise(resolve=>{detailRelease=resolve;});
  await page.route(url=>url.pathname==='/ui/fragments/source'&&url.searchParams.get('source_id')==='other-docs',async route=>{const response=await route.fetch();detailReady();await detailGate;await route.fulfill({response});},{times:1});
