@@ -6,6 +6,15 @@ runtime:
         model: gemini-3.8-flash-medium
 
 knowl:
+  embeddings:
+    enabled: true
+    endpoint: http://127.0.0.1:8091/v1/embeddings
+    model: intfloat/multilingual-e5-base
+    revision: d128750597153bb5987e10b1c3493a34e5a4502a
+    dimensions: 768
+    query_prefix: 'query: '
+    passage_prefix: 'passage: '
+    failure_policy: lexical
   workers: 1
   provider: antigravity
   output:
