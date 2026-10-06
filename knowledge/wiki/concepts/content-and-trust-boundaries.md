@@ -5,7 +5,7 @@ knowl:
   id: concepts/content-and-trust-boundaries
   source_refs:
     - wiki-filesystem:knowl-docs/design.md@15d3f23357e10afc7a1f9e7ba3dda84f262521d5ae864d5fbc4ed95c822ec4e0
-    - wiki-filesystem:knowl-docs/workspace.md@f3ad44d1383b2256e486b9da1e4943e6afaf6af471594db73ef3d87e4abc89f3
+    - wiki-filesystem:knowl-docs/workspace.md@4281a4b504c77bfd8a33c1b39073beba46852e6100e313fc93f4303eb5cc8692
 ---
 # Content and Trust Boundaries
 
@@ -30,12 +30,24 @@ Curated semantic pages must follow enforced OKF v0.2 conventions:
 - **Link Integrity**: Curated pages use strict double-bracket wiki links (`[[concepts/architecture]]`) targeting confirmed bundle-relative page identities. Imported OKF concepts use standard Markdown links (`[Related](related.md)`). Unresolved internal targets are rejected; external URLs and assets are excluded from the concept graph.
 - **Edit Bounds**: Maintainer edit plans may target safe semantic paths under `wiki/**/*.md`, but cannot modify `wiki/log.md`, `schema.md`, or the reserved legacy `wiki/sources/**` boundary.
 
+## Export for Publication
+
+- **Standalone OKF Bundle**: `knowl export okf --output ./public` copies the canonical `wiki/` directory without `schema.md`, `raw/`, `.knowl/`, or database files.
+- **LLM Navigation**: `knowl export llms-txt --output ./public/llms.txt` renders bundle-relative navigation beside exported pages following the llms.txt v2 proposal (`--base-url`, `--title`, `--summary`).
+
+## Explicit Hierarchy Reconciliation
+
+- **Trigger & Scope**: Reorganizes catalog structures only on explicit `knowl hierarchy reconcile`, owning only `wiki/index.md` and generated `wiki/catalogs/**/index.md`.
+- **Subject-First Planner**: Operates under durable planner identity `hierarchy-v3` with subject domains as primary navigation axes; pages receive primary placements, and secondary memberships are added sparingly.
+- **Conservative Bounds**: Capped at 1,024 ordinary pages, 1,024 catalogs, 16,384 edges, max depth 16, 4 MiB planner input, 4,096 excerpt chars/page, 1 MiB output, 1,024 managed edits, 256 KiB per generated catalog, and 1 MiB stage manifest.
+
 ## Operational Projections and Staging Recovery
 
 SQL stores (SQLite FTS and PostgreSQL) and search state are rebuildable operational indices, not canonical content:
 - **Lexical Indexing**: Projections prioritize four semantic fields in descending order: (1) Title, (2) Normalized OKF tags, (3) OKF description, (4) User-authored body. Filenames, paths, extensions, and provenance metadata are excluded from lexical ranking.
 - **Atomic Commits & Recovery Journals**: Content commits write staging manifests and preimage recovery journals before atomically replacing files. Startup recovery processes journals before readiness: `prepared` journals rollback preimages, `committed` journals are finalized, and partial staging is discarded.
 - **Version Control**: Workspaces are suitable for Git review, but Knowl never commits, pushes, or syncs remote repositories.
+- **Explicit Migration**: Upgrading legacy workspaces runs `knowl migrate okf-v0.2` and `knowl validate`, creating audit archives before marker commits.
 
 ## External and Provider Trust Boundaries
 

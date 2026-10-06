@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/operations.md
+version: a8d940886adea2001c407905f2d47f917ad2702bde8c86af930c71bc49bcefb2
+digest: a8d940886adea2001c407905f2d47f917ad2702bde8c86af930c71bc49bcefb2
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: operations.md
+    revision: a8d940886adea2001c407905f2d47f917ad2702bde8c86af930c71bc49bcefb2
+    uri: file:///home/bigboss/Projects/knowl/docs/operations.md
+received_at: 2026-10-06T03:53:38.08263Z

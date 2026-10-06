@@ -4,7 +4,7 @@ title: Product Architecture
 knowl:
   id: concepts/architecture
   source_refs:
-    - wiki-filesystem:knowl-docs/design.md@15d3f23357e10afc7a1f9e7ba3dda84f262521d5ae864d5fbc4ed95c822ec4e0
+    - wiki-filesystem:knowl-docs/design.md@5539fb0c0744742e6994ced9f2ec2ac57a6e842cb634a4425a728193131b482c
 ---
 # Product Architecture
 
@@ -40,8 +40,15 @@ Supported Go import paths are `pkg/knowl`, `pkg/knowlfx`, `pkg/knowl/mcp`, and `
 ## Synchronization and Migration
 
 - **Bootstrap**: An optional CLI preflight that initializes workspace and configuration, verifies path separation, and executes an initial sync.
-- **Ordinary Sync**: Persists immutable raw evidence, reserves idempotent maintenance work, and invokes the maintainer to update semantic pages. Upstream source deletions tombstone active source state and remove legacy `wiki/sources/<source_id>/**` subtrees during subsequent sync while preserving raw revisions and curated pages.
+- **Ordinary Sync**: Persists immutable raw evidence, reserves idempotent maintenance work, and invokes the maintainer to update semantic pages. The operation scheduler uses one worker by default, or two isolated maintainer owners when configured. Upstream source deletions tombstone active source state and remove legacy `wiki/sources/<source_id>/**` subtrees during subsequent sync while preserving raw revisions and curated pages.
 - **Migration**: Format upgrades are performed explicitly via `knowl migrate okf-v0.2`, preserving legacy logs in an archive.
+
+## Maintenance Execution Ownership
+
+- **Execution Owners**: `knowl.workers` configures one or two fixed execution owners. Each owner maintains an independent RuntimeMaintainer, agent, session service, and source/hierarchy services while sharing policy identity and canonical storage.
+- **Dispatcher and Leases**: A finite dispatcher drives bounded worker loops. Admission precedes durable claims, and active claims renew leases. Background workers, joined Drain invocations, direct hierarchy, and optional model-lint share this same owner pool.
+- **Host Publication Gate**: Inference and output correction hold only their execution owner. A single host publication gate serializes canonical commit, snapshot projection, and outcome (including source-sync saga recovery and hierarchy no-op finalization).
+- **Typed Conflict Handling**: Preimage mismatches for stale log, catalog, or page files fail permanently with typed conflicts without automatic replanning.
 
 ## Invariants and Non-Goals
 
