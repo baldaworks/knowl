@@ -48,7 +48,7 @@ func (workspace *Workspace) Page(ctx context.Context, scope knowl.ScopeRef, id k
 		return knowl.OperatorPage{}, err
 	}
 	metadata := page.OKF
-	result := knowl.OperatorPage{ID: id, Title: page.Title, Markdown: page.Content, Digest: page.Digest, Version: page.Digest,
+	result := knowl.OperatorPage{ID: page.ID, Title: page.Title, Markdown: page.Content, Digest: page.Digest, Version: page.Digest,
 		Metadata:       &knowl.OperatorPageMetadata{Type: metadata.Type, Description: metadata.Description, Tags: slices.Clone(metadata.Tags), Status: string(metadata.ResolvedStatus), TrustTier: string(metadata.TrustTier), Stale: metadata.Stale},
 		RelatedPageIDs: []knowl.PageID{}, Sources: []knowl.OperatorPageSource{},
 	}
@@ -140,13 +140,10 @@ func operatorReadError(err, missing error) error {
 }
 
 func operatorPagePath(id knowl.PageID, wanted okf.DocumentKind) (string, error) {
-	if !validReadPath(string(id)) {
+	if !validReadPath(string(id)) || knowlwiki.NormalizePageTarget(string(id)) != string(id) {
 		return "", app.ErrOperatorInvalidRequest
 	}
-	relative := strings.TrimPrefix(string(id), workspaceWikiDir+"/")
-	if !strings.HasSuffix(relative, markdownExt) {
-		relative += markdownExt
-	}
+	relative := string(id) + markdownExt
 	kind, err := okf.ClassifyPath(relative)
 	if err != nil || kind != wanted {
 		return "", app.ErrOperatorInvalidRequest
