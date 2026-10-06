@@ -1,0 +1,6 @@
+package: operatorapi
+output: server.gen.go
+generate:
+  models: true
+  strict-server: true
+  std-http-server: true

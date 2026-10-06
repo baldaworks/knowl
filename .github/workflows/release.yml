@@ -46,8 +46,8 @@ jobs:
 
       - name: Verify generated OpenAPI bindings
         run: |
-          go generate ./internal/httpapi/knowlapi
-          git diff --exit-code -- internal/httpapi/knowlapi/server.gen.go
+          go generate ./internal/httpapi/knowlapi ./internal/httpapi/operatorapi
+          git diff --exit-code -- internal/httpapi/knowlapi/server.gen.go internal/httpapi/operatorapi/server.gen.go
 
       - name: Test with race detector
         run: go test -v -race ./...

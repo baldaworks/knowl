@@ -290,6 +290,10 @@ func (host *Host) Addr() string {
 // Handler returns the loopback HTTP handler for in-process integration tests and embedding.
 func (host *Host) Handler() http.Handler { return host.handler }
 
+// Operator returns host-bound read capabilities for embedded use. Callers own
+// lifecycle readiness; HTTP adapters enforce Ready before dispatch.
+func (host *Host) Operator() *app.OperatorService { return host.operator }
+
 // MCP returns the server-bound read-only MCP tool registry.
 func (host *Host) MCP() *mcp.Server { return host.mcp }
 

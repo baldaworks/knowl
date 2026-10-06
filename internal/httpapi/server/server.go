@@ -18,6 +18,7 @@ import (
 const maxBodyBytes = 8 << 20
 
 const serviceName = "knowl"
+const invalidRequestCode = "invalid_request"
 
 type Waker interface {
 	Wake(id domain.OperationID)
@@ -55,6 +56,7 @@ type compatHandler struct {
 
 func (handler *compatHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	if strings.HasPrefix(request.URL.Path, "/v1/") {
+		response.Header().Set("Cache-Control", "no-store")
 		if scope := request.URL.Query().Get("scope"); scope != "" {
 			writeHTTPError(response, http.StatusForbidden, "scope_override_forbidden")
 			return
@@ -81,6 +83,10 @@ func (mux *statusMux) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	mux.inner.ServeHTTP(recorder, request)
 	switch recorder.statusCode {
 	case http.StatusNotFound:
+		if recorder.header.Get("Content-Type") == "application/json" {
+			recorder.writeTo(response)
+			return
+		}
 		writeHTTPError(response, http.StatusNotFound, "not_found")
 	case http.StatusMethodNotAllowed:
 		copyHeaders(response.Header(), recorder.header)
@@ -179,11 +185,11 @@ func generatedBindingError(response http.ResponseWriter, _ *http.Request, err er
 		case "query":
 			writeHTTPError(response, http.StatusBadRequest, "query_required")
 		default:
-			writeHTTPError(response, http.StatusBadRequest, "invalid_request")
+			writeHTTPError(response, http.StatusBadRequest, invalidRequestCode)
 		}
 		return
 	}
-	writeHTTPError(response, http.StatusBadRequest, "invalid_request")
+	writeHTTPError(response, http.StatusBadRequest, invalidRequestCode)
 }
 
 func decodeJSON(response http.ResponseWriter, request *http.Request, destination any) error {
@@ -208,5 +214,6 @@ func writeJSON(response http.ResponseWriter, status int, value any) {
 }
 
 func writeHTTPError(response http.ResponseWriter, status int, class string) {
+	response.Header().Set("Cache-Control", "no-store")
 	writeJSON(response, status, map[string]string{"error": class})
 }

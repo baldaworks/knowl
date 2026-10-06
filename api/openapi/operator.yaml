@@ -1,0 +1,981 @@
+openapi: 3.0.3
+info:
+  title: Knowl operator read API
+  version: 1.0.0
+  description: 'Opt-in host-bound reads. Exactly seven GET routes, no caller scope/workspace
+    selection. Unknown or duplicate query parameters and GET bodies are rejected.
+    Total query budget 16 KiB. All data/errors use Cache-Control: no-store. No reads
+    start workers or fetch upstream. Canonical snapshot versions describe the current
+    read, not historical storage. Token also authorizes existing write endpoints.'
+security:
+- OperatorBearer: []
+paths:
+  /operator/v1/catalogs:
+    get:
+      operationId: getCatalogs
+      parameters:
+      - name: parent_id
+        in: query
+        required: false
+        schema: &id001
+          type: string
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Safe detached read; no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatorCatalog'
+        '400':
+          description: invalid_request, cursor_invalid or limit_invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: scope_override_forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource-specific not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: snapshot_changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: read_limit_exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: unsupported_format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: capability_unavailable, not_ready or workspace_unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: internal_error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /operator/v1/pages:
+    get:
+      operationId: getPages
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Safe detached read; no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageList'
+        '400':
+          description: invalid_request, cursor_invalid or limit_invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: scope_override_forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource-specific not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: snapshot_changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: read_limit_exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: unsupported_format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: capability_unavailable, not_ready or workspace_unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: internal_error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /operator/v1/page:
+    get:
+      operationId: getPage
+      parameters:
+      - name: page_id
+        in: query
+        required: true
+        schema: *id001
+      responses:
+        '200':
+          description: Safe detached read; no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatorPage'
+        '400':
+          description: invalid_request, cursor_invalid or limit_invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: scope_override_forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource-specific not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: snapshot_changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: read_limit_exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: unsupported_format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: capability_unavailable, not_ready or workspace_unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: internal_error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /operator/v1/source-revision:
+    get:
+      operationId: getSourceRevision
+      parameters:
+      - name: source_ref
+        in: query
+        required: true
+        schema: *id001
+      responses:
+        '200':
+          description: Safe detached read; no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatorSourceRevision'
+        '400':
+          description: invalid_request, cursor_invalid or limit_invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: scope_override_forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource-specific not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: snapshot_changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: read_limit_exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: unsupported_format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: capability_unavailable, not_ready or workspace_unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: internal_error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /operator/v1/sources:
+    get:
+      operationId: getSources
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Safe detached read; no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceList'
+        '400':
+          description: invalid_request, cursor_invalid or limit_invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: scope_override_forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource-specific not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: snapshot_changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: read_limit_exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: unsupported_format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: capability_unavailable, not_ready or workspace_unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: internal_error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /operator/v1/sources/{source_id}:
+    get:
+      operationId: getSource
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema: *id001
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Safe detached read; no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatorSourceDetail'
+        '400':
+          description: invalid_request, cursor_invalid or limit_invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: scope_override_forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource-specific not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: snapshot_changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: read_limit_exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: unsupported_format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: capability_unavailable, not_ready or workspace_unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: internal_error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /operator/v1/operations:
+    get:
+      operationId: getOperations
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema: *id001
+      - name: source_id
+        in: query
+        required: false
+        schema: *id001
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Safe detached read; no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationList'
+        '400':
+          description: invalid_request, cursor_invalid or limit_invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: scope_override_forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Resource-specific not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: snapshot_changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: read_limit_exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: unsupported_format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: capability_unavailable, not_ready or workspace_unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: internal_error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    OperatorBearer:
+      type: http
+      scheme: bearer
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        maxLength: 8192
+      description: Signed process-local cursor; restart invalidates it with cursor_invalid.
+        Bound to endpoint, scope, filters, limit and canonical snapshot where applicable.
+  schemas:
+    OperatorCatalogSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+      required:
+      - id
+      - title
+      x-go-type: domain.OperatorCatalogSummary
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorCatalogChild:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        kind:
+          type: string
+        description:
+          type: string
+      required:
+      - id
+      - title
+      - kind
+      x-go-type: domain.OperatorCatalogChild
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorCatalog:
+      type: object
+      additionalProperties: false
+      properties:
+        parent:
+          $ref: '#/components/schemas/OperatorCatalogSummary'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperatorCatalogChild'
+        next_cursor: *id001
+        snapshot_version: *id001
+      required:
+      - parent
+      - items
+      - snapshot_version
+      x-go-type: domain.OperatorCatalog
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorPageSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        digest:
+          type: string
+        version:
+          type: string
+        updated_at: &id002
+          type: string
+          format: date-time
+      required:
+      - id
+      - title
+      - digest
+      - version
+      - updated_at
+      x-go-type: domain.OperatorPageSummary
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorPageMetadata:
+      type: object
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        trust_tier:
+          type: string
+        tags:
+          type: array
+          items: *id001
+        stale: &id003
+          type: boolean
+      required:
+      - stale
+      x-go-type: domain.OperatorPageMetadata
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorPageSource:
+      type: object
+      additionalProperties: false
+      properties:
+        source_ref:
+          type: string
+        source_id:
+          type: string
+        document_id:
+          type: string
+        revision:
+          type: string
+        original_uri:
+          type: string
+      required:
+      - source_ref
+      - revision
+      x-go-type: domain.OperatorPageSource
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorPage:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        markdown:
+          type: string
+        digest:
+          type: string
+        version:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/OperatorPageMetadata'
+        related_page_ids:
+          type: array
+          items: *id001
+          nullable: true
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperatorPageSource'
+          nullable: true
+      required:
+      - id
+      - title
+      - markdown
+      - digest
+      - version
+      - related_page_ids
+      - sources
+      x-go-type: domain.OperatorPage
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    SourceRef:
+      type: object
+      additionalProperties: false
+      properties:
+        adapter:
+          type: string
+        id:
+          type: string
+      required:
+      - adapter
+      - id
+      x-go-type: domain.SourceRef
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    SourceVersion:
+      type: object
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+        digest:
+          type: string
+      required:
+      - version
+      - digest
+      x-go-type: domain.SourceVersion
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorSourceRevision:
+      type: object
+      additionalProperties: false
+      properties:
+        source_ref:
+          type: string
+        media_type:
+          type: string
+        digest:
+          type: string
+        original_uri:
+          type: string
+        text:
+          type: string
+        source:
+          $ref: '#/components/schemas/SourceRef'
+        version:
+          $ref: '#/components/schemas/SourceVersion'
+      required:
+      - source_ref
+      - media_type
+      - digest
+      - text
+      - source
+      - version
+      x-go-type: domain.OperatorSourceRevision
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    SyncCounts:
+      type: object
+      additionalProperties: false
+      properties:
+        added:
+          type: integer
+          format: int64
+        updated:
+          type: integer
+          format: int64
+        unchanged:
+          type: integer
+          format: int64
+        deleted:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+      required:
+      - added
+      - updated
+      - unchanged
+      - deleted
+      - failed
+      x-go-type: domain.SyncCounts
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    MaintenanceCounts:
+      type: object
+      additionalProperties: false
+      properties:
+        queued:
+          type: integer
+          format: int64
+        retrying:
+          type: integer
+          format: int64
+        replayed:
+          type: integer
+          format: int64
+        committed:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+      required:
+      - queued
+      - retrying
+      - replayed
+      - committed
+      - failed
+      x-go-type: domain.MaintenanceCounts
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorSourceStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        status: *id001
+        counts:
+          $ref: '#/components/schemas/SyncCounts'
+        maintenance_counts:
+          $ref: '#/components/schemas/MaintenanceCounts'
+        last_attempt_at: *id002
+        last_successful_at: *id002
+        updated_at: *id002
+      required:
+      - counts
+      - maintenance_counts
+      - updated_at
+      x-go-type: domain.OperatorSourceStatus
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorSourceSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        enabled: *id003
+        status:
+          $ref: '#/components/schemas/OperatorSourceStatus'
+      required:
+      - id
+      - type
+      - enabled
+      x-go-type: domain.OperatorSourceSummary
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorDocumentSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        revision:
+          type: string
+        accepted_revision:
+          type: string
+        maintenance_status:
+          type: string
+        maintenance_revision:
+          type: string
+        maintenance_operation_id:
+          type: string
+        deleted: *id003
+        updated_at: *id002
+      required:
+      - id
+      - revision
+      - deleted
+      - updated_at
+      x-go-type: domain.OperatorDocumentSummary
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    DocumentList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperatorDocumentSummary'
+        next_cursor: *id001
+        snapshot_version: *id001
+      required:
+      - items
+      x-go-type: domain.OperatorList[domain.OperatorDocumentSummary]
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorSourceDetail:
+      type: object
+      additionalProperties: false
+      properties:
+        source:
+          $ref: '#/components/schemas/OperatorSourceSummary'
+        documents:
+          $ref: '#/components/schemas/DocumentList'
+      required:
+      - source
+      - documents
+      x-go-type: domain.OperatorSourceDetail
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperatorOperationSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+        source_id:
+          type: string
+        created_at: *id002
+        updated_at: *id002
+      required:
+      - id
+      - status
+      - created_at
+      - updated_at
+      x-go-type: domain.OperatorOperationSummary
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    PageList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperatorPageSummary'
+        next_cursor: *id001
+        snapshot_version: *id001
+      required:
+      - items
+      - snapshot_version
+      x-go-type: domain.OperatorList[domain.OperatorPageSummary]
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    SourceList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperatorSourceSummary'
+        next_cursor: *id001
+        snapshot_version: *id001
+      required:
+      - items
+      x-go-type: domain.OperatorList[domain.OperatorSourceSummary]
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    OperationList:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperatorOperationSummary'
+        next_cursor: *id001
+        snapshot_version: *id001
+      required:
+      - items
+      x-go-type: domain.OperatorList[domain.OperatorOperationSummary]
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    Error:
+      type: object
+      additionalProperties: false
+      properties:
+        error: *id001
+      required:
+      - error

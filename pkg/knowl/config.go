@@ -12,6 +12,14 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+// ErrWebConfigInvalid identifies enabled web access without an operator token.
+var ErrWebConfigInvalid = errors.New("web requires an operator token")
+
+// WebConfig controls opt-in operator HTTP and UI access.
+type WebConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+}
+
 // ErrWorkerConfigInvalid identifies unsupported maintenance capacity or ownership.
 var ErrWorkerConfigInvalid = errors.New("invalid maintenance worker configuration")
 
@@ -32,6 +40,7 @@ type Config struct {
 	PostgresDSN   string
 	ListenAddr    string
 	OperatorToken string
+	Web           WebConfig
 	ReadLimits    domain.ReadLimits
 	IngestOptions app.IngestOptions
 	// Workers bounds simultaneous owned maintenance execution; zero defaults to one.
@@ -66,6 +75,9 @@ func (config Config) Validate() error {
 }
 
 func (config Config) normalized() (Config, error) {
+	if config.Web.Enabled && strings.TrimSpace(config.OperatorToken) == "" {
+		return Config{}, ErrWebConfigInvalid
+	}
 	if config.Workers == 0 {
 		config.Workers = 1
 	}

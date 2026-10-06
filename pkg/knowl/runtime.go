@@ -46,6 +46,7 @@ type Host struct {
 	service     *app.IngestService
 	hierarchy   *app.HierarchyService
 	query       *app.QueryService
+	operator    *app.OperatorService
 	lint        *app.LintService
 	mcp         *mcp.Server
 	handler     http.Handler
