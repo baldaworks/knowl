@@ -51,6 +51,7 @@ type Host struct {
 	handler     http.Handler
 
 	ready           atomic.Bool
+	startGate       chan struct{}
 	stopGate        chan struct{}
 	mu              sync.Mutex
 	server          *http.Server
