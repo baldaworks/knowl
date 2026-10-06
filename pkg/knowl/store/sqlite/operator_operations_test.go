@@ -115,3 +115,12 @@ func TestOperatorMigrationInvalidCreationPreservesHistory(t *testing.T) {
 		t.Fatalf("failed migration advanced: %d %v", current, err)
 	}
 }
+
+func TestOperatorRetryOperations(t *testing.T) {
+	store, err := Open(t.Context(), t.TempDir()+"/retry-list.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	storetest.RunOperatorRetryOperations(t, store, "operator-retry")
+}

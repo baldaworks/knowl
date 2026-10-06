@@ -96,3 +96,12 @@ func runOperatorMigrationPostgres(t *testing.T, dsn string) {
 		},
 	})
 }
+
+func runOperatorRetryOperationsPostgres(t *testing.T, dsn string) {
+	store, err := Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	storetest.RunOperatorRetryOperations(t, store, "operator-retry")
+}
