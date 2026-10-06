@@ -135,6 +135,42 @@ func TestOperationContinuationPreservesFilters(t *testing.T) {
 		t.Fatalf("continuation status=%d reads=%+v", r.Code, f.operationOptions)
 	}
 }
+
+func TestOperationRefreshPreservesFiltersAndRestartsContinuation(t *testing.T) {
+	f := &activityReader{}
+	h := activityHandler(t, f)
+	r, doc := fragmentDocument(t, h, operationsFragment+"?status=applying&source_id=docs&limit=1")
+	if r.Code != 200 {
+		t.Fatalf("status=%d", r.Code)
+	}
+	r, doc = fragmentDocument(t, h, continuation(doc))
+	if r.Code != 200 {
+		t.Fatalf("continuation status=%d", r.Code)
+	}
+	var refresh string
+	walk(doc, func(n *html.Node) {
+		if n.Data == "button" && nodeText(n) == "Refresh" {
+			for _, a := range n.Attr {
+				if a.Key == hxGetAttribute {
+					refresh = a.Val
+				}
+			}
+		}
+	})
+	u, err := url.Parse(refresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := url.Values{"status": {"applying"}, sourceIDParameter: {activitySourceID}, limitParameter: {"1"}}
+	if u.Path != operationsFragment || !reflect.DeepEqual(u.Query(), want) {
+		t.Fatalf("refresh query=%v want=%v", u.Query(), want)
+	}
+	r, _ = fragmentDocument(t, h, refresh)
+	last := f.operationOptions[len(f.operationOptions)-1]
+	if r.Code != 200 || last.Status != domain.StatusApplying || last.SourceID != activitySourceID || last.Limit != 1 || last.Continuation.Key != "" {
+		t.Fatalf("refresh status=%d options=%+v", r.Code, last)
+	}
+}
 func TestSourceSavedLifecycleAndDocumentContinuation(t *testing.T) {
 	f := &activityReader{}
 	h := activityHandler(t, f)

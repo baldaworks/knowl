@@ -30,6 +30,9 @@ func TestBrowserOperationsSources(t *testing.T) {
 	}
 	h.dependencies.Operator = operator
 	h.dependencies.Operation = func(_ context.Context, id string) (knowlapi.OperationResult, error) {
+		if id == "op-10" {
+			return knowlapi.OperationResult{}, app.ErrOperationNotFound
+		}
 		return knowlapi.OperationResult{Id: id, Status: operationStatus.Load().(knowlapi.OperationResultStatus), UpdatedAt: time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC), Details: &knowlapi.OperationDetails{Retrieval: &knowlapi.RetrievalReport{Effective: "lexical"}, Execution: &knowlapi.OperationExecutionDetails{WorkAttempt: 2, RetryAttempt: 1}, Context: &knowlapi.OperationContextReport{Version: 1, WorkAttempt: 1, Outcome: knowlapi.Assembled, EntriesOmitted: 4, Budget: &knowlapi.ContextBudget{MaxBytes: 4096, IncludedCount: 3, OmittedCount: 2}}, Correction: &knowlapi.OperationCorrectionReport{WorkAttempt: 1, Outcome: "accepted", MaxCorrections: 2}, Plan: &knowlapi.OperationPlanSummary{Digest: screenSnapshot}}}, nil
 	}
 	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,9 +70,29 @@ type responsiveActivityReader struct{ *activityReader }
 func (*responsiveActivityReader) ListSources(context.Context, domain.ScopeRef, app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorSourceSummary], error) {
 	second := activitySource()
 	second.ID = "other-docs"
-	return app.OperatorReadPage[domain.OperatorSourceSummary]{Items: []domain.OperatorSourceSummary{activitySource(), second}}, nil
+	items := []domain.OperatorSourceSummary{activitySource()}
+	for _, id := range []domain.SourceID{"docs-2", "docs-3", "docs-4", "docs-5", "docs-6", "docs-7"} {
+		source := activitySource()
+		source.ID = id
+		items = append(items, source)
+	}
+	return app.OperatorReadPage[domain.OperatorSourceSummary]{Items: append(items, second)}, nil
+}
+
+func (f *responsiveActivityReader) ListOperations(ctx context.Context, scope domain.ScopeRef, o app.OperatorOperationReadOptions) (app.OperatorReadPage[domain.OperatorOperationSummary], error) {
+	result, err := f.activityReader.ListOperations(ctx, scope, o)
+	for _, id := range []domain.OperationID{"op-3", "op-4", "op-5", "op-6", "op-7", "op-8", "op-9", "op-10"} {
+		if len(result.Items) >= o.Limit {
+			break
+		}
+		result.Items = append(result.Items, domain.OperatorOperationSummary{ID: id, Kind: "maintenance", Status: domain.StatusApplying, SourceID: activitySourceID})
+	}
+	return result, err
 }
 func (*responsiveActivityReader) Source(_ context.Context, _ domain.ScopeRef, id domain.SourceID) (domain.OperatorSourceSummary, error) {
+	if id == "docs-7" {
+		return domain.OperatorSourceSummary{}, app.ErrSourceNotFound
+	}
 	source := activitySource()
 	source.ID = id
 	return source, nil

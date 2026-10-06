@@ -24,8 +24,8 @@ const (
 )
 
 type operationsView struct {
-	Items                  []domain.OperatorOperationSummary
-	Next, Status, SourceID string
+	Items                           []domain.OperatorOperationSummary
+	Next, Refresh, Status, SourceID string
 }
 type sourcesView struct {
 	Items []domain.OperatorSourceSummary
@@ -88,7 +88,9 @@ func (h *Handler) operations(w http.ResponseWriter, r *http.Request) {
 		h.readError(w, err)
 		return
 	}
-	h.render(w, 200, "operations", operationsView{Items: result.Items, Next: nextActivityURL("operations", q, result.NextCursor), Status: q.Get("status"), SourceID: q.Get(sourceIDParameter)})
+	q.Del(cursorParameter)
+	refresh := fragmentURL("operations", q)
+	h.render(w, 200, "operations", operationsView{Items: result.Items, Refresh: refresh, Next: nextActivityURL("operations", q, result.NextCursor), Status: q.Get("status"), SourceID: q.Get(sourceIDParameter)})
 }
 func (h *Handler) operation(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("operation_id")

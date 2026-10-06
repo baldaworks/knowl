@@ -49,7 +49,10 @@ opens the catalog panel.
 
 Select **Read saved source** to read immutable accepted text with its digest
 and media type. This uses Knowl's saved revision and does not fetch upstream.
-An unavailable revision is reported explicitly. **Open original** appears only
+The selected reader opens immediately after its source record and focuses its
+loading, accepted text, or error. **Close saved source** clears the reader and
+returns focus to the read button. An unavailable revision is reported explicitly.
+**Open original** appears only
 when provenance contains an allowed, credential-free HTTP/HTTPS URL. A local
 filesystem source may have no original URL; its saved text remains available.
 Normal browsing does not automatically load remote images or upstream content.
@@ -88,9 +91,12 @@ reports distinguish candidates excluded by the request byte budget from entries
 omitted by reporting bounds. Missing older reports are unavailable rather than
 zero.
 
-A selected queued/running operation refreshes while the tab is visible. Polling
+Selecting an operation reveals and focuses its details, including loading or
+errors in stacked layouts. A selected queued/running operation refreshes while
+the tab is visible. Background polling keeps reading position and focus. Polling
 pauses in a hidden tab, backs off on transient failures, and stops on terminal
-status, navigation, or disconnect. **Refresh** reloads the list. This screen
+status, navigation, or disconnect. **Refresh** reloads the first list page while
+keeping the selected status and source filters. This screen
 does not start work or retry failed operations.
 
 ## Sources
@@ -98,7 +104,8 @@ does not start work or retry failed operations.
 Select a configured source to inspect synchronization facts, accepted documents,
 and maintenance status. Document rows distinguish the upstream head, accepted
 revision, and processing revision. **View operation** opens a stored associated
-operation when available.
+operation when available. Selecting a source or **Next documents** reveals and
+focuses the requested details, including loading and failures, beneath tall lists.
 
 Successful synchronization accepts data and reserves work; wiki processing may
 still be queued or failed. A later failed sync preserves the last successful

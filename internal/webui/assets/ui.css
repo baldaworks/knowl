@@ -173,6 +173,8 @@ nav[aria-label="Breadcrumb"],.breadcrumb,.breadcrumb-item {min-width:0;max-width
 @media(max-width:639px){.table-filters label {flex-basis:100%;}.operation-history .table td:first-child {width:100%;}}
 /* The reference has a light canvas regardless of OS or vendor theme storage. */
 html {color-scheme:light;}
+/* Explicit detail focus must not race Bootstrap's smooth root scrolling. */
+:root {scroll-behavior:auto;}
 body:not([data-connection-state="connected"]) .app-wrapper,.sidebar-collapse .app-wrapper {grid-template-columns:0 minmax(0,1fr);}
 body:not([data-connection-state="connected"]) .app-header .header-start {display:none;}
 body:not([data-connection-state="connected"]) .app-header .container-fluid {justify-content:flex-end;}
@@ -223,3 +225,5 @@ a:focus-visible,button:focus-visible,summary:focus-visible,[tabindex]:focus-visi
 @media(prefers-reduced-motion:reduce){
  *,*::before,*::after {animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important;scroll-behavior:auto!important;}
 }
+
+#raw-source,#source-detail,#operation-detail,#page-sources,[data-toggle-sources],[hx-target="#raw-source"] {scroll-margin-top:84px;}

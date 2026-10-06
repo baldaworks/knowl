@@ -3,6 +3,73 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const {readable}=require('./assertions.cjs');
 const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright');
+async function visibleDetail(page,id) {
+ const state=await page.locator('#'+id).evaluate(e=>{const start=e.querySelector('.raw-heading strong,h2,.empty-state') || e;const range=document.createRange();range.selectNodeContents(start);let r=range.getBoundingClientRect();const error=e.querySelector('[data-error-code] p');if(error){range.selectNodeContents(error);const message=range.getBoundingClientRect();r={top:Math.min(r.top,message.top),bottom:Math.max(r.bottom,message.bottom)};}return {top:r.top,bottom:r.bottom,height:innerHeight,headerBottom:Math.max(0,document.querySelector('.app-header').getBoundingClientRect().bottom),focused:document.activeElement===e};});
+ assert.ok(state.top>=state.headerBottom && state.bottom<=state.height,'detail heading outside viewport: '+JSON.stringify(state));
+ assert.equal(state.focused,true,'explicit detail read must focus '+id);
+}
+async function savedSourceOutcomes(page) {
+ const cases=[
+  {width:320,index:1,code:'source_revision_not_found',status:404},
+  {width:390,index:2,code:'unsupported_format',status:415},
+  {width:640,index:3,code:'read_limit_exceeded',status:413},
+  {width:1024,index:4,network:true},
+  {width:1366,index:4},
+  {width:1366,index:6,nearBottom:true}
+ ];
+ for(const test of cases) {
+  await page.setViewportSize({width:test.width,height:844});
+  const control=page.locator('[hx-target="#raw-source"]').nth(test.index);
+  const expected=new URL(await control.getAttribute('hx-get'),page.url()).searchParams.get('source_ref');
+  const match=url=>url.pathname==='/ui/fragments/source-revision'&&url.searchParams.get('source_ref')===expected;
+  let ready,release,delivered;
+  const held=new Promise(resolve=>{ready=resolve;});const gate=new Promise(resolve=>{release=resolve;});const delivery=new Promise(resolve=>{delivered=resolve;});
+  await page.route(match,async route=>{const response=await route.fetch();if(test.status)assert.equal(response.status(),test.status);ready();await gate;try{if(test.network)await route.abort('failed');else await route.fulfill({response});}finally{delivered();}},{times:1});
+  if(test.nearBottom) {
+   // Position the actual opener near the lower edge through ordinary user
+   // scrolling before activation. The result is never scrolled by the test.
+   const delta=await control.evaluate(e=>{const record=e.closest('.source-record');return record.getBoundingClientRect().bottom+parseFloat(getComputedStyle(record).marginBottom)-(innerHeight-69);});
+   await page.mouse.wheel(0,delta);await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   const predicted=await control.evaluate(e=>{const record=e.closest('.source-record');return record.getBoundingClientRect().bottom+parseFloat(getComputedStyle(record).marginBottom);});
+   assert.ok(Math.abs(predicted-(844-69))<3,'near-bottom ordinary opener fixture must reach the measured boundary');
+  }
+  await control.focus();await page.keyboard.press('Enter');await held;
+  assert.equal(await page.locator('#raw-source').getAttribute('aria-busy'),'true');
+  assert.equal(await page.locator('#raw-source .empty-state').textContent(),'Loading saved source…');
+  assert.equal(await page.locator('#raw-source').count(),1);
+  await visibleDetail(page,'raw-source');
+  release();await delivery;
+  await page.waitForFunction(()=>!document.getElementById('raw-source').hasAttribute('aria-busy'),null,{timeout:5000});
+  if(test.code) {
+   assert.equal(await page.locator('#raw-source [data-error-code]').getAttribute('data-error-code'),test.code);
+   assert.equal(await page.locator('#raw-source pre').count(),0);
+  } else if(test.network) {
+   assert.equal(await page.locator('#raw-source .empty-state').textContent(),'Request failed. Select again or refresh this view to retry.');
+   assert.equal(await page.locator('#raw-source pre,[data-error-code]').count(),0);
+  } else {
+   assert.equal(await page.locator('.raw-view .source-meta').textContent(),expected,'opaque source_ref round-trips exactly');
+   assert.equal(await page.locator('.raw-view pre').textContent(),'<script>immutable accepted text</script>');
+   assert.equal(await page.locator('#raw-source script').count(),0);
+  }
+  await visibleDetail(page,'raw-source');
+  await page.getByRole('button',{name:'Close saved source',exact:true}).click();
+  assert.equal(await page.locator('#raw-source').textContent(),'');
+  assert.equal(await control.evaluate(e=>e===document.activeElement),true);
+  const position=await control.evaluate(e=>({top:e.getBoundingClientRect().top,bottom:e.getBoundingClientRect().bottom,header:document.querySelector('.app-header').getBoundingClientRect().bottom,height:innerHeight}));
+  assert.ok(position.top>=position.header && position.bottom<=position.height,'close must return to a visible source opener: '+JSON.stringify(position));
+ }
+ await page.setViewportSize({width:1366,height:900});
+ let ready,release,delivered;
+ const held=new Promise(resolve=>{ready=resolve;});const gate=new Promise(resolve=>{release=resolve;});const delivery=new Promise(resolve=>{delivered=resolve;});
+ const first=page.locator('[hx-target="#raw-source"]').first();
+ const match=url=>url.pathname==='/ui/fragments/source-revision'&&url.searchParams.get('source_ref')==='git:docs/guide@accepted';
+ await page.route(match,async route=>{const response=await route.fetch();ready();await gate;try{await route.fulfill({response});}catch{}finally{delivered();}},{times:1});
+ await first.click();await held;await visibleDetail(page,'raw-source');
+ await page.getByRole('button',{name:'Close saved source',exact:true}).click();release();await delivery;
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.equal(await page.locator('#raw-source').textContent(),'','closing a pending read rejects its late response');
+ assert.equal(await first.evaluate(e=>e===document.activeElement),true);
+}
 // Hold an actual server-rendered response until the newer selection completes.
 async function latestKnowledgeSelection(page, continuation) {
  let release, held;
@@ -123,7 +190,12 @@ async function latestKnowledgeSelection(page, continuation) {
   }
   await page.setViewportSize({width:1366,height:900});
   await page.locator('[data-toggle-sources]').click();
+  assert.equal(await page.locator('.source-record').count(),7);
   await page.locator('[hx-target="#raw-source"]').first().click();await page.locator('.raw-view').waitFor();
+  await visibleDetail(page,'raw-source');
+  assert.equal(await page.locator('#raw-source').getAttribute('tabindex'),'-1');
+  assert.equal(await page.locator('#raw-source').evaluate(e=>e.previousElementSibling?.querySelector('[hx-target="#raw-source"]')?.getAttribute('aria-current')),'true');
+  assert.equal(await page.locator('a[href="https://example.test/guide"]').count(),1,'selected revision original is shown once');
   assert.equal(await page.locator('.raw-view pre').textContent(),'<script>immutable accepted text</script>');
   assert.equal(requests.filter(u=>new URL(u).searchParams.has('query')).length,0);
   let rawReady,rawRelease,rawDone;
@@ -132,11 +204,17 @@ async function latestKnowledgeSelection(page, continuation) {
   await page.route(rawPath,async route=>{const response=await route.fetch();rawReady();await rawGate;try{await route.fulfill({response});}catch{}finally{rawDone();}},{times:1});
   await page.locator('[hx-target="#raw-source"]').first().click();await rawHeld;
   assert.equal(await page.locator('#raw-source').getAttribute('aria-busy'),'true');assert.equal(await page.locator('.raw-view').count(),0);
+  await visibleDetail(page,'raw-source');
   await page.locator('[hx-target="#raw-source"]').last().click();
   await page.waitForFunction(()=>document.querySelector('.raw-view .source-meta')?.textContent.includes('@second'));
   rawRelease();await rawDelivered;await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   assert.equal((await page.locator('.raw-view .source-meta').textContent()).endsWith('@second'),true,'old saved source must not replace latest selection');
   assert.equal(await page.locator('[hx-target="#raw-source"]').last().getAttribute('aria-current'),'true');
+  await visibleDetail(page,'raw-source');
+  await page.getByRole('button',{name:'Close saved source',exact:true}).click();
+  assert.equal(await page.locator('#raw-source').textContent(),'');
+  assert.equal(await page.locator('[hx-target="#raw-source"]').last().evaluate(e=>e===document.activeElement),true);
+  await savedSourceOutcomes(page);
   await latestKnowledgeSelection(page,false);
   await latestKnowledgeSelection(page,true);
   await page.goBack();await page.waitForFunction(()=>document.querySelector('.catalog-label')?.textContent.trim()==='ALL PAGES');
@@ -186,7 +264,7 @@ async function latestKnowledgeSelection(page, continuation) {
   assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Root','Article']);
   assert.equal(await page.locator('.source-panel').isVisible(),false);
   const sourcesToggle=page.locator('[data-toggle-sources]').first();
-  await page.evaluate(()=>scrollTo(0,200));const reading=await page.evaluate(()=>scrollY);
+  await page.evaluate(()=>scrollTo(0,200));
   await sourcesToggle.focus();await page.keyboard.press('Enter');assert.equal(await page.locator('.source-panel').isVisible(),true);
   assert.equal(await sourcesToggle.getAttribute('aria-expanded'),'true');
   assert.equal(await page.locator('[data-close-sources]').evaluate(e=>e===document.activeElement),true);
@@ -198,11 +276,12 @@ async function latestKnowledgeSelection(page, continuation) {
   for(const width of [320,390,639,640,768,1024,1366]){
    await page.setViewportSize({width,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'expanded metadata overflow at '+width);
   }
-  await page.setViewportSize({width:390,height:844});await page.locator('.source-panel').scrollIntoViewIfNeeded();await artifact('knowledge-expanded-mobile');
+  await page.setViewportSize({width:390,height:844});await artifact('knowledge-expanded-mobile');
   if(process.env.KNOWL_BROWSER_ARTIFACT_DIR)await page.locator('.source-panel').screenshot({path:require('node:path').join(process.env.KNOWL_BROWSER_ARTIFACT_DIR,'task-012-source-panel-expanded-mobile.png')});
   await page.locator('[data-close-sources]').click();assert.equal(await sourcesToggle.getAttribute('aria-expanded'),'false');
   assert.equal(await sourcesToggle.evaluate(e=>e===document.activeElement),true);
-  assert.ok(Math.abs((await page.evaluate(()=>scrollY))-reading)<3);
+  const returned=await sourcesToggle.evaluate(e=>({top:e.getBoundingClientRect().top,bottom:e.getBoundingClientRect().bottom,header:document.querySelector('.app-header').getBoundingClientRect().bottom,height:innerHeight}));
+  assert.ok(returned.top>=returned.header && returned.bottom<=returned.height,'Page sources close returns to visible opener below the pinned header');
   await page.locator('[data-toggle-catalog]').click();assert.equal(await page.locator('.catalog-panel').isVisible(),true);
   assert.equal(await page.locator('[data-toggle-catalog]').getAttribute('aria-expanded'),'true');
   await page.locator('[data-toggle-catalog]').focus();

@@ -86,13 +86,28 @@ func TestBrowserKnowledgeSearch(t *testing.T) {
 	}
 }
 
-// Browser-only long provenance exercises expanded metadata and two real revisions.
+// Browser-only long provenance exercises expanded metadata and seven revisions.
 type responsiveScreenReader struct{ *screenReader }
 
 func (f *responsiveScreenReader) Page(ctx context.Context, scope domain.ScopeRef, id domain.PageID, limits domain.ReadLimits) (domain.OperatorPage, error) {
 	page, err := f.screenReader.Page(ctx, scope, id, limits)
 	if kind, _ := okf.ClassifyPath(string(id) + ".md"); kind == okf.DocumentConcept && id != knowledgeDistantLeaf {
+		page.Sources[0].OriginalURI = "https://example.test/guide"
+		for _, name := range []string{"missing", "unsupported", "limit", "a & b?🦉", "additional"} {
+			page.Sources = append(page.Sources, domain.OperatorPageSource{SourceRef: "git:docs/" + name + "@accepted", Revision: "accepted", DocumentID: domain.DocumentID(name)})
+		}
 		page.Sources = append(page.Sources, domain.OperatorPageSource{SourceRef: "git:docs/" + strings.Repeat("long-reference", 30) + "@second", Revision: strings.Repeat("r", 100)})
 	}
 	return page, err
+}
+
+func (f *responsiveScreenReader) SourceRevision(ctx context.Context, scope domain.ScopeRef, ref string, limits domain.ReadLimits) (domain.OperatorSourceRevision, error) {
+	for name, err := range map[string]error{"missing": app.ErrOperatorSourceRevisionNotFound, "unsupported": app.ErrOperatorUnsupportedFormat, "limit": app.ErrOperatorReadLimitExceeded} {
+		if ref == "git:docs/"+name+"@accepted" {
+			return domain.OperatorSourceRevision{}, err
+		}
+	}
+	revision, err := f.screenReader.SourceRevision(ctx, scope, ref, limits)
+	revision.OriginalURI = "https://example.test/guide"
+	return revision, err
 }
