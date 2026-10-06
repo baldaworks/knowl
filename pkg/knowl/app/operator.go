@@ -12,6 +12,10 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+// A composite adapter:identity@revision key includes more than the bounded
+// revision alone. Keep its separate cap within the total operator query budget.
+const maxOperatorSourceRefBytes = 8 << 10
+
 var (
 	ErrOperatorInvalidRequest         = errors.New("invalid operator request")
 	ErrOperatorLimitInvalid           = errors.New("invalid operator limit")
@@ -290,7 +294,7 @@ func validOperatorPageID(id knowl.PageID) bool {
 	return validOpaque(value, maxEditPathBytes, false) && strings.TrimSpace(value) == value && !strings.Contains(value, "\\") && !path.IsAbs(value) && path.Clean(value) == value && value != "." && value != ".." && !strings.HasPrefix(value, "../")
 }
 func validOperatorSourceRef(value string) bool {
-	if !validOpaque(value, maxRevisionBytes, false) || strings.TrimSpace(value) != value {
+	if !validOpaque(value, maxOperatorSourceRefBytes, false) || strings.TrimSpace(value) != value {
 		return false
 	}
 	adapter, rest, ok := strings.Cut(value, ":")

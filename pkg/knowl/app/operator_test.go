@@ -168,18 +168,22 @@ func TestOperatorCapabilityAbsence(t *testing.T) {
 }
 
 type operatorSingleFixture struct {
-	page     knowl.OperatorPage
-	revision knowl.OperatorSourceRevision
-	err      error
-	scope    knowl.ScopeRef
-	limits   knowl.ReadLimits
+	reference     string
+	revisionCalls int
+	page          knowl.OperatorPage
+	revision      knowl.OperatorSourceRevision
+	err           error
+	scope         knowl.ScopeRef
+	limits        knowl.ReadLimits
 }
 
 func (reader *operatorSingleFixture) Page(_ context.Context, scope knowl.ScopeRef, _ knowl.PageID, limits knowl.ReadLimits) (knowl.OperatorPage, error) {
 	reader.scope, reader.limits = scope, limits
 	return reader.page, reader.err
 }
-func (reader *operatorSingleFixture) SourceRevision(_ context.Context, scope knowl.ScopeRef, _ string, limits knowl.ReadLimits) (knowl.OperatorSourceRevision, error) {
+func (reader *operatorSingleFixture) SourceRevision(_ context.Context, scope knowl.ScopeRef, ref string, limits knowl.ReadLimits) (knowl.OperatorSourceRevision, error) {
+	reader.reference = ref
+	reader.revisionCalls++
 	reader.scope, reader.limits = scope, limits
 	return reader.revision, reader.err
 }
@@ -481,5 +485,38 @@ func TestOperatorOperationPositionCodec(t *testing.T) {
 		if !errors.Is(err, ErrOperatorInvalidRequest) {
 			t.Fatalf("err=%v", err)
 		}
+	}
+}
+
+// Catches a component revision limit incorrectly applied to the composite
+// adapter:source/document@revision key for a valid accepted source revision.
+func TestOperatorSourceRevisionCompositeReference(t *testing.T) {
+	document := knowl.SourceDocument{
+		SourceID:   knowl.SourceID(strings.Repeat("s", 64)),
+		DocumentID: knowl.DocumentID(strings.Repeat("d", 1024)),
+		Revision:   strings.Repeat("r", 4096),
+		URI:        "https://example.test/document",
+	}
+	if err := ValidateSourceDocument(document); err != nil {
+		t.Fatalf("valid document rejected: %v", err)
+	}
+	accepted := knowl.AcceptedSource{
+		Source:         knowl.SourceRef{Adapter: "filesystem", ID: string(document.SourceID) + "/" + string(document.DocumentID)},
+		Version:        knowl.SourceVersion{Version: document.Revision},
+		SourceDocument: document,
+	}
+	ref := SourceRefKey(accepted)
+	reader := &operatorSingleFixture{revision: knowl.OperatorSourceRevision{SourceRef: ref, Source: accepted.Source, Version: accepted.Version, Text: "saved accepted text"}}
+	service := operatorService(t, OperatorReaders{Revisions: reader})
+	result, err := service.SourceRevision(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("valid composite reference bytes=%d dispatches=%d: %v", len(ref), reader.revisionCalls, err)
+	}
+	if reader.revisionCalls != 1 || reader.reference != ref || reader.scope != operatorTestScope || result.SourceRef != ref || result.Version.Version != document.Revision || result.Text != "saved accepted text" {
+		t.Fatalf("accepted revision or host-bound dispatch differs: result=%+v dispatches=%d", result, reader.revisionCalls)
+	}
+	_, err = service.SourceRevision(t.Context(), "file:document@"+strings.Repeat("r", 8192))
+	if !errors.Is(err, ErrOperatorInvalidRequest) || reader.revisionCalls != 1 {
+		t.Fatalf("oversized composite reference err=%v dispatches=%d", err, reader.revisionCalls)
 	}
 }
