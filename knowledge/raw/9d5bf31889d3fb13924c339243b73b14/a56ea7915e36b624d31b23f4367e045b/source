@@ -1,0 +1,88 @@
+# Knowl v0.4.0 — Connected Sources and Publishable Wikis
+
+Knowl v0.4.0 expands the complete source-to-publication workflow: it can read
+remote Git repositories, recover and retry durable maintenance, organize a
+semantic wiki explicitly, and export the result as a portable OKF bundle with
+an `llms.txt` navigation document.
+
+## Highlights
+
+### Remote Git sources
+
+- Configured remote Git sources join filesystem sources under the same bounded
+  synchronization, status, retry, and maintenance lifecycle.
+- HTTPS and SSH authentication remain external to configuration. SSH host keys,
+  immutable repository identity, ref movement, cache size, and pack transfer
+  limits are validated fail-closed.
+- Branch rewrites, moved tags, and repository rebinding require explicit
+  operator acknowledgement; logs and errors redact credentials and content.
+
+### Durable one-shot operation and recovery
+
+- `knowl run` performs a bounded source sync, drains queued maintenance, and
+  optionally reconciles hierarchy without keeping the HTTP service running.
+- Failed maintenance records stable failure classes and bounded retry state.
+  Operators can preview or requeue selected failures with `knowl source retry`.
+- Recovery resumes durable work after interruption while preserving the last
+  successful source checkpoint and searchable wiki projection.
+
+### Semantic hierarchy and publication
+
+- `knowl hierarchy reconcile` explicitly reorganizes ordinary pages into a
+  subject-first, root-reachable OKF catalog graph. Planning is deterministic,
+  bounded, staged, and conflict-checked; source synchronization never invokes
+  hierarchy implicitly.
+- `knowl export okf` copies the canonical portable wiki without raw evidence,
+  operational state, configuration, or databases.
+- `knowl export llms-txt` renders bundle-relative navigation to stdout or a
+  selected file, with optional title, summary, and public base URL.
+
+### Retrieval and ingestion fixes
+
+- Search indexes semantic OKF tags and falls back to native relaxed matching
+  when a strict query has no results.
+- Git synchronization closes acceptance gaps around rewritten refs, cache
+  safety, bounded traversal, and provenance continuity.
+- The default wiki document ceiling is now 262,144 characters instead of
+  32,768. Documents at the limit are accepted; larger documents still fail
+  before provider invocation, alongside the independent 4 MiB byte guard.
+
+## Compatibility and upgrade
+
+The HTTP, MCP, and embedded Go ownership model remains unchanged. This release
+adds operational-store migrations for generic hierarchy operations, semantic
+tag projection, retry state, and Git repository identity. The migrations are
+additive and preserve existing source operations and canonical Markdown.
+
+1. Stop active writers and back up the workspace and operational store.
+2. Deploy `ghcr.io/baldaworks/knowl:v0.4.0` and wait for `/readyz`.
+3. Review any new Git source configuration, especially credentials,
+   `known_hosts`, repository identity, and rewrite policy.
+4. Run `knowl run` or the existing source synchronization workflow, then inspect
+   `knowl source status` until maintenance is terminal.
+5. Optionally run `knowl hierarchy reconcile`, validate the workspace, and
+   generate publication output with `knowl export okf` and
+   `knowl export llms-txt`.
+
+After the first hierarchy operation, rolling back the binary also requires
+restoring the pre-upgrade operational database. The canonical Markdown
+workspace remains portable and can rebuild a fresh projection.
+
+## Published artifact
+
+The release workflow publishes and attests a multi-platform Linux image for
+`amd64` and `arm64` to:
+
+```text
+ghcr.io/baldaworks/knowl:v0.4.0
+```
+
+Pin the immutable digest emitted by the GitHub Release for production
+deployments.
+
+## Validation
+
+The release gate verifies modules and generated OpenAPI bindings, runs the full
+race-enabled Go suite, vulnerability and architecture checks, strict linting,
+the PostgreSQL integration contract, and a release-shaped persistent-volume
+sidecar smoke test before publishing.

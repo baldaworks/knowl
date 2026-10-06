@@ -417,8 +417,7 @@ content/fs, store/*, provider
 pkg/knowl/mcp         MCP adapter
 internal/httpapi      HTTP adapter
 internal/mcphttp      Streamable HTTP transport for MCP
-internal/source       filesystem and remote Git adapters, normalization,
-                      and reconciliation
+internal/source       filesystem adapter, normalization, and reconciliation
 pkg/knowl             composition root and host API
 pkg/knowlfx, cmd/knowl
                        Fx and CLI entrypoints
@@ -464,14 +463,9 @@ hypothetical reuse. `.go-arch-lint.yml` protects these top-level boundaries.
 - Startup validates the workspace, initializes storage, performs recovery, and
   prepares projections before readiness.
 - Canonical writes preserve one-writer ordering.
-- Knowl synchronizes configured filesystem and remote Git sources into its
-  workspace. Git sources are read-only: scans fetch the tracked branch or tag
-  and consume documents from one immutable commit without modifying the remote.
-- Knowl does not commit or push the generated workspace to Git. Workspace
-  version control and publication remain operator responsibilities.
 - Knowl does not promise automatic crawling or research, vector DB as
-  canonical storage, implicit forgetting, binary/image understanding, a broad
-  CRUD/admin API, or shared multi-tenant security.
+  canonical storage, implicit forgetting, binary/image understanding, Git
+  push/sync, a broad CRUD/admin API, or shared multi-tenant security.
 
 ### Maintenance execution ownership
 

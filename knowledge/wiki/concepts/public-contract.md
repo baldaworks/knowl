@@ -4,7 +4,7 @@ title: Public Contract
 knowl:
   id: concepts/public-contract
   source_refs:
-    - wiki-filesystem:knowl-docs/design.md@15d3f23357e10afc7a1f9e7ba3dda84f262521d5ae864d5fbc4ed95c822ec4e0
+    - wiki-filesystem:knowl-docs/design.md@3a68ce3bd879e93c51035a4f8f0cf5c198e5019718caf580e388c947b63f1749
 ---
 # Public Contract
 
@@ -23,5 +23,7 @@ Knowl defines a minimal public business contract consisting of exactly three ope
 ## Boundary Constraints
 
 Transports do not expose direct page CRUD, raw workspace file writes, search sub-steps, or public review/apply workflows.
+
+Public ingest accepts source text or a URI reference; submitting a URI does not download its contents. Configured filesystem and remote Git sources use the separate operator synchronization lifecycle to fetch documents and reserve durable maintenance work. Git synchronization preserves the same three-operation public contract.
 
 See [[concepts/architecture]] for system design and [[concepts/content-and-trust-boundaries]] for workspace structure.
