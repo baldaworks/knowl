@@ -88,11 +88,12 @@ type OperatorSourceRevision struct {
 // OperatorSourceStatus allows durable processing facts without configuration,
 // checkpoints, repository identities, or arbitrary provider error messages.
 type OperatorSourceStatus struct {
-	Status           SyncStatus `json:"status,omitempty"`
-	Counts           SyncCounts `json:"counts"`
-	LastAttemptAt    time.Time  `json:"last_attempt_at,omitempty"`
-	LastSuccessfulAt time.Time  `json:"last_successful_at,omitempty"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	Status            SyncStatus        `json:"status,omitempty"`
+	Counts            SyncCounts        `json:"counts"`
+	LastAttemptAt     time.Time         `json:"last_attempt_at,omitzero"`
+	LastSuccessfulAt  time.Time         `json:"last_successful_at,omitzero"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+	MaintenanceCounts MaintenanceCounts `json:"maintenance_counts"`
 }
 
 // OperatorSourceSummary is the safe configured identity and durable status.
@@ -104,13 +105,18 @@ type OperatorSourceSummary struct {
 }
 
 // OperatorDocumentSummary exposes stored document processing associations.
+// Revision is the saved head; AcceptedRevision is present only for validated
+// accepted metadata. An empty MaintenanceStatus means the scoped associated
+// operation is unavailable, rather than an inferred maintenance outcome.
 type OperatorDocumentSummary struct {
-	ID                     DocumentID  `json:"id"`
-	Revision               string      `json:"revision"`
-	MaintenanceRevision    string      `json:"maintenance_revision,omitempty"`
-	MaintenanceOperationID OperationID `json:"maintenance_operation_id,omitempty"`
-	Deleted                bool        `json:"deleted"`
-	UpdatedAt              time.Time   `json:"updated_at"`
+	ID                     DocumentID      `json:"id"`
+	Revision               string          `json:"revision"`
+	AcceptedRevision       string          `json:"accepted_revision,omitempty"`
+	MaintenanceStatus      OperationStatus `json:"maintenance_status,omitempty"`
+	MaintenanceRevision    string          `json:"maintenance_revision,omitempty"`
+	MaintenanceOperationID OperationID     `json:"maintenance_operation_id,omitempty"`
+	Deleted                bool            `json:"deleted"`
+	UpdatedAt              time.Time       `json:"updated_at"`
 }
 
 // OperatorSourceDetail combines safe source status and a bounded document list.

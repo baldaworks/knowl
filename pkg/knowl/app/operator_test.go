@@ -390,7 +390,7 @@ func TestOperatorCatalogReads(t *testing.T) {
 
 // Catches partial-capability fallback, document source cursor replay, and shared status pointers.
 func TestOperatorSourceReads(t *testing.T) {
-	sources := &operatorSourcesFixture{source: knowl.OperatorSourceSummary{ID: operatorTestSourceID, Type: knowl.SourceTypeGit, Enabled: true, Status: &knowl.OperatorSourceStatus{Status: knowl.SyncStatusSucceeded}}}
+	sources := &operatorSourcesFixture{source: knowl.OperatorSourceSummary{ID: operatorTestSourceID, Type: knowl.SourceTypeGit, Enabled: true, Status: &knowl.OperatorSourceStatus{Status: knowl.SyncStatusSucceeded, MaintenanceCounts: knowl.MaintenanceCounts{Queued: 2, Failed: 1}}}}
 	documents := &operatorDocumentsFixture{}
 	service := operatorService(t, OperatorReaders{Sources: sources, Documents: documents})
 	list, err := service.Sources(t.Context(), OperatorListOptions{})
@@ -398,7 +398,8 @@ func TestOperatorSourceReads(t *testing.T) {
 		t.Fatalf("list=%+v sources=%+v err=%v", list, sources, err)
 	}
 	list.Items[0].Status.Status = knowl.SyncStatusFailed
-	if sources.source.Status.Status != knowl.SyncStatusSucceeded {
+	list.Items[0].Status.MaintenanceCounts.Queued = 99
+	if sources.source.Status.Status != knowl.SyncStatusSucceeded || sources.source.Status.MaintenanceCounts.Queued != 2 || sources.source.Status.MaintenanceCounts.Failed != 1 {
 		t.Fatal("reader status mutated")
 	}
 	detail, err := service.Source(t.Context(), operatorTestSourceID, OperatorListOptions{})
