@@ -56,7 +56,11 @@
     event.detail.headers.Authorization = 'Bearer ' + token;
   });
   document.addEventListener('htmx:beforeRequest', event => {
-    if (!token || !protectedURL(event.detail.requestConfig.path)) {event.preventDefault(); return;}
+    const url = protectedURL(event.detail.requestConfig.path);
+    if (!token || !url) {event.preventDefault(); return;}
+    // Catalog, All pages, and continuation controls replace the same screen.
+    // Advance before aborting so canceled requests cannot display an error.
+    if (event.detail.target === screen && ['/ui/fragments/knowledge', '/ui/fragments/page'].includes(url.pathname)) abortRequests();
     pending.set(event.detail.xhr, generation);
   });
   document.addEventListener('htmx:beforeSwap', event => {
