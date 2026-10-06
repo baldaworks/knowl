@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/baldaworks/knowl/internal/httpapi/server"
@@ -17,7 +18,12 @@ import (
 
 // This test-only server uses the production shell, renderer and auth/read boundary.
 // Browser tooling never enters the binary or the normal Go test/build dependency path.
-func TestBrowserSecurity(t *testing.T) {
+func TestBrowserSecurity(t *testing.T) { runSecurityBrowser(t, "security.cjs") }
+
+func TestBrowserRepairs(t *testing.T) { runSecurityBrowser(t, "repairs.cjs") }
+
+func runSecurityBrowser(t *testing.T, scriptName string) {
+	t.Helper()
 	ui, err := webui.New(webui.Dependencies{})
 	if err != nil {
 		t.Fatal(err)
@@ -42,11 +48,15 @@ func TestBrowserSecurity(t *testing.T) {
 			fragments.ServeHTTP(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/ui/fragments/") {
+			server.WithOperatorAuth(server.WithOperatorReadBoundary(http.HandlerFunc(ui.Fragments), func() bool { return true }), "browser-secret-token").ServeHTTP(w, r)
+			return
+		}
 		ui.ServeHTTP(w, r)
 	})
 	host := httptest.NewServer(handler)
 	defer host.Close()
-	script, err := filepath.Abs("../../tools/webui-browser/security.cjs")
+	script, err := filepath.Abs("../../tools/webui-browser/" + scriptName)
 	if err != nil {
 		t.Fatal(err)
 	}

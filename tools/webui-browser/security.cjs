@@ -66,21 +66,19 @@ const origin = process.env.KNOWL_BROWSER_URL;
         body: '<p id="proxy-body">untrusted proxy body</p><img src="https://evil.invalid/proxy"><script>window.proxyExecuted=true</script>'
       }));
       await connect();
-      await page.waitForFunction(() => document.getElementById('screen').textContent === 'Workspace request failed. Reconnect to retry.', null, {timeout:3000});
+      await page.waitForFunction(() => document.getElementById('connection-feedback').textContent === 'Connection failed. Check the server and token, then Connect to retry.', null, {timeout:3000});
       assert.equal(await page.locator('#proxy-body, #screen img, #screen script').count(), 0);
       assert.equal(await page.evaluate(() => window.proxyExecuted), undefined);
-      assert.equal(await page.locator('#connection-status').textContent(), 'Connected');
+      assert.equal(await page.locator('#connection-status').textContent(), 'Disconnected');
       if (process.env.KNOWL_BROWSER_ARTIFACT_DIR) {
         await page.screenshot({path:require('node:path').join(process.env.KNOWL_BROWSER_ARTIFACT_DIR, 'retry-' + status + '.png'),fullPage:true});
       }
-      await page.locator('#disconnect').click();
       await page.unroute('**/ui/fragments/knowledge');
     }
     // Current network failures use the same local state.
     await page.route('**/ui/fragments/knowledge', route => route.abort('failed'));
     await connect();
-    await page.waitForFunction(() => document.getElementById('screen').textContent === 'Workspace request failed. Reconnect to retry.');
-    await page.locator('#disconnect').click();
+    await page.waitForFunction(() => document.getElementById('connection-feedback').textContent === 'Connection failed. Check the server and token, then Connect to retry.');
     await page.unroute('**/ui/fragments/knowledge');
     // Release an old HTTP error only after the replacement session has real content.
     let releaseError, errorStarted, errorFinished;
@@ -118,6 +116,8 @@ const origin = process.env.KNOWL_BROWSER_URL;
       if(r.headers.authorization) assert.ok(u.pathname.startsWith('/ui/fragments/'));
     }
     await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.locator('[aria-label="Toggle navigation"]').isVisible(),false);
+    await connect();await page.locator('#protected-document').waitFor();
     await page.locator('[aria-label="Toggle navigation"]').click();
     await page.locator('[data-screen="sources"]').click();
     assert.equal(new URL(page.url()).pathname,'/ui/sources');

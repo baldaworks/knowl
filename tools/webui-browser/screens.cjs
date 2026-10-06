@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const {readable}=require('./assertions.cjs');
 const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright');
 // Hold an actual server-rendered response until the newer selection completes.
 async function latestKnowledgeSelection(page, continuation) {
@@ -43,6 +44,7 @@ async function latestKnowledgeSelection(page, continuation) {
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  try {
   const page=await browser.newPage({viewport:{width:1366,height:900}});
+  const artifact=async name=>{if(process.env.KNOWL_BROWSER_ARTIFACT_DIR)await page.screenshot({path:require('node:path').join(process.env.KNOWL_BROWSER_ARTIFACT_DIR,'task-012-'+name+'.png'),fullPage:false});};
   const requests=[],violations=[];
   page.on('request',r=>requests.push(r.url()));
   await page.exposeFunction('recordCSP',v=>violations.push(v));
@@ -50,18 +52,32 @@ async function latestKnowledgeSelection(page, continuation) {
   await page.goto(process.env.KNOWL_BROWSER_URL+'/ui/knowledge');
   await page.locator('#operator-token').fill('browser-secret-token');await page.locator('#connect-form button').click();
   await page.locator('.knowledge-article').waitFor();
+  await readable(page,'#header-view,#connection-status,.panel-description,.source-kind,.source-meta,.source-note,.technical-details dt,.catalog-label');
+  await artifact('knowledge-desktop');
   await page.locator('.catalog-item').filter({hasText:'All pages'}).click();
   const stale=page.waitForResponse(r=>r.status()===409);
   await page.getByRole('button',{name:'Next pages'}).click();await stale;
   await page.locator('.knowledge-article').waitFor();
-  assert.equal(await page.locator('[data-error-code]').count(),0);
-  await page.locator('[hx-target="#raw-source"]').click();await page.locator('.raw-view').waitFor();
+  assert.equal(await page.locator('[data-error-code]').count(),0,await page.locator('#screen').textContent());
+  await page.locator('[hx-target="#raw-source"]').first().click();await page.locator('.raw-view').waitFor();
   assert.equal(await page.locator('.raw-view pre').textContent(),'<script>immutable accepted text</script>');
   assert.equal(requests.filter(u=>new URL(u).searchParams.has('query')).length,0);
+  let rawReady,rawRelease,rawDone;
+  const rawHeld=new Promise(resolve=>{rawReady=resolve;});const rawGate=new Promise(resolve=>{rawRelease=resolve;});const rawDelivered=new Promise(resolve=>{rawDone=resolve;});
+  const rawPath=url=>url.pathname==='/ui/fragments/source-revision'&&url.searchParams.get('source_ref')==='git:docs/guide@accepted';
+  await page.route(rawPath,async route=>{const response=await route.fetch();rawReady();await rawGate;try{await route.fulfill({response});}catch{}finally{rawDone();}},{times:1});
+  await page.locator('[hx-target="#raw-source"]').first().click();await rawHeld;
+  assert.equal(await page.locator('#raw-source').getAttribute('aria-busy'),'true');assert.equal(await page.locator('.raw-view').count(),0);
+  await page.locator('[hx-target="#raw-source"]').last().click();
+  await page.waitForFunction(()=>document.querySelector('.raw-view .source-meta')?.textContent.includes('@second'));
+  rawRelease();await rawDelivered;await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal((await page.locator('.raw-view .source-meta').textContent()).endsWith('@second'),true,'old saved source must not replace latest selection');
+  assert.equal(await page.locator('[hx-target="#raw-source"]').last().getAttribute('aria-current'),'true');
   await latestKnowledgeSelection(page,false);
   await latestKnowledgeSelection(page,true);
   await page.locator('[data-screen="search"]').click();await page.locator('#search-form').waitFor();
   assert.match(await page.locator('.search-disclosure').textContent(),/Embeddings are enabled/);
+  await readable(page,'.search-disclosure,.search-filters,.empty-state,.empty-state h3');
   await page.waitForFunction(()=>getComputedStyle(document.getElementById('search-loading')).display==='none');
   await page.locator('#query').fill('typed but not submitted');
   assert.equal(requests.filter(u=>new URL(u).searchParams.has('query')).length,0);
@@ -71,7 +87,7 @@ async function latestKnowledgeSelection(page, continuation) {
    await page.waitForFunction(mode=>{const code=document.getElementById('response-json-data');return code && JSON.parse(code.textContent).query===mode},mode);
    await page.waitForFunction(()=>getComputedStyle(document.getElementById('search-loading')).display==='none');
    const count=requests.filter(u=>new URL(u).searchParams.has('query')).length;
-   await page.locator('[data-toggle-json]').click();
+   await page.locator('[data-toggle-json]').click();assert.equal(await page.locator('[data-toggle-json]').getAttribute('aria-expanded'),'true');
    const result=JSON.parse(await page.locator('#response-json-data').textContent());
    assert.deepEqual(await page.locator('.evidence-title').allTextContents(),result.evidence.map(e=>e.title));
    assert.deepEqual(await page.locator('.evidence-snippet').allTextContents(),result.evidence.map(e=>e.snippet));
@@ -80,6 +96,8 @@ async function latestKnowledgeSelection(page, continuation) {
    const download=await downloadPromise;assert.deepEqual(JSON.parse(await fs.readFile(await download.path(),'utf8')),result);
    assert.equal(requests.filter(u=>new URL(u).searchParams.has('query')).length,count);
    assert.equal(new URL(page.url()).search,'');
+   await readable(page,'.status-badge,.evidence-bottom,.evidence-citations,.subtle-note');
+   if(mode==='lexical')await artifact('search-desktop');
   }
   await page.locator('[data-toggle-snippet]').first().click();assert.equal(await page.locator('[data-toggle-snippet]').first().getAttribute('aria-expanded'),'true');
   await page.setViewportSize({width:390,height:844});
@@ -88,8 +106,25 @@ async function latestKnowledgeSelection(page, continuation) {
   await page.locator('.evidence-bottom a').first().click();await page.locator('.knowledge-article').waitFor();
   assert.equal(new URL(page.url()).searchParams.get('page_id'),'concepts/other');
   assert.equal(await page.locator('.source-panel').isVisible(),false);
-  await page.locator('[data-toggle-sources]').first().click();assert.equal(await page.locator('.source-panel').isVisible(),true);
+  const sourcesToggle=page.locator('[data-toggle-sources]').first();
+  await page.evaluate(()=>scrollTo(0,200));const reading=await page.evaluate(()=>scrollY);
+  await sourcesToggle.focus();await page.keyboard.press('Enter');assert.equal(await page.locator('.source-panel').isVisible(),true);
+  assert.equal(await sourcesToggle.getAttribute('aria-expanded'),'true');
+  assert.equal(await page.locator('[data-close-sources]').evaluate(e=>e===document.activeElement),true);
+  await page.locator('.page-details summary').click();await page.locator('.source-identity summary').last().click();
+  await page.locator('[hx-target="#raw-source"]').first().click();await page.locator('.raw-view').waitFor();
+  for(const width of [320,390,639,640,768,1024,1366]){
+   await page.setViewportSize({width,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'expanded metadata overflow at '+width);
+  }
+  await page.setViewportSize({width:390,height:844});await page.locator('.source-panel').scrollIntoViewIfNeeded();await artifact('knowledge-expanded-mobile');
+  if(process.env.KNOWL_BROWSER_ARTIFACT_DIR)await page.locator('.source-panel').screenshot({path:require('node:path').join(process.env.KNOWL_BROWSER_ARTIFACT_DIR,'task-012-source-panel-expanded-mobile.png')});
+  await page.locator('[data-close-sources]').click();assert.equal(await sourcesToggle.getAttribute('aria-expanded'),'false');
+  assert.equal(await sourcesToggle.evaluate(e=>e===document.activeElement),true);
+  assert.ok(Math.abs((await page.evaluate(()=>scrollY))-reading)<3);
   await page.locator('[data-toggle-catalog]').click();assert.equal(await page.locator('.catalog-panel').isVisible(),true);
+  assert.equal(await page.locator('[data-toggle-catalog]').getAttribute('aria-expanded'),'true');
+  await page.setViewportSize({width:640,height:844});assert.equal(await page.locator('[data-toggle-catalog]').getAttribute('aria-expanded'),'true');
+  await page.setViewportSize({width:390,height:844});
   await page.evaluate(()=>document.querySelector('[data-screen="search"]').click());await page.locator('#search-form').waitFor();
   assert.equal(await page.locator('#query').inputValue(),'');assert.equal(await page.locator('.evidence-card').count(),0);
   const stored=await page.evaluate(()=>({local:{...localStorage},session:{...sessionStorage},cookies:document.cookie}));

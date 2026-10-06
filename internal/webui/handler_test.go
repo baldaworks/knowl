@@ -26,7 +26,21 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 			t.Fatal(parseErr)
 		}
 		var logo, connect, navigation int
+		var guestMenu, guestToggle bool
 		walk(doc, func(n *html.Node) {
+			attrs := map[string]string{}
+			for _, a := range n.Attr {
+				attrs[a.Key] = a.Val
+			}
+			if attrs["id"] == "workspace-navigation" {
+				_, hidden := attrs["hidden"]
+				_, inert := attrs["inert"]
+				guestMenu = hidden && inert && attrs["aria-hidden"] == "true"
+			}
+			if attrs["id"] == "navigation-toggle" {
+				_, guestToggle = attrs["hidden"]
+			}
+
 			for _, a := range n.Attr {
 				if a.Key == "src" && a.Val == "/ui/assets/knowl-logo.png" {
 					logo++
@@ -39,7 +53,7 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 				}
 			}
 		})
-		if logo != 1 || connect != 1 || navigation != 4 {
+		if logo != 2 || connect != 1 || navigation != 4 || !guestMenu || !guestToggle {
 			t.Fatalf("%s logo=%d connect=%d navigation=%d", route, logo, connect, navigation)
 		}
 	}

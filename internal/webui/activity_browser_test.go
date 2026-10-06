@@ -15,12 +15,20 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 func TestBrowserOperationsSources(t *testing.T) {
 	var operationStatus atomic.Value
 	operationStatus.Store(knowlapi.OperationResultStatusRunning)
-	h := activityHandler(t, &activityReader{manyOperations: true})
+	reader := &responsiveActivityReader{&activityReader{manyOperations: true}}
+	h := activityHandler(t, reader.activityReader)
+	operator, err := app.NewOperatorService("trusted", app.OperatorReaders{Operations: reader, Sources: reader, Documents: reader}, app.OperatorOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.dependencies.Operator = operator
 	h.dependencies.Operation = func(_ context.Context, id string) (knowlapi.OperationResult, error) {
 		return knowlapi.OperationResult{Id: id, Status: operationStatus.Load().(knowlapi.OperationResultStatus), UpdatedAt: time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC), Details: &knowlapi.OperationDetails{Execution: &knowlapi.OperationExecutionDetails{WorkAttempt: 2, RetryAttempt: 1}, Context: &knowlapi.OperationContextReport{Version: 1, WorkAttempt: 1, Outcome: knowlapi.Assembled, EntriesOmitted: 4, Budget: &knowlapi.ContextBudget{MaxBytes: 4096, IncludedCount: 3, OmittedCount: 2}}, Correction: &knowlapi.OperationCorrectionReport{WorkAttempt: 1, Outcome: "accepted", MaxCorrections: 2}, Plan: &knowlapi.OperationPlanSummary{Digest: screenSnapshot}}}, nil
 	}
@@ -52,4 +60,17 @@ func TestBrowserOperationsSources(t *testing.T) {
 		t.Fatalf("browser: %v\n%s", e, output)
 	}
 	t.Log(string(output))
+}
+
+type responsiveActivityReader struct{ *activityReader }
+
+func (*responsiveActivityReader) ListSources(context.Context, domain.ScopeRef, app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorSourceSummary], error) {
+	second := activitySource()
+	second.ID = "other-docs"
+	return app.OperatorReadPage[domain.OperatorSourceSummary]{Items: []domain.OperatorSourceSummary{activitySource(), second}}, nil
+}
+func (*responsiveActivityReader) Source(_ context.Context, _ domain.ScopeRef, id domain.SourceID) (domain.OperatorSourceSummary, error) {
+	source := activitySource()
+	source.ID = id
+	return source, nil
 }
