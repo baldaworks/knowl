@@ -26,6 +26,8 @@ Knowl supports these baseline use cases:
 2. Ingest supplied text or a URI reference through one canonical pipeline.
 3. Retrieve bounded evidence and provenance for a host query.
 4. Read durable ingest-operation status.
+5. Let operators browse the current wiki, immutable accepted sources, retrieval
+   evidence, and processing history through an optional read-only web UI.
 
 Knowl is not session, user-fact, or temporal memory; agent orchestration; the
 primary final-answer generator; a generic memory platform; or a multi-tenant
@@ -54,6 +56,25 @@ HTTP/OpenAPI provides the same deterministic contract:
 `GET /healthz` and `GET /readyz` are operational endpoints, not additional
 business operations. The authoritative HTTP schema is
 [api/openapi/knowl.yaml](../api/openapi/knowl.yaml).
+
+The optional [operator web UI](web-ui.md) adds four server-rendered screens:
+Knowledge, Search, Operations, and Sources. Its separate
+[operator read API](../api/openapi/operator.yaml) exposes seven GET routes bound
+to the configured workspace and scope. It adds no agent business operations.
+Both are disabled by default and share the existing HTTP listener. Enabled web
+access requires the operator token; that credential also authorizes the existing
+agent write endpoints.
+
+The UI reads current canonical pages and immutable accepted raw revisions.
+Page references support a page as a whole, without claim-level attribution.
+Search uses the existing retrieval path once per submitted query; optional
+embeddings may send that query to the configured provider. Browsing does not
+invoke a maintainer or fetch upstream sources. Maintenance and source schedules
+continue independently of the UI. There are no browser mutations, chat, edit
+controls, or changeset review.
+
+Go templates and pinned local assets are embedded in the service. A normal Go
+build or Go library consumer needs no Node runtime or frontend build step.
 
 Neither transport exposes direct page CRUD, raw workspace writes, search
 sub-steps, or public review/apply choreography. The operator CLI is a local

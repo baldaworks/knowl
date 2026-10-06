@@ -159,6 +159,29 @@ control files. The schema's exact byte digest is recorded with every operation
 and must match the provider plan. It is rechecked before staging and commit so
 an operator policy change invalidates work planned against older bytes.
 
+## Reading pages and accepted sources in the browser
+
+The optional [web UI](web-ui.md) reads the current canonical `wiki/` page and
+its saved source references. **Page sources** identifies each immutable accepted
+revision; **Read saved source** displays its accepted text and digest from
+`raw/`, without fetching the original source again. If that revision is missing,
+unavailable, too large, or not displayable as text, the UI reports the failure.
+It never substitutes a newer upstream document.
+
+An **Open original** link appears only for a safe, credential-free HTTP/HTTPS
+URI recorded in provenance, with user info, query strings, and fragments removed.
+Filesystem paths, credentials, and unsafe schemes
+are not exposed as clickable originals; a source can remain readable from its
+accepted revision when no original URL is available. Links require a deliberate
+click and carry no operator bearer token.
+
+Source references describe support for the page as a whole, not individual
+sentences. A search evidence card preserves the retrieved snippet and source
+references. **Open current page** reads the page as it exists when opened, which
+may have changed since retrieval. Page digests and snapshot versions identify
+current reads; the browser does not provide historical wiki-page storage.
+Accepted raw revisions retain their immutable identity independently.
+
 ## Control pages
 
 `wiki/index.md` is the OKF root catalog and declares version `0.2`. Nested

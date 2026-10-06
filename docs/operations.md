@@ -105,6 +105,8 @@ knowl:
   scope: local
   server:
     listen_addr: 127.0.0.1:8080
+  web:
+    enabled: false
   operator:
     token: replace-with-a-local-secret
 ```
@@ -245,6 +247,79 @@ Common `KNOWL_*` overrides include:
 - `KNOWL_STORAGE_POSTGRES_DSN`
 - `KNOWL_SERVER_LISTEN_ADDR`
 - `KNOWL_OPERATOR_TOKEN`
+
+## Optional web UI and operator reads
+
+The web UI and operator read API are disabled by default. Add this overlay to
+an existing valid provider/workspace configuration to enable them:
+
+```yaml
+knowl:
+  web:
+    enabled: true
+  server:
+    listen_addr: 127.0.0.1:8080
+  operator:
+    token: ${KNOWL_OPERATOR_TOKEN}
+```
+
+Set `KNOWL_OPERATOR_TOKEN` to a local secret before starting the service. Keep
+secret overrides in `.config/knowl/*.local.yaml` or the process environment;
+do not commit them. Startup rejects enabled web access with an empty token.
+For embedded Go applications the corresponding fields are `Config.Web.Enabled`
+and `Config.OperatorToken`. MCP stdio disables web access.
+
+Open `http://127.0.0.1:8080/ui/` and enter the token in **Connect**. The public
+shell and bundled assets contain no workspace data; fragments under
+`/ui/fragments/*` and JSON reads under `/operator/v1/*` require the bearer
+header. Disabled web routes return 404. Health probes remain public.
+
+The browser keeps the token in memory for the current document. Reload,
+**Disconnect**, or an authorization failure clears the connection. It is not
+saved in cookies, local/session storage, browser URLs, or exported search JSON.
+Data responses use `Cache-Control: no-store`. Treat the operator token as a
+write-capable credential: it also authorizes `POST /v1/ingest` and the existing
+MCP tools. The read-only UI does not narrow the token's authority.
+
+Keep local access on loopback. For remote access, terminate HTTPS at a trusted
+reverse proxy and restrict direct access to the Go listener. Knowl serves HTTP
+on this listener; it does not configure TLS certificates. Forward the bearer
+header, and keep credentials and query strings out of proxy/access logs. Normal
+browsing loads assets locally and does not automatically fetch upstream URLs
+or remote images. A deliberate **Open original** click navigates to the allowed
+HTTP/HTTPS URL without forwarding the operator token.
+
+The [web UI guide](web-ui.md) covers all four screens and a source-to-wiki
+walkthrough. The [operator OpenAPI contract](../api/openapi/operator.yaml)
+defines seven read routes:
+
+| Path (all `GET`) | Purpose |
+| --- | --- |
+| `/operator/v1/catalogs` | Read direct catalog children; optional `parent_id` |
+| `/operator/v1/pages` | List current factual page summaries |
+| `/operator/v1/page?page_id=...` | Read one current canonical page |
+| `/operator/v1/source-revision?source_ref=...` | Read immutable accepted text |
+| `/operator/v1/sources` | List configured sources and saved status |
+| `/operator/v1/sources/{source_id}` | Read source status and document inventory |
+| `/operator/v1/operations` | List stored operations; optional `status` and `source_id` |
+
+Lists default to 50 items, accept `limit` from 1 through 100, and return an
+optional `next_cursor`. The UI starts Operations at 10 rows. Continue with the
+same route, filter, and limit; cursors are opaque, bounded to 8 KiB, and become
+invalid after a host restart. Canonical catalog/page continuations also bind to
+the current snapshot. Refresh from the first page if it changes. Requests
+cannot select another scope or workspace. Unknown/duplicate parameters, GET
+bodies, and total query strings over 16 KiB are rejected. Bounded workspace
+reads use the existing read limits; an unavailable saved source is reported
+without fetching an upstream substitute.
+
+Source synchronization, accepted data, and completed knowledge processing are
+separate facts. A successful sync may still have queued or failed maintenance;
+a later failed scan preserves prior accepted revisions and the last successful
+sync. Only a stored reconciled tombstone confirms deletion. Operations show
+saved attempt reports where available; selected context is what the maintainer
+read, not a changed-page list. Older operations may have no reports. Missing
+reports mean unavailable, rather than failed retrieval or zero work.
 
 ## Optional embeddings
 

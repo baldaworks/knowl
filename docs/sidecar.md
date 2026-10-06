@@ -90,6 +90,36 @@ Sync accepts raw revisions and reserves durable maintenance work; model-backed
 wiki changes complete asynchronously. Inspect bounded maintenance counts and
 operation-correlated samples with `knowl source status <source-id>`.
 
+## Optional browser access
+
+Build the current checkout to include the [web UI](web-ui.md); do not assume an
+older published quickstart image contains it. Templates and pinned local assets
+ship in the Go binary and container, with no Node service, frontend build step,
+CDN, or extra listener.
+
+Merge this into the container's existing Knowl configuration, retaining its
+provider, sources, and persistent workspace settings:
+
+```yaml
+knowl:
+  web:
+    enabled: true
+  server:
+    listen_addr: 0.0.0.0:8080
+  operator:
+    token: ${KNOWL_OPERATOR_TOKEN}
+```
+
+Supply the secret through the container environment, or mount a local-only
+config override beneath `/etc/knowl/`. A host environment variable must be
+explicitly passed into Docker/Compose to reach the container. The baseline
+Compose example does not automatically enable the UI or forward this variable.
+Restart Knowl after updating its configuration. Keep the published port bound
+to `127.0.0.1`; then open `http://127.0.0.1:8080/ui/` and connect with the token.
+For access beyond loopback, place a trusted HTTPS proxy in front of the listener
+and restrict direct access. The same token permits ingestion through the agent
+API; see [security and operator reads](operations.md#optional-web-ui-and-operator-reads).
+
 ## Optional CPU embeddings
 
 From this checkout, opt in with the separately checked-in

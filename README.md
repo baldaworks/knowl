@@ -19,6 +19,7 @@ review it in Git, and export it as a portable bundle.
 [Quickstart](#minimal-sidecar-quickstart) ·
 [Use with Codex](#local-codex-plugin) ·
 [Connect an agent](#connect-an-agent) ·
+[Browse the wiki](docs/web-ui.md) ·
 [Documentation](#documentation-by-goal)
 
 ## What You Get
@@ -28,6 +29,7 @@ review it in Git, and export it as a portable bundle.
 | Keep project knowledge across tasks | An LLM-maintained wiki built from durable source revisions |
 | Understand where a result came from | Bounded evidence linked to its supporting sources |
 | Own and inspect your knowledge | Plain Markdown in an OKF-compatible workspace |
+| Read the wiki in your browser | An optional read-only console for pages, saved sources, search, and processing history |
 | Find related evidence across different wording | Optional hybrid search through your own embedding API or CPU sidecar |
 | Choose where it runs | Local Codex, a self-hosted MCP/HTTP service, or an embedded Go runtime |
 
@@ -137,6 +139,14 @@ Embed Knowl through `pkg/knowl`, or use `pkg/knowlfx` for Fx lifecycle
 integration. See the [product design](docs/design.md) for runtime composition
 and ownership boundaries.
 
+## Read Your Wiki in a Browser
+
+Enable the optional [web UI](docs/web-ui.md) to browse published pages, inspect
+their saved source revisions, retrieve evidence, and follow maintenance status.
+It runs inside the Go service with locally bundled assets and is disabled by
+default. Connect with an operator token; use HTTPS when exposing the service
+beyond loopback.
+
 ## Search Across Different Wording
 
 Enable optional embeddings to retrieve related evidence across paraphrases and
@@ -164,6 +174,7 @@ layout and commands.
 | --- | --- |
 | Set up local Codex | [Local Codex guide](docs/local-codex.md) |
 | Deploy an MCP/HTTP service | [Sidecar deployment](docs/sidecar.md) |
+| Browse pages, saved sources, and processing history | [Web UI guide](docs/web-ui.md) |
 | Configure providers, sources, and recovery | [Operations guide](docs/operations.md) |
 | Understand storage and source provenance | [Workspace guide](docs/workspace.md) |
 | Export the wiki for publishing or agents | [OKF and llms.txt export](docs/workspace.md#export-for-publication) |
