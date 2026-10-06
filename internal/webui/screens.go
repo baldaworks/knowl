@@ -268,6 +268,7 @@ func (h *Handler) readError(w http.ResponseWriter, err error) {
 		code   string
 	}{
 		{app.ErrOperatorInvalidRequest, 400, errorInvalidRequest}, {app.ErrQueryInvalid, 400, errorInvalidRequest}, {app.ErrOperatorLimitInvalid, 400, errorLimitInvalid}, {app.ErrOperatorCursorInvalid, 400, errorCursorInvalid},
+		{app.ErrOperationNotFound, 404, "operation_not_found"}, {app.ErrSourceNotFound, 404, "source_not_found"},
 		{app.ErrOperatorCatalogNotFound, 404, "catalog_not_found"}, {app.ErrPageNotFound, 404, errorPageNotFound}, {app.ErrOperatorSourceRevisionNotFound, 404, errorSourceRevisionNotFound},
 		{app.ErrOperatorSnapshotChanged, 409, errorSnapshotChanged}, {app.ErrOperatorReadLimitExceeded, 413, errorReadLimitExceeded}, {app.ErrOperatorUnsupportedFormat, 415, errorUnsupportedFormat},
 		{app.ErrOperatorCapabilityUnavailable, 503, errorCapabilityUnavailable}, {app.ErrOperatorNotReady, 503, "not_ready"}, {app.ErrOperatorWorkspaceUnavailable, 503, errorWorkspaceUnavailable}, {context.Canceled, 503, errorWorkspaceUnavailable}, {context.DeadlineExceeded, 503, errorWorkspaceUnavailable},
@@ -290,6 +291,19 @@ func validFragmentQuery(r *http.Request) bool {
 		allowed["page_id"] = true
 	case sourceRevisionFragment:
 		allowed["source_ref"] = true
+	case operationsFragment:
+		for _, k := range []string{"status", sourceIDParameter, limitParameter, cursorParameter} {
+			allowed[k] = true
+		}
+	case operationFragment:
+		allowed["operation_id"] = true
+	case sourcesFragment:
+		allowed[limitParameter] = true
+		allowed[cursorParameter] = true
+	case sourceFragment:
+		allowed[sourceIDParameter] = true
+		allowed[limitParameter] = true
+		allowed[cursorParameter] = true
 	case searchFragment:
 		allowed["query"] = true
 		allowed["source"] = true

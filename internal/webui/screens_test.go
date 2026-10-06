@@ -20,7 +20,7 @@ func TestSearchExplicitSubmissionSharesResult(t *testing.T) {
 	want := knowlapi.RetrieveResult{Query: "source lifecycle", Evidence: []knowlapi.EvidenceItem{{PageId: "concepts/second", Title: "Second", Snippet: "Exact second snippet"}, {PageId: "concepts/first", Title: "First", Snippet: "Exact first snippet"}}}
 	h, err := New(Dependencies{Retrieve: func(_ context.Context, query string, sources []string) (knowlapi.RetrieveResult, error) {
 		calls++
-		if query != want.Query || !reflect.DeepEqual(sources, []string{"docs"}) {
+		if query != want.Query || !reflect.DeepEqual(sources, []string{activitySourceID}) {
 			t.Errorf("input %q %v", query, sources)
 		}
 		return want, nil
@@ -179,7 +179,7 @@ func TestKnowledgeCurrentPageAndImmutableRaw(t *testing.T) {
 			article++
 		}
 		for _, a := range n.Attr {
-			if a.Key == "hx-get" && strings.HasPrefix(a.Val, "/ui/fragments/source-revision?") {
+			if a.Key == hxGetAttribute && strings.HasPrefix(a.Val, "/ui/fragments/source-revision?") {
 				rawURL = a.Val
 				source++
 			}
@@ -261,7 +261,7 @@ func TestKnowledgeSnapshotContinuation(t *testing.T) {
 	walk(doc, func(n *html.Node) {
 		if n.Data == "button" && nodeText(n) == "Next pages" {
 			for _, a := range n.Attr {
-				if a.Key == "hx-get" {
+				if a.Key == hxGetAttribute {
 					next = a.Val
 				}
 			}

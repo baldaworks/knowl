@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"golang.org/x/net/html"
@@ -83,5 +85,70 @@ func TestUIPublicProjectionRemovesUnsafeFields(t *testing.T) {
 	operation := safeUIOperation(domain.Operation{ID: "op", Status: domain.StatusFailed, Failure: &domain.Failure{Class: "provider", Reason: "/secret/provider"}})
 	if operation.Failure != nil {
 		t.Fatal("unfiltered failure disclosed")
+	}
+}
+
+// Nil embedded writer/content ports fail immediately if operation browsing ever
+// leaves the existing scoped operation read path.
+type uiReadOnlyContent struct{ app.ContentStore }
+type uiReadOnlyOperations struct {
+	app.OperationStore
+	operation domain.Operation
+	calls     int
+}
+
+func (s *uiReadOnlyOperations) Operation(_ context.Context, scope domain.ScopeRef, id domain.OperationID) (domain.Operation, error) {
+	s.calls++
+	if scope != s.operation.Key.Scope || id != s.operation.ID {
+		return domain.Operation{}, app.ErrOperationNotFound
+	}
+	return s.operation, nil
+}
+func TestUIOperationReadUsesSafePublicStatusAndNoWriters(t *testing.T) {
+	for _, tc := range []struct {
+		stored domain.OperationStatus
+		public string
+	}{{domain.StatusReceived, string(knowlapi.OperationResultStatusQueued)}, {domain.StatusPlanned, string(knowlapi.OperationResultStatusQueued)}, {domain.StatusAwaitingReview, string(knowlapi.OperationResultStatusQueued)}, {domain.StatusApplying, "running"}, {domain.StatusCommitted, string(knowlapi.OperationResultStatusCompleted)}, {domain.StatusFailed, "failed"}} {
+		t.Run(string(tc.stored), func(t *testing.T) {
+			store := &uiReadOnlyOperations{operation: domain.Operation{ID: "test-op", Key: domain.OperationKey{Scope: "ui-scope"}, Status: tc.stored, Failure: &domain.Failure{Class: "provider", Reason: "secret-provider-error"}}}
+			query, err := app.NewQueryService(uiReadOnlyContent{}, store, detailsReadOnlyIndex{}, nil, app.QueryOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h, err := NewWebHandler(nil, Dependencies{Query: query, Scope: "ui-scope", Ready: func() bool { return true }}, uiTestToken)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest(http.MethodGet, "/ui/fragments/operation?operation_id=test-op", nil)
+			r.Header.Set("Authorization", "Bearer "+uiTestToken)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 200 || store.calls != 1 {
+				t.Fatalf("status=%d reads=%d", w.Code, store.calls)
+			}
+			doc, err := html.Parse(w.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status string
+			var inspect func(*html.Node)
+			inspect = func(n *html.Node) {
+				if n.Type == html.TextNode && strings.Contains(n.Data, "secret-provider-error") {
+					t.Error("private provider failure rendered")
+				}
+				for _, a := range n.Attr {
+					if a.Key == "data-operation-status" {
+						status = a.Val
+					}
+				}
+				for c := n.FirstChild; c != nil; c = c.NextSibling {
+					inspect(c)
+				}
+			}
+			inspect(doc)
+			if status != tc.public {
+				t.Errorf("status=%q want=%q", status, tc.public)
+			}
+		})
 	}
 }

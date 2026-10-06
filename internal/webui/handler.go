@@ -28,6 +28,7 @@ type Dependencies struct {
 	EmbeddingsEnabled bool
 	Operator          *app.OperatorService
 	Retrieve          func(context.Context, string, []string) (knowlapi.RetrieveResult, error)
+	OperationStatus   func(domain.OperationStatus) string
 	Operation         func(context.Context, string) (knowlapi.OperationResult, error)
 }
 type Handler struct {
@@ -49,7 +50,18 @@ func newHandler(files fs.FS, dependencies Dependencies) (*Handler, error) {
 		},
 		"rawURL":        func(ref string) string { return fragmentURL("source-revision", url.Values{"source_ref": {ref}}) },
 		"shortRevision": shortRevision,
-		"number":        func(i int) int { return i + 1 },
+		"shortIdentity": shortIdentity,
+		"activityTime":  activityTime,
+		"operationURL":  operationURL,
+		"sourceURL":     sourceURL,
+		"publicStatus": func(status domain.OperationStatus) string {
+			if status == "" || dependencies.OperationStatus == nil {
+				return "unavailable"
+			}
+			return dependencies.OperationStatus(status)
+		},
+		"label":  func(value any) string { return strings.ReplaceAll(fmt.Sprint(value), "_", " ") },
+		"number": func(i int) int { return i + 1 },
 	}).ParseFS(files, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse UI templates: %w", err)
@@ -113,7 +125,7 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
-	case knowledgeFragment, pageFragment, sourceRevisionFragment, searchFragment:
+	case knowledgeFragment, pageFragment, sourceRevisionFragment, searchFragment, operationsFragment, operationFragment, sourcesFragment, sourceFragment:
 		if !validFragmentQuery(r) {
 			h.Error(w, 400, errorInvalidRequest)
 			return
@@ -125,13 +137,15 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 			h.sourceRevision(w, r)
 		case searchFragment:
 			h.search(w, r)
+		case operationsFragment:
+			h.operations(w, r)
+		case operationFragment:
+			h.operation(w, r)
+		case sourcesFragment:
+			h.sources(w, r)
+		case sourceFragment:
+			h.source(w, r)
 		}
-	case "/ui/fragments/operations", "/ui/fragments/sources":
-		if len(r.URL.Query()) != 0 {
-			h.Error(w, 400, errorInvalidRequest)
-			return
-		}
-		h.Error(w, 503, errorCapabilityUnavailable)
 	default:
 		h.Error(w, 404, "not_found")
 	}

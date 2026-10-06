@@ -3,6 +3,7 @@
   'use strict';
   let token = '', generation = 0;
   const pending = new Map();
+  let poll = null, issuingPoll = false;
   const screen = document.getElementById('screen');
   const names = {knowledge: 'Knowledge', search: 'Search', operations: 'Operations', sources: 'Sources'};
   const descriptions = {knowledge: 'Read your wiki and inspect the sources behind it.', search: 'Find evidence in your project knowledge.', operations: 'Follow processing and inspect the facts from each attempt.', sources: 'See what was synchronized and what has been processed.'};
@@ -11,7 +12,8 @@
     try { const u = new URL(value, location.href); return u.origin === location.origin && !u.username && !u.password && protectedPaths.has(u.pathname) ? u : null; } catch { return null; }
   }
   function selected() { return Object.hasOwn(names, location.pathname.split('/').pop()) ? location.pathname.split('/').pop() : 'knowledge'; }
-  function abortRequests() { generation++; for (const xhr of pending.keys()) xhr.abort(); pending.clear(); }
+  function stopPolling() { if (!poll) return; clearTimeout(poll.timer); const xhr=poll.xhr; poll=null; if(xhr) {pending.delete(xhr);xhr.abort();} }
+  function abortRequests() { stopPolling(); generation++; for (const xhr of pending.keys()) xhr.abort(); pending.clear(); }
   function message(text) { const div = document.createElement('div'); div.className = 'empty-state'; div.textContent = text; screen.replaceChildren(div); }
   function disconnect() {
     token = ''; abortRequests(); document.getElementById('operator-token').value = '';
@@ -23,7 +25,11 @@
     const params = new URLSearchParams(location.search);
     let path='/ui/fragments/'+selected();
     if(selected()==='knowledge') {if(params.has('page_id'))path='/ui/fragments/page?page_id='+encodeURIComponent(params.get('page_id'));else if(params.has('parent_id'))path+='?parent_id='+encodeURIComponent(params.get('parent_id'));}
-    htmx.ajax('GET', path, {target: screen, swap: 'innerHTML'}).catch(() => {});
+    const request=htmx.ajax('GET', path, {target: screen, swap: 'innerHTML'});
+    const current=generation;
+    request.then(()=>{
+      if(token && generation===current && selected()==='operations' && params.has('operation_id')) htmx.ajax('GET','/ui/fragments/operation?operation_id='+encodeURIComponent(params.get('operation_id')),{target:'#operation-detail',swap:'innerHTML'}).catch(()=>{});
+    }).catch(() => {});
   }
   function navigate() {
     abortRequests(); const key = selected();
@@ -39,6 +45,8 @@
   });
   document.getElementById('disconnect').addEventListener('click', disconnect);
   document.addEventListener('click', event => {
+    const operationButton=event.target.closest('[data-open-operation]');
+    if(operationButton){history.pushState(null,'','/ui/operations?operation_id='+encodeURIComponent(operationButton.dataset.openOperation));navigate();return;}
     const snippetButton=event.target.closest('[data-toggle-snippet]');
     if(snippetButton) {const expanded=snippetButton.closest('.evidence-card').classList.toggle('snippet-expanded');snippetButton.setAttribute('aria-expanded',String(expanded));snippetButton.textContent=expanded?'Collapse snippet':'Show full snippet';return;}
     const toggleSources = event.target.closest('[data-toggle-sources]');
@@ -58,15 +66,20 @@
   document.addEventListener('htmx:beforeRequest', event => {
     const url = protectedURL(event.detail.requestConfig.path);
     if (!token || !url) {event.preventDefault(); return;}
-    // Catalog, All pages, and continuation controls replace the same screen.
+    // Whole-screen replacements cancel older reads, including catalog continuation.
     // Advance before aborting so canceled requests cannot display an error.
-    if (event.detail.target === screen && ['/ui/fragments/knowledge', '/ui/fragments/page'].includes(url.pathname)) abortRequests();
+    if (event.detail.target === screen || url.pathname==='/ui/fragments/source') abortRequests();
+    if(url.pathname==='/ui/fragments/operation') {
+      if(issuingPoll && poll) poll.xhr=event.detail.xhr;
+      else abortRequests();
+    }
     pending.set(event.detail.xhr, generation);
   });
   document.addEventListener('htmx:beforeSwap', event => {
     const xhr = event.detail.xhr;
     if (!token || pending.get(xhr) !== generation || !protectedURL(xhr.responseURL)) {event.detail.shouldSwap = false; event.preventDefault(); return;}
     if (xhr.status === 401) {disconnect(); event.detail.shouldSwap = false; event.preventDefault(); return;}
+    if(poll?.xhr===xhr && (xhr.status===0 || xhr.status>=500)) {event.detail.shouldSwap=false;event.preventDefault();return;}
     const error = xhr.getResponseHeader('X-Knowl-Error');
     if (error && [400,403,404,409,413,415,422,500,503].includes(xhr.status)) {event.detail.shouldSwap = true; event.detail.isError = false;}
     else if (xhr.status >= 400) {
@@ -75,14 +88,46 @@
   });
   document.addEventListener('htmx:afterRequest', event => {
     const xhr = event.detail.xhr;
-    if (token && pending.get(xhr) === generation && xhr.status === 0) message('Workspace request failed. Reconnect to retry.');
+    const current=token && pending.get(xhr)===generation;
+    const wasPoll=poll?.xhr===xhr;
+    if(current && wasPoll) {
+      poll.xhr=null;
+      if(xhr.status===0 || xhr.status>=500) {poll.delay=Math.min(poll.delay*2,30000);const note=screen.querySelector('[data-poll-message]');if(note)note.textContent='Refresh unavailable. Retrying shortly.';schedulePoll();}
+      else if(xhr.status===200) adoptOperation();
+      else stopPolling();
+    } else if(current && xhr.status===200 && protectedURL(event.detail.requestConfig.path)?.pathname==='/ui/fragments/operation') adoptOperation();
+    if (current && !wasPoll && xhr.status === 0) message('Workspace request failed. Reconnect to retry.');
     if(token && pending.get(xhr)===generation && xhr.getResponseHeader('X-Knowl-Error')==='snapshot_changed') {
       const url=protectedURL(event.detail.requestConfig.path);if(url && url.searchParams.has('cursor')) {url.searchParams.delete('cursor');htmx.ajax('GET',url.pathname+url.search,{target:screen,swap:'innerHTML'}).catch(()=>{});}
     }
+    if(current && !wasPoll && xhr.status===200 && matchMedia('(max-width:639px)').matches && ['operation','source'].some(name=>protectedURL(event.detail.requestConfig.path)?.pathname==='/ui/fragments/'+name)) event.detail.target.scrollIntoView({block:'start',behavior:'instant'});
     pending.delete(xhr);
   });
   document.addEventListener('htmx:afterSettle', () => {
     for(const snippet of screen.querySelectorAll('.evidence-snippet')) {const toggle=snippet.nextElementSibling;if(toggle?.matches('[data-toggle-snippet]')) toggle.hidden=snippet.scrollHeight<=snippet.clientHeight;}
+  });
+
+  function schedulePoll(delay) {
+    if(!poll || !token || document.hidden || poll.xhr) return;
+    clearTimeout(poll.timer);
+    poll.timer=setTimeout(()=>{
+      if(!poll || !token || document.hidden || poll.xhr) return;
+      issuingPoll=true;
+      try {htmx.ajax('GET',poll.url,{target:'#operation-detail',swap:'innerHTML'}).catch(()=>{});} finally {issuingPoll=false;}
+    },delay===undefined?poll.delay:delay);
+  }
+  function adoptOperation() {
+    const card=screen.querySelector('[data-operation-id]');
+    if(!card || !['queued','running'].includes(card.dataset.operationStatus)) {stopPolling();return;}
+    const url=protectedURL(card.dataset.pollUrl);
+    if(!url || url.pathname!=='/ui/fragments/operation') {stopPolling();return;}
+    if(poll)clearTimeout(poll.timer);
+    poll={url:url.pathname+url.search,delay:2000,timer:null,xhr:null};schedulePoll();
+  }
+  document.addEventListener('visibilitychange',()=>{
+    if(!poll)return;
+    if(document.hidden){clearTimeout(poll.timer);const xhr=poll.xhr;poll.xhr=null;if(xhr){pending.delete(xhr);xhr.abort();}}
+    else schedulePoll(0);
   });
   addEventListener('popstate', navigate);
   addEventListener('pagehide', disconnect);
