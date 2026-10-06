@@ -177,7 +177,7 @@
   document.addEventListener('htmx:beforeSwap', event => {
     const xhr = event.detail.xhr;
     if (!token || pending.get(xhr) !== generation || !protectedURL(xhr.responseURL)) {event.detail.shouldSwap = false; event.preventDefault(); return;}
-    if (xhr.status === 401) {disconnect('Token was rejected or the session expired. Enter a valid operator token.',true); event.detail.shouldSwap = false; event.preventDefault(); return;}
+    if (xhr.status === 401) {disconnect('Token was rejected or the session expired. Paste the exact token value without extra quotes, backticks, or asterisks from copied formatting, then Connect again.',true); event.detail.shouldSwap = false; event.preventDefault(); return;}
     if(poll?.xhr===xhr && (xhr.status===0 || xhr.status>=500)) {event.detail.shouldSwap=false;event.preventDefault();return;}
     const error = xhr.getResponseHeader('X-Knowl-Error');
     const trustedErrors={invalid_request:400,limit_invalid:400,cursor_invalid:400,catalog_not_found:404,page_not_found:404,source_revision_not_found:404,operation_not_found:404,source_not_found:404,snapshot_changed:409,read_limit_exceeded:413,unsupported_format:415,retrieval_failed:503,capability_unavailable:503,not_ready:503,workspace_unavailable:503};
