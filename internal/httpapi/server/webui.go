@@ -17,7 +17,7 @@ const uiInternalErrorCode = "internal_error"
 // NewWebHandler mounts no routes itself. Composition mounts its public shell and
 // protected fragments on the same host listener only when web is enabled.
 func NewWebHandler(service *app.OperatorService, dependencies Dependencies, token string) (http.Handler, error) {
-	ui, err := webui.New(webui.Dependencies{Operator: service,
+	ui, err := webui.New(webui.Dependencies{Operator: service, EmbeddingsEnabled: dependencies.EmbeddingsEnabled,
 		Retrieve: func(ctx context.Context, query string, sources []string) (knowlapi.RetrieveResult, error) {
 			if dependencies.Query == nil {
 				return knowlapi.RetrieveResult{}, app.ErrOperatorCapabilityUnavailable
@@ -27,10 +27,7 @@ func NewWebHandler(service *app.OperatorService, dependencies Dependencies, toke
 				ids[i] = domain.SourceID(source)
 			}
 			result, readErr := dependencies.Query.Query(ctx, dependencies.Scope, strings.TrimSpace(query), domain.ReadLimits{}, ids)
-			if readErr != nil {
-				return knowlapi.RetrieveResult{}, readErr
-			}
-			return safeUIRetrieve(result), nil
+			return safeUIRetrieve(result), readErr
 		},
 		Operation: func(ctx context.Context, id string) (knowlapi.OperationResult, error) {
 			if dependencies.Query == nil {

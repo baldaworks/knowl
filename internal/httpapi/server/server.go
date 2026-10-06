@@ -25,11 +25,12 @@ type Waker interface {
 }
 
 type Dependencies struct {
-	Scope  domain.ScopeRef
-	Ingest *app.IngestService
-	Query  *app.QueryService
-	Ready  func() bool
-	Waker  Waker
+	EmbeddingsEnabled bool
+	Scope             domain.ScopeRef
+	Ingest            *app.IngestService
+	Query             *app.QueryService
+	Ready             func() bool
+	Waker             Waker
 }
 
 func NewHandler(dependencies Dependencies) http.Handler {

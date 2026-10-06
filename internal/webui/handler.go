@@ -10,10 +10,12 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 //go:embed templates/*.html assets
@@ -23,9 +25,10 @@ const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 's
 
 // Dependencies are read-only presentation inputs. They never expose writers.
 type Dependencies struct {
-	Operator  *app.OperatorService
-	Retrieve  func(context.Context, string, []string) (knowlapi.RetrieveResult, error)
-	Operation func(context.Context, string) (knowlapi.OperationResult, error)
+	EmbeddingsEnabled bool
+	Operator          *app.OperatorService
+	Retrieve          func(context.Context, string, []string) (knowlapi.RetrieveResult, error)
+	Operation         func(context.Context, string) (knowlapi.OperationResult, error)
 }
 type Handler struct {
 	templates    *template.Template
@@ -38,7 +41,16 @@ func newHandler(files fs.FS, dependencies Dependencies) (*Handler, error) {
 	if err := validateAssets(files); err != nil {
 		return nil, err
 	}
-	t, err := template.New("ui").Funcs(template.FuncMap{"lower": strings.ToLower}).ParseFS(files, "templates/*.html")
+	t, err := template.New("ui").Funcs(template.FuncMap{
+		"lower":   strings.ToLower,
+		"pageURL": pageURL,
+		"catalogURL": func(id domain.PageID) string {
+			return fragmentURL("knowledge", url.Values{parentIDParameter: {string(id)}})
+		},
+		"rawURL":        func(ref string) string { return fragmentURL("source-revision", url.Values{"source_ref": {ref}}) },
+		"shortRevision": shortRevision,
+		"number":        func(i int) int { return i + 1 },
+	}).ParseFS(files, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse UI templates: %w", err)
 	}
@@ -101,12 +113,25 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
-	case "/ui/fragments/knowledge", "/ui/fragments/search", "/ui/fragments/operations", "/ui/fragments/sources":
-		if len(r.URL.Query()) != 0 {
-			h.Error(w, 400, "invalid_request")
+	case knowledgeFragment, pageFragment, sourceRevisionFragment, searchFragment:
+		if !validFragmentQuery(r) {
+			h.Error(w, 400, errorInvalidRequest)
 			return
 		}
-		h.Error(w, 503, "capability_unavailable")
+		switch r.URL.Path {
+		case knowledgeFragment, pageFragment:
+			h.knowledge(w, r)
+		case sourceRevisionFragment:
+			h.sourceRevision(w, r)
+		case searchFragment:
+			h.search(w, r)
+		}
+	case "/ui/fragments/operations", "/ui/fragments/sources":
+		if len(r.URL.Query()) != 0 {
+			h.Error(w, 400, errorInvalidRequest)
+			return
+		}
+		h.Error(w, 503, errorCapabilityUnavailable)
 	default:
 		h.Error(w, 404, "not_found")
 	}
@@ -116,16 +141,20 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Error(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("X-Knowl-Error", code)
 	messages := map[string]string{
-		"capability_unavailable":   "This workspace view is not available yet.",
-		"invalid_request":          "The request is invalid. Check the selected view and try again.",
-		"unauthorized":             "Reconnect with a valid operator token.",
-		"scope_override_forbidden": "This connection cannot select another workspace.",
-		"not_found":                "The requested workspace view was not found.",
-		"not_ready":                "The workspace is starting. Please try again shortly.",
-		"workspace_unavailable":    "The workspace is temporarily unavailable. Please try again.",
-		"snapshot_changed":         "The workspace changed. Refresh this view to continue.",
-		"read_limit_exceeded":      "This request exceeds the workspace read limit.",
-		"unsupported_format":       "This source format cannot be displayed.",
+		errorCapabilityUnavailable:  "This workspace view is not available yet.",
+		errorInvalidRequest:         "The request is invalid. Check the selected view and try again.",
+		"unauthorized":              "Reconnect with a valid operator token.",
+		"scope_override_forbidden":  "This connection cannot select another workspace.",
+		"not_found":                 "The requested workspace view was not found.",
+		"not_ready":                 "The workspace is starting. Please try again shortly.",
+		errorWorkspaceUnavailable:   "The workspace is temporarily unavailable. Please try again.",
+		errorSnapshotChanged:        "The workspace changed. Refresh this view to continue.",
+		errorReadLimitExceeded:      "This request exceeds the workspace read limit.",
+		errorPageNotFound:           "This published page is no longer available.",
+		errorSourceRevisionNotFound: "This saved source revision is unavailable. No upstream source was fetched.",
+		errorCursorInvalid:          "This continuation expired. Open the first page to continue.",
+		errorLimitInvalid:           "Choose a page size between 1 and 100.",
+		errorUnsupportedFormat:      "This source format cannot be displayed.",
 	}
 	message := messages[code]
 	if message == "" {

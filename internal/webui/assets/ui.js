@@ -20,7 +20,10 @@
   }
   function load() {
     if (!token) return;
-    htmx.ajax('GET', '/ui/fragments/' + selected(), {target: screen, swap: 'innerHTML'}).catch(() => {});
+    const params = new URLSearchParams(location.search);
+    let path='/ui/fragments/'+selected();
+    if(selected()==='knowledge') {if(params.has('page_id'))path='/ui/fragments/page?page_id='+encodeURIComponent(params.get('page_id'));else if(params.has('parent_id'))path+='?parent_id='+encodeURIComponent(params.get('parent_id'));}
+    htmx.ajax('GET', path, {target: screen, swap: 'innerHTML'}).catch(() => {});
   }
   function navigate() {
     abortRequests(); const key = selected();
@@ -36,6 +39,15 @@
   });
   document.getElementById('disconnect').addEventListener('click', disconnect);
   document.addEventListener('click', event => {
+    const snippetButton=event.target.closest('[data-toggle-snippet]');
+    if(snippetButton) {const expanded=snippetButton.closest('.evidence-card').classList.toggle('snippet-expanded');snippetButton.setAttribute('aria-expanded',String(expanded));snippetButton.textContent=expanded?'Collapse snippet':'Show full snippet';return;}
+    const toggleSources = event.target.closest('[data-toggle-sources]');
+    if(toggleSources) {const grid=screen.querySelector('.knowledge-grid');if(grid){if(matchMedia('(max-width:639px)').matches) {if(grid.classList.toggle('mobile-sources-open'))grid.querySelector('.source-panel')?.scrollIntoView({block:'start'});}else grid.classList.toggle('sources-hidden');}return;}
+    if(event.target.closest('[data-toggle-catalog]')) {screen.querySelector('.knowledge-grid')?.classList.toggle('catalog-open');return;}
+    if(event.target.closest('[data-toggle-json]')) {const json=document.getElementById('response-json');if(json) json.hidden=!json.hidden;return;}
+    if(event.target.closest('[data-export-json]')) {const data=document.getElementById('response-json-data');if(data){const url=URL.createObjectURL(new Blob([data.textContent],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='knowl-search.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}return;}
+    const page = event.target.closest('a[href]');
+    if(page && event.button===0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {const u=new URL(page.href,location.href);if(u.origin===location.origin && u.pathname==='/ui/knowledge' && (u.searchParams.has('page_id') || u.searchParams.has('parent_id'))) {event.preventDefault();history.pushState(null,'',u.pathname+u.search);navigate();return;}}
     const link = event.target.closest('[data-screen]'); if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault(); history.pushState(null, '', '/ui/' + link.dataset.screen); navigate();
   });
@@ -60,7 +72,13 @@
   document.addEventListener('htmx:afterRequest', event => {
     const xhr = event.detail.xhr;
     if (token && pending.get(xhr) === generation && xhr.status === 0) message('Workspace request failed. Reconnect to retry.');
+    if(token && pending.get(xhr)===generation && xhr.getResponseHeader('X-Knowl-Error')==='snapshot_changed') {
+      const url=protectedURL(event.detail.requestConfig.path);if(url && url.searchParams.has('cursor')) {url.searchParams.delete('cursor');htmx.ajax('GET',url.pathname+url.search,{target:screen,swap:'innerHTML'}).catch(()=>{});}
+    }
     pending.delete(xhr);
+  });
+  document.addEventListener('htmx:afterSettle', () => {
+    for(const snippet of screen.querySelectorAll('.evidence-snippet')) {const toggle=snippet.nextElementSibling;if(toggle?.matches('[data-toggle-snippet]')) toggle.hidden=snippet.scrollHeight<=snippet.clientHeight;}
   });
   addEventListener('popstate', navigate);
   addEventListener('pagehide', disconnect);

@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestMarkdownDeniesActiveContentAndPrivateURIs(t *testing.T) {
 			headings++
 		case "a":
 			for _, a := range n.Attr {
-				if a.Key == "href" {
+				if a.Key == linkHrefAttribute {
 					links++
 					if a.Val != "https://example.com/doc" {
 						t.Errorf("unsafe link %q", a.Val)
@@ -44,5 +45,34 @@ func TestMarkdownDeniesActiveContentAndPrivateURIs(t *testing.T) {
 	})
 	if headings != 1 || links != 1 {
 		t.Fatalf("headings=%d safe links=%d", headings, links)
+	}
+}
+
+func TestCanonicalMarkdownBodyAndLinks(t *testing.T) {
+	input := "---\ntype: topic\ntitle: Article\nknowl:\n  id: concepts/article\n---\n# Article\n\n[related](other.md) [escape](../../private.md) [asset](secret.png) [external](https://user:pass@example.com/a?secret=1)\n\n[[wiki/concepts/second.md|Second]] `[[concepts/code]]`"
+	rendered, err := renderPageMarkdown(input, "concepts/article")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := html.Parse(strings.NewReader(string(rendered)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	walk(doc, func(n *html.Node) {
+		if n.Data == "a" {
+			for _, a := range n.Attr {
+				if a.Key == linkHrefAttribute {
+					got[nodeText(n)] = a.Val
+				}
+			}
+		}
+		if n.Data == "hr" {
+			t.Error("front matter rendered as article")
+		}
+	})
+	want := map[string]string{"related": "/ui/knowledge?page_id=concepts%2Fother", "external": "https://example.com/a", "Second": "/ui/knowledge?page_id=concepts%2Fsecond"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("links=%v want %v", got, want)
 	}
 }
