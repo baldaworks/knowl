@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
@@ -278,41 +279,38 @@ func (workspace *Workspace) inspectRawSources(ctx context.Context, scope knowl.S
 }
 
 func (workspace *Workspace) inspectRawSourcesLocked(scope knowl.ScopeRef) ([]knowl.RawSourceRecord, error) {
-	rawRoot := filepath.Join(workspace.root, workspaceRawDir)
-	if err := rejectSymlinkPath(workspace.root, rawRoot); err != nil {
+	raw, err := openReadRoot(workspace.root, workspaceRawDir)
+	if err != nil {
 		return nil, err
 	}
+	defer raw.close()
 	states := make(map[string]*rawDirectoryState)
-	err := filepath.WalkDir(rawRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlink in raw source tree: %w", ErrPathRejected)
-		}
+	err = raw.walk(func(rawRelative string, entry fs.DirEntry) error {
 		if entry.IsDir() {
 			return nil
 		}
-		relative, relErr := filepath.Rel(workspace.root, path)
-		if relErr != nil {
-			return relErr
+		if !entry.Type().IsRegular() {
+			return ErrPathRejected
 		}
-		relative = filepath.ToSlash(relative)
+		relative := workspaceRawDir + "/" + rawRelative
 		directory := filepath.ToSlash(filepath.Dir(relative))
 		state := states[directory]
 		if state == nil {
 			state = &rawDirectoryState{relative: directory}
 			states[directory] = state
 		}
-		switch filepath.Base(path) {
+		switch entry.Name() {
 		case "source":
 			state.hasSource = true
 		case "manifest.yaml":
 			state.hasManifest = true
 			record := &knowl.RawSourceRecord{Path: relative}
 			state.record = record
-			manifestBytes, readErr := os.ReadFile(path)
+			manifestBytes, _, readErr := raw.read(rawRelative, knowl.ReadLimits{}, maxStageManifestBytes)
 			if readErr != nil {
+				if errors.Is(readErr, ErrPathRejected) || errors.Is(readErr, app.ErrOperatorReadLimitExceeded) {
+					return readErr
+				}
 				record.ErrorClass = "manifest_unreadable"
 				return nil
 			}
@@ -326,32 +324,25 @@ func (workspace *Workspace) inspectRawSourcesLocked(scope knowl.ScopeRef) ([]kno
 				state.record = nil
 				return nil
 			}
-			record.Valid = validSourceManifest(manifest)
+			record.Valid = validSourceManifest(manifest) && relative == record.Source.ManifestRef
 			if !record.Valid {
 				record.ErrorClass = "manifest_invalid"
 				return nil
 			}
-			sourcePath := filepath.Join(filepath.Dir(path), "source")
-			info, statErr := os.Stat(sourcePath)
-			if errors.Is(statErr, os.ErrNotExist) {
-				record.Valid = false
-				record.ErrorClass = "source_missing"
-				return nil
-			}
-			if statErr != nil {
-				record.Valid = false
-				record.ErrorClass = "source_unreadable"
-				return nil
-			}
-			if info.Size() > int64(workspace.maxSourceBytes) {
-				record.Valid = false
-				record.ErrorClass = "source_too_large"
-				return nil
-			}
-			content, contentErr := os.ReadFile(sourcePath)
+			content, _, contentErr := raw.read(filepath.ToSlash(filepath.Join(filepath.Dir(rawRelative), "source")), knowl.ReadLimits{}, workspace.maxSourceBytes)
 			if contentErr != nil {
+				if errors.Is(contentErr, ErrPathRejected) {
+					return contentErr
+				}
 				record.Valid = false
-				record.ErrorClass = "source_unreadable"
+				switch {
+				case errors.Is(contentErr, os.ErrNotExist):
+					record.ErrorClass = "source_missing"
+				case errors.Is(contentErr, app.ErrOperatorReadLimitExceeded):
+					record.ErrorClass = "source_too_large"
+				default:
+					record.ErrorClass = "source_unreadable"
+				}
 				return nil
 			}
 			record.ContentDigest = digestBytes(content)
