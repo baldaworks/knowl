@@ -53,9 +53,15 @@
     if (xhr.status === 401) {disconnect(); event.detail.shouldSwap = false; event.preventDefault(); return;}
     const error = xhr.getResponseHeader('X-Knowl-Error');
     if (error && [400,403,404,409,413,415,422,500,503].includes(xhr.status)) {event.detail.shouldSwap = true; event.detail.isError = false;}
+    else if (xhr.status >= 400) {
+      event.detail.shouldSwap = false; event.preventDefault(); message('Workspace request failed. Reconnect to retry.');
+    }
   });
-  document.addEventListener('htmx:afterRequest', event => {pending.delete(event.detail.xhr);});
-  document.addEventListener('htmx:sendError', () => {if(token) message('Workspace request failed. Reconnect to retry.');});
+  document.addEventListener('htmx:afterRequest', event => {
+    const xhr = event.detail.xhr;
+    if (token && pending.get(xhr) === generation && xhr.status === 0) message('Workspace request failed. Reconnect to retry.');
+    pending.delete(xhr);
+  });
   addEventListener('popstate', navigate);
   addEventListener('pagehide', disconnect);
   addEventListener('pageshow', event => {if(event.persisted) disconnect();});
