@@ -36,6 +36,25 @@ const {chromium}=require(process.env.KNOWL_PLAYWRIGHT_MODULE||'playwright');
   await page.setViewportSize({width:992,height:844});await page.waitForFunction(()=>!document.getElementById('workspace-navigation').inert);assert.equal(await page.locator('.app-sidebar').evaluate(e=>e.inert),false);assert.equal(await page.locator('.app-main').evaluate(e=>e.inert),false);
   await page.setViewportSize({width:991,height:844});await page.waitForFunction(()=>document.getElementById('workspace-navigation').inert);assert.equal(await page.locator('.app-sidebar').evaluate(e=>e.inert),true);
  });
+ await check('open drawer breakpoint closes mobile return and preserves useful focus',async()=>{
+  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.getElementById('workspace-navigation').inert);
+  await page.locator('#navigation-toggle').click();await page.locator('#navigation-close').focus();
+  await page.setViewportSize({width:1024,height:844});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const desktopFocus=await page.locator('#navigation-toggle').evaluate(e=>e===document.activeElement);
+  assert.equal(await page.locator('.app-sidebar').evaluate(e=>e.inert),false,'desktop navigation remains available');
+  assert.equal(await page.locator('#navigation-toggle').getAttribute('aria-expanded'),'true');
+  assert.equal(await page.locator('.app-main').evaluate(e=>e.inert),false);
+  assert.equal(await page.locator('.app-sidebar').getAttribute('aria-modal'),null);
+  await page.setViewportSize({width:390,height:844});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.locator('.app-sidebar').evaluate(e=>e.inert),true,'return to mobile starts drawer closed');
+  assert.equal(await page.locator('.app-main').evaluate(e=>e.inert),false,'return to mobile releases workspace');
+  assert.equal(await page.locator('.app-sidebar').getAttribute('aria-modal'),null);
+  assert.equal(await page.locator('#navigation-toggle').getAttribute('aria-expanded'),'false');
+  assert.equal(desktopFocus,true,'hidden desktop close control returns focus to navigation toggle');
+ });
+ await page.evaluate(()=>adminlte.PushMenu.getOrCreateInstance(document.getElementById('workspace-navigation')).collapse());
  for(const width of [320,390,640,768,1024,1366,1920]){
   await page.setViewportSize({width,height:900});
   await check('header and layout at '+width,async()=>{

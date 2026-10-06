@@ -22,6 +22,17 @@
   const compact = matchMedia('(max-width:639px)');
   const pushMenu = adminlte.PushMenu.getOrCreateInstance(sidebar);
   const backgrounds = [...document.querySelectorAll('.app-header,.app-main,.app-footer')];
+  // Browsers can drop focus to BODY before a breakpoint's change event fires.
+  let responsiveFocus = null;
+  document.addEventListener('focusin',event=>{
+    responsiveFocus=event.target instanceof HTMLElement && event.target.matches('#navigation-close,[data-toggle-catalog]')?event.target:null;
+  });
+  function restoreResponsiveFocus() {
+    if(responsiveFocus?.isConnected && !isVisible(responsiveFocus)) {
+      const destination=responsiveFocus.id==='navigation-close'?navToggle:document.getElementById('screen-title');
+      if(isVisible(destination))destination.focus({preventScroll:true});
+    }
+  }
   function syncNavigation() {
     const connected = connectionState === 'connected';
     const open = connected && !pushMenu.isCollapsed();
@@ -34,6 +45,7 @@
     navToggle.hidden = !connected; navToggle.setAttribute('aria-expanded',String(open));
     if (modal) {sidebar.setAttribute('role','dialog');sidebar.setAttribute('aria-modal','true');if(!wasModal)(sidebar.querySelector('[aria-current="page"]') || document.getElementById('navigation-close')).focus();}
     else {sidebar.removeAttribute('role');sidebar.removeAttribute('aria-modal');}
+    restoreResponsiveFocus();
   }
   sidebar.addEventListener('open.lte.push-menu',event=>{if(connectionState!=='connected')event.preventDefault();});
   sidebar.addEventListener('opened.lte.push-menu',syncNavigation);
@@ -48,7 +60,17 @@
     if(event.shiftKey && document.activeElement===first){event.preventDefault();last.focus();}
     else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first.focus();}
   });
-  mobile.addEventListener('change',syncNavigation);
+  mobile.addEventListener('change',()=>{
+    // The vendor retains sidebar-open on desktop; normalize via its shared API.
+    if(mobile.matches)pushMenu.collapse();
+    else if(pushMenu.isExplicitlyOpen()) {
+      const focused=document.activeElement;
+      pushMenu.collapse();
+      if(connectionState==='connected')pushMenu.expand();
+      if(sidebar.contains(focused) && isVisible(focused))focused.focus({preventScroll:true});
+    }
+    syncNavigation();
+  });
   function setConnectionState(state, feedback = '', invalid = false) {
     connectionState=state;document.body.dataset.connectionState=state;
     const connected=state==='connected', connecting=state==='connecting';
@@ -190,6 +212,7 @@
       control?.setAttribute('aria-expanded',String(isVisible(element)));
       if(element && !isVisible(element) && element.contains(document.activeElement)) (isVisible(control)?control:document.getElementById('screen-title')).focus({preventScroll:true});
     }
+    restoreResponsiveFocus();
   }
   compact.addEventListener('change',syncDisclosures);
   document.addEventListener('htmx:afterSettle', () => {

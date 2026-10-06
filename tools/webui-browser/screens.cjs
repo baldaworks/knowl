@@ -123,7 +123,12 @@ async function latestKnowledgeSelection(page, continuation) {
   assert.ok(Math.abs((await page.evaluate(()=>scrollY))-reading)<3);
   await page.locator('[data-toggle-catalog]').click();assert.equal(await page.locator('.catalog-panel').isVisible(),true);
   assert.equal(await page.locator('[data-toggle-catalog]').getAttribute('aria-expanded'),'true');
-  await page.setViewportSize({width:640,height:844});assert.equal(await page.locator('[data-toggle-catalog]').getAttribute('aria-expanded'),'true');
+  await page.locator('[data-toggle-catalog]').focus();
+  await page.setViewportSize({width:768,height:844});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.locator('[data-toggle-catalog]').isVisible(),false);
+  assert.equal(await page.locator('#screen-title').evaluate(e=>e===document.activeElement),true,'hidden catalog opener returns focus to screen heading');
+  assert.equal(await page.locator('[data-toggle-catalog]').getAttribute('aria-expanded'),'true');
   await page.setViewportSize({width:390,height:844});
   await page.evaluate(()=>document.querySelector('[data-screen="search"]').click());await page.locator('#search-form').waitFor();
   assert.equal(await page.locator('#query').inputValue(),'');assert.equal(await page.locator('.evidence-card').count(),0);
