@@ -87,8 +87,21 @@ func TestOperatorRuntimeEnabledAndDisabled(t *testing.T) {
 			if got := request("/v1/retrieve?query=example", ""); got != 401 {
 				t.Fatalf("existing auth: %d", got)
 			}
-			if got := request("/ui/fragments/knowledge", ""); got != 404 {
-				t.Fatalf("unmounted fragments: %d", got)
+			want = 404
+			if enabled {
+				want = 401
+			}
+			if got := request("/ui/fragments/knowledge", ""); got != want {
+				t.Fatalf("fragments auth: %d", got)
+			}
+			want = 404
+			if enabled {
+				want = 200
+			}
+			for _, path := range []string{"/ui/knowledge", "/ui/search", "/ui/operations", "/ui/sources", "/ui/assets/knowl-logo.png"} {
+				if got := request(path, ""); got != want {
+					t.Fatalf("shell %s: %d", path, got)
+				}
 			}
 			if _, err := host.Operator().PageSummaries(t.Context(), app.OperatorListOptions{}); err != nil {
 				t.Fatal(err)

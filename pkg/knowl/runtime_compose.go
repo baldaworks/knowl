@@ -296,6 +296,11 @@ func newHost(runtime composedRuntime) (*Host, error) {
 	mux.Handle("/v1/", httpserver.WithOperatorAuth(httpHandler, runtime.config.OperatorToken))
 	mux.Handle("/", httpHandler)
 	if runtime.config.Web.Enabled {
+		ui, uiErr := httpserver.NewWebHandler(host.operator, httpserver.Dependencies{Scope: runtime.config.Scope, Query: runtime.query, Ready: host.Ready}, runtime.config.OperatorToken)
+		if uiErr != nil {
+			return nil, fmt.Errorf("compose web UI: %w", uiErr)
+		}
+		mux.Handle("/ui/", ui)
 		mux.Handle("/operator/v1/", httpserver.WithOperatorAuth(httpserver.NewOperatorHandler(host.operator, host.Ready), runtime.config.OperatorToken))
 	}
 	host.handler = mux
