@@ -4,6 +4,8 @@
   let token = '', generation = 0, connectionState = 'disconnected', focusScreen = false;
   let sourcesOpener = null, sourcesScroll = 0;
   const pending = new Map();
+	let knownNavigation = false;
+	let catalogDepth = 16, currentTrail = [];
   let poll = null, issuingPoll = false;
   const screen = document.getElementById('screen');
   const names = {knowledge: 'Knowledge', search: 'Search', operations: 'Operations', sources: 'Sources'};
@@ -88,7 +90,7 @@
   }
   function disconnect(feedback = '', invalid = false, focus = true) {
     token = ''; abortRequests(); document.getElementById('operator-token').value = '';
-    sourcesOpener=null;screen.replaceChildren();
+    sourcesOpener=null;knownNavigation=false;currentTrail=[];screen.replaceChildren();
     setConnectionState('disconnected',feedback,invalid);
     if(focus)document.getElementById('operator-token').focus({preventScroll:true});
   }
@@ -101,7 +103,12 @@
     if (!token) return;
     const params = new URLSearchParams(location.search);
     let path='/ui/fragments/'+selected();
-    if(selected()==='knowledge') {if(params.has('page_id'))path='/ui/fragments/page?page_id='+encodeURIComponent(params.get('page_id'));else if(params.has('parent_id'))path+='?parent_id='+encodeURIComponent(params.get('parent_id'));}
+    if(selected()==='knowledge') {
+      const query=new URLSearchParams();
+      for(const key of ['page_id','parent_id','view','limit','cursor'])if(params.has(key))query.set(key,params.get(key));
+      if(params.has('page_id'))path='/ui/fragments/page';
+      if(query.size)path+='?'+query;
+    }
     const request=htmx.ajax('GET', path, {target: screen, swap: 'innerHTML'});
     const current=generation;
     request.then(()=>{
@@ -114,6 +121,28 @@
     document.getElementById('header-view').textContent = names[key]; document.getElementById('screen-description').textContent = descriptions[key];
     for (const link of document.querySelectorAll('[data-screen]')) {link.classList.toggle('active', link.dataset.screen === key); if(link.dataset.screen === key) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');}
     message(token ? 'Loading workspace…' : 'Connect to load workspace data.'); load();
+  }
+  function navigationState(url) {
+    if(url.pathname!=='/ui/knowledge' || url.searchParams.has('view'))return null;
+    const target=url.searchParams.get('parent_id');
+    if(!target)return {catalogIds:[]};
+    let trail=currentTrail.slice(0,catalogDepth);
+    const existing=trail.indexOf(target);
+    if(existing>=0)trail=trail.slice(0,existing+1);
+    else if(trail.length<catalogDepth)trail.push(target);
+    else trail=[target];
+    return {catalogIds:trail};
+  }
+  function adoptKnowledge() {
+    const nav=screen.querySelector('nav[aria-label="Breadcrumb"]');
+    if(!nav)return;
+    catalogDepth=Math.min(16,Number(nav.dataset.maxDepth)||16);
+    try {
+      const ids=JSON.parse(nav.dataset.catalogTrail);
+      currentTrail=Array.isArray(ids) && ids.length<=catalogDepth && ids.every(id=>typeof id==='string')?ids:[];
+    } catch {currentTrail=[];}
+    knownNavigation=true;
+    history.replaceState({catalogIds:currentTrail},'',location.href);
   }
   document.getElementById('connect-form').addEventListener('submit', event => {
     event.preventDefault(); const value = document.getElementById('operator-token').value.trim(); disconnect('',false,false); if (!value) return;
@@ -143,13 +172,21 @@
     if(jsonToggle) {const json=document.getElementById('response-json');if(json){json.hidden=!json.hidden;jsonToggle.setAttribute('aria-expanded',String(!json.hidden));}return;}
     if(event.target.closest('[data-export-json]')) {const data=document.getElementById('response-json-data');if(data){const url=URL.createObjectURL(new Blob([data.textContent],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='knowl-search.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}return;}
     const page = event.target.closest('a[href]');
-    if(page && event.button===0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {const u=new URL(page.href,location.href);if(u.origin===location.origin && u.pathname==='/ui/knowledge' && (page.classList.contains('brand-link') || u.searchParams.has('page_id') || u.searchParams.has('parent_id'))) {event.preventDefault();if(connectionState!=='connected')return;if(mobile.matches)pushMenu.collapse();history.pushState(null,'',u.pathname+u.search);navigate();return;}}
+    if(page && event.button===0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !page.target && !page.hasAttribute('download')) {const u=new URL(page.href,location.href);if(u.origin===location.origin && u.pathname==='/ui/knowledge') {event.preventDefault();if(connectionState!=='connected')return;if(mobile.matches)pushMenu.collapse();history.pushState(navigationState(u),'',u.pathname+u.search);navigate();return;}}
     const link = event.target.closest('[data-screen]'); if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault(); if(connectionState!=='connected')return;if(mobile.matches)pushMenu.collapse();history.pushState(null, '', '/ui/' + link.dataset.screen); navigate();
   });
   document.addEventListener('htmx:configRequest', event => {
     if (!token || !protectedURL(event.detail.path) || event.detail.verb !== 'get') {event.preventDefault(); return;}
     event.detail.headers.Authorization = 'Bearer ' + token;
+    const path=protectedURL(event.detail.path).pathname;
+    const ids=history.state?.catalogIds;
+    if(knownNavigation && ['/ui/fragments/knowledge','/ui/fragments/page'].includes(path) && Array.isArray(ids) && ids.length>0 && ids.length<=catalogDepth && ids.every(id=>typeof id==='string' && id.length<=2048)) {
+      // XHR headers use bytes. ASCII JSON escapes preserve every UTF-16 code
+      // unit, including Latin-1 and surrogate pairs, without HTMX URI encoding.
+      const trail=JSON.stringify(ids).replace(/[^\x20-\x7e]/g,character=>'\\u'+character.charCodeAt(0).toString(16).padStart(4,'0'));
+      if(trail.length<=32768)event.detail.headers['X-Knowl-Catalog-Trail']=trail;
+    }
   });
   document.addEventListener('htmx:beforeRequest', event => {
     const url = protectedURL(event.detail.requestConfig.path);
@@ -200,7 +237,7 @@
     } else if(current && xhr.status===200 && protectedURL(event.detail.requestConfig.path)?.pathname==='/ui/fragments/operation') adoptOperation();
     if (current && !wasPoll) {event.detail.target.removeAttribute('aria-busy');if(xhr.status===0)requestFailed(event.detail.target);}
     if(token && pending.get(xhr)===generation && xhr.getResponseHeader('X-Knowl-Error')==='snapshot_changed') {
-      const url=protectedURL(event.detail.requestConfig.path);if(url && url.searchParams.has('cursor')) {url.searchParams.delete('cursor');htmx.ajax('GET',url.pathname+url.search,{target:screen,swap:'innerHTML'}).catch(()=>{});}
+      const url=protectedURL(event.detail.requestConfig.path);if(url && url.searchParams.has('cursor')) {url.searchParams.delete('cursor');if(selected()==='knowledge'){const shell=new URL(location.href);shell.searchParams.delete('cursor');history.replaceState(history.state,'',shell.pathname+shell.search);}htmx.ajax('GET',url.pathname+url.search,{target:screen,swap:'innerHTML'}).catch(()=>{});}
     }
     if(current && !wasPoll && xhr.status===200 && matchMedia('(max-width:639px)').matches && ['operation','source'].some(name=>protectedURL(event.detail.requestConfig.path)?.pathname==='/ui/fragments/'+name)) {event.detail.target.scrollIntoView({block:'start',behavior:'instant'});if(!wasPoll)event.detail.target.focus({preventScroll:true});}
     pending.delete(xhr);
@@ -215,7 +252,10 @@
     restoreResponsiveFocus();
   }
   compact.addEventListener('change',syncDisclosures);
-  document.addEventListener('htmx:afterSettle', () => {
+  document.addEventListener('htmx:afterSwap', event => {
+    if(event.detail.target===screen && selected()==='knowledge')adoptKnowledge();
+  });
+  document.addEventListener('htmx:afterSettle', event => {
     syncDisclosures();
     if(focusScreen && connectionState==='connected'){document.getElementById('screen-title').focus({preventScroll:true});focusScreen=false;}
     for(const snippet of screen.querySelectorAll('.evidence-snippet')) {const toggle=snippet.nextElementSibling;if(toggle?.matches('[data-toggle-snippet]')) toggle.hidden=snippet.scrollHeight<=snippet.clientHeight;}

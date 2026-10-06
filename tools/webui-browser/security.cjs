@@ -145,7 +145,11 @@ const origin = process.env.KNOWL_BROWSER_URL;
     assert.deepEqual(storage.local, {});
     for(const [key,value] of Object.entries(storage.session)) {assert.equal(key,'htmx-current-path-for-history');assert.ok(value.startsWith('/ui/'));}
     assert.equal((await context.cookies()).length, 0);
-    assert.equal(await page.evaluate(() => history.state), null);
+    const state=await page.evaluate(() => history.state);
+    if(state!==null) {
+      assert.deepEqual(Object.keys(state),['catalogIds']);assert.ok(Array.isArray(state.catalogIds) && state.catalogIds.length<=16);
+      for(const id of state.catalogIds) {assert.equal(typeof id,'string');assert.ok(id.length<=2048 && (id==='index' || id.endsWith('/index')));assert.equal(/[\\%?#:\s]/.test(id),false);}
+    }
     assert.deepEqual(errors, []); assert.deepEqual(violations, []);
     assert.ok(requests.some(r=>r.headers.authorization==='Bearer browser-secret-token'));
     for(const r of requests) {

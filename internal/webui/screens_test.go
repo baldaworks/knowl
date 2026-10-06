@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 func TestSearchExplicitSubmissionSharesResult(t *testing.T) {
@@ -103,6 +105,7 @@ func TestSearchFailedDiagnosticsArePreserved(t *testing.T) {
 
 const screenSnapshot = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const screenSourceRef = "git:docs/guide@accepted"
+const screenRootTitle = "Topics"
 
 type screenReader struct {
 	invalidateContinuation      bool
@@ -110,15 +113,45 @@ type screenReader struct {
 	calls                       int
 	snapshot, body              string
 	empty                       bool
+	catalogs                    map[domain.PageID]app.OperatorCatalogRead
+	pages                       map[domain.PageID]domain.OperatorPage
+	catalogErrors               map[domain.PageID]error
+	pageIDs                     []domain.PageID
+	catalogReads                int
 }
 
-func (f *screenReader) CatalogChildren(_ context.Context, _ domain.ScopeRef, _ domain.PageID, o app.OperatorReadOptions) (app.OperatorCatalogRead, error) {
+func (f *screenReader) CatalogChildren(_ context.Context, _ domain.ScopeRef, parent domain.PageID, o app.OperatorReadOptions) (app.OperatorCatalogRead, error) {
 	f.calls++
+	f.catalogReads++
+	if f.catalogs != nil {
+		if parent == "" {
+			parent = renderTestRootID
+		}
+		if err := f.catalogErrors[parent]; err != nil {
+			return app.OperatorCatalogRead{}, err
+		}
+		catalog, exists := f.catalogs[parent]
+		if !exists {
+			return app.OperatorCatalogRead{}, app.ErrOperatorCatalogNotFound
+		}
+		catalog.Children.SnapshotVersion = f.snapshot
+		items := catalog.Children.Items
+		start := 0
+		for start < len(items) && string(items[start].ID) <= o.Continuation.Key {
+			start++
+		}
+		end := min(start+o.Limit, len(items))
+		catalog.Children.Items = items[start:end]
+		if end < len(items) {
+			catalog.Children.NextKey = string(items[end-1].ID)
+		}
+		return catalog, nil
+	}
 	items := []domain.OperatorCatalogChild{{ID: screenArticleID, Title: screenArticleTitle, Kind: pageKind}}
 	if f.empty {
 		items = nil
 	}
-	return app.OperatorCatalogRead{Parent: domain.OperatorCatalogSummary{ID: "index", Title: "Topics"}, Children: app.OperatorReadPage[domain.OperatorCatalogChild]{Items: items, SnapshotVersion: f.snapshot}}, f.catalogErr
+	return app.OperatorCatalogRead{Parent: domain.OperatorCatalogSummary{ID: "index", Title: screenRootTitle}, Children: app.OperatorReadPage[domain.OperatorCatalogChild]{Items: items, SnapshotVersion: f.snapshot}}, f.catalogErr
 }
 func (f *screenReader) PageSummaries(_ context.Context, _ domain.ScopeRef, o app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorPageSummary], error) {
 	f.calls++
@@ -134,6 +167,17 @@ func (f *screenReader) PageSummaries(_ context.Context, _ domain.ScopeRef, o app
 }
 func (f *screenReader) Page(_ context.Context, _ domain.ScopeRef, id domain.PageID, _ domain.ReadLimits) (domain.OperatorPage, error) {
 	f.calls++
+	f.pageIDs = append(f.pageIDs, id)
+	if f.pages != nil {
+		page, exists := f.pages[id]
+		if !exists {
+			return domain.OperatorPage{}, app.ErrPageNotFound
+		}
+		return page, f.pageErr
+	}
+	if id == renderTestRootID {
+		return domain.OperatorPage{ID: id, Title: screenRootTitle, Markdown: "# Topics\n", Digest: screenSnapshot, Version: screenSnapshot}, f.pageErr
+	}
 	return domain.OperatorPage{ID: id, Title: screenArticleTitle, Markdown: f.body, Digest: screenSnapshot, Version: screenSnapshot, RelatedPageIDs: []domain.PageID{"concepts/other"}, Sources: []domain.OperatorPageSource{{SourceRef: screenSourceRef, Revision: "accepted", OriginalURI: "file:///private/source"}}}, f.pageErr
 }
 func (f *screenReader) SourceRevision(_ context.Context, _ domain.ScopeRef, ref string, _ domain.ReadLimits) (domain.OperatorSourceRevision, error) {
@@ -168,7 +212,7 @@ func fragmentDocument(t *testing.T, h *Handler, path string) (*httptest.Response
 func TestKnowledgeCurrentPageAndImmutableRaw(t *testing.T) {
 	f := &screenReader{snapshot: screenSnapshot, body: "# Article\n\nCurrent body"}
 	h := screenHandler(t, f)
-	r, doc := fragmentDocument(t, h, knowledgeFragment)
+	r, doc := fragmentDocument(t, h, pageFragment+"?"+url.Values{pageIDParameter: {screenArticleID}}.Encode())
 	if r.Code != 200 {
 		t.Fatalf("status=%d", r.Code)
 	}
@@ -259,9 +303,9 @@ func TestKnowledgeSnapshotContinuation(t *testing.T) {
 	}
 	var next string
 	walk(doc, func(n *html.Node) {
-		if n.Data == "button" && nodeText(n) == "Next pages" {
+		if n.DataAtom == atom.A && nodeText(n) == "Next pages" {
 			for _, a := range n.Attr {
-				if a.Key == hxGetAttribute {
+				if a.Key == linkHrefAttribute {
 					next = a.Val
 				}
 			}
@@ -271,7 +315,11 @@ func TestKnowledgeSnapshotContinuation(t *testing.T) {
 		t.Fatal("missing continuation")
 	}
 	f.snapshot = strings.Repeat("b", 64)
-	r, _ = fragmentDocument(t, h, next)
+	u, err := url.Parse(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ = fragmentDocument(t, h, knowledgeFragment+"?"+u.RawQuery)
 	if r.Code != 409 || r.Header().Get("X-Knowl-Error") != errorSnapshotChanged {
 		t.Fatalf("stale status=%d header=%v", r.Code, r.Header())
 	}
@@ -280,7 +328,7 @@ func TestKnowledgeEmptyAndUncataloguedRemainDistinct(t *testing.T) {
 	for _, tc := range []struct {
 		err     error
 		heading string
-	}{{nil, "No pages here yet"}, {app.ErrOperatorCatalogNotFound, "No catalog available"}} {
+	}{{nil, screenRootTitle}, {app.ErrOperatorCatalogNotFound, "No catalog available"}} {
 		f := &screenReader{snapshot: screenSnapshot, empty: true, catalogErr: tc.err}
 		r, doc := fragmentDocument(t, screenHandler(t, f), knowledgeFragment)
 		if r.Code != 200 {
@@ -288,7 +336,7 @@ func TestKnowledgeEmptyAndUncataloguedRemainDistinct(t *testing.T) {
 		}
 		found := false
 		walk(doc, func(n *html.Node) {
-			if n.Data == "h2" && nodeText(n) == tc.heading {
+			if (n.DataAtom == atom.H1 || n.DataAtom == atom.H2) && nodeText(n) == tc.heading {
 				found = true
 			}
 		})

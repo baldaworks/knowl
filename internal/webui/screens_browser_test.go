@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,11 +17,27 @@ import (
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 func TestBrowserKnowledgeSearch(t *testing.T) {
 	fixture := &screenReader{snapshot: screenSnapshot, invalidateContinuation: true, body: "---\ntype: topic\ntitle: Article\n---\n# Article\n\nCurrent published body. [[concepts/other]]" + strings.Repeat("\n\nPublished paragraph for responsive reading and saved-source focus restoration.", 24)}
+	canonical := canonicalKnowledgeFixture()
+	fixture.catalogs, fixture.pages = canonical.catalogs, canonical.pages
+	for _, id := range []domain.PageID{screenArticleID, "concepts/other"} {
+		fixture.pages[id] = domain.OperatorPage{ID: id, Title: screenArticleTitle, Markdown: fixture.body, Digest: screenSnapshot, Version: screenSnapshot, Metadata: &domain.OperatorPageMetadata{Type: "topic"}, Sources: []domain.OperatorPageSource{{SourceRef: screenSourceRef, Revision: "accepted"}}}
+	}
+	longTitle := strings.Repeat("CanonicalDocumentTitle", 8)
+	fixture.catalogs["catalogs/long/index"] = app.OperatorCatalogRead{Parent: domain.OperatorCatalogSummary{ID: "catalogs/long/index", Title: longTitle}, Children: app.OperatorReadPage[domain.OperatorCatalogChild]{}}
+	fixture.pages["catalogs/long/index"] = domain.OperatorPage{ID: "catalogs/long/index", Title: longTitle, Markdown: "# " + longTitle + "\n", Digest: screenSnapshot, Version: screenSnapshot}
+	unicodeID := domain.PageID("catalogs/архитектура/🦉/index")
+	fixture.catalogs[unicodeID] = app.OperatorCatalogRead{Parent: domain.OperatorCatalogSummary{ID: unicodeID, Title: "Unicode catalog"}, Children: app.OperatorReadPage[domain.OperatorCatalogChild]{Items: []domain.OperatorCatalogChild{{ID: knowledgeDistantLeaf, Title: knowledgeDistantTitle, Kind: pageKind}}}}
+	fixture.pages[unicodeID] = domain.OperatorPage{ID: unicodeID, Title: "Unicode catalog", Markdown: "# Unicode catalog\n\n* [Distant leaf](../../../sources/distant/leaf.md)\n", Digest: screenSnapshot, Version: screenSnapshot}
+	root := fixture.catalogs[rootCatalogID]
+	root.Children.Items = append(root.Children.Items, domain.OperatorCatalogChild{ID: unicodeID, Title: "Unicode catalog", Kind: "catalog"})
+	slices.SortFunc(root.Children.Items, func(a, b domain.OperatorCatalogChild) int { return strings.Compare(string(a.ID), string(b.ID)) })
+	fixture.catalogs[rootCatalogID] = root
 	ui := screenHandler(t, fixture)
 	reader := &responsiveScreenReader{fixture}
 	operator, err := app.NewOperatorService("trusted", app.OperatorReaders{Catalogs: reader, Pages: reader, Page: reader, Revisions: reader}, app.OperatorOptions{})
@@ -74,6 +91,8 @@ type responsiveScreenReader struct{ *screenReader }
 
 func (f *responsiveScreenReader) Page(ctx context.Context, scope domain.ScopeRef, id domain.PageID, limits domain.ReadLimits) (domain.OperatorPage, error) {
 	page, err := f.screenReader.Page(ctx, scope, id, limits)
-	page.Sources = append(page.Sources, domain.OperatorPageSource{SourceRef: "git:docs/" + strings.Repeat("long-reference", 30) + "@second", Revision: strings.Repeat("r", 100)})
+	if kind, _ := okf.ClassifyPath(string(id) + ".md"); kind == okf.DocumentConcept {
+		page.Sources = append(page.Sources, domain.OperatorPageSource{SourceRef: "git:docs/" + strings.Repeat("long-reference", 30) + "@second", Revision: strings.Repeat("r", 100)})
+	}
 	return page, err
 }

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark/v2/parser"
@@ -101,7 +102,7 @@ func sanitizeLinks(node *html.Node, pageID string) {
 	for child := node.FirstChild; child != nil; {
 		next := child.NextSibling
 		if child.Type == html.TextNode && pageID != "" {
-			linkWikiText(node, child)
+			linkWikiText(node, child, pageID)
 		} else {
 			sanitizeLinks(child, pageID)
 		}
@@ -132,6 +133,9 @@ func documentLink(raw, pageID string) string {
 	if err != nil || u.IsAbs() || u.Host != "" || u.User != nil || u.RawQuery != "" || strings.HasPrefix(u.Path, "/") || strings.Contains(u.Path, "\\") || u.Path == "" {
 		return ""
 	}
+	if strings.HasSuffix(u.Path, "/") || u.Path == "." || u.Path == ".." {
+		return ""
+	}
 	if ext := path.Ext(u.Path); ext != "" && ext != ".md" {
 		return ""
 	}
@@ -139,9 +143,17 @@ func documentLink(raw, pageID string) string {
 	if !validPageIdentity(id) {
 		return ""
 	}
+	return contextualDocumentURL(id, pageID)
+}
+func contextualDocumentURL(id, pageID string) string {
+	currentKind, _ := okf.ClassifyPath(pageID + ".md")
+	targetKind, _ := okf.ClassifyPath(id + ".md")
+	if currentKind == okf.DocumentIndex && targetKind == okf.DocumentConcept && canonicalURL(id) != "" {
+		return contextualPageURL(domain.PageID(id), domain.PageID(pageID))
+	}
 	return canonicalURL(id)
 }
-func linkWikiText(parent, node *html.Node) {
+func linkWikiText(parent, node *html.Node, pageID string) {
 	remaining := node.Data
 	for {
 		start := strings.Index(remaining, "[[")
@@ -165,7 +177,7 @@ func linkWikiText(parent, node *html.Node) {
 			return
 		}
 		parent.InsertBefore(&html.Node{Type: html.TextNode, Data: remaining[:start]}, node)
-		link := &html.Node{Type: html.ElementNode, Data: "a", DataAtom: atom.A, Attr: []html.Attribute{{Key: linkHrefAttribute, Val: canonicalURL(id)}}}
+		link := &html.Node{Type: html.ElementNode, Data: "a", DataAtom: atom.A, Attr: []html.Attribute{{Key: linkHrefAttribute, Val: contextualDocumentURL(id, pageID)}}}
 		link.AppendChild(&html.Node{Type: html.TextNode, Data: label})
 		parent.InsertBefore(link, node)
 		remaining = remaining[end+2:]

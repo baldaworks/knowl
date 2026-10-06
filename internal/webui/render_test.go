@@ -66,14 +66,14 @@ func TestRenderIndexBodyAndLinks(t *testing.T) {
 		{
 			name: "root version", id: renderTestRootID, title: renderTestRootTitle,
 			markdown: "---\nokf_version: \"0.2\"\n---\n# Root\n\n* [Team](catalogs/team/index.md)\n* [Article](concepts/article.md)\n* [Log](log.md)\n* [External](https://user:secret@example.com/doc?token=secret#private)\n* [Unsafe](javascript:alert%281%29)\n* [Active](concepts/active.md) <a hx-get='/v1/retrieve' onclick='alert(1)'>bad</a>\n",
-			links:    map[string]string{renderTestCatalogTitle: "/ui/knowledge?parent_id=catalogs%2Fteam%2Findex", "Article": "/ui/knowledge?page_id=concepts%2Farticle", "External": "https://example.com/doc", "Active": "/ui/knowledge?page_id=concepts%2Factive"},
+			links:    map[string]string{renderTestCatalogTitle: "/ui/knowledge?parent_id=catalogs%2Fteam%2Findex", "Article": "/ui/knowledge?page_id=concepts%2Farticle&parent_id=index", "External": "https://example.com/doc", "Active": "/ui/knowledge?page_id=concepts%2Factive&parent_id=index"},
 		},
 		{name: "root heading only", id: renderTestRootID, markdown: "# Root\n", title: renderTestRootTitle, links: map[string]string{}},
 		{name: "nested heading only", id: renderTestCatalogID, markdown: "# Team\n", title: renderTestCatalogTitle, links: map[string]string{}},
 		{
 			name: "nested links", id: renderTestCatalogID, title: renderTestCatalogTitle,
 			markdown: "# Team\n\n* [Root](../../index.md)\n* [Other](../other/index.md)\n* [Article](../../concepts/article.md)\n* [Escape](../../../private.md)\n",
-			links:    map[string]string{renderTestRootTitle: "/ui/knowledge?parent_id=index", "Other": "/ui/knowledge?parent_id=catalogs%2Fother%2Findex", "Article": "/ui/knowledge?page_id=concepts%2Farticle"},
+			links:    map[string]string{renderTestRootTitle: "/ui/knowledge?parent_id=index", "Other": "/ui/knowledge?parent_id=catalogs%2Fother%2Findex", "Article": "/ui/knowledge?page_id=concepts%2Farticle&parent_id=catalogs%2Fteam%2Findex"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -164,5 +164,30 @@ func TestCanonicalMarkdownBodyAndLinks(t *testing.T) {
 	want := map[string]string{"related": "/ui/knowledge?page_id=concepts%2Fother", "external": "https://example.com/a", "Second": "/ui/knowledge?page_id=concepts%2Fsecond"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("links=%v want %v", got, want)
+	}
+}
+
+func TestRenderDirectoryLinksStayInert(t *testing.T) {
+	rendered, err := renderPageMarkdown("# Article\n\n[Directory](../catalogs/) [Self](.) [Parent](..) [Leaf](other.md) [Catalog](../catalogs/team/index.md)", screenArticleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := html.Parse(strings.NewReader(string(rendered)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{}
+	walk(doc, func(n *html.Node) {
+		if n.DataAtom == atom.A {
+			for _, attr := range n.Attr {
+				if attr.Key == linkHrefAttribute {
+					links[nodeText(n)] = attr.Val
+				}
+			}
+		}
+	})
+	want := map[string]string{"Leaf": "/ui/knowledge?page_id=concepts%2Fother", "Catalog": "/ui/knowledge?parent_id=catalogs%2Fteam%2Findex"}
+	if !reflect.DeepEqual(links, want) {
+		t.Fatalf("links=%v want %v", links, want)
 	}
 }

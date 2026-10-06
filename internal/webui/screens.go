@@ -12,14 +12,23 @@ import (
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 const (
 	limitParameter              = "limit"
+	pageIDParameter             = "page_id"
+	knowledgePath               = "/ui/knowledge"
+	rootCatalogID               = "index"
+	errorCatalogNotFound        = "catalog_not_found"
+	catalogTrailHeader          = "X-Knowl-Catalog-Trail"
 	parentIDParameter           = "parent_id"
 	cursorParameter             = "cursor"
 	allPagesView                = "all"
+	viewParameter               = "view"
+	rootBreadcrumbTitle         = "Root"
 	pageKind                    = "page"
 	retrievalFailed             = "failed"
 	knowledgeFragment           = "/ui/fragments/knowledge"
@@ -47,13 +56,37 @@ type knowledgeView struct {
 	Next                  string
 	Page                  *domain.OperatorPage
 	Markdown              template.HTML
+	Index                 bool
+	ContextID             domain.PageID
+	Breadcrumbs           []knowledgeBreadcrumb
+	MaxDepth              int
+	TrailJSON             string
 }
+
+type knowledgeBreadcrumb struct {
+	Title, URL string
+}
+
+type navigationBudget struct{ edges, bytes, windows int }
 
 func fragmentURL(route string, values url.Values) string {
 	return "/ui/fragments/" + route + "?" + values.Encode()
 }
 func pageURL(id any) string {
-	return "/ui/knowledge?" + url.Values{"page_id": {strings.TrimSpace(stringID(id))}}.Encode()
+	return knowledgePath + "?" + url.Values{pageIDParameter: {strings.TrimSpace(stringID(id))}}.Encode()
+}
+func knowledgeURL(values url.Values) string {
+	if len(values) == 0 {
+		return knowledgePath
+	}
+	return knowledgePath + "?" + values.Encode()
+}
+func contextualPageURL(id, parent domain.PageID) string {
+	values := url.Values{pageIDParameter: {string(id)}}
+	if parent != "" {
+		values.Set(parentIDParameter, string(parent))
+	}
+	return knowledgeURL(values)
 }
 func stringID(id any) string {
 	switch v := id.(type) {
@@ -71,37 +104,50 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	options, err := listOptions(q)
-	if err != nil {
-		h.readError(w, err)
-		return
-	}
-	v := knowledgeView{All: q.Get("view") == allPagesView}
-	if r.URL.Path == pageFragment {
-		page, readErr := h.dependencies.Operator.Page(r.Context(), domain.PageID(q.Get("page_id")))
+	ctx, cancel := context.WithTimeout(r.Context(), app.DefaultReadLimits().Deadline)
+	defer cancel()
+	v := knowledgeView{All: q.Get(viewParameter) == allPagesView, MaxDepth: app.DefaultCatalogLimits().MaxDepth}
+	if r.URL.Path == pageFragment || q.Has(pageIDParameter) {
+		page, readErr := h.dependencies.Operator.Page(ctx, domain.PageID(q.Get(pageIDParameter)))
 		if readErr != nil {
 			h.readError(w, readErr)
 			return
 		}
 		v.Page = &page
 	}
-	if v.All {
-		pages, readErr := h.dependencies.Operator.PageSummaries(r.Context(), options)
-		if readErr != nil {
-			h.readError(w, readErr)
+	options, err := listOptions(q)
+	if err != nil {
+		if v.Page == nil {
+			h.readError(w, err)
 			return
+		}
+		v.NavigationUnavailable = true
+	}
+	var nextCursor string
+	budget := &navigationBudget{}
+	if v.All {
+		pages, readErr := h.dependencies.Operator.PageSummaries(ctx, options)
+		if readErr != nil {
+			if v.Page == nil {
+				h.readError(w, readErr)
+				return
+			}
+			v.NavigationUnavailable = true
 		}
 		for _, p := range pages.Items {
 			v.Items = append(v.Items, domain.OperatorCatalogChild{ID: p.ID, Title: p.Title, Description: p.Description, Kind: pageKind})
 		}
-		if pages.NextCursor != "" {
-			v.Next = fragmentURL("knowledge", url.Values{"view": {allPagesView}, cursorParameter: {pages.NextCursor}, limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}})
-		}
-	} else {
-		catalog, readErr := h.dependencies.Operator.CatalogChildren(r.Context(), domain.PageID(q.Get(parentIDParameter)), options)
+		nextCursor = pages.NextCursor
+	} else if !v.NavigationUnavailable {
+		parent := domain.PageID(q.Get(parentIDParameter))
+		catalog, readErr := h.readNavigationCatalog(ctx, parent, options, budget)
 		switch {
 		case errors.Is(readErr, app.ErrOperatorCatalogNotFound):
-			if q.Get(parentIDParameter) != "" {
+			if v.Page != nil {
+				v.NavigationUnavailable = true
+				break
+			}
+			if parent != "" {
 				h.readError(w, readErr)
 				return
 			}
@@ -113,17 +159,30 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 			}
 			v.NavigationUnavailable = true
 		default:
+			if v.Page != nil && parent != "" && (catalog.Parent.ID != parent || !h.catalogContains(ctx, parent, v.Page.ID, catalog, options, budget)) {
+				v.NavigationUnavailable = true
+				break
+			}
 			v.Parent = catalog.Parent
 			v.Items = catalog.Items
-			if catalog.NextCursor != "" {
-				v.Next = fragmentURL("knowledge", url.Values{parentIDParameter: {q.Get(parentIDParameter)}, cursorParameter: {catalog.NextCursor}, limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}})
+			nextCursor = catalog.NextCursor
+			if v.Page == nil {
+				page, pageErr := h.dependencies.Operator.Page(ctx, catalog.Parent.ID)
+				if pageErr != nil {
+					h.readError(w, pageErr)
+					return
+				}
+				v.Page = &page
+				v.ContextID = catalog.Parent.ID
+			} else if parent != "" {
+				v.ContextID = parent
 			}
 		}
 	}
-	if v.Page == nil {
+	if v.Page == nil && v.All {
 		for _, p := range v.Items {
 			if p.Kind == pageKind {
-				page, readErr := h.dependencies.Operator.Page(r.Context(), p.ID)
+				page, readErr := h.dependencies.Operator.Page(ctx, p.ID)
 				if readErr != nil {
 					h.readError(w, readErr)
 					return
@@ -133,21 +192,57 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if v.Page == nil && !v.All && !v.Uncatalogued && q.Get(parentIDParameter) == "" && len(v.Items) > 0 {
-		pages, readErr := h.dependencies.Operator.PageSummaries(r.Context(), app.OperatorListOptions{Limit: 1})
-		if readErr == nil && len(pages.Items) > 0 {
-			page, pageErr := h.dependencies.Operator.Page(r.Context(), pages.Items[0].ID)
-			if pageErr != nil {
-				h.readError(w, pageErr)
-				return
-			}
-			v.Page = &page
-		} else if readErr != nil && !errors.Is(readErr, app.ErrOperatorCapabilityUnavailable) {
-			h.readError(w, readErr)
-			return
+	if nextCursor != "" {
+		values := url.Values{cursorParameter: {nextCursor}, limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}}
+		if v.All {
+			values.Set(viewParameter, allPagesView)
+		} else if q.Get(parentIDParameter) != "" {
+			values.Set(parentIDParameter, q.Get(parentIDParameter))
+		}
+		if q.Has(pageIDParameter) {
+			values.Set(pageIDParameter, q.Get(pageIDParameter))
+		}
+		v.Next = knowledgeURL(values)
+	}
+	v.Breadcrumbs = []knowledgeBreadcrumb{{Title: rootBreadcrumbTitle, URL: knowledgePath}}
+	if v.All {
+		crumb := knowledgeBreadcrumb{Title: "All pages"}
+		if v.Page != nil {
+			crumb.URL = knowledgeURL(url.Values{viewParameter: {allPagesView}})
+		}
+		v.Breadcrumbs = append(v.Breadcrumbs, crumb)
+	}
+	trail := []domain.PageID{}
+	if v.ContextID != "" {
+		trail = []domain.PageID{v.ContextID}
+	}
+	ancestors := []knowledgeBreadcrumb{}
+	if v.ContextID != "" && v.ContextID != rootCatalogID {
+		ancestors = []knowledgeBreadcrumb{{Title: v.Parent.Title, URL: knowledgeURL(url.Values{parentIDParameter: {string(v.ContextID)}})}}
+	}
+	if header := r.Header.Get(catalogTrailHeader); header != "" && v.ContextID != "" {
+		validated, crumbs, valid := h.validatedCatalogTrail(ctx, header, v.ContextID, v.Parent.Title, budget)
+		if valid {
+			trail, ancestors = validated, crumbs
+		} else {
+			v.NavigationUnavailable = true
 		}
 	}
+	encoded, _ := json.Marshal(trail)
+	v.TrailJSON = string(encoded)
 	if v.Page != nil {
+		kind, _ := okf.ClassifyPath(string(v.Page.ID) + ".md")
+		v.Index = kind == okf.DocumentIndex
+		for _, ancestor := range ancestors {
+			if ancestor.URL != knowledgeURL(url.Values{parentIDParameter: {string(v.Page.ID)}}) {
+				v.Breadcrumbs = append(v.Breadcrumbs, ancestor)
+			}
+		}
+		if v.Page.ID == rootCatalogID && !v.All {
+			v.Breadcrumbs[0] = knowledgeBreadcrumb{Title: v.Page.Title}
+		} else {
+			v.Breadcrumbs = append(v.Breadcrumbs, knowledgeBreadcrumb{Title: v.Page.Title})
+		}
 		v.Markdown, err = renderPageMarkdown(v.Page.Markdown, string(v.Page.ID))
 		if err != nil {
 			h.readError(w, err)
@@ -158,6 +253,100 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.render(w, http.StatusOK, "knowledge", v)
+}
+
+// Context is optional presentation. Scan only this catalog's bounded windows,
+// never filesystem ancestors or a graph, and retain a valid explicit page on failure.
+func (h *Handler) catalogContains(ctx context.Context, parent, selected domain.PageID, catalog domain.OperatorCatalog, options app.OperatorListOptions, budget *navigationBudget) bool {
+	seen := make(map[string]bool)
+	if options.Cursor != "" || (catalog.NextCursor != "" && normalizedLimit(options.Limit) != 100) {
+		version := catalog.SnapshotVersion
+		var err error
+		catalog, err = h.readNavigationCatalog(ctx, parent, app.OperatorListOptions{Limit: 100}, budget)
+		if err != nil || catalog.SnapshotVersion != version {
+			return false
+		}
+	}
+	for {
+		if ctx.Err() != nil || catalog.Parent.ID != parent {
+			return false
+		}
+		for _, child := range catalog.Items {
+			if child.ID == selected {
+				return true
+			}
+		}
+		if catalog.NextCursor == "" || seen[catalog.NextCursor] {
+			return false
+		}
+		seen[catalog.NextCursor] = true
+		var err error
+		catalog, err = h.readNavigationCatalog(ctx, parent, app.OperatorListOptions{Limit: 100, Cursor: catalog.NextCursor}, budget)
+		if err != nil {
+			return false
+		}
+	}
+}
+
+func (h *Handler) readNavigationCatalog(ctx context.Context, parent domain.PageID, options app.OperatorListOptions, budget *navigationBudget) (domain.OperatorCatalog, error) {
+	limits := app.DefaultCatalogLimits()
+	if err := ctx.Err(); err != nil {
+		return domain.OperatorCatalog{}, err
+	}
+	if budget.windows >= limits.MaxEdges {
+		return domain.OperatorCatalog{}, app.ErrOperatorReadLimitExceeded
+	}
+	catalog, err := h.dependencies.Operator.CatalogChildren(ctx, parent, options)
+	if err != nil {
+		return catalog, err
+	}
+	budget.windows++
+	budget.edges += len(catalog.Items)
+	data, err := json.Marshal(catalog)
+	if err != nil {
+		return domain.OperatorCatalog{}, app.ErrOperatorWorkspaceUnavailable
+	}
+	budget.bytes += len(data)
+	if budget.edges > limits.MaxEdges || budget.bytes > limits.MaxSnapshotBytes {
+		return domain.OperatorCatalog{}, app.ErrOperatorReadLimitExceeded
+	}
+	return catalog, nil
+}
+
+// The private header carries presentation IDs only. Every supplied adjacent
+// edge is re-read; history never supplies labels or authority.
+func (h *Handler) validatedCatalogTrail(ctx context.Context, header string, current domain.PageID, title string, budget *navigationBudget) ([]domain.PageID, []knowledgeBreadcrumb, bool) {
+	limits := app.DefaultCatalogLimits()
+	if len(header) > limits.MaxDepth*(limits.MaxPathBytes+4)+2 {
+		return nil, nil, false
+	}
+	var ids []domain.PageID
+	if json.Unmarshal([]byte(header), &ids) != nil || len(ids) == 0 || len(ids) > limits.MaxDepth || ids[len(ids)-1] != current {
+		return nil, nil, false
+	}
+	seen := make(map[domain.PageID]bool)
+	for _, id := range ids {
+		kind, err := okf.ClassifyPath(string(id) + ".md")
+		if seen[id] || !validPageIdentity(string(id)) || wiki.NormalizePageTarget(string(id)) != string(id) || err != nil || kind != okf.DocumentIndex {
+			return nil, nil, false
+		}
+		seen[id] = true
+	}
+	crumbs := []knowledgeBreadcrumb{}
+	for i, id := range ids {
+		label := title
+		if i < len(ids)-1 {
+			catalog, err := h.readNavigationCatalog(ctx, id, app.OperatorListOptions{Limit: 100}, budget)
+			if err != nil || !h.catalogContains(ctx, id, ids[i+1], catalog, app.OperatorListOptions{Limit: 100}, budget) {
+				return nil, nil, false
+			}
+			label = catalog.Parent.Title
+		}
+		if id != rootCatalogID {
+			crumbs = append(crumbs, knowledgeBreadcrumb{Title: label, URL: knowledgeURL(url.Values{parentIDParameter: {string(id)}})})
+		}
+	}
+	return ids, crumbs, true
 }
 func normalizedLimit(limit int) int {
 	if limit == 0 {
@@ -269,7 +458,7 @@ func (h *Handler) readError(w http.ResponseWriter, err error) {
 	}{
 		{app.ErrOperatorInvalidRequest, 400, errorInvalidRequest}, {app.ErrQueryInvalid, 400, errorInvalidRequest}, {app.ErrOperatorLimitInvalid, 400, errorLimitInvalid}, {app.ErrOperatorCursorInvalid, 400, errorCursorInvalid},
 		{app.ErrOperationNotFound, 404, "operation_not_found"}, {app.ErrSourceNotFound, 404, "source_not_found"},
-		{app.ErrOperatorCatalogNotFound, 404, "catalog_not_found"}, {app.ErrPageNotFound, 404, errorPageNotFound}, {app.ErrOperatorSourceRevisionNotFound, 404, errorSourceRevisionNotFound},
+		{app.ErrOperatorCatalogNotFound, 404, errorCatalogNotFound}, {app.ErrPageNotFound, 404, errorPageNotFound}, {app.ErrOperatorSourceRevisionNotFound, 404, errorSourceRevisionNotFound},
 		{app.ErrOperatorSnapshotChanged, 409, errorSnapshotChanged}, {app.ErrOperatorReadLimitExceeded, 413, errorReadLimitExceeded}, {app.ErrOperatorUnsupportedFormat, 415, errorUnsupportedFormat},
 		{app.ErrOperatorCapabilityUnavailable, 503, errorCapabilityUnavailable}, {app.ErrOperatorNotReady, 503, "not_ready"}, {app.ErrOperatorWorkspaceUnavailable, 503, errorWorkspaceUnavailable}, {context.Canceled, 503, errorWorkspaceUnavailable}, {context.DeadlineExceeded, 503, errorWorkspaceUnavailable},
 	} {
@@ -284,11 +473,13 @@ func validFragmentQuery(r *http.Request) bool {
 	allowed := map[string]bool{}
 	switch r.URL.Path {
 	case knowledgeFragment:
-		for _, k := range []string{parentIDParameter, "view", limitParameter, cursorParameter} {
+		for _, k := range []string{parentIDParameter, pageIDParameter, viewParameter, limitParameter, cursorParameter} {
 			allowed[k] = true
 		}
 	case pageFragment:
-		allowed["page_id"] = true
+		for _, k := range []string{pageIDParameter, parentIDParameter, viewParameter, limitParameter, cursorParameter} {
+			allowed[k] = true
+		}
 	case sourceRevisionFragment:
 		allowed["source_ref"] = true
 	case operationsFragment:
@@ -314,7 +505,7 @@ func validFragmentQuery(r *http.Request) bool {
 			return false
 		}
 	}
-	return (!q.Has("view") || q.Get("view") == allPagesView) && (!q.Has("view") || !q.Has(parentIDParameter))
+	return (!q.Has(viewParameter) || q.Get(viewParameter) == allPagesView) && (!q.Has(viewParameter) || !q.Has(parentIDParameter))
 }
 
 func shortRevision(value string) string {
