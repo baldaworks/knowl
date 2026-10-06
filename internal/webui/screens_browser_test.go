@@ -26,7 +26,7 @@ func TestBrowserKnowledgeSearch(t *testing.T) {
 	canonical := canonicalKnowledgeFixture()
 	fixture.catalogs, fixture.pages = canonical.catalogs, canonical.pages
 	for _, id := range []domain.PageID{screenArticleID, "concepts/other"} {
-		fixture.pages[id] = domain.OperatorPage{ID: id, Title: screenArticleTitle, Markdown: fixture.body, Digest: screenSnapshot, Version: screenSnapshot, Metadata: &domain.OperatorPageMetadata{Type: "topic"}, Sources: []domain.OperatorPageSource{{SourceRef: screenSourceRef, Revision: "accepted"}}}
+		fixture.pages[id] = domain.OperatorPage{ID: id, Title: screenArticleTitle, Markdown: fixture.body, Digest: screenSnapshot, Version: screenSnapshot, Metadata: &domain.OperatorPageMetadata{Type: "topic", Description: "Published article metadata", Tags: []string{"navigation", "provenance"}}, Sources: []domain.OperatorPageSource{{SourceRef: screenSourceRef, Revision: "accepted"}}}
 	}
 	longTitle := strings.Repeat("CanonicalDocumentTitle", 8)
 	fixture.catalogs["catalogs/long/index"] = app.OperatorCatalogRead{Parent: domain.OperatorCatalogSummary{ID: "catalogs/long/index", Title: longTitle}, Children: app.OperatorReadPage[domain.OperatorCatalogChild]{}}
@@ -91,7 +91,7 @@ type responsiveScreenReader struct{ *screenReader }
 
 func (f *responsiveScreenReader) Page(ctx context.Context, scope domain.ScopeRef, id domain.PageID, limits domain.ReadLimits) (domain.OperatorPage, error) {
 	page, err := f.screenReader.Page(ctx, scope, id, limits)
-	if kind, _ := okf.ClassifyPath(string(id) + ".md"); kind == okf.DocumentConcept {
+	if kind, _ := okf.ClassifyPath(string(id) + ".md"); kind == okf.DocumentConcept && id != knowledgeDistantLeaf {
 		page.Sources = append(page.Sources, domain.OperatorPageSource{SourceRef: "git:docs/" + strings.Repeat("long-reference", 30) + "@second", Revision: strings.Repeat("r", 100)})
 	}
 	return page, err

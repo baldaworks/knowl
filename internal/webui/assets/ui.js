@@ -9,7 +9,6 @@
   let poll = null, issuingPoll = false;
   const screen = document.getElementById('screen');
   const names = {knowledge: 'Knowledge', search: 'Search', operations: 'Operations', sources: 'Sources'};
-  const descriptions = {knowledge: 'Read your wiki and inspect the sources behind it.', search: 'Find evidence in your project knowledge.', operations: 'Follow processing and inspect the facts from each attempt.', sources: 'See what was synchronized and what has been processed.'};
   const protectedPaths = new Set(['knowledge', 'page', 'source-revision', 'search', 'operations', 'operation', 'sources', 'source'].map(p => '/ui/fragments/' + p));
   function protectedURL(value) {
     try { const u = new URL(value, location.href); return u.origin === location.origin && !u.username && !u.password && protectedPaths.has(u.pathname) ? u : null; } catch { return null; }
@@ -23,7 +22,7 @@
   const mobile = matchMedia('(max-width:991.98px)');
   const compact = matchMedia('(max-width:639px)');
   const pushMenu = adminlte.PushMenu.getOrCreateInstance(sidebar);
-  const backgrounds = [...document.querySelectorAll('.app-header,.app-main,.app-footer')];
+  const backgrounds = [...document.querySelectorAll('.app-header,.app-main')];
   // Browsers can drop focus to BODY before a breakpoint's change event fires.
   let responsiveFocus = null;
   document.addEventListener('focusin',event=>{
@@ -31,7 +30,7 @@
   });
   function restoreResponsiveFocus() {
     if(responsiveFocus?.isConnected && !isVisible(responsiveFocus)) {
-      const destination=responsiveFocus.id==='navigation-close'?navToggle:document.getElementById('screen-title');
+      const destination=responsiveFocus.id==='navigation-close'?navToggle:screen;
       if(isVisible(destination))destination.focus({preventScroll:true});
     }
   }
@@ -82,7 +81,7 @@
     document.getElementById('disconnect').hidden=!connected && !connecting;
     document.getElementById('disconnect').textContent=connecting?'Cancel':'Disconnect';
     document.getElementById('connection-status').textContent=connected?'Connected':connecting?'Connecting…':'Disconnected';
-    document.getElementById('workspace-heading').hidden=!connected;screen.hidden=!connected;
+    screen.hidden=!connected;
     const note=document.getElementById('connection-feedback');note.textContent=feedback;note.hidden=!feedback;
     const input=document.getElementById('operator-token');if(invalid)input.setAttribute('aria-invalid','true');else input.removeAttribute('aria-invalid');
     if(!connected)pushMenu.collapse();
@@ -97,7 +96,7 @@
   function localMessage(target,text) {const note=document.createElement('div');note.className='empty-state';note.textContent=text;target.replaceChildren(note);}
   function requestFailed(target) {
     if(connectionState==='connecting')disconnect('Connection failed. Check the server and token, then Connect to retry.');
-    else {target.removeAttribute('aria-busy');localMessage(target,'Workspace request failed. Select again or refresh this view to retry.');}
+    else {target.removeAttribute('aria-busy');localMessage(target,'Request failed. Select again or refresh this view to retry.');}
   }
   function load() {
     if (!token) return;
@@ -117,10 +116,10 @@
   }
   function navigate() {
     abortRequests(); sourcesOpener=null;focusScreen=true; const key = selected();
-    document.title = names[key] + ' · Knowl'; document.getElementById('screen-title').textContent = names[key];
-    document.getElementById('header-view').textContent = names[key]; document.getElementById('screen-description').textContent = descriptions[key];
+    document.title = names[key] + ' · Knowl'; screen.setAttribute('aria-label', names[key]);
+    document.getElementById('header-view').textContent = names[key];
     for (const link of document.querySelectorAll('[data-screen]')) {link.classList.toggle('active', link.dataset.screen === key); if(link.dataset.screen === key) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');}
-    message(token ? 'Loading workspace…' : 'Connect to load workspace data.'); load();
+    message(token ? 'Loading view…' : 'Connect to read knowledge.'); load();
   }
   function navigationState(url) {
     if(url.pathname!=='/ui/knowledge' || url.searchParams.has('view'))return null;
@@ -160,8 +159,8 @@
       const grid=screen.querySelector('.knowledge-grid');
       if(grid){
         const open=closeSources?false:!isVisible(grid.querySelector('.source-panel'));
-        if(compact.matches){grid.classList.toggle('mobile-sources-open',open);grid.classList.remove('sources-hidden');}
-        else grid.classList.toggle('sources-hidden',!open);
+        grid.classList.toggle('sources-hidden',!open);
+        grid.classList.toggle('mobile-sources-open',open);
         if(open && compact.matches){sourcesOpener=toggleSources;sourcesScroll=scrollY;grid.querySelector('.source-panel').scrollIntoView({block:'start',behavior:'instant'});grid.querySelector('[data-close-sources]').focus({preventScroll:true});}
         if(!open && (closeSources || grid.querySelector('.source-panel').contains(document.activeElement))){const opener=sourcesOpener || screen.querySelector('[data-toggle-sources]');opener?.focus({preventScroll:true});if(compact.matches)scrollTo({top:sourcesScroll,behavior:'instant'});sourcesOpener=null;}
         syncDisclosures();
@@ -247,7 +246,7 @@
     for(const [button,panel] of [['[data-toggle-catalog]','.catalog-panel'],['[data-toggle-sources]','.source-panel']]) {
       const control=screen.querySelector(button),element=screen.querySelector(panel);
       control?.setAttribute('aria-expanded',String(isVisible(element)));
-      if(element && !isVisible(element) && element.contains(document.activeElement)) (isVisible(control)?control:document.getElementById('screen-title')).focus({preventScroll:true});
+      if(element && !isVisible(element) && element.contains(document.activeElement)) (isVisible(control)?control:screen).focus({preventScroll:true});
     }
     restoreResponsiveFocus();
   }
@@ -257,7 +256,7 @@
   });
   document.addEventListener('htmx:afterSettle', event => {
     syncDisclosures();
-    if(focusScreen && connectionState==='connected'){document.getElementById('screen-title').focus({preventScroll:true});focusScreen=false;}
+    if(focusScreen && connectionState==='connected'){screen.focus({preventScroll:true});focusScreen=false;}
     for(const snippet of screen.querySelectorAll('.evidence-snippet')) {const toggle=snippet.nextElementSibling;if(toggle?.matches('[data-toggle-snippet]')) toggle.hidden=snippet.scrollHeight<=snippet.clientHeight;}
   });
 

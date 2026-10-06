@@ -34,11 +34,18 @@ and [container setup](sidecar.md#optional-browser-access).
 
 ## Knowledge
 
-Browse **Topics** or **All pages**, select a published page, and follow related
-pages. **Details** shows the page identity and current digest/version alongside
-available metadata. **Page sources** lists the saved revisions supporting the
-page. On a small screen, use **Browse knowledge** and **Page sources** to open
-the corresponding panels.
+Knowledge opens the canonical wiki root and renders its actual index body.
+Follow catalog and page links, use the breadcrumb to return through verified
+catalogs, or choose **All pages**. Back and Forward preserve navigation within
+the connected document. Direct links and reload use the root and any verified
+current catalog; deeper ancestry is not inferred from file paths.
+
+**Details** starts closed and contains page identity, digest/version, and
+available type, description, tags, status, trust and stale metadata.
+**Page sources** starts closed at every screen width; open it explicitly to
+inspect saved revisions supporting a leaf page. A leaf with no references says
+so. Catalog indexes have no source panel. On a small screen, **Browse knowledge**
+opens the catalog panel.
 
 Select **Read saved source** to read immutable accepted text with its digest
 and media type. This uses Knowl's saved revision and does not fetch upstream.
@@ -53,7 +60,8 @@ immutable history; see [workspace semantics](workspace.md#reading-pages-and-acce
 
 ## Search
 
-Enter a query, optionally choose a source, and select **Search**. Each submission
+Enter a query in the blank labeled input and select **Search** to search the
+whole configured wiki. Each submission
 uses the existing retrieval path once. No search runs while typing or merely
 opening the screen. The disclosure above the results tells you whether
 embeddings are enabled: submitting an embedding-enabled query sends it to the
@@ -65,8 +73,8 @@ those diagnostics are available. A successful empty result differs from a
 failed retrieval. Missing diagnostics are shown as unavailable.
 
 **View JSON** and **Export JSON** expose the same safe response used for the
-cards, without another retrieval or the operator token. **Open current page**
-reads the page at the time you open it, which may differ from the earlier search
+cards, without another retrieval or the operator token. Select an evidence title
+to read its current page, which may differ from the earlier search
 snapshot. The search is evidence retrieval, not a chat or generated answer.
 
 ## Operations
@@ -177,9 +185,9 @@ Keep the service running and open `http://127.0.0.1:8086/ui/`:
 3. In **Knowledge**, open **All pages** and choose a generated authentication
    page. Open **Page sources**, then **Read saved source**. The text is the
    accepted authentication document; it remains immutable if the source changes.
-4. In **Search**, submit `session revocation JWT`, optionally filtered to
-   `engineering-docs`. Inspect the evidence and **View JSON**. With embeddings
-   disabled, this query is searched locally. Follow **Open current page**.
+4. In **Search**, submit `session revocation JWT` across the wiki. Inspect the
+   evidence and **View JSON**. With embeddings disabled, this query is searched
+   locally. Follow an evidence title to read its current page.
 5. In **Sources**, open the document's **View operation** link. Compare its saved
    processing facts with the accepted revision. Legacy absent reports remain
    unavailable.

@@ -156,15 +156,15 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Error(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("X-Knowl-Error", code)
 	messages := map[string]string{
-		errorCapabilityUnavailable:  "This workspace view is not available yet.",
+		errorCapabilityUnavailable:  "This view is not available yet.",
 		errorInvalidRequest:         "The request is invalid. Check the selected view and try again.",
 		"unauthorized":              "Reconnect with a valid operator token.",
-		"scope_override_forbidden":  "This connection cannot select another workspace.",
-		"not_found":                 "The requested workspace view was not found.",
-		"not_ready":                 "The workspace is starting. Please try again shortly.",
-		errorWorkspaceUnavailable:   "The workspace is temporarily unavailable. Please try again.",
-		errorSnapshotChanged:        "The workspace changed. Refresh this view to continue.",
-		errorReadLimitExceeded:      "This request exceeds the workspace read limit.",
+		"scope_override_forbidden":  "This connection cannot select another knowledge scope.",
+		"not_found":                 "The requested view was not found.",
+		"not_ready":                 "The server is starting. Please try again shortly.",
+		errorWorkspaceUnavailable:   "Knowledge is temporarily unavailable. Please try again.",
+		errorSnapshotChanged:        "Knowledge changed. Refresh this view to continue.",
+		errorReadLimitExceeded:      "This request exceeds the read limit.",
 		errorPageNotFound:           "This published page is no longer available.",
 		errorSourceRevisionNotFound: "This saved source revision is unavailable. No upstream source was fetched.",
 		errorCursorInvalid:          "This continuation expired. Open the first page to continue.",
@@ -173,7 +173,7 @@ func (h *Handler) Error(w http.ResponseWriter, status int, code string) {
 	}
 	message := messages[code]
 	if message == "" {
-		message = "The workspace request could not be completed. Please try again."
+		message = "The request could not be completed. Please try again."
 	}
 	h.render(w, status, "error", struct{ Code, Message string }{code, message})
 }

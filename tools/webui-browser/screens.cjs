@@ -55,6 +55,8 @@ async function latestKnowledgeSelection(page, continuation) {
   await page.goto(process.env.KNOWL_BROWSER_URL+'/ui/knowledge');
   await page.locator('#operator-token').fill('browser-secret-token');await page.locator('#connect-form button').click();
   await page.locator('.knowledge-article').waitFor();
+  await page.waitForFunction(()=>document.activeElement===document.getElementById('screen'),null,{timeout:5000});
+  assert.equal(await page.locator('#screen').getAttribute('aria-label'),'Knowledge');
   assert.equal(await page.locator('.document h1').textContent(),'Root','connect must read canonical root');
   assert.equal(await page.locator('.knowledge-article h2').count(),0);
   assert.equal(await page.locator('#page-sources,[data-toggle-sources]').count(),0);
@@ -65,6 +67,12 @@ async function latestKnowledgeSelection(page, continuation) {
   await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Distant leaf');
   assert.deepEqual(await page.evaluate(()=>history.state),{catalogIds:['index','catalogs/архитектура/🦉/index']},'Unicode history IDs must survive transport unchanged');
   assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Root','Unicode catalog','Distant leaf']);
+  assert.equal(await page.locator('[data-toggle-sources] .counter').textContent(),'0');
+  assert.equal(await page.locator('.source-panel').isVisible(),false);
+  await page.locator('[data-toggle-sources]').click();
+  assert.equal(await page.getByText('No saved source references are recorded for this page.',{exact:true}).isVisible(),true,'zero-source leaf remains truthful and accessible');
+  await page.locator('[data-close-sources]').click();
+  assert.equal(await page.locator('[data-toggle-sources]').evaluate(e=>e===document.activeElement),true);
   assert.equal(await page.locator('.panel-description').filter({hasText:'Topic navigation is unavailable.'}).count(),0);
   await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('link',{name:'Root',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Root');
@@ -106,6 +114,15 @@ async function latestKnowledgeSelection(page, continuation) {
   await page.getByRole('link',{name:'Next pages'}).click();await stale;
   await page.locator('.knowledge-article').waitFor();
   assert.equal(await page.locator('[data-error-code]').count(),0,await page.locator('#screen').textContent());
+  for(const width of [320,390,639,640,768,1024,1366,1920]) {
+   await page.setViewportSize({width,height:900});
+   assert.equal(await page.locator('.source-panel').isVisible(),false,'provenance starts closed at '+width);
+   assert.equal(await page.locator('[data-toggle-sources]').getAttribute('aria-expanded'),'false');
+   assert.equal(await page.locator('.page-details').evaluate(e=>e.open),false);
+   assert.equal(await page.getByText('Published article metadata',{exact:true}).isVisible(),false);
+  }
+  await page.setViewportSize({width:1366,height:900});
+  await page.locator('[data-toggle-sources]').click();
   await page.locator('[hx-target="#raw-source"]').first().click();await page.locator('.raw-view').waitFor();
   assert.equal(await page.locator('.raw-view pre').textContent(),'<script>immutable accepted text</script>');
   assert.equal(requests.filter(u=>new URL(u).searchParams.has('query')).length,0);
@@ -127,8 +144,14 @@ async function latestKnowledgeSelection(page, continuation) {
   assert.equal(await page.locator('.knowledge-article h2').textContent(),'Article');
   await page.goForward();await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Root');
   await page.locator('[data-screen="search"]').click();await page.locator('#search-form').waitFor();
+  await page.waitForFunction(()=>document.activeElement===document.getElementById('screen'),null,{timeout:5000});
+  assert.equal(await page.locator('#screen').getAttribute('aria-label'),'Search');
+  assert.equal(await page.locator('#query').evaluate(e=>e.placeholder),'');
+  assert.equal(await page.locator('#query').inputValue(),'');
+  assert.equal(await page.locator('#search-form select').count(),0);
+  assert.deepEqual(await page.locator('#search-form').evaluate(form=>[...new FormData(form).keys()]),['query']);
   assert.match(await page.locator('.search-disclosure').textContent(),/Embeddings are enabled/);
-  await readable(page,'.search-disclosure,.search-filters,.empty-state,.empty-state h3');
+  await readable(page,'.search-disclosure,.form-label');
   await page.waitForFunction(()=>getComputedStyle(document.getElementById('search-loading')).display==='none');
   await page.locator('#query').fill('typed but not submitted');
   assert.equal(requests.filter(u=>new URL(u).searchParams.has('query')).length,0);
@@ -137,6 +160,8 @@ async function latestKnowledgeSelection(page, continuation) {
    assert.equal(await page.locator('#search-loading').isVisible(),true);
    await page.waitForFunction(mode=>{const code=document.getElementById('response-json-data');return code && JSON.parse(code.textContent).query===mode},mode);
    await page.waitForFunction(()=>getComputedStyle(document.getElementById('search-loading')).display==='none');
+   const sent=new URL(requests.filter(u=>new URL(u).searchParams.has('query')).at(-1));
+   assert.deepEqual([...sent.searchParams.keys()],['query'],'UI search submits whole-wiki query only');
    const count=requests.filter(u=>new URL(u).searchParams.has('query')).length;
    await page.locator('[data-toggle-json]').click();assert.equal(await page.locator('[data-toggle-json]').getAttribute('aria-expanded'),'true');
    const result=JSON.parse(await page.locator('#response-json-data').textContent());
@@ -154,7 +179,9 @@ async function latestKnowledgeSelection(page, continuation) {
   await page.setViewportSize({width:390,height:844});
   await page.locator('.evidence-source-refs summary').first().click();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-  await page.locator('.evidence-bottom a').first().click();await page.locator('.knowledge-article').waitFor();
+  await page.locator('.evidence-title').first().click();await page.locator('.knowledge-article').waitFor();
+  await page.waitForFunction(()=>document.activeElement===document.getElementById('screen'),null,{timeout:5000});
+  assert.equal(await page.locator('#screen').getAttribute('aria-label'),'Knowledge');
   assert.equal(new URL(page.url()).searchParams.get('page_id'),'concepts/other');
   assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Root','Article']);
   assert.equal(await page.locator('.source-panel').isVisible(),false);
@@ -163,7 +190,10 @@ async function latestKnowledgeSelection(page, continuation) {
   await sourcesToggle.focus();await page.keyboard.press('Enter');assert.equal(await page.locator('.source-panel').isVisible(),true);
   assert.equal(await sourcesToggle.getAttribute('aria-expanded'),'true');
   assert.equal(await page.locator('[data-close-sources]').evaluate(e=>e===document.activeElement),true);
-  await page.locator('.page-details summary').click();await page.locator('.source-identity summary').last().click();
+  await page.locator('.page-details summary').click();
+  assert.equal(await page.getByText('Published article metadata',{exact:true}).isVisible(),true);
+  assert.equal(await page.locator('.page-details dd').filter({hasText:'navigation provenance'}).isVisible(),true);
+  await page.locator('.source-identity summary').last().click();
   await page.locator('[hx-target="#raw-source"]').first().click();await page.locator('.raw-view').waitFor();
   for(const width of [320,390,639,640,768,1024,1366]){
    await page.setViewportSize({width,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'expanded metadata overflow at '+width);
@@ -179,7 +209,7 @@ async function latestKnowledgeSelection(page, continuation) {
   await page.setViewportSize({width:768,height:844});
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   assert.equal(await page.locator('[data-toggle-catalog]').isVisible(),false);
-  assert.equal(await page.locator('#screen-title').evaluate(e=>e===document.activeElement),true,'hidden catalog opener returns focus to screen heading');
+  assert.equal(await page.locator('#screen').evaluate(e=>e===document.activeElement),true,'hidden catalog opener returns focus to persistent screen');
   assert.equal(await page.locator('[data-toggle-catalog]').getAttribute('aria-expanded'),'true');
   await page.setViewportSize({width:390,height:844});
   await page.evaluate(()=>document.querySelector('[data-screen="search"]').click());await page.locator('#search-form').waitFor();

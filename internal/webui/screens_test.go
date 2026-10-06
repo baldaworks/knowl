@@ -62,6 +62,116 @@ func TestSearchExplicitSubmissionSharesResult(t *testing.T) {
 		t.Fatalf("different projection: %+v snippets=%v", got, snippets)
 	}
 }
+
+type searchInventoryReader struct{ calls int }
+
+func (f *searchInventoryReader) ListSources(context.Context, domain.ScopeRef, app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorSourceSummary], error) {
+	f.calls++
+	return app.OperatorReadPage[domain.OperatorSourceSummary]{Items: []domain.OperatorSourceSummary{{ID: activitySourceID}}}, nil
+}
+func (*searchInventoryReader) Source(context.Context, domain.ScopeRef, domain.SourceID) (domain.OperatorSourceSummary, error) {
+	return domain.OperatorSourceSummary{}, app.ErrSourceNotFound
+}
+
+func TestSearchMountHasOnlyBlankLabeledQueryAndDoesNotReadSources(t *testing.T) {
+	f := &searchInventoryReader{}
+	service, err := app.NewOperatorService("trusted", app.OperatorReaders{Sources: f}, app.OperatorOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(Dependencies{Operator: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, doc := fragmentDocument(t, h, searchFragment)
+	if r.Code != http.StatusOK {
+		t.Fatalf("status=%d", r.Code)
+	}
+	if f.calls != 0 {
+		t.Errorf("mount read source inventory %d times", f.calls)
+	}
+	var fields []string
+	var labeled, query bool
+	walk(doc, func(n *html.Node) {
+		if n.DataAtom == atom.Label && hasAttribute(n, "for", "query") && nodeText(n) != "" {
+			labeled = true
+		}
+		if n.DataAtom == atom.Input || n.DataAtom == atom.Select {
+			for _, a := range n.Attr {
+				if a.Key == "name" {
+					fields = append(fields, a.Val)
+				}
+				if a.Key == "placeholder" && a.Val != "" {
+					t.Errorf("example placeholder=%q", a.Val)
+				}
+				if a.Key == "value" && a.Val != "" {
+					t.Errorf("prefilled input=%q", a.Val)
+				}
+			}
+		}
+		if n.DataAtom == atom.Input && hasAttribute(n, "id", "query") && hasAttribute(n, "type", "search") {
+			query = true
+		}
+	})
+	if !query || !labeled || !reflect.DeepEqual(fields, []string{"query"}) {
+		t.Errorf("query=%v labeled=%v fields=%v", query, labeled, fields)
+	}
+}
+
+func TestKnowledgeLeafDetailsAndSourcesStartClosed(t *testing.T) {
+	f := canonicalKnowledgeFixture()
+	page := f.pages[screenArticleID]
+	page.Metadata = &domain.OperatorPageMetadata{Type: "topic", Description: "Useful metadata", Tags: []string{"one", "two"}, Status: "stable", TrustTier: "verified", Stale: true}
+	f.pages[screenArticleID] = page
+	r, doc := fragmentDocument(t, screenHandler(t, f), pageFragment+"?page_id="+screenArticleID)
+	if r.Code != http.StatusOK {
+		t.Fatalf("status=%d", r.Code)
+	}
+	var details *html.Node
+	var toggle, hidden, panel bool
+	walk(doc, func(n *html.Node) {
+		if hasAttribute(n, "class", "page-details") {
+			details = n
+		}
+		if hasAttribute(n, "aria-controls", "page-sources") {
+			toggle = true
+			if !hasAttribute(n, "aria-expanded", "false") {
+				t.Error("sources opener starts expanded")
+			}
+		}
+		if hasAttribute(n, "id", "page-sources") {
+			panel = true
+		}
+		for _, a := range n.Attr {
+			if a.Key == "class" && n.DataAtom == atom.Div && strings.Contains(" "+a.Val+" ", " sources-hidden ") {
+				hidden = true
+			}
+		}
+	})
+	if !toggle || !panel || !hidden || details == nil {
+		t.Errorf("toggle=%v panel=%v hidden=%v details=%v", toggle, panel, hidden, details != nil)
+	}
+	if details == nil {
+		return
+	}
+	if hasAttribute(details, "open", "") {
+		t.Error("metadata details starts open")
+	}
+	var labels, values []string
+	walk(details, func(n *html.Node) {
+		if n.DataAtom == atom.Dt {
+			labels = append(labels, nodeText(n))
+		}
+		if n.DataAtom == atom.Dd {
+			values = append(values, compactNodeText(n))
+		}
+	})
+	wantLabels := []string{"Page ID", "Digest", "Version", "Type", "Description", "Tags", "Status", "Trust tier", "Stale"}
+	wantValues := []string{screenArticleID, screenSnapshot, screenSnapshot, "topic", "Useful metadata", "one two", "stable", "verified", "true"}
+	if !reflect.DeepEqual(labels, wantLabels) || !reflect.DeepEqual(values, wantValues) {
+		t.Errorf("details labels=%v values=%v", labels, values)
+	}
+}
 func nodeText(n *html.Node) string {
 	if n.Type == html.TextNode {
 		return n.Data

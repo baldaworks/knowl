@@ -383,10 +383,7 @@ func (h *Handler) sourceRevision(w http.ResponseWriter, r *http.Request) {
 }
 
 type searchView struct {
-	Embeddings         bool
-	Sources            []domain.OperatorSourceSummary
-	SourcesUnavailable bool
-	MoreSources        bool
+	Embeddings bool
 }
 type searchResults struct {
 	Result knowlapi.RetrieveResult
@@ -401,14 +398,6 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		v := searchView{Embeddings: h.dependencies.EmbeddingsEnabled}
-		if h.dependencies.Operator != nil {
-			sources, err := h.dependencies.Operator.Sources(r.Context(), app.OperatorListOptions{Limit: 100})
-			v.Sources = sources.Items
-			v.MoreSources = sources.NextCursor != ""
-			v.SourcesUnavailable = err != nil
-		} else {
-			v.SourcesUnavailable = true
-		}
 		h.render(w, 200, "search", v)
 		return
 	}
