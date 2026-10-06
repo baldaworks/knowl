@@ -5,7 +5,8 @@ knowl:
   id: concepts/content-and-trust-boundaries
   source_refs:
     - wiki-filesystem:knowl-docs/design.md@15d3f23357e10afc7a1f9e7ba3dda84f262521d5ae864d5fbc4ed95c822ec4e0
-    - wiki-filesystem:knowl-docs/workspace.md@4281a4b504c77bfd8a33c1b39073beba46852e6100e313fc93f4303eb5cc8692
+    - wiki-filesystem:knowl-docs/design.md@3a68ce3bd879e93c51035a4f8f0cf5c198e5019718caf580e388c947b63f1749
+    - wiki-filesystem:knowl-docs/workspace.md@dd7f4ae47072b5a774920628d5aef1a861fa5840e12854cc58cf3d5d9351d386
 ---
 # Content and Trust Boundaries
 
@@ -46,7 +47,8 @@ Curated semantic pages must follow enforced OKF v0.2 conventions:
 SQL stores (SQLite FTS and PostgreSQL) and search state are rebuildable operational indices, not canonical content:
 - **Lexical Indexing**: Projections prioritize four semantic fields in descending order: (1) Title, (2) Normalized OKF tags, (3) OKF description, (4) User-authored body. Filenames, paths, extensions, and provenance metadata are excluded from lexical ranking.
 - **Atomic Commits & Recovery Journals**: Content commits write staging manifests and preimage recovery journals before atomically replacing files. Startup recovery processes journals before readiness: `prepared` journals rollback preimages, `committed` journals are finalized, and partial staging is discarded.
-- **Version Control**: Workspaces are suitable for Git review, but Knowl never commits, pushes, or syncs remote repositories.
+- **Git Source Synchronization**: Configured remote Git sources are fetched read-only, with each complete scan pinned to an immutable commit. Accepted source revisions are preserved as raw evidence; the remote is never modified.
+- **Workspace Version Control**: Workspaces are suitable for Git review. Knowl does not commit or push the generated workspace to a remote repository; operators own its version control and publication.
 - **Explicit Migration**: Upgrading legacy workspaces runs `knowl migrate okf-v0.2` and `knowl validate`, creating audit archives before marker commits.
 
 ## External and Provider Trust Boundaries

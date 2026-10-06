@@ -288,11 +288,10 @@ unchanged.
 
 The workspace is suitable for Git review. Knowl synchronizes configured remote
 Git sources by fetching their tracked refs and accepting documents from an
-immutable commit. These read-only fetches never execute repository content or
-modify the remote. Knowl does not commit or push the generated workspace to a
-remote repository; operators own workspace version control and publication.
+immutable commit. It does not commit or push the generated workspace to a remote
+repository; operators own workspace version control and publication.
 Operators commonly version `schema.md`, `raw/`, and `wiki/`, while treating
-`.knowl/` as local operational state. If `.knowl/` is versioned for a specific
-workflow, exclude credentials and review
+`.knowl/` as local operational state. If
+`.knowl/` is versioned for a specific workflow, exclude credentials and review
 the database/staging contents deliberately. Deletion or forgetting is not
 implicit: absence from search is not an audited delete operation.
