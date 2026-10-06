@@ -2,10 +2,13 @@ package fs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,10 +17,12 @@ import (
 )
 
 const (
-	operatorTestLogID      = "log"
-	operatorTestPageID     = "entities/a"
-	operatorTestRelatedID  = "entities/b"
-	operatorTestDigestCase = "digest"
+	operatorTestLogID        = "log"
+	operatorTestPageID       = "entities/a"
+	operatorTestRelatedID    = "entities/b"
+	operatorTestDigestCase   = "digest"
+	operatorTestCatalogID    = "catalogs/team/index"
+	operatorTestRootMarkdown = "# Root\n"
 )
 
 func operatorReader(t *testing.T, workspace *Workspace) app.WorkspaceReader {
@@ -71,10 +76,10 @@ func TestOperatorCatalogDirectChildren(t *testing.T) {
 	writeCanonicalFixture(t, workspace, "wiki/sources/mirror.md", validWorkspacePage("sources/mirror", "Mirror", testWorkspaceSourceRef, "Body"))
 	writeRootCatalogTargets(t, workspace, "catalogs/team/index.md")
 	root, err := reader.CatalogChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 10})
-	if err != nil || len(root.Children.Items) != 1 || root.Children.Items[0].ID != "catalogs/team/index" || root.Children.Items[0].Kind != "catalog" {
+	if err != nil || len(root.Children.Items) != 1 || root.Children.Items[0].ID != operatorTestCatalogID || root.Children.Items[0].Kind != "catalog" {
 		t.Fatalf("root = %#v, %v", root, err)
 	}
-	nested, err := reader.CatalogChildren(t.Context(), testScope, "catalogs/team/index", app.OperatorReadOptions{Limit: 10})
+	nested, err := reader.CatalogChildren(t.Context(), testScope, operatorTestCatalogID, app.OperatorReadOptions{Limit: 10})
 	if err != nil || nested.Parent.Title != "Team" || len(nested.Children.Items) != 1 || nested.Children.Items[0].ID != operatorTestPageID || nested.Children.Items[0].Kind != operatorPageKind {
 		t.Fatalf("nested = %#v, %v", nested, err)
 	}
@@ -129,7 +134,7 @@ func TestOperatorTypedFailures(t *testing.T) {
 	workspace := newSourceStageWorkspace(t)
 	reader := operatorReader(t, workspace)
 	writeCanonicalFixture(t, workspace, "wiki/entities/a.md", validWorkspacePage(operatorTestPageID, "A", testWorkspaceSourceRef, "Body"))
-	for _, id := range []knowl.PageID{"../private", "entities/%2e%2e/private", "entities/%252e%252e/private", operatorRootID, operatorTestLogID, "entities/a:stream", "entities//a"} {
+	for _, id := range []knowl.PageID{"../private", "entities/%2e%2e/private", "entities/%252e%252e/private", operatorTestLogID, "entities/a:stream", "entities//a"} {
 		if _, err := reader.Page(t.Context(), testScope, id, knowl.ReadLimits{}); !errors.Is(err, app.ErrOperatorInvalidRequest) {
 			t.Errorf("Page(%q) = %v", id, err)
 		}
@@ -166,6 +171,101 @@ func TestOperatorTypedFailures(t *testing.T) {
 	}
 	if _, err := reader.SourceRevision(t.Context(), testScope, sourceRefKey(binary), knowl.ReadLimits{}); !errors.Is(err, app.ErrOperatorSourceRevisionNotFound) {
 		t.Fatalf("missing raw = %v", err)
+	}
+}
+
+func TestOperatorIndexPage(t *testing.T) {
+	for _, tc := range []struct {
+		id              knowl.PageID
+		title, markdown string
+	}{
+		{operatorRootID, "Wiki root", "---\nokf_version: \"0.2\"\n---\n# Wiki root\n\n* [Team](catalogs/team/index.md)\n* [A](entities/a.md)\n"},
+		{operatorTestCatalogID, "Team", "# Team\n"},
+		{"catalogs/linked/index", "Linked", "# Linked\n\n* [A](../../entities/a.md)\n"},
+	} {
+		t.Run(string(tc.id), func(t *testing.T) {
+			workspace := newSourceStageWorkspace(t)
+			reader := operatorReader(t, workspace)
+			writeCanonicalFixture(t, workspace, "wiki/"+string(tc.id)+".md", []byte(tc.markdown))
+			writeCanonicalFixture(t, workspace, "wiki/entities/a.md", validWorkspacePage(operatorTestPageID, "A", testWorkspaceSourceRef, "Body"))
+			if err := os.RemoveAll(filepath.Join(workspace.root, workspaceRawDir)); err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256([]byte(tc.markdown))
+			want := knowl.OperatorPage{ID: tc.id, Title: tc.title, Markdown: tc.markdown, Digest: hex.EncodeToString(sum[:]), Version: hex.EncodeToString(sum[:]), RelatedPageIDs: []knowl.PageID{}, Sources: []knowl.OperatorPageSource{}}
+			for _, rawState := range []string{"absent", "invalid manifest"} {
+				if rawState == "invalid manifest" {
+					writeCanonicalFixture(t, workspace, "raw/broken/manifest.yaml", []byte("invalid: ["))
+				}
+				page, err := reader.Page(t.Context(), testScope, tc.id, knowl.ReadLimits{})
+				if err != nil || !reflect.DeepEqual(page, want) {
+					t.Fatalf("index with %s raw tree = %#v, %v; want %#v", rawState, page, err, want)
+				}
+			}
+			inventory, err := reader.PageSummaries(t.Context(), testScope, app.OperatorReadOptions{Limit: 10})
+			if err != nil || len(inventory.Items) != 1 || inventory.Items[0].ID != operatorTestPageID {
+				t.Fatalf("concept-only inventory = %#v, %v", inventory, err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			unlock, err := workspace.lock(ctx)
+			if err != nil {
+				t.Fatalf("detached index retains publication lock: %v", err)
+			}
+			unlock()
+		})
+	}
+}
+
+func TestOperatorIndexReadFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		id           knowl.PageID
+		content      string
+		limits       knowl.ReadLimits
+		storageBytes int
+		missing      bool
+		want         error
+	}{
+		{name: "missing root", id: operatorRootID, missing: true, want: app.ErrPageNotFound},
+		{name: "missing nested", id: operatorTestCatalogID, missing: true, want: app.ErrPageNotFound},
+		{name: "malformed root", id: operatorRootID, content: "---\ntitle: Invalid\n---\n# Root\n", want: app.ErrOperatorWorkspaceUnavailable},
+		{name: "nested frontmatter", id: operatorTestCatalogID, content: "---\nokf_version: \"0.2\"\n---\n# Team\n", want: app.ErrOperatorWorkspaceUnavailable},
+		{name: "invalid heading", id: operatorRootID, content: "## Root\n", want: app.ErrOperatorWorkspaceUnavailable},
+		{name: "invalid UTF8", id: operatorRootID, content: "# Root\n\xff", want: app.ErrOperatorWorkspaceUnavailable},
+		{name: "caller bytes", id: operatorRootID, content: operatorTestRootMarkdown, limits: knowl.ReadLimits{Bytes: 1}, want: app.ErrOperatorReadLimitExceeded},
+		{name: "caller characters", id: operatorRootID, content: operatorTestRootMarkdown, limits: knowl.ReadLimits{Characters: 1}, want: app.ErrOperatorReadLimitExceeded},
+		{name: "storage bytes", id: operatorRootID, content: operatorTestRootMarkdown, storageBytes: 1, want: app.ErrOperatorReadLimitExceeded},
+		{name: "catalog bytes", id: operatorRootID, content: "# " + strings.Repeat("x", app.DefaultCatalogLimits().MaxCatalogBytes) + "\n", want: app.ErrOperatorReadLimitExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := newSourceStageWorkspace(t)
+			name := "wiki/" + string(tc.id) + ".md"
+			if tc.missing {
+				if err := os.Remove(filepath.Join(workspace.root, filepath.FromSlash(name))); err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatal(err)
+				}
+			} else {
+				writeCanonicalFixture(t, workspace, name, []byte(tc.content))
+			}
+			if tc.storageBytes > 0 {
+				workspace.maxSourceBytes = tc.storageBytes
+			}
+			if _, err := workspace.Page(t.Context(), testScope, tc.id, tc.limits); !errors.Is(err, tc.want) {
+				t.Fatalf("index read = %v, want %v", err, tc.want)
+			}
+		})
+	}
+	workspace := newSourceStageWorkspace(t)
+	for _, id := range []knowl.PageID{"index.md", "wiki/index", canonicalIndexPath, "catalogs/team/index.md", "wiki/catalogs/team/index", "../index", "catalogs/../index", "catalogs/%2e%2e/index", "catalogs/%252e%252e/index", "catalogs//index", operatorTestLogID, "catalogs/team/log"} {
+		if _, err := workspace.Page(t.Context(), testScope, id, knowl.ReadLimits{}); !errors.Is(err, app.ErrOperatorInvalidRequest) {
+			t.Errorf("invalid index identity %q = %v", id, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := workspace.Page(ctx, testScope, operatorRootID, knowl.ReadLimits{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled index read = %v", err)
 	}
 }
 

@@ -49,7 +49,7 @@ func TestOperatorRequiresCanonicalIDs(t *testing.T) {
 	if err != nil || len(summaries.Items) != 1 || summaries.Items[0].ID != page.ID {
 		t.Fatalf("canonical summaries = %#v, %v", summaries, err)
 	}
-	for _, parent := range []knowl.PageID{"", operatorRootID, "catalogs/team/index"} {
+	for _, parent := range []knowl.PageID{"", operatorRootID, operatorTestCatalogID} {
 		catalog, err := service.CatalogChildren(t.Context(), parent, app.OperatorListOptions{})
 		want := parent
 		if want == "" {

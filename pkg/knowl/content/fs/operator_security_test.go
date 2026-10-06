@@ -25,7 +25,7 @@ func TestOperatorSnapshotDetectsReplacement(t *testing.T) {
 			target := "wiki/entities/a.md"
 			content := validWorkspacePage(operatorTestPageID, "A", testWorkspaceSourceRef, "Body")
 			if catalog {
-				target = "wiki/index.md"
+				target = canonicalIndexPath
 				content = []byte("# Root\n")
 			}
 			writeCanonicalFixture(t, workspace, target, content)
@@ -114,6 +114,10 @@ func TestOperatorPublicationGuard(t *testing.T) {
 	}
 	for _, read := range []func() error{
 		func() error {
+			_, err := reader.Page(t.Context(), testScope, operatorRootID, knowl.ReadLimits{})
+			return err
+		},
+		func() error {
 			_, err := reader.Page(t.Context(), testScope, "sources/engineering/operator", knowl.ReadLimits{})
 			return err
 		},
@@ -141,13 +145,16 @@ func TestOperatorPublicationGuard(t *testing.T) {
 }
 
 func TestOperatorRejectsUnsafeFiles(t *testing.T) {
-	for _, kind := range []string{operatorPageKind, workspaceRawDir, "manifest"} {
+	for _, kind := range []string{operatorPageKind, operatorRootID, workspaceRawDir, "manifest"} {
 		t.Run(kind, func(t *testing.T) {
 			workspace := newSourceStageWorkspace(t)
 			reader := operatorReader(t, workspace)
 			source := operatorAcceptSource(t, workspace, testScope, "v1", operatorPlainText, "original")
 			name := "wiki/entities/a.md"
 			writeCanonicalFixture(t, workspace, name, validWorkspacePage(operatorTestPageID, "A", sourceRefKey(source), "Body"))
+			if kind == operatorRootID {
+				name = canonicalIndexPath
+			}
 			if kind == workspaceRawDir {
 				name = filepath.ToSlash(filepath.Join(filepath.Dir(source.ManifestRef), "source"))
 			}
@@ -163,9 +170,12 @@ func TestOperatorRejectsUnsafeFiles(t *testing.T) {
 				t.Fatal(err)
 			}
 			var err error
-			if kind == operatorPageKind {
+			switch kind {
+			case operatorPageKind:
 				_, err = reader.Page(t.Context(), testScope, operatorTestPageID, knowl.ReadLimits{})
-			} else {
+			case operatorRootID:
+				_, err = reader.Page(t.Context(), testScope, operatorRootID, knowl.ReadLimits{})
+			default:
 				_, err = reader.SourceRevision(t.Context(), testScope, sourceRefKey(source), knowl.ReadLimits{})
 			}
 			if !errors.Is(err, app.ErrOperatorWorkspaceUnavailable) {
@@ -306,7 +316,7 @@ func TestOperatorReadBoundsAndSelectedWindow(t *testing.T) {
 			t.Errorf("list limit %d = %v", limit, err)
 		}
 	}
-	writeCanonicalFixture(t, workspace, "wiki/index.md", append([]byte("# Root\n"), bytes.Repeat([]byte("text\n"), 60_000)...))
+	writeCanonicalFixture(t, workspace, canonicalIndexPath, append([]byte("# Root\n"), bytes.Repeat([]byte("text\n"), 60_000)...))
 	if _, err := reader.CatalogChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 1}); !errors.Is(err, app.ErrOperatorReadLimitExceeded) {
 		t.Fatalf("catalog byte limit = %v", err)
 	}

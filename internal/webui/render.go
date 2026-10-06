@@ -27,15 +27,33 @@ const linkHrefAttribute = "href"
 func RenderMarkdown(markdown string) (template.HTML, error) { return renderPageMarkdown(markdown, "") }
 func renderPageMarkdown(markdown, pageID string) (template.HTML, error) {
 	title := ""
-	if pageID != "" && (strings.HasPrefix(markdown, "---\n") || strings.HasPrefix(markdown, "---\r\n")) {
-		limits := okf.DefaultLimits()
-		limits.MaxBytes = max(limits.MaxBytes, len(markdown))
-		parsed, err := okf.ParseConcept(pageID+".md", []byte(markdown), limits)
+	if pageID != "" {
+		relative := pageID + ".md"
+		kind, err := okf.ClassifyPath(relative)
 		if err != nil {
 			return "", fmt.Errorf("read canonical body: %w", err)
 		}
-		markdown = parsed.Body
-		title = parsed.Metadata.Title
+		limits := okf.DefaultLimits()
+		switch kind {
+		case okf.DocumentIndex:
+			index, err := okf.ValidateIndex(relative, []byte(markdown), limits)
+			if err != nil {
+				return "", fmt.Errorf("read canonical body: %w", err)
+			}
+			markdown = index.Body
+		case okf.DocumentConcept:
+			if strings.HasPrefix(markdown, "---\n") || strings.HasPrefix(markdown, "---\r\n") {
+				limits.MaxBytes = max(limits.MaxBytes, len(markdown))
+				parsed, err := okf.ParseConcept(relative, []byte(markdown), limits)
+				if err != nil {
+					return "", fmt.Errorf("read canonical body: %w", err)
+				}
+				markdown = parsed.Body
+				title = parsed.Metadata.Title
+			}
+		default:
+			return "", fmt.Errorf("read canonical body: %w", &okf.Violation{Path: relative, Rule: okf.RulePathInvalid})
+		}
 	}
 	source := []byte(markdown)
 	document := parser.New().Parse(source)

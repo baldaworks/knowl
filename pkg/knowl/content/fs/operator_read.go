@@ -22,10 +22,10 @@ const operatorPlainText = "text/plain"
 
 var _ app.WorkspaceReader = (*Workspace)(nil)
 
-// Page reads one detached factual page and its scoped accepted provenance under
-// one publication lock. It never fetches source content or upstream resources.
+// Page reads one detached concept and its scoped accepted provenance, or a
+// canonical index, under one publication lock. It never fetches upstream resources.
 func (workspace *Workspace) Page(ctx context.Context, scope knowl.ScopeRef, id knowl.PageID, limits knowl.ReadLimits) (knowl.OperatorPage, error) {
-	relative, err := operatorPagePath(id, okf.DocumentConcept)
+	relative, err := operatorPagePath(id, okf.DocumentConcept, okf.DocumentIndex)
 	if err != nil {
 		return knowl.OperatorPage{}, err
 	}
@@ -39,6 +39,21 @@ func (workspace *Workspace) Page(ctx context.Context, scope knowl.ScopeRef, id k
 		return knowl.OperatorPage{}, operatorReadError(err, app.ErrPageNotFound)
 	}
 	defer wiki.close()
+	if kind, _ := okf.ClassifyPath(relative); kind == okf.DocumentIndex {
+		ceiling := app.DefaultCatalogLimits().MaxCatalogBytes
+		content, _, err := wiki.read(relative, limits, min(workspace.maxSourceBytes, ceiling))
+		if err != nil {
+			return knowl.OperatorPage{}, operatorReadError(err, app.ErrPageNotFound)
+		}
+		index, err := okf.ValidateIndex(relative, content, okfLimits(ceiling))
+		if err != nil {
+			return knowl.OperatorPage{}, operatorReadError(err, app.ErrOperatorWorkspaceUnavailable)
+		}
+		digest := digestBytes(content)
+		return knowl.OperatorPage{ID: id, Title: markdownTitle([]byte(index.Body)), Markdown: string(content), Digest: digest, Version: digest,
+			RelatedPageIDs: []knowl.PageID{}, Sources: []knowl.OperatorPageSource{},
+		}, nil
+	}
 	page, _, err := workspace.operatorPage(wiki, relative, limits)
 	if err != nil {
 		return knowl.OperatorPage{}, operatorReadError(err, app.ErrPageNotFound)
@@ -139,13 +154,13 @@ func operatorReadError(err, missing error) error {
 	}
 }
 
-func operatorPagePath(id knowl.PageID, wanted okf.DocumentKind) (string, error) {
+func operatorPagePath(id knowl.PageID, wanted ...okf.DocumentKind) (string, error) {
 	if !validReadPath(string(id)) || knowlwiki.NormalizePageTarget(string(id)) != string(id) {
 		return "", app.ErrOperatorInvalidRequest
 	}
 	relative := string(id) + markdownExt
 	kind, err := okf.ClassifyPath(relative)
-	if err != nil || kind != wanted {
+	if err != nil || !slices.Contains(wanted, kind) {
 		return "", app.ErrOperatorInvalidRequest
 	}
 	return relative, nil
