@@ -260,7 +260,7 @@ func operatorListResult[T any](service *OperatorService, endpoint, filter string
 	if canonical && options.Continuation.SnapshotVersion != "" && options.Continuation.SnapshotVersion != page.SnapshotVersion {
 		return knowl.OperatorList[T]{}, ErrOperatorSnapshotChanged
 	}
-	if !validOpaque(page.NextKey, maxCursorBytes, true) {
+	if !validOpaque(page.NextKey, operatorContinuationKeyLimit(endpoint), true) {
 		return knowl.OperatorList[T]{}, ErrOperatorReadLimitExceeded
 	}
 	result := knowl.OperatorList[T]{Items: append(make([]T, 0, len(page.Items)), page.Items...), SnapshotVersion: page.SnapshotVersion}

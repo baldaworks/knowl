@@ -105,3 +105,12 @@ func runOperatorRetryOperationsPostgres(t *testing.T, dsn string) {
 	t.Cleanup(func() { _ = store.Close() })
 	storetest.RunOperatorRetryOperations(t, store, "operator-retry")
 }
+
+func runOperatorCursorBoundsPostgres(t *testing.T, dsn string) {
+	store, err := Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	storetest.RunOperatorCursorBounds(t, store, "operator-cursor")
+}

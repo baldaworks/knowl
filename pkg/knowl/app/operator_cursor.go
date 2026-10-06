@@ -20,7 +20,9 @@ const (
 	operatorPagesEndpoint      = "pages"
 	operatorOperationsEndpoint = "operations"
 	maxOperatorCursorBytes     = 8 << 10
-	maxOperatorQueryBytes      = 16 << 10
+	// Composite operation IDs can exceed an individual source cursor bound.
+	maxOperatorPositionBytes = 8 << 10
+	maxOperatorQueryBytes    = 16 << 10
 )
 
 type operatorCursorPayload struct {
@@ -104,7 +106,7 @@ func (service *OperatorService) decodeCursor(endpoint, filter string, limit int,
 		return OperatorContinuation{}, ErrOperatorCursorInvalid
 	}
 	value := wire.Payload
-	if value.Version != 1 || value.Endpoint != endpoint || value.Scope != operatorFingerprint(string(service.scope)) || value.Filter != operatorFingerprint(filter) || value.Limit != limit || !validOpaque(value.Key, maxCursorBytes, false) {
+	if value.Version != 1 || value.Endpoint != endpoint || value.Scope != operatorFingerprint(string(service.scope)) || value.Filter != operatorFingerprint(filter) || value.Limit != limit || !validOpaque(value.Key, operatorContinuationKeyLimit(endpoint), false) {
 		return OperatorContinuation{}, ErrOperatorCursorInvalid
 	}
 	if (endpoint == operatorPagesEndpoint || endpoint == operatorCatalogEndpoint) && !validExecutionDigest(value.SnapshotVersion) {
@@ -140,16 +142,22 @@ func EncodeOperatorOperationPosition(position OperatorOperationPosition) (string
 	if !validOperatorPosition(position) {
 		return "", ErrOperatorInvalidRequest
 	}
+	if len(position.OperationID) > maxOperatorPositionBytes {
+		return "", ErrOperatorReadLimitExceeded
+	}
 	data, err := json.Marshal(position)
-	if err != nil || len(data) > maxCursorBytes {
+	if err != nil {
 		return "", ErrOperatorInvalidRequest
+	}
+	if len(data) > maxOperatorPositionBytes {
+		return "", ErrOperatorReadLimitExceeded
 	}
 	return string(data), nil
 }
 
 // DecodeOperatorOperationPosition decodes a verified backend key, not a public cursor.
 func DecodeOperatorOperationPosition(key string) (OperatorOperationPosition, error) {
-	if !validOpaque(key, maxCursorBytes, false) {
+	if !validOpaque(key, maxOperatorPositionBytes, false) {
 		return OperatorOperationPosition{}, ErrOperatorCursorInvalid
 	}
 	var position OperatorOperationPosition
@@ -165,5 +173,15 @@ func DecodeOperatorOperationPosition(key string) (OperatorOperationPosition, err
 }
 
 func validOperatorPosition(position OperatorOperationPosition) bool {
-	return !position.CreatedAt.IsZero() && validOpaque(string(position.OperationID), maxCursorBytes, false)
+	// Input/output size is checked separately so a valid tuple exceeding the
+	// materialized budget remains a resource-limit error rather than a bad request.
+	id := string(position.OperationID)
+	return !position.CreatedAt.IsZero() && validOpaque(id, len(id), false)
+}
+
+func operatorContinuationKeyLimit(endpoint string) int {
+	if endpoint == operatorOperationsEndpoint {
+		return maxOperatorPositionBytes
+	}
+	return maxCursorBytes
 }

@@ -124,3 +124,12 @@ func TestOperatorRetryOperations(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	storetest.RunOperatorRetryOperations(t, store, "operator-retry")
 }
+
+func TestOperatorCursorBounds(t *testing.T) {
+	store, err := Open(t.Context(), t.TempDir()+"/cursor-bounds.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	storetest.RunOperatorCursorBounds(t, store, "operator-cursor")
+}
