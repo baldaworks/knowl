@@ -4,18 +4,13 @@ import (
 	"errors"
 	"os"
 	"runtime"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 func openReadDirectory(path string) (*os.File, error) {
-	name := `\??\` + path
-	if strings.HasPrefix(path, `\\`) {
-		name = `\??\UNC\` + strings.TrimPrefix(path, `\\`)
-	}
-	return openReadHandle(0, name, true)
+	return openReadHandle(0, windowsReadRootName(path), true)
 }
 
 func openReadChild(parent *os.File, name string, directory bool) (*os.File, error) {
