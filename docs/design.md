@@ -13,7 +13,7 @@ and bounded evidence with source references. The configured maintainer
 provider proposes validated Markdown updates inside Knowl; it is neither a
 connector nor another public interface.
 
-The default deployment is a sidecar service with SQLite. Agents use MCP; HTTP
+The default operational store is SQLite for local and service use. Agents use MCP; HTTP
 is the deterministic control transport. Go applications may use Fx to run the
 same host runtime in-process.
 
@@ -289,7 +289,7 @@ candidate/capacity and failure policy. Addresses, credentials and CPU settings d
 not identify the output policy. Changing the space requires a complete rebuild.
 Genuine historical staged recovery publishes lexical state without new
 inference; dense repair runs separately. Old unplanned generations reject before
-embedding or maintainer calls. See [configuration and recovery](operations.md#optional-embeddings)
+embedding or maintainer calls. See [configuration and recovery](search.md#coverage-limits-and-recovery)
 and the [real CPU quality measurements](testing.md#real-cpu-embedding-quality-gate).
 
 ### Source maintenance contract v6

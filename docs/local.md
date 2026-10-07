@@ -1,0 +1,88 @@
+# Run Knowl locally
+
+This quickstart uses Codex as the ACP agent that maintains a project-local
+wiki. It builds the current checkout so the guide and binary share the same
+configuration contract. You need Git, the Go version in `go.mod`, Node.js/npm,
+and an installed, authenticated Codex CLI. Authenticate Codex before running
+maintenance; the ACP bridge uses that local setup. Initial bridge startup may
+need network access to download its pinned npm package.
+
+For a persistent HTTP/MCP host, use the [service quickstart](service.md).
+For another agent, see [Bring your own agent](agents.md).
+
+## Prepare a project
+
+From a cloned Knowl repository:
+
+```bash
+KNOWL_DEMO=$(mktemp -d)
+go build -o "$KNOWL_DEMO/knowl" ./cmd/knowl
+mkdir -p "$KNOWL_DEMO/sources" "$KNOWL_DEMO/.config/knowl"
+cp examples/source-to-wiki/sources/authentication-service.md "$KNOWL_DEMO/sources/"
+```
+
+Save the following as `$KNOWL_DEMO/.config/knowl/config.yaml`:
+
+```yaml
+runtime:
+  providers:
+    codex:
+      type: codex_acp
+      codex_acp:
+        bridge_version: "1.7.3"
+knowl:
+  provider: codex
+  workspace:
+    path: knowledge
+  storage:
+    type: sqlite
+    sqlite:
+      path: .knowl/knowl.sqlite
+  scope: local
+  server:
+    listen_addr: 127.0.0.1:0
+  sources:
+    - id: engineering-docs
+      type: filesystem
+      filesystem:
+        root: sources
+        include: ["authentication-service.md"]
+        flavor: markdown
+```
+
+The agent uses its default model. If your account needs a specific model, add
+`model` under `codex_acp` using an available identifier. These one-shot commands do not start HTTP/MCP listeners and need no persistent
+service or operator token.
+
+## Build and inspect the wiki
+
+```bash
+cd "$KNOWL_DEMO"
+./knowl init
+./knowl run --source engineering-docs
+./knowl validate
+./knowl source status engineering-docs
+./knowl retrieve 'authentication session revocation'
+```
+
+The source status must show completed maintenance, not merely a successful
+source scan. Retrieval should contain a non-empty `evidence` array with page
+identities, excerpts and source references. Read the generated Markdown under
+`knowledge/wiki/`; accepted source revisions are preserved under `knowledge/raw/`.
+Generated titles and paths depend on the agent, so follow the actual evidence
+rather than assuming a fixed output filename.
+
+If maintenance fails, inspect the reported operation and repair the selected
+agent's installation, authentication or model selection before retrying. See
+[source recovery](operations.md#recovering-failed-source-maintenance).
+
+## Next steps
+
+- [Codex plugin](local-codex.md): connect Codex as a consumer of this knowledge.
+- [Web UI](web-ui.md): enable browser access with a fixed listener and operator token.
+- [Search](search.md): optionally add an embedding API or local TEI server.
+- [Knowl's own wiki](examples/own-docs-wiki.md): see this workflow applied to the repository's documentation.
+
+Keep the demo directory to inspect its wiki and provenance. To adopt the workflow
+in an existing project, add the configuration and sources deliberately; preserve
+existing knowledge and credentials.

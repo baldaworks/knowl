@@ -12,15 +12,15 @@ into connected Markdown pages and gives AI agents grounded evidence from that
 wiki. Knowledge remains available across tasks, with references back to the
 sources that support it.
 
-Run Knowl with your own storage and maintainer provider. The wiki uses
-[Open Knowledge Format (OKF) v0.2](docs/workspace.md), so you can inspect it,
-review it in Git, and export it as a portable bundle.
+Knowl builds on Andrej Karpathy's [LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):
+an agent reads sources and maintains connected knowledge over time. Bring your
+own ACP-compatible agent to maintain the wiki. Your knowledge stays in portable,
+[Open Knowledge Format (OKF)](docs/workspace.md) Markdown under your control.
 
-[Quickstart](#minimal-sidecar-quickstart) ·
-[Use with Codex](#local-codex-plugin) ·
-[Connect an agent](#connect-an-agent) ·
+[Get started](#get-started) ·
 [Browse the wiki](docs/web-ui.md) ·
-[Documentation](#documentation-by-goal)
+[See Knowl's own wiki](knowledge/wiki/index.md) ·
+[Documentation](docs/README.md)
 
 ## What You Get
 
@@ -30,7 +30,7 @@ review it in Git, and export it as a portable bundle.
 | Understand where a result came from | Bounded evidence linked to its supporting sources |
 | Own and inspect your knowledge | Plain Markdown in an OKF-compatible workspace |
 | Read the wiki in your browser | An optional read-only console for pages, saved sources, search, and processing history |
-| Find related evidence across different wording | Optional hybrid search through your own embedding API or CPU sidecar |
+| Find related evidence across different wording | Optional hybrid search through your own embedding API or local CPU server |
 | Choose where it runs | Local Codex, a self-hosted MCP/HTTP service, or an embedded Go runtime |
 
 ## From Sources to a Wiki
@@ -48,58 +48,26 @@ also read the wiki directly, inspect its source references, or export it for
 publishing. See the [source-to-wiki example](examples/source-to-wiki/README.md)
 for a complete walkthrough.
 
-## Minimal Sidecar Quickstart
+## Get Started
 
-The quickstart runs the published
-[v0.5.0](https://github.com/baldaworks/knowl/releases/tag/v0.5.0) image with a
-checked-in example source. It requires Git, Docker Compose, `curl`, an OpenAI
-API key, and a model available to that key.
+| Local | Service |
+| --- | --- |
+| Keep a wiki alongside your project and use a local ACP agent to maintain it. | Run a persistent Knowl service and connect clients over MCP or HTTP. |
+| [Local quickstart with Codex](docs/local.md) | [Service quickstart](docs/service.md) |
 
-```bash
-git clone https://github.com/baldaworks/knowl.git
-cd knowl
+Both guides take you from a source document to a published wiki page and a
+retrieval result. Choose your maintainer in the [agent guide](docs/agents.md),
+including a custom agent through `generic_acp` over stdio.
 
-export OPENAI_API_KEY='your-api-key'
-export OPENAI_MODEL='a-model-available-to-your-account'
-export KNOWL_OPERATOR_TOKEN='replace-with-a-local-secret'
+<a id="minimal-sidecar-quickstart"></a>
+The container quickstart is now in the [service guide](docs/service.md).
 
-docker compose -f deploy/sidecar/quickstart.compose.yaml up -d
-curl -sS http://127.0.0.1:8080/readyz
-```
+## Knowl Uses Knowl
 
-The configured source synchronizes on startup. Check maintenance status:
-
-```bash
-docker compose -f deploy/sidecar/quickstart.compose.yaml \
-  exec knowl knowl --config-dir /etc source status engineering
-```
-
-Then retrieve grounded evidence:
-
-```bash
-curl -sS --get \
-  -H "Authorization: Bearer ${KNOWL_OPERATOR_TOKEN}" \
-  --data-urlencode 'query=Engineering shared page' \
-  http://127.0.0.1:8080/v1/retrieve
-```
-
-A successful response contains a non-empty `evidence` array with source
-provenance. `/readyz` confirms that the service and storage are ready; use
-`source status` to confirm that model-backed maintenance completed.
-
-Stop the example without deleting its persistent volume:
-
-```bash
-docker compose -f deploy/sidecar/quickstart.compose.yaml down
-```
-
-The quickstart uses the hosted `openai` maintainer provider. Other
-configurations may use `opencode_acp`, which requires `opencode acp` on `PATH`
-and an authenticated OpenCode session. See
-[configuration and operations](docs/operations.md) for provider and source
-settings. Maintenance runs sequentially by default; opt into
-[two isolated workers](docs/operations.md#maintenance-workers) when a blocked
-model call should allow another operation to progress.
+Knowl maintains a wiki of its own documentation. Compare the [source docs](docs/)
+with the [generated wiki](knowledge/wiki/index.md) to see source material become
+connected knowledge. The [walkthrough](docs/examples/own-docs-wiki.md) explains
+the configured ACP agent, generation commands and saved source provenance.
 
 ## Connect an Agent
 
@@ -125,7 +93,7 @@ tools: `knowl_retrieve` for evidence, `knowl_ingest` for durable inputs, and
 `knowl_operation` for operation status.
 
 The same capabilities are available through HTTP. See
-[sidecar deployment](docs/sidecar.md#connect-an-mcp-client),
+[service connection guide](docs/service.md#connect-an-mcp-client),
 [service operations](docs/operations.md#http-contract), and the
 [OpenAPI contract](api/openapi/knowl.yaml).
 
@@ -156,9 +124,9 @@ covers the full text of each published page within the configured projection
 capacity; a dense-only match shows the matching passage as its excerpt.
 
 Use your own compatible embedding API or the
-[self-hosted CPU sidecar](docs/sidecar.md#optional-cpu-embeddings).
+[local CPU embedding server](docs/search.md#local-embedding-server).
 Embeddings are off by default. Choose explicit keyword fallback or strict
-semantic availability in the [operations guide](docs/operations.md#optional-embeddings).
+semantic availability in the [search guide](docs/search.md).
 
 ## Keep Your Knowledge Portable
 
@@ -174,17 +142,19 @@ layout and commands.
 
 | Goal | Start here |
 | --- | --- |
-| Set up local Codex | [Local Codex guide](docs/local-codex.md) |
-| Deploy an MCP/HTTP service | [Sidecar deployment](docs/sidecar.md) |
-| Browse pages, saved sources, and processing history | [Web UI guide](docs/web-ui.md) |
-| Configure providers, sources, and recovery | [Operations guide](docs/operations.md) |
-| Understand storage and source provenance | [Workspace guide](docs/workspace.md) |
-| Export the wiki for publishing or agents | [OKF and llms.txt export](docs/workspace.md#export-for-publication) |
-| Embed Knowl in an application | [Product design](docs/design.md) |
-| Integrate over HTTP | [OpenAPI contract](api/openapi/knowl.yaml) |
-| See source documents become a wiki | [Source-to-wiki showcase](examples/source-to-wiki/README.md) |
-| Review the container quickstart release | [v0.5.0 release notes](docs/releases/v0.5.0.md) |
-| Review the npm/plugin release | [v0.6.0 release notes](docs/releases/v0.6.0.md) |
+| Run a local wiki with Codex | [Local quickstart](docs/local.md) |
+| Run Knowl as an MCP/HTTP service | [Service quickstart](docs/service.md) |
+| Bring your own ACP agent | [Agent configuration](docs/agents.md) |
+| Use the Codex plugin | [Codex integration](docs/local-codex.md) |
+| Browse the wiki | [Web UI](docs/web-ui.md) |
+| Configure lexical or hybrid search | [Search](docs/search.md) |
+| See Knowl maintain its own wiki | [Own-docs walkthrough](docs/examples/own-docs-wiki.md) |
+| Operate and recover Knowl | [Operations](docs/operations.md) |
+| Understand storage and export | [Workspace and OKF](docs/workspace.md) |
+| Embed Knowl in Go | [Go application integration](docs/operations.md#go-application-integration) |
+
+See the [documentation index](docs/README.md) for architecture, API contracts,
+quality measurements and release history.
 
 ## License
 

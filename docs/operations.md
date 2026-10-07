@@ -1,10 +1,13 @@
-# Service operations
+# Operations and configuration
 
-This document is the operator-facing reference for running Knowl as a service.
+<a id="service-operations"></a>
+
+This is the shared configuration and operator reference for local and service use.
 
 If you only need the product overview, start with [README.md](../README.md).
-If you need the baseline container path, see [sidecar deployment](sidecar.md).
-For project-local Codex setup and MCP stdio, see the [local Codex guide](local-codex.md).
+Start with the [local quickstart](local.md) or [service quickstart](service.md).
+See [agent configuration](agents.md) for maintainers and the
+[Codex plugin guide](local-codex.md) for consumer MCP integration.
 
 ## Runtime model
 
@@ -15,8 +18,9 @@ Knowl is a standalone knowledge service with:
 - rebuildable operational state and projections;
 - MCP and HTTP transports over the same application services.
 
-Baseline deployment is service/sidecar mode. Fx embedding is the alternative
-for Go applications that want the same runtime in-process.
+Use the CLI for a project-local workflow or run a persistent MCP/HTTP service.
+Go applications can compose the same runtime in-process; see
+[Go application integration](#go-application-integration).
 
 ## Maintenance workers
 
@@ -206,7 +210,7 @@ Notes:
   is available.
 - `knowl.storage.type` selects one optional typed storage block.
 - when storage is omitted, Knowl defaults to SQLite.
-- default local listen address is `127.0.0.1:8080`; service/sidecar deployments
+- default local listen address is `127.0.0.1:8080`; container deployments
   may override it with `0.0.0.0:8080` or another literal IP bind.
 - when `knowl.operator.token` is non-empty, `/v1/*` and `/mcp` require an
   `Authorization: Bearer <token>` header. Health and readiness probes remain
@@ -323,100 +327,9 @@ reports mean unavailable, rather than failed retrieval or zero work.
 
 ## Optional embeddings
 
-Embeddings are off by default. Disabled configuration creates no embedding
-client, reads no embedding credential and makes no model/readiness request.
-The maintainer selected by `knowl.provider` remains a separate requirement.
-
-This opt-in fragment matches the checked-in CPU sidecar profile:
-
-```yaml
-knowl:
-  embeddings:
-    enabled: true
-    endpoint: http://tei:80/v1/embeddings
-    model: intfloat/multilingual-e5-base
-    revision: d128750597153bb5987e10b1c3493a34e5a4502a
-    dimensions: 768
-    query_prefix: 'query: '
-    passage_prefix: 'passage: '
-    failure_policy: lexical
-```
-
-`endpoint` is the full URL for one OpenAI-compatible float embedding API. Use
-`api_key_env: YOUR_EMBEDDING_KEY` to read an optional bearer credential from the
-process environment. It names the variable, not its value; a missing configured
-credential fails startup. Enabled configuration requires model/revision and
-1–4,096 dimensions. Model/revision/prefix fields are bounded at 256 UTF-8 bytes;
-the endpoint at 2,048. Empty prefixes are supported for models that require none.
-Userinfo and fragments in endpoints are rejected. HTTPS uses normal TLS;
-private HTTP is supported. Redirects and inference retries are disabled.
-
-The operator must keep the declared immutable revision aligned with the served
-weights. The response model name and vector dimension are checked; the generic
-API cannot attest weight identity. Change the declared revision and rebuild
-when weights change. The pinned reference is
-[E5-base](https://huggingface.co/intfloat/multilingual-e5-base), served by the
-[CPU TEI sidecar](sidecar.md#optional-cpu-embeddings) with mean float32 output,
-required prefixes and server truncation disabled.
-
-| Setting or fixed bound | Behavior |
-| --- | --- |
-| `failure_policy: lexical` | Classified embedding failure returns lexical evidence with `degraded` mode and a safe reason |
-| `failure_policy: strict` | Missing/unavailable/incompatible dense retrieval returns a typed failure |
-| Request | At most 16 inputs, 2,048 UTF-8 bytes each including prefix, 64 KiB serialized body |
-| Response | At most 1 MiB; complete unique indices, exact model/dimensions, finite nonzero normalized vectors |
-| Inference | 10-second request bound or earlier caller deadline; four concurrent client requests, no hidden retry |
-| Semantic input | NFC/original case; 384 runes per chunk, 64 overlap; full page text within projection bounds, four chunks/query or source signals |
-| Projection | At most 8,192 chunks, 1 MiB of page coverage metadata and 64 MiB total per scope; 15-minute rebuild or earlier caller deadline |
-
-Rune limits are not tokenizer limits. The service must reject token overflow
-rather than silently truncate; the pinned TEI reports `input_limit`. Chunk/rune
-coverage omissions for bounded queries/source signals appear in the Go report;
-ready page projections have zero omissions. Lexical full-field indexing and
-maintenance's complete-page/request limits still apply. Larger corpora require a
-separately evaluated capacity design; these bounds are not throughput promises.
-
-HTTP/MCP results optionally include, for example:
-
-```json
-{"retrieval":{"effective":"degraded","reason":"unavailable"}}
-```
-
-Effective modes are `lexical`, `hybrid`, `degraded`, and `failed`. Go
-`QueryResult.Retrieval`, `IngestResult.Retrieval` and durable
-`Operation.Retrieval` additionally carry requested mode, model-space prefix,
-candidate/scanned-chunk counts and omitted coverage. Maintenance records its
-selection report before maintainer inference. `Operation.RetrievalAttempt`
-identifies its originating work attempt; terminal/legacy replay does not invent
-or replace historical reports. Reports omit text, endpoint URLs, credentials and
-upstream error bodies. Public transport exposes only effective mode and reason.
-
-A rebuild replaces lexical state first, then generates full-page vectors in
-batches of at most 16 without holding SQL locks. Complete dense publication
-checks the canonical snapshot and every page's expected chunk count again;
-concurrent change discards the stale build. A classified failure saves degraded
-state even under strict policy. With lexical fallback, startup may be ready
-while semantic retrieval is degraded; `/readyz` alone is not a hybrid guarantee.
-Read the retrieval status. Invalid input and caller cancellation never return
-successful fallback.
-
-Queries never trigger a rebuild or download a model. After repairing a degraded
-service, restart Knowl to retry the projection once during startup. Embedded
-applications can call `knowl.RebuildProjection(ctx, config, snapshot)` explicitly.
-Changing model/revision/dimensions/prefixes requires a complete projection rebuild
-and changes maintenance identity. A strict projection error can occur after a
-canonical commit: repair the derived projection, preserving the committed
-facts and raw evidence.
-
-Migration 16 adds disposable vector state and bounded operation reports in both
-stores. Migration 21 expands the ordinal range and adds a bounded page coverage
-manifest. Existing partial indexes are incompatible with the new preprocessing
-identity and are rebuilt on startup. Down removes derived vector additions while
-preserving canonical/raw content and older durable state. Stop writers and pair
-the schema with a compatible binary before rollback. Disabling embeddings retains
-the default lexical behavior and
-ignores derived vectors. See [pending-operation recovery](#upgrading-pending-operations)
-for generation changes.
+Search configuration, full-page coverage, external APIs, local TEI and rebuild
+recovery are documented in the [search guide](search.md). Embeddings are optional
+and independent of the maintainer and deployment method.
 
 ## Supported operator workflow
 
@@ -464,11 +377,8 @@ Empty workspace initialization:
 ./knowl start
 ```
 
-Sidecar baseline:
-
-```bash
-docker compose -f deploy/sidecar/compose.yaml up --build
-```
+For container prerequisites, provider credentials and startup commands, follow
+the [service quickstart](service.md#build-and-run).
 
 The CLI commands `retrieve`, `ingest`, and `operation` are one-shot operator
 wrappers over the same service semantics. Source controls run directly against
@@ -1227,18 +1137,20 @@ Host construction performs:
 
 ## Sidecar notes
 
-The checked-in sidecar assets assume:
+The [service deployment assets](service.md) assume:
 
 - Knowl owns `/var/lib/knowl`;
 - the canonical workspace is `/var/lib/knowl/knowledge`;
 - the agent talks to Knowl over MCP or the same KISS HTTP contract;
 - the agent does not mutate `raw/`, `wiki/`, or `.knowl/` directly.
 
-## Fx embedding
+<a id="fx-embedding"></a>
+
+## Go application integration
 
 For Go applications:
 
 - root `pkg/knowl` is the non-Fx runtime entrypoint;
 - `pkg/knowlfx.NewApp` wraps the same runtime with Fx lifecycle management.
 
-This is an alternative deployment/composition mode, not a second product API.
+Both entrypoints use the same application services and storage contracts.

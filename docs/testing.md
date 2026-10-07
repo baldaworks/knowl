@@ -200,7 +200,7 @@ the artifact rather than treating these values as deployment guarantees.
 An authorized, private 51-page wiki snapshot (page-digest set SHA-256
 `ad2518dd403ce09f810085b78a1e3a745ba60e0c8989a8da0d9d1f8bf8f5654c`)
 was measured before and after full-page indexing with the same E5-base revision,
-prefixes, CPU TEI sidecar and queries. The original 16-chunk/page implementation
+prefixes, CPU TEI server and queries. The original 16-chunk/page implementation
 indexed 644 chunks and omitted 192,332 normalized runes across 31 pages. The
 complete-page implementation indexed 1,272 chunks, at most 79 for one page,
 with zero omissions. Both fit the 8,192-chunk projection limit.
@@ -246,10 +246,13 @@ explicitly skips local model tests. A configured endpoint requires the PostgreSQ
 fixture. Skipping is never recorded as a passing model gate.
 
 The Compose profile exposes no TEI host port. To reproduce on its private network,
-start only TEI from this checkout and create a disposable database:
+start only TEI from this checkout and create a disposable database. Compose
+resolves the whole profile even when starting only TEI, so supply unused values
+for the Knowl-only variables in these TEI-only commands:
 
 ```bash
-docker compose -p knowl-evaluation -f deploy/sidecar/compose.yaml \
+OPENAI_API_KEY=unused OPENAI_MODEL=unused KNOWL_OPERATOR_TOKEN=unused \
+  docker compose -p knowl-evaluation -f deploy/sidecar/compose.yaml \
   -f deploy/sidecar/embeddings.compose.yaml up -d tei
 # Wait until `docker compose ... ps tei` reports healthy.
 docker run -d --name knowl-eval-postgres \
@@ -280,7 +283,8 @@ observations. Clean up the fixture while preserving the model cache:
 
 ```bash
 docker rm -f knowl-eval-postgres
-docker compose -p knowl-evaluation -f deploy/sidecar/compose.yaml \
+OPENAI_API_KEY=unused OPENAI_MODEL=unused KNOWL_OPERATOR_TOKEN=unused \
+  docker compose -p knowl-evaluation -f deploy/sidecar/compose.yaml \
   -f deploy/sidecar/embeddings.compose.yaml down
 ```
 

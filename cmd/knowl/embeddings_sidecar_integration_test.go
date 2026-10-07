@@ -14,6 +14,11 @@ func TestEmbeddingSidecarMergedComposeContract(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("Docker Compose is required for the deployment contract")
 	}
+
+	expectedKnowlEnv := map[string]string{"OPENAI_API_KEY": "test-api-key", "OPENAI_MODEL": "test-model", "KNOWL_OPERATOR_TOKEN": "test-operator-token"}
+	for key, value := range expectedKnowlEnv {
+		t.Setenv(key, value)
+	}
 	repo := testRepoRoot(t)
 	command := exec.CommandContext(t.Context(), "docker", "compose", "-p", "knowl-embedding-contract", "-f", filepath.Join(repo, "deploy", "sidecar", "compose.yaml"), "-f", filepath.Join(repo, "deploy", "sidecar", "embeddings.compose.yaml"), "config", "--format", "json")
 	output, err := command.Output()
@@ -92,6 +97,12 @@ func TestEmbeddingSidecarMergedComposeContract(t *testing.T) {
 		t.Fatal("missing persistent cache volume")
 	}
 	knowl := config.Services["knowl"]
+
+	for key, value := range expectedKnowlEnv {
+		if knowl.Environment[key] != value {
+			t.Fatalf("service environment %s was not preserved", key)
+		}
+	}
 	shared := false
 	for network := range knowl.Networks {
 		if _, present := tei.Networks[network]; present {

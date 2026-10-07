@@ -3,6 +3,10 @@
 The local plugin connects your project's Knowl wiki to Codex through MCP stdio.
 It provides setup and bounded maintenance skills without a separate service.
 
+For a complete source-to-wiki setup using Codex as the maintainer, start with
+the [local quickstart](local.md). This page configures Codex as a Knowl client;
+choose the wiki maintainer separately in the [agent guide](agents.md).
+
 ## Install
 
 These instructions require the v0.6.0 npm release to be published. See the

@@ -30,7 +30,7 @@ Use HTTPS through a trusted proxy for access beyond loopback. The token also
 permits ingestion through the existing agent API, even though the UI only reads.
 Keep local secret overrides out of Git. See
 [configuration and security](operations.md#optional-web-ui-and-operator-reads)
-and [container setup](sidecar.md#optional-browser-access).
+and [container setup](service.md#optional-browser-access).
 
 ## Knowledge
 
@@ -231,17 +231,6 @@ go test -count=1 ./examples/source-to-wiki \
 
 ## Maintaining this project's wiki
 
-After documentation changes are reviewed, regenerate the project's wiki through
-its existing source configuration and maintainer workflow, from the repository
-root:
-
-```bash
-task wiki:generate
-```
-
-This task resolves the pinned ACP runner, runs `knowl run --source knowl-docs`,
-and validates the workspace. It requires the configured maintainer's
-prerequisites and authentication. Inspect the generated pages and accepted raw
-provenance separately before committing. `task wiki:validate` validates the
-workspace without regeneration. Preserve accepted raw history when revising or
-rolling back wiki output; operators own its Git publication.
+See [Knowl maintains its own documentation wiki](examples/own-docs-wiki.md) for
+the actual source configuration, generation commands, prerequisites and review
+of saved provenance.
