@@ -43,12 +43,9 @@ func newHandler(files fs.FS, dependencies Dependencies) (*Handler, error) {
 		return nil, err
 	}
 	t, err := template.New("ui").Funcs(template.FuncMap{
-		"lower":             strings.ToLower,
-		"pageURL":           pageURL,
-		"contextualPageURL": contextualPageURL,
-		"catalogURL": func(id domain.PageID) string {
-			return knowledgeURL(url.Values{parentIDParameter: {string(id)}})
-		},
+		"lower":         strings.ToLower,
+		"pageURL":       pageURL,
+		"treePageURL":   treePageURL,
 		"rawURL":        func(ref string) string { return fragmentURL("source-revision", url.Values{"source_ref": {ref}}) },
 		"shortRevision": shortRevision,
 		"shortIdentity": shortIdentity,

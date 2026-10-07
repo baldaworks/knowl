@@ -30,7 +30,11 @@ func (h *Handler) wikiDirectory(w http.ResponseWriter, r *http.Request) {
 	if result.NextCursor != "" {
 		next = fragmentURL("wiki-directory", url.Values{"directory": {directory}, limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}, cursorParameter: {result.NextCursor}})
 	}
-	h.render(w, http.StatusOK, "wiki_directory", struct {
+	name := "wiki_directory"
+	if options.Cursor != "" {
+		name = "wiki_directory_more_page"
+	}
+	h.render(w, http.StatusOK, name, struct {
 		Directory string
 		Items     []domain.OperatorWikiEntry
 		Next      string

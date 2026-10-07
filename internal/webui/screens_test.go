@@ -228,6 +228,28 @@ type screenReader struct {
 	catalogErrors               map[domain.PageID]error
 	pageIDs                     []domain.PageID
 	catalogReads                int
+	directories                 map[string][]domain.OperatorWikiEntry
+}
+
+func (f *screenReader) WikiDirectoryChildren(_ context.Context, _ domain.ScopeRef, directory string, o app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorWikiEntry], error) {
+	f.calls++
+	items, ok := f.directories[directory]
+	if !ok {
+		return app.OperatorReadPage[domain.OperatorWikiEntry]{}, app.ErrOperatorDirectoryNotFound
+	}
+	if o.Continuation.SnapshotVersion != "" && o.Continuation.SnapshotVersion != f.snapshot {
+		return app.OperatorReadPage[domain.OperatorWikiEntry]{}, app.ErrOperatorSnapshotChanged
+	}
+	start := 0
+	for start < len(items) && items[start].Path <= o.Continuation.Key {
+		start++
+	}
+	end := min(start+o.Limit, len(items))
+	result := app.OperatorReadPage[domain.OperatorWikiEntry]{Items: items[start:end], SnapshotVersion: f.snapshot}
+	if end < len(items) {
+		result.NextKey = items[end-1].Path
+	}
+	return result, nil
 }
 
 func (f *screenReader) CatalogChildren(_ context.Context, _ domain.ScopeRef, parent domain.PageID, o app.OperatorReadOptions) (app.OperatorCatalogRead, error) {
@@ -296,7 +318,7 @@ func (f *screenReader) SourceRevision(_ context.Context, _ domain.ScopeRef, ref 
 }
 func screenHandler(t *testing.T, f *screenReader) *Handler {
 	t.Helper()
-	service, err := app.NewOperatorService("trusted", app.OperatorReaders{Catalogs: f, Pages: f, Page: f, Revisions: f}, app.OperatorOptions{})
+	service, err := app.NewOperatorService("trusted", app.OperatorReaders{Catalogs: f, Pages: f, Page: f, Revisions: f, Directories: f}, app.OperatorOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +427,10 @@ func TestKnowledgeTypedFailuresAndInputBounds(t *testing.T) {
 	}
 }
 func TestKnowledgeSnapshotContinuation(t *testing.T) {
-	f := &screenReader{snapshot: screenSnapshot}
+	f := &screenReader{snapshot: screenSnapshot, directories: map[string][]domain.OperatorWikiEntry{"": {
+		{Path: "a.md", Name: "a.md", Kind: pageKind, PageID: "a"},
+		{Path: "b.md", Name: "b.md", Kind: pageKind, PageID: "b"},
+	}}}
 	h := screenHandler(t, f)
 	r, doc := fragmentDocument(t, h, "/ui/fragments/knowledge?view=all&limit=1")
 	if r.Code != 200 {
@@ -413,9 +438,9 @@ func TestKnowledgeSnapshotContinuation(t *testing.T) {
 	}
 	var next string
 	walk(doc, func(n *html.Node) {
-		if n.DataAtom == atom.A && nodeText(n) == "Next pages" {
+		if n.DataAtom == atom.Button && nodeText(n) == "More files" {
 			for _, a := range n.Attr {
-				if a.Key == linkHrefAttribute {
+				if a.Key == "data-directory-url" {
 					next = a.Val
 				}
 			}
@@ -425,11 +450,7 @@ func TestKnowledgeSnapshotContinuation(t *testing.T) {
 		t.Fatal("missing continuation")
 	}
 	f.snapshot = strings.Repeat("b", 64)
-	u, err := url.Parse(next)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, _ = fragmentDocument(t, h, knowledgeFragment+"?"+u.RawQuery)
+	r, _ = fragmentDocument(t, h, next)
 	if r.Code != 409 || r.Header().Get("X-Knowl-Error") != errorSnapshotChanged {
 		t.Fatalf("stale status=%d header=%v", r.Code, r.Header())
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
@@ -22,7 +23,7 @@ func (f wikiDirectoryFixture) WikiDirectoryChildren(_ context.Context, _ domain.
 	if f.unsupported {
 		return app.OperatorReadPage[domain.OperatorWikiEntry]{Items: []domain.OperatorWikiEntry{{Path: "entities/%2e%2e.md", Name: "%2e%2e.md", Kind: "unsupported"}}, SnapshotVersion: screenSnapshot}, nil
 	}
-	items := []domain.OperatorWikiEntry{{Path: "entities/" + wikiDirectoryNestedName, Name: wikiDirectoryNestedName, Kind: "folder"}, {Path: "entities/index.md", Name: "index.md", Kind: "page", PageID: "entities/index"}}
+	items := []domain.OperatorWikiEntry{{Path: "entities/" + wikiDirectoryNestedName, Name: wikiDirectoryNestedName, Kind: folderKind}, {Path: "entities/index.md", Name: indexFileName, Kind: pageKind, PageID: "entities/index"}}
 	if o.Continuation.Key != "" {
 		items = items[1:]
 		return app.OperatorReadPage[domain.OperatorWikiEntry]{Items: items, SnapshotVersion: screenSnapshot}, nil
@@ -76,15 +77,15 @@ func TestWikiDirectoryFragment(t *testing.T) {
 		t.Fatalf("status = %d", r.Code)
 	}
 	paths := markedText(doc, "data-wiki-path")
-	if paths["entities/"+wikiDirectoryNestedName] != wikiDirectoryNestedName || len(paths) != 1 {
+	if !strings.HasSuffix(paths["entities/"+wikiDirectoryNestedName], wikiDirectoryNestedName) || len(paths) != 1 {
 		t.Fatalf("paths = %#v", paths)
 	}
 	var next string
 	walk(doc, func(n *html.Node) {
 		for _, a := range n.Attr {
-			if a.Key == "data-next" {
+			if a.Key == "data-tree-more" {
 				for _, b := range n.Attr {
-					if b.Key == "href" {
+					if b.Key == "data-directory-url" {
 						next = b.Val
 					}
 				}
@@ -96,7 +97,7 @@ func TestWikiDirectoryFragment(t *testing.T) {
 	}
 	r, doc = fragmentDocument(t, h, next)
 	paths = markedText(doc, "data-wiki-path")
-	if r.Code != http.StatusOK || paths["entities/index.md"] != "index.md" || len(paths) != 1 {
+	if r.Code != http.StatusOK || paths["entities/index.md"] != indexFileName || len(paths) != 1 {
 		t.Fatalf("second = %d %#v", r.Code, paths)
 	}
 	for _, uri := range []string{"/ui/fragments/wiki-directory?directory=../raw", "/ui/fragments/wiki-directory?directory=entities&scope=other"} {

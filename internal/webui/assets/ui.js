@@ -3,6 +3,8 @@
   'use strict';
   let token = '', generation = 0, connectionState = 'disconnected', focusScreen = false;
   let sourcesOpener = null, sourcesScroll = 0, rawOpener = null;
+  let treePending = 0, treeVisitSerial = 0, renderedTreeEntry = 0;
+  const treeSnapshots = new Map(), treeNodeLimit = 1000, treeSnapshotLimit = 3;
   let detailRead = null;
   const pending = new Map();
 	let knownNavigation = false;
@@ -27,7 +29,7 @@
   // Browsers can drop focus to BODY before a breakpoint's change event fires.
   let responsiveFocus = null;
   document.addEventListener('focusin',event=>{
-    responsiveFocus=event.target instanceof HTMLElement && event.target.matches('#navigation-close,[data-toggle-catalog]')?event.target:null;
+    responsiveFocus=event.target instanceof HTMLElement && event.target.matches('#navigation-close')?event.target:null;
   });
   function restoreResponsiveFocus() {
     if(responsiveFocus?.isConnected && !isVisible(responsiveFocus)) {
@@ -90,7 +92,7 @@
   }
   function disconnect(feedback = '', invalid = false, focus = true) {
     token = ''; abortRequests(); document.getElementById('operator-token').value = '';
-    sourcesOpener=null;rawOpener=null;knownNavigation=false;currentTrail=[];screen.replaceChildren();
+    sourcesOpener=null;rawOpener=null;treeSnapshots.clear();renderedTreeEntry=0;knownNavigation=false;currentTrail=[];screen.replaceChildren();
     setConnectionState('disconnected',feedback,invalid);
     if(focus)document.getElementById('operator-token').focus({preventScroll:true});
   }
@@ -131,15 +133,31 @@
       if(token && generation===current && selected()==='operations' && params.has('operation_id')) htmx.ajax('GET','/ui/fragments/operation?operation_id='+encodeURIComponent(params.get('operation_id')),{target:'#operation-detail',swap:'innerHTML'}).catch(()=>{});
     }).catch(() => {});
   }
-  function navigate() {
+  function navigate(event) {
+    if(screen.querySelector('.wiki-tree') && renderedTreeEntry) {
+      const snapshot=document.createElement('div');
+      snapshot.replaceChildren(...screen.childNodes);
+      treeSnapshots.delete(renderedTreeEntry);
+      treeSnapshots.set(renderedTreeEntry,snapshot);
+      if(treeSnapshots.size>treeSnapshotLimit)treeSnapshots.delete(treeSnapshots.keys().next().value);
+    }
+    renderedTreeEntry=0;
     abortRequests(); sourcesOpener=null;rawOpener=null;focusScreen=true; const key = selected();
     document.title = names[key] + ' · Knowl'; screen.setAttribute('aria-label', names[key]);
     document.getElementById('header-view').textContent = names[key];
     for (const link of document.querySelectorAll('[data-screen]')) {link.classList.toggle('active', link.dataset.screen === key); if(link.dataset.screen === key) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');}
+    const params=new URLSearchParams(location.search);
+    const treeEntry=history.state?.treeEntry;
+    const snapshot=Number.isSafeInteger(treeEntry)?treeSnapshots.get(treeEntry):null;
+    if(event?.type==='popstate' && token && key==='knowledge' && params.get('view')==='all' && !params.has('page_id') && snapshot?.hasChildNodes()) {
+      treeSnapshots.delete(treeEntry);screen.replaceChildren(...snapshot.childNodes);adoptKnowledge();screen.focus({preventScroll:true});focusScreen=false;return;
+    }
     message(token ? 'Loading view…' : 'Connect to read knowledge.'); load();
   }
   function navigationState(url) {
-    if(url.pathname!=='/ui/knowledge' || url.searchParams.has('view'))return null;
+    if(url.pathname!=='/ui/knowledge')return null;
+    if(url.searchParams.get('view')==='all' && !url.searchParams.has('page_id'))return {treeEntry:++treeVisitSerial};
+    if(url.searchParams.has('view'))return null;
     const target=url.searchParams.get('parent_id');
     if(!target)return {catalogIds:[]};
     let trail=currentTrail.slice(0,catalogDepth);
@@ -158,14 +176,63 @@
       currentTrail=Array.isArray(ids) && ids.length<=catalogDepth && ids.every(id=>typeof id==='string')?ids:[];
     } catch {currentTrail=[];}
     knownNavigation=true;
-    history.replaceState({catalogIds:currentTrail},'',location.href);
+    const state={catalogIds:currentTrail};
+    if(screen.querySelector('.wiki-tree')) {
+      const prior=history.state?.treeEntry;
+      renderedTreeEntry=Number.isSafeInteger(prior)&&prior>0?prior:++treeVisitSerial;
+      treeVisitSerial=Math.max(treeVisitSerial,renderedTreeEntry);
+      state.treeEntry=renderedTreeEntry;
+    } else renderedTreeEntry=0;
+    history.replaceState(state,'',location.href);
   }
   document.getElementById('connect-form').addEventListener('submit', event => {
     event.preventDefault(); const value = document.getElementById('operator-token').value.trim(); disconnect('',false,false); if (!value) return;
     token = value; setConnectionState('connecting'); navigate();
   });
   document.getElementById('disconnect').addEventListener('click', () => disconnect());
+  function treeCapacityAvailable() {
+    const tree=screen.querySelector('.wiki-tree');
+    if(!tree)return false;
+    if(tree.querySelectorAll('[data-wiki-path]').length+(treePending+1)*100<=treeNodeLimit)return true;
+    const note=tree.querySelector('.wiki-tree-limit');
+    if(note){note.hidden=false;note.textContent='Tree limit reached. Open a page or refresh All pages to start again.';}
+    return false;
+  }
+  function readTree(button,target,swap,onSuccess) {
+    const url=protectedURL(button.dataset.directoryUrl);
+    if(!url || url.pathname!=='/ui/fragments/wiki-directory' || !treeCapacityAvailable())return;
+    const requestGeneration=generation;
+    treePending++;button.disabled=true;
+    htmx.ajax('GET',url.pathname+url.search,{target,swap}).then(()=>{
+      if(token && generation===requestGeneration && !target.querySelector('[data-error-code]'))onSuccess();
+    }).catch(()=>{}).finally(()=>{
+      treePending--;
+      if(target.isConnected && target.classList.contains('wiki-tree-branch') && target.hasChildNodes()) {target.hidden=false;button.setAttribute('aria-expanded','true');}
+      if(button.isConnected)button.disabled=false;
+    });
+  }
   document.addEventListener('click', event => {
+    const folder=event.target.closest('[data-tree-expand]');
+    if(folder){
+      const branch=folder.nextElementSibling;
+      if(!branch)return;
+      if(branch.dataset.loaded==='true') {branch.hidden=!branch.hidden;folder.setAttribute('aria-expanded',String(!branch.hidden));}
+      else readTree(folder,branch,'innerHTML',()=>{branch.dataset.loaded='true';branch.hidden=false;folder.setAttribute('aria-expanded','true');});
+      return;
+    }
+    const more=event.target.closest('[data-tree-more]');
+    if(more){
+      const item=more.closest('li'),list=item?.parentElement,previous=item?.previousElementSibling;
+      readTree(more,item,'outerHTML',()=>{
+        if(!list?.isConnected)return;
+        const next=previous?.nextElementSibling || list.firstElementChild;
+        if(!next?.hasAttribute('data-wiki-path'))return;
+        const focus=next.querySelector('a,button') || next;
+        if(focus===next)next.tabIndex=-1;
+        focus.focus();
+      });
+      return;
+    }
     if(event.target.closest('[data-close-raw]')) {
       abortRequests();const raw=screen.querySelector('#raw-source');raw?.replaceChildren();raw?.removeAttribute('aria-busy');
       const opener=rawOpener?.isConnected?rawOpener:screen.querySelector('[data-toggle-sources]') || screen;
@@ -188,7 +255,6 @@
         syncDisclosures();
       }return;
     }
-    if(event.target.closest('[data-toggle-catalog]')) {screen.querySelector('.knowledge-grid')?.classList.toggle('catalog-open');syncDisclosures();return;}
     const jsonToggle=event.target.closest('[data-toggle-json]');
     if(jsonToggle) {const json=document.getElementById('response-json');if(json){json.hidden=!json.hidden;jsonToggle.setAttribute('aria-expanded',String(!json.hidden));}return;}
     if(event.target.closest('[data-export-json]')) {const data=document.getElementById('response-json-data');if(data){const url=URL.createObjectURL(new Blob([data.textContent],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='knowl-search.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}return;}
@@ -245,7 +311,7 @@
     if (xhr.status === 401) {disconnect('Token was rejected or the session expired. Paste the exact token value without extra quotes, backticks, or asterisks from copied formatting, then Connect again.',true); event.detail.shouldSwap = false; event.preventDefault(); return;}
     if(poll?.xhr===xhr && (xhr.status===0 || xhr.status>=500)) {event.detail.shouldSwap=false;event.preventDefault();return;}
     const error = xhr.getResponseHeader('X-Knowl-Error');
-    const trustedErrors={invalid_request:400,limit_invalid:400,cursor_invalid:400,catalog_not_found:404,page_not_found:404,source_revision_not_found:404,operation_not_found:404,source_not_found:404,snapshot_changed:409,read_limit_exceeded:413,unsupported_format:415,retrieval_failed:503,capability_unavailable:503,not_ready:503,workspace_unavailable:503};
+    const trustedErrors={invalid_request:400,limit_invalid:400,cursor_invalid:400,catalog_not_found:404,directory_not_found:404,page_not_found:404,source_revision_not_found:404,operation_not_found:404,source_not_found:404,snapshot_changed:409,read_limit_exceeded:413,unsupported_format:415,retrieval_failed:503,capability_unavailable:503,not_ready:503,workspace_unavailable:503};
     const trusted=trustedErrors[error]===xhr.status;
     if(connectionState==='connecting' && (xhr.status===200 || trusted)) {setConnectionState('connected');if(!mobile.matches)pushMenu.expand();}
     if (trusted) {event.detail.shouldSwap = true; event.detail.isError = false;}
@@ -265,14 +331,24 @@
     } else if(current && xhr.status===200 && protectedURL(event.detail.requestConfig.path)?.pathname==='/ui/fragments/operation') adoptOperation();
     if (current && !wasPoll) {event.detail.target.removeAttribute('aria-busy');if(xhr.status===0)requestFailed(event.detail.target);}
     if(token && pending.get(xhr)===generation && xhr.getResponseHeader('X-Knowl-Error')==='snapshot_changed') {
-      const url=protectedURL(event.detail.requestConfig.path);if(url && url.searchParams.has('cursor')) {url.searchParams.delete('cursor');if(selected()==='knowledge'){const shell=new URL(location.href);shell.searchParams.delete('cursor');history.replaceState(history.state,'',shell.pathname+shell.search);}htmx.ajax('GET',url.pathname+url.search,{target:screen,swap:'innerHTML'}).catch(()=>{});}
+      const url=protectedURL(event.detail.requestConfig.path);if(url && url.searchParams.has('cursor')) {
+        url.searchParams.delete('cursor');
+        if(url.pathname==='/ui/fragments/wiki-directory') {
+          const directory=url.searchParams.get('directory')||'';
+          const branch=[...screen.querySelectorAll('[data-wiki-directory]')].find(node=>node.dataset.wikiDirectory===directory);
+          if(branch)htmx.ajax('GET',url.pathname+url.search,{target:branch,swap:'outerHTML'}).catch(()=>{});
+        } else {
+          if(selected()==='knowledge'){const shell=new URL(location.href);shell.searchParams.delete('cursor');history.replaceState(history.state,'',shell.pathname+shell.search);}
+          htmx.ajax('GET',url.pathname+url.search,{target:screen,swap:'innerHTML'}).catch(()=>{});
+        }
+      }
     }
     if(current && !wasPoll && ['raw-source','source-detail','operation-detail'].includes(event.detail.target.id))revealDetail(event.detail.target);
     pending.delete(xhr);
   });
   function isVisible(element) {return !!element && getComputedStyle(element).display!=='none';}
   function syncDisclosures() {
-    for(const [button,panel] of [['[data-toggle-catalog]','.catalog-panel'],['[data-toggle-sources]','.source-panel']]) {
+    for(const [button,panel] of [['[data-toggle-sources]','.source-panel']]) {
       const control=screen.querySelector(button),element=screen.querySelector(panel);
       control?.setAttribute('aria-expanded',String(isVisible(element)));
       if(element && !isVisible(element) && element.contains(document.activeElement)) (isVisible(control)?control:screen).focus({preventScroll:true});

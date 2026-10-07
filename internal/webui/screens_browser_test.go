@@ -4,6 +4,7 @@ package webui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,7 +25,11 @@ import (
 func TestBrowserKnowledgeSearch(t *testing.T) {
 	fixture := &screenReader{snapshot: screenSnapshot, invalidateContinuation: true, body: "---\ntype: topic\ntitle: Article\n---\n# Article\n\nCurrent published body. [[concepts/other]]" + strings.Repeat("\n\nPublished paragraph for responsive reading and saved-source focus restoration.", 24)}
 	canonical := canonicalKnowledgeFixture()
-	fixture.catalogs, fixture.pages = canonical.catalogs, canonical.pages
+	fixture.catalogs, fixture.pages, fixture.directories = canonical.catalogs, canonical.pages, canonical.directories
+	for i := range 60 {
+		name := fmt.Sprintf("x%03d.md", i)
+		fixture.directories[""] = append(fixture.directories[""], domain.OperatorWikiEntry{Path: name, Name: name, Kind: "unsupported"})
+	}
 	for _, id := range []domain.PageID{screenArticleID, "concepts/other"} {
 		fixture.pages[id] = domain.OperatorPage{ID: id, Title: screenArticleTitle, Markdown: fixture.body, Digest: screenSnapshot, Version: screenSnapshot, Metadata: &domain.OperatorPageMetadata{Type: "topic", Description: "Published article metadata", Tags: []string{"navigation", "provenance"}}, Sources: []domain.OperatorPageSource{{SourceRef: screenSourceRef, Revision: "accepted"}}}
 	}
@@ -40,7 +45,7 @@ func TestBrowserKnowledgeSearch(t *testing.T) {
 	fixture.catalogs[rootCatalogID] = root
 	ui := screenHandler(t, fixture)
 	reader := &responsiveScreenReader{fixture}
-	operator, err := app.NewOperatorService("trusted", app.OperatorReaders{Catalogs: reader, Pages: reader, Page: reader, Revisions: reader}, app.OperatorOptions{})
+	operator, err := app.NewOperatorService("trusted", app.OperatorReaders{Catalogs: reader, Pages: reader, Page: reader, Revisions: reader, Directories: reader}, app.OperatorOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

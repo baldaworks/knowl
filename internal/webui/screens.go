@@ -27,6 +27,7 @@ const (
 	parentIDParameter           = "parent_id"
 	cursorParameter             = "cursor"
 	allPagesView                = "all"
+	allPagesTitle               = "All pages"
 	viewParameter               = "view"
 	rootBreadcrumbTitle         = "Root"
 	pageKind                    = "page"
@@ -50,11 +51,10 @@ const (
 
 type knowledgeView struct {
 	Parent                domain.OperatorCatalogSummary
-	Items                 []domain.OperatorCatalogChild
 	All                   bool
-	Uncatalogued          bool
+	Tree                  []domain.OperatorWikiEntry
+	TreeNext              string
 	NavigationUnavailable bool
-	Next                  string
 	Page                  *domain.OperatorPage
 	Markdown              template.HTML
 	Index                 bool
@@ -88,6 +88,9 @@ func contextualPageURL(id, parent domain.PageID) string {
 		values.Set(parentIDParameter, string(parent))
 	}
 	return knowledgeURL(values)
+}
+func treePageURL(id domain.PageID) string {
+	return knowledgeURL(url.Values{pageIDParameter: {string(id)}, viewParameter: {allPagesView}})
 }
 func stringID(id any) string {
 	switch v := id.(type) {
@@ -124,21 +127,19 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 		}
 		v.NavigationUnavailable = true
 	}
-	var nextCursor string
 	budget := &navigationBudget{}
 	if v.All {
-		pages, readErr := h.dependencies.Operator.PageSummaries(ctx, options)
-		if readErr != nil {
-			if v.Page == nil {
+		if v.Page == nil {
+			branch, readErr := h.dependencies.Operator.WikiDirectoryChildren(ctx, "", options)
+			if readErr != nil {
 				h.readError(w, readErr)
 				return
 			}
-			v.NavigationUnavailable = true
+			v.Tree = branch.Items
+			if branch.NextCursor != "" {
+				v.TreeNext = fragmentURL("wiki-directory", url.Values{limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}, cursorParameter: {branch.NextCursor}})
+			}
 		}
-		for _, p := range pages.Items {
-			v.Items = append(v.Items, domain.OperatorCatalogChild{ID: p.ID, Title: p.Title, Description: p.Description, Kind: pageKind})
-		}
-		nextCursor = pages.NextCursor
 	} else if !v.NavigationUnavailable {
 		parent := domain.PageID(q.Get(parentIDParameter))
 		catalog, readErr := h.readNavigationCatalog(ctx, parent, options, budget)
@@ -152,7 +153,6 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 				h.readError(w, readErr)
 				return
 			}
-			v.Uncatalogued = true
 		case readErr != nil:
 			if v.Page == nil {
 				h.readError(w, readErr)
@@ -165,8 +165,6 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			v.Parent = catalog.Parent
-			v.Items = catalog.Items
-			nextCursor = catalog.NextCursor
 			if v.Page == nil {
 				page, pageErr := h.dependencies.Operator.Page(ctx, catalog.Parent.ID)
 				if pageErr != nil {
@@ -180,34 +178,9 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if v.Page == nil && v.All {
-		for _, p := range v.Items {
-			if p.Kind == pageKind {
-				page, readErr := h.dependencies.Operator.Page(ctx, p.ID)
-				if readErr != nil {
-					h.readError(w, readErr)
-					return
-				}
-				v.Page = &page
-				break
-			}
-		}
-	}
-	if nextCursor != "" {
-		values := url.Values{cursorParameter: {nextCursor}, limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}}
-		if v.All {
-			values.Set(viewParameter, allPagesView)
-		} else if q.Get(parentIDParameter) != "" {
-			values.Set(parentIDParameter, q.Get(parentIDParameter))
-		}
-		if q.Has(pageIDParameter) {
-			values.Set(pageIDParameter, q.Get(pageIDParameter))
-		}
-		v.Next = knowledgeURL(values)
-	}
 	v.Breadcrumbs = []knowledgeBreadcrumb{{Title: rootBreadcrumbTitle, URL: knowledgePath}}
 	if v.All {
-		crumb := knowledgeBreadcrumb{Title: "All pages"}
+		crumb := knowledgeBreadcrumb{Title: allPagesTitle}
 		if v.Page != nil {
 			crumb.URL = knowledgeURL(url.Values{viewParameter: {allPagesView}})
 		}
