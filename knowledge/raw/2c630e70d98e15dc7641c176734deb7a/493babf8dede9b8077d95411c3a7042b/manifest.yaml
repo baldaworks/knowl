@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/local.md
+version: b72ed8a3f8d255df1843e32445e50fa7be99e752b764711b7494cd76f325c5e0
+digest: b72ed8a3f8d255df1843e32445e50fa7be99e752b764711b7494cd76f325c5e0
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: local.md
+    revision: b72ed8a3f8d255df1843e32445e50fa7be99e752b764711b7494cd76f325c5e0
+    uri: file:///home/bigboss/Projects/knowl/docs/local.md
+received_at: 2026-10-07T15:01:43.376704Z

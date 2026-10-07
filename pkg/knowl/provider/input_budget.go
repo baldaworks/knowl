@@ -46,6 +46,28 @@ func sourceWrappedBytes(envelopeBytes int) int {
 
 type sourceRequestGuard struct{ adkagent.Agent }
 
+// The wrapped agent must remain visible to ADK processors that inspect its
+// concrete capabilities. All other invocation state belongs to the caller.
+type guardedInvocationContext struct {
+	adkagent.InvocationContext
+	wrapped adkagent.Agent
+}
+
+func (ctx guardedInvocationContext) Agent() adkagent.Agent { return ctx.wrapped }
+
+func (ctx guardedInvocationContext) WithContext(base context.Context) adkagent.InvocationContext {
+	ctx.InvocationContext = ctx.InvocationContext.WithContext(base)
+	return ctx
+}
+
+func (ctx guardedInvocationContext) WithICDelta(delta *adkagent.InvocationContextDelta) adkagent.InvocationContext {
+	ctx.InvocationContext = ctx.InvocationContext.WithICDelta(delta)
+	if delta != nil && delta.Agent != nil {
+		ctx.wrapped = *delta.Agent
+	}
+	return ctx
+}
+
 func (a *sourceRequestGuard) Run(ctx adkagent.InvocationContext) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
 		if err := correctionContextError(ctx); err != nil {
@@ -70,7 +92,7 @@ func (a *sourceRequestGuard) Run(ctx adkagent.InvocationContext) iter.Seq2[*sess
 		if evidence != nil {
 			evidence.turns++
 		}
-		for event, err := range a.Agent.Run(ctx) {
+		for event, err := range a.Agent.Run(guardedInvocationContext{InvocationContext: ctx, wrapped: a.Agent}) {
 			if err == nil && evidence != nil && event != nil && event.Content != nil && strings.TrimSpace(event.ErrorCode) == "" && strings.TrimSpace(event.ErrorMessage) == "" {
 				for _, part := range event.Content.Parts {
 					if part == nil || part.Thought {

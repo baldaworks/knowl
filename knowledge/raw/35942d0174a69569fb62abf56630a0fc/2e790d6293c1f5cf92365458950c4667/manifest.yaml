@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/README.md
+version: 5dc9ddce38b85082810b9f03e88921ba503abaebd974be1dacb48fde1069a10d
+digest: 5dc9ddce38b85082810b9f03e88921ba503abaebd974be1dacb48fde1069a10d
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: README.md
+    revision: 5dc9ddce38b85082810b9f03e88921ba503abaebd974be1dacb48fde1069a10d
+    uri: file:///home/bigboss/Projects/knowl/docs/README.md
+received_at: 2026-10-07T14:33:32.206295Z

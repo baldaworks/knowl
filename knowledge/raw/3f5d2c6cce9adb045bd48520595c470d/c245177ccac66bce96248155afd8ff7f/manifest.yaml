@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/agents.md
+version: e0b710a8a9c32653f3580c09abb08dbbe32b2322de428c63a60bae39370b377b
+digest: e0b710a8a9c32653f3580c09abb08dbbe32b2322de428c63a60bae39370b377b
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: agents.md
+    revision: e0b710a8a9c32653f3580c09abb08dbbe32b2322de428c63a60bae39370b377b
+    uri: file:///home/bigboss/Projects/knowl/docs/agents.md
+received_at: 2026-10-07T15:11:40.900086Z

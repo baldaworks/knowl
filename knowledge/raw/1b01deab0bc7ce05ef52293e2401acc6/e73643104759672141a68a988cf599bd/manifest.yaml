@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/web-ui.md
+version: fdf8776452fa7a187b2ab02c1f9c637d49472fa460390a57f0da9a30de5e3a41
+digest: fdf8776452fa7a187b2ab02c1f9c637d49472fa460390a57f0da9a30de5e3a41
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: web-ui.md
+    revision: fdf8776452fa7a187b2ab02c1f9c637d49472fa460390a57f0da9a30de5e3a41
+    uri: file:///home/bigboss/Projects/knowl/docs/web-ui.md
+received_at: 2026-10-07T14:33:32.487983Z

@@ -1,7 +1,5 @@
 # Service deployment guide moved
 
-<a id="sidecar-deployment"></a>
-
 Start with [Run Knowl as a service](service.md). Optional vectorization has its
 own [search guide](search.md), shared by local and service deployments. The
 repository keeps deployment assets under `deploy/sidecar/` for compatibility.
