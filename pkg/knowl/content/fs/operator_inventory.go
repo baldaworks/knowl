@@ -271,6 +271,12 @@ func operatorInventoryVersion(scope knowl.ScopeRef, endpoint, parentDigest strin
 	encoder := json.NewEncoder(hash)
 	_ = encoder.Encode([]string{"operator-inventory-v1", string(scope), endpoint, parentDigest})
 	for _, entry := range entries {
+		if entry.info == nil {
+			// Unsupported path names are never opened or dereferenced. Their
+			// presence and type, not their content, define this branch view.
+			_ = encoder.Encode([]any{entry.path, entry.identity})
+			continue
+		}
 		// Explicit stable facts: Sys contains atime on some platforms and cannot be
 		// serialized wholesale without invalidating cursors on a read.
 		_ = encoder.Encode([]any{entry.path, entry.identity, entry.info.Size(), entry.info.ModTime().UTC().UnixNano()})

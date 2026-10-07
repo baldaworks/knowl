@@ -1,0 +1,1 @@
+{{define "wiki_directory"}}<div data-wiki-directory="{{.Directory}}"><ul>{{range .Items}}<li data-wiki-path="{{.Path}}" data-wiki-kind="{{.Kind}}"{{if .PageID}} data-page-id="{{.PageID}}"{{end}}>{{.Name}}{{if eq .Kind "unsupported"}} (unsupported path){{end}}</li>{{end}}</ul>{{if .Next}}<a data-next href="{{.Next}}">More</a>{{end}}</div>{{end}}

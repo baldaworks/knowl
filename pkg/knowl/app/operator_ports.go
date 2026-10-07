@@ -42,6 +42,12 @@ type CatalogReader interface {
 	CatalogChildren(ctx context.Context, scope knowl.ScopeRef, parent knowl.PageID, options OperatorReadOptions) (OperatorCatalogRead, error)
 }
 
+// WikiDirectoryReader is an optional direct-child path inventory, independent
+// of authored catalog links and the concept-only page inventory.
+type WikiDirectoryReader interface {
+	WikiDirectoryChildren(ctx context.Context, scope knowl.ScopeRef, directory string, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorWikiEntry], error)
+}
+
 // PageSummaryReader is an optional consistent factual-page inventory capability.
 type PageSummaryReader interface {
 	PageSummaries(ctx context.Context, scope knowl.ScopeRef, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorPageSummary], error)
@@ -93,11 +99,12 @@ type OperatorSourceReader interface {
 
 // OperatorReaders contains only independently optional read capabilities.
 type OperatorReaders struct {
-	Catalogs   CatalogReader
-	Pages      PageSummaryReader
-	Page       PageReader
-	Revisions  SourceRevisionReader
-	Sources    OperatorSourceReader
-	Documents  SourceDocumentLister
-	Operations OperationLister
+	Catalogs    CatalogReader
+	Directories WikiDirectoryReader
+	Pages       PageSummaryReader
+	Page        PageReader
+	Revisions   SourceRevisionReader
+	Sources     OperatorSourceReader
+	Documents   SourceDocumentLister
+	Operations  OperationLister
 }

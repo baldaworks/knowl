@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -134,10 +135,16 @@ func TestOperatorTypedFailures(t *testing.T) {
 	workspace := newSourceStageWorkspace(t)
 	reader := operatorReader(t, workspace)
 	writeCanonicalFixture(t, workspace, "wiki/entities/a.md", validWorkspacePage(operatorTestPageID, "A", testWorkspaceSourceRef, "Body"))
-	for _, id := range []knowl.PageID{"../private", "entities/%2e%2e/private", "entities/%252e%252e/private", operatorTestLogID, "entities/a:stream", "entities//a"} {
+	for _, id := range []knowl.PageID{"../private", "entities/%2e%2e/private", "entities/%252e%252e/private", operatorTestLogID, "entities//a"} {
 		if _, err := reader.Page(t.Context(), testScope, id, knowl.ReadLimits{}); !errors.Is(err, app.ErrOperatorInvalidRequest) {
 			t.Errorf("Page(%q) = %v", id, err)
 		}
+	}
+	_, colonErr := reader.Page(t.Context(), testScope, "entities/a:stream", knowl.ReadLimits{})
+	if runtime.GOOS == operatorTestWindowsOS && !errors.Is(colonErr, app.ErrOperatorInvalidRequest) {
+		t.Errorf("Windows ADS path = %v", colonErr)
+	} else if runtime.GOOS != operatorTestWindowsOS && !errors.Is(colonErr, app.ErrPageNotFound) {
+		t.Errorf("missing Unix colon path = %v", colonErr)
 	}
 	if _, err := reader.Page(t.Context(), testScope, "entities/missing", knowl.ReadLimits{}); !errors.Is(err, app.ErrPageNotFound) {
 		t.Fatalf("missing page = %v", err)

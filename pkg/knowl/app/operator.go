@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"path"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -15,12 +17,14 @@ import (
 // A composite adapter:identity@revision key includes more than the bounded
 // revision alone. Keep its separate cap within the total operator query budget.
 const maxOperatorSourceRefBytes = 8 << 10
+const operatorWindowsOS = "windows"
 
 var (
 	ErrOperatorInvalidRequest         = errors.New("invalid operator request")
 	ErrOperatorLimitInvalid           = errors.New("invalid operator limit")
 	ErrOperatorCursorInvalid          = errors.New("invalid operator cursor")
 	ErrOperatorCatalogNotFound        = errors.New("operator catalog not found")
+	ErrOperatorDirectoryNotFound      = errors.New("operator wiki directory not found")
 	ErrOperatorSourceRevisionNotFound = errors.New("operator source revision not found")
 	ErrOperatorSnapshotChanged        = errors.New("operator canonical snapshot changed")
 	ErrOperatorReadLimitExceeded      = errors.New("operator read limit exceeded")
@@ -106,6 +110,86 @@ func (service *OperatorService) PageSummaries(ctx context.Context, options Opera
 	return operatorListRead(service, ctx, operatorPagesEndpoint, "", options, service.readers.Pages != nil, true, func(readCtx context.Context, readOptions OperatorReadOptions) (OperatorReadPage[knowl.OperatorPageSummary], error) {
 		return service.readers.Pages.PageSummaries(readCtx, service.scope, readOptions)
 	})
+}
+
+// WikiDirectoryChildren reads one bounded branch of the published wiki path
+// tree. The empty directory selects the root, not a page-path alias.
+func (service *OperatorService) WikiDirectoryChildren(ctx context.Context, directory string, options OperatorListOptions) (knowl.OperatorList[knowl.OperatorWikiEntry], error) {
+	if !validOperatorDirectory(directory) {
+		return knowl.OperatorList[knowl.OperatorWikiEntry]{}, ErrOperatorInvalidRequest
+	}
+	if directory != "" && strings.Count(directory, "/")+1 > DefaultCatalogLimits().MaxDepth {
+		return knowl.OperatorList[knowl.OperatorWikiEntry]{}, ErrOperatorReadLimitExceeded
+	}
+	return operatorListRead(service, ctx, operatorDirectoryEndpoint, directory, options, service.readers.Directories != nil, true, func(readCtx context.Context, readOptions OperatorReadOptions) (OperatorReadPage[knowl.OperatorWikiEntry], error) {
+		return service.readers.Directories.WikiDirectoryChildren(readCtx, service.scope, directory, readOptions)
+	})
+}
+
+func validOperatorDirectory(directory string) bool {
+	if directory == "" {
+		return true
+	}
+	return ValidOperatorReadPath(directory)
+}
+
+// ValidOperatorReadPath checks literal canonical relative paths before a
+// descriptor-relative open. Percent is permitted in real filenames, except
+// alias-shaped escapes that could become separators or dot segments after an
+// extra URL decode. Windows colons remain forbidden because of ADS semantics.
+func ValidOperatorReadPath(relative string) bool {
+	if relative == "" || relative == "." || len(relative) > maxEditPathBytes || !utf8.ValidString(relative) || path.IsAbs(relative) || path.Clean(relative) != relative || strings.Contains(relative, "\\") || (runtime.GOOS == operatorWindowsOS && strings.Contains(relative, ":")) || encodedOperatorAlias(relative) {
+		return false
+	}
+	for _, part := range strings.Split(relative, "/") {
+		if part == "" || part == "." || part == ".." || strings.TrimSpace(part) != part || strings.HasSuffix(part, ".") {
+			return false
+		}
+	}
+	for _, character := range relative {
+		if character < ' ' || character == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func encodedOperatorAlias(relative string) bool {
+	for {
+		var decoded strings.Builder
+		changed := false
+		for index := 0; index < len(relative); index++ {
+			if relative[index] != '%' || index+2 >= len(relative) {
+				decoded.WriteByte(relative[index])
+				continue
+			}
+			value, err := strconv.ParseUint(relative[index+1:index+3], 16, 8)
+			if err != nil {
+				decoded.WriteByte(relative[index])
+				continue
+			}
+			character := byte(value)
+			if character == '/' || character == '\\' || character < ' ' || character == 0x7f || (runtime.GOOS == operatorWindowsOS && character == ':') {
+				return true
+			}
+			if character == '%' || character == '.' {
+				decoded.WriteByte(character)
+				changed = true
+			} else {
+				decoded.WriteString(relative[index : index+3])
+			}
+			index += 2
+		}
+		if !changed {
+			return false
+		}
+		relative = decoded.String()
+		for _, part := range strings.Split(relative, "/") {
+			if part == "." || part == ".." || (runtime.GOOS == operatorWindowsOS && strings.HasSuffix(part, ".")) {
+				return true
+			}
+		}
+	}
 }
 
 // Page returns detached current Markdown, metadata and resolved page-level provenance.
@@ -291,7 +375,7 @@ func operatorTextExceeded(text string, limits knowl.ReadLimits) bool {
 }
 func validOperatorPageID(id knowl.PageID) bool {
 	value := string(id)
-	return validOpaque(value, maxEditPathBytes, false) && strings.TrimSpace(value) == value && !strings.Contains(value, "\\") && !path.IsAbs(value) && path.Clean(value) == value && value != "." && value != ".." && !strings.HasPrefix(value, "../")
+	return validOpaque(value, maxEditPathBytes, false) && ValidOperatorReadPath(value)
 }
 func validOperatorSourceRef(value string) bool {
 	if !validOpaque(value, maxOperatorSourceRefBytes, false) || strings.TrimSpace(value) != value {

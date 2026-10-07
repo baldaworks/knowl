@@ -32,6 +32,7 @@ const (
 	pageKind                    = "page"
 	retrievalFailed             = "failed"
 	knowledgeFragment           = "/ui/fragments/knowledge"
+	wikiDirectoryFragment       = "/ui/fragments/wiki-directory"
 	pageFragment                = "/ui/fragments/page"
 	searchFragment              = "/ui/fragments/search"
 	sourceRevisionFragment      = "/ui/fragments/source-revision"
@@ -448,6 +449,7 @@ func (h *Handler) readError(w http.ResponseWriter, err error) {
 		{app.ErrOperatorInvalidRequest, 400, errorInvalidRequest}, {app.ErrQueryInvalid, 400, errorInvalidRequest}, {app.ErrOperatorLimitInvalid, 400, errorLimitInvalid}, {app.ErrOperatorCursorInvalid, 400, errorCursorInvalid},
 		{app.ErrOperationNotFound, 404, "operation_not_found"}, {app.ErrSourceNotFound, 404, "source_not_found"},
 		{app.ErrOperatorCatalogNotFound, 404, errorCatalogNotFound}, {app.ErrPageNotFound, 404, errorPageNotFound}, {app.ErrOperatorSourceRevisionNotFound, 404, errorSourceRevisionNotFound},
+		{app.ErrOperatorDirectoryNotFound, 404, "directory_not_found"},
 		{app.ErrOperatorSnapshotChanged, 409, errorSnapshotChanged}, {app.ErrOperatorReadLimitExceeded, 413, errorReadLimitExceeded}, {app.ErrOperatorUnsupportedFormat, 415, errorUnsupportedFormat},
 		{app.ErrOperatorCapabilityUnavailable, 503, errorCapabilityUnavailable}, {app.ErrOperatorNotReady, 503, "not_ready"}, {app.ErrOperatorWorkspaceUnavailable, 503, errorWorkspaceUnavailable}, {context.Canceled, 503, errorWorkspaceUnavailable}, {context.DeadlineExceeded, 503, errorWorkspaceUnavailable},
 	} {
@@ -463,6 +465,10 @@ func validFragmentQuery(r *http.Request) bool {
 	switch r.URL.Path {
 	case knowledgeFragment:
 		for _, k := range []string{parentIDParameter, pageIDParameter, viewParameter, limitParameter, cursorParameter} {
+			allowed[k] = true
+		}
+	case wikiDirectoryFragment:
+		for _, k := range []string{"directory", limitParameter, cursorParameter} {
 			allowed[k] = true
 		}
 	case pageFragment:

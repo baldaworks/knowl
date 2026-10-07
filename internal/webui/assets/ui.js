@@ -10,7 +10,7 @@
   let poll = null, issuingPoll = false;
   const screen = document.getElementById('screen');
   const names = {knowledge: 'Knowledge', search: 'Search', operations: 'Operations', sources: 'Sources'};
-  const protectedPaths = new Set(['knowledge', 'page', 'source-revision', 'search', 'operations', 'operation', 'sources', 'source'].map(p => '/ui/fragments/' + p));
+  const protectedPaths = new Set(['knowledge', 'page', 'wiki-directory', 'source-revision', 'search', 'operations', 'operation', 'sources', 'source'].map(p => '/ui/fragments/' + p));
   function protectedURL(value) {
     try { const u = new URL(value, location.href); return u.origin === location.origin && !u.username && !u.password && protectedPaths.has(u.pathname) ? u : null; } catch { return null; }
   }

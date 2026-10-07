@@ -126,7 +126,7 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
-	case knowledgeFragment, pageFragment, sourceRevisionFragment, searchFragment, operationsFragment, operationFragment, sourcesFragment, sourceFragment:
+	case knowledgeFragment, pageFragment, wikiDirectoryFragment, sourceRevisionFragment, searchFragment, operationsFragment, operationFragment, sourcesFragment, sourceFragment:
 		if !validFragmentQuery(r) {
 			h.Error(w, 400, errorInvalidRequest)
 			return
@@ -134,6 +134,8 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case knowledgeFragment, pageFragment:
 			h.knowledge(w, r)
+		case wikiDirectoryFragment:
+			h.wikiDirectory(w, r)
 		case sourceRevisionFragment:
 			h.sourceRevision(w, r)
 		case searchFragment:
@@ -161,6 +163,7 @@ func (h *Handler) Error(w http.ResponseWriter, status int, code string) {
 		"unauthorized":              "Reconnect with a valid operator token.",
 		"scope_override_forbidden":  "This connection cannot select another knowledge scope.",
 		"not_found":                 "The requested view was not found.",
+		"directory_not_found":       "This wiki folder is no longer available.",
 		"not_ready":                 "The server is starting. Please try again shortly.",
 		errorWorkspaceUnavailable:   "Knowledge is temporarily unavailable. Please try again.",
 		errorSnapshotChanged:        "Knowledge changed. Refresh this view to continue.",

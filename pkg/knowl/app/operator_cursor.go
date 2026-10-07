@@ -17,6 +17,7 @@ import (
 
 const (
 	operatorCatalogEndpoint    = "catalogs"
+	operatorDirectoryEndpoint  = "wiki-directories"
 	operatorPagesEndpoint      = "pages"
 	operatorOperationsEndpoint = "operations"
 	maxOperatorCursorBytes     = 8 << 10
@@ -109,7 +110,7 @@ func (service *OperatorService) decodeCursor(endpoint, filter string, limit int,
 	if value.Version != 1 || value.Endpoint != endpoint || value.Scope != operatorFingerprint(string(service.scope)) || value.Filter != operatorFingerprint(filter) || value.Limit != limit || !validOpaque(value.Key, operatorContinuationKeyLimit(endpoint), false) {
 		return OperatorContinuation{}, ErrOperatorCursorInvalid
 	}
-	if (endpoint == operatorPagesEndpoint || endpoint == operatorCatalogEndpoint) && !validExecutionDigest(value.SnapshotVersion) {
+	if (endpoint == operatorPagesEndpoint || endpoint == operatorCatalogEndpoint || endpoint == operatorDirectoryEndpoint) && !validExecutionDigest(value.SnapshotVersion) {
 		return OperatorContinuation{}, ErrOperatorCursorInvalid
 	}
 

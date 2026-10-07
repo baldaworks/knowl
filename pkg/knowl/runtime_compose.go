@@ -268,6 +268,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 	readers := app.OperatorReaders{Sources: newOperatorSourceReader(host)}
 	if runtime.workspace != nil {
 		readers.Catalogs = runtime.workspace
+		readers.Directories = runtime.workspace
 		readers.Pages = runtime.workspace
 		readers.Page = runtime.workspace
 		readers.Revisions = runtime.workspace

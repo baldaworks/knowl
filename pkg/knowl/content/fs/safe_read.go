@@ -39,20 +39,7 @@ func openReadRoot(workspacePath, relative string) (*readRoot, error) {
 func (root *readRoot) close() { _ = root.file.Close() }
 
 func validReadPath(relative string) bool {
-	if relative == "" || relative == "." || len(relative) > maxCanonicalPathBytes || !utf8.ValidString(relative) || path.IsAbs(relative) || path.Clean(relative) != relative || strings.ContainsAny(relative, "\\%:") {
-		return false
-	}
-	for _, part := range strings.Split(relative, "/") {
-		if part == ".." || part == "." || strings.TrimSpace(part) != part || strings.HasSuffix(part, ".") {
-			return false
-		}
-	}
-	for _, character := range relative {
-		if character < ' ' || character == 0x7f {
-			return false
-		}
-	}
-	return true
+	return app.ValidOperatorReadPath(relative)
 }
 
 func (root *readRoot) open(relative string, directory bool) (*os.File, error) {

@@ -32,6 +32,17 @@ type OperatorCatalog struct {
 	SnapshotVersion string                 `json:"snapshot_version"`
 }
 
+// OperatorWikiEntry is one immediate filesystem-path tree node. A folder and
+// its index.md are separate entries; PageID is set only for readable pages.
+// Kind "unsupported" names a canonical Markdown or directory path excluded
+// by the operator alias policy and must not be offered as a navigation link.
+type OperatorWikiEntry struct {
+	Path   string `json:"path"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	PageID PageID `json:"page_id,omitempty"`
+}
+
 // OperatorPageSummary exposes factual page identity without filesystem paths.
 type OperatorPageSummary struct {
 	ID          PageID    `json:"id"`
