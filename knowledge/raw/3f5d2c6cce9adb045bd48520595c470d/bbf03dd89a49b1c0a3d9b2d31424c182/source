@@ -1,11 +1,11 @@
 # Bring your own agent
 
 Knowl uses your selected agent to read sources and propose wiki updates. It
-validates those proposals before publishing them. Bring your own agent through
-ACP (Agent Client Protocol) over stdio, or use a supported hosted-model provider.
-Select the maintainer with `knowl.provider` from the `runtime.providers` registry.
+validates those proposals before publishing them. The agent connects through
+ACP (Agent Client Protocol) over stdio; select it with `knowl.provider` from the
+`runtime.providers` registry.
 
-The ACP connection has a different role from MCP: ACP connects Knowl to its wiki
+This connection has a different role from MCP: ACP connects Knowl to its wiki
 maintainer, while MCP connects a consumer agent to Knowl's retrieval, ingest and
 operation tools. Codex can serve either role, or both.
 

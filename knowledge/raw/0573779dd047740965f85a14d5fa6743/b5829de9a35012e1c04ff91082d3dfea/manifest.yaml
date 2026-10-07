@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/local-codex.md
+version: 50fcfaf27cd8c671650b42f050c7b90bfcef1355619133c9d9da92ffa3ccc0f9
+digest: 50fcfaf27cd8c671650b42f050c7b90bfcef1355619133c9d9da92ffa3ccc0f9
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: local-codex.md
+    revision: 50fcfaf27cd8c671650b42f050c7b90bfcef1355619133c9d9da92ffa3ccc0f9
+    uri: file:///home/bigboss/Projects/knowl/docs/local-codex.md
+received_at: 2026-10-07T14:33:32.292473Z

@@ -1,0 +1,125 @@
+# Run Knowl as a service
+
+Knowl can run as a persistent service with its own storage. Clients connect over
+MCP or HTTP, and the optional browser UI uses the same listener. The maintainer
+that updates the wiki and the optional embedding API are separate dependencies.
+
+This guide builds the current checkout. It uses the existing OpenAI maintainer
+provider so the container does not need an additional ACP executable. To use
+Codex or another ACP agent, supply its executable and authentication inside the
+container or run Knowl directly in that agent's environment; see
+[Bring your own agent](agents.md). For project-local use, see [Local](local.md).
+
+## Build and run
+
+You need Git, Docker Compose, curl, an OpenAI API key and a model available to
+that key. From a clone of this repository:
+
+```bash
+export OPENAI_API_KEY='your-api-key'
+export OPENAI_MODEL='a-model-available-to-your-account'
+export KNOWL_OPERATOR_TOKEN='replace-with-a-local-secret'
+
+docker compose -f deploy/sidecar/compose.yaml up --build -d --wait
+curl -fsS http://127.0.0.1:8080/readyz
+```
+
+The repository directory `deploy/sidecar/` contains these Compose assets;
+"sidecar" describes one deployment arrangement, not a separate Knowl mode.
+This profile mounts [quickstart.yaml](../deploy/sidecar/quickstart.yaml) as the
+complete service configuration and explicitly forwards the three variables.
+`KNOWL_IMAGE` changes the image name; this recipe still builds from source.
+For a prebuilt deployment use an image containing the required features and
+pin its immutable digest. The historical `quickstart.compose.yaml` is pinned to
+v0.5.0; do not combine it with current optional-feature profiles.
+
+The entrypoint initializes an empty volume and starts Knowl. The service runs
+as a non-root user, listens on port 8080 inside Docker and publishes only to
+host loopback. It owns `/var/lib/knowl/knowledge` and its SQLite database under
+`.knowl/`. The `knowl-data` named volume preserves that entire directory.
+The example source is mounted read-only at `/sources/engineering`.
+
+## Process and read a source
+
+The configured source synchronizes on startup and periodically. Inspect its
+maintenance outcome:
+
+```bash
+docker compose -f deploy/sidecar/compose.yaml \
+  exec knowl knowl --config-dir /etc source status engineering
+```
+
+Wait for committed maintenance and inspect any failed operation. A successful
+scan only records accepted sources; `/readyz` reports service readiness, not
+completion of model-backed processing. Agent/model failures are described in
+[source recovery](operations.md#recovering-failed-source-maintenance).
+
+Retrieve the resulting evidence:
+
+```bash
+curl -fsS --get \
+  -H "Authorization: Bearer ${KNOWL_OPERATOR_TOKEN}" \
+  --data-urlencode 'query=Engineering shared page' \
+  http://127.0.0.1:8080/v1/retrieve
+```
+
+Expect a non-empty `evidence` array with page identities, excerpts and source
+references. Read the generated wiki inside the persistent volume, or enable
+[browser access](#optional-browser-access) and open the page named in evidence.
+The source revision is preserved under `raw/`; the agent writes a separate
+semantic wiki under `wiki/`. Preserve both with the operational state.
+
+## Connect an MCP client
+
+Configure your client's Streamable HTTP connection with:
+
+```json
+{
+  "transport": "streamable_http",
+  "url": "http://127.0.0.1:8080/mcp",
+  "headers": {"Authorization": "Bearer <operator-token>"}
+}
+```
+
+Adapt this shape to your client. Tools are `knowl_retrieve`, `knowl_ingest` and
+`knowl_operation`; the [OpenAPI contract](../api/openapi/knowl.yaml) describes the
+HTTP equivalents. See [Codex integration](local-codex.md) for local MCP stdio.
+
+## Optional browser access
+
+The UI is bundled in the Knowl binary. It requires no additional web service.
+In a copy of the profile's complete configuration, add:
+
+```yaml
+knowl:
+  web:
+    enabled: true
+```
+
+Retain provider, sources, storage, server and operator settings. Mount that
+complete file at `/etc/knowl/config.yaml`, replacing the profile's existing
+config mount, then recreate the Knowl container. Open
+`http://127.0.0.1:8080/ui/` and connect using your operator token. For access
+beyond loopback, use a trusted HTTPS proxy and restrict direct listener access.
+See the [Web UI guide](web-ui.md) for navigation and token handling.
+
+## Optional hybrid search
+
+Use an external embedding API or a local TEI server. Both are configured
+independently of the maintainer and service transport. Follow the
+[search guide](search.md); its Compose profile preserves this guide's provider,
+source and authentication settings.
+
+## Health, persistence and shutdown
+
+`/healthz` reports an HTTP-serving process. `/readyz` reports usable storage,
+recovery and retrieval readiness; lexical fallback can be ready while hybrid
+retrieval is degraded. Inspect the retrieval response for effective search mode.
+
+```bash
+docker compose -f deploy/sidecar/compose.yaml down
+```
+
+This preserves named volumes. Keep the whole `/var/lib/knowl` volume for raw
+history, wiki, source status and recovery state. See [operations](operations.md)
+for backup/recovery and the [workspace guide](workspace.md) for export.

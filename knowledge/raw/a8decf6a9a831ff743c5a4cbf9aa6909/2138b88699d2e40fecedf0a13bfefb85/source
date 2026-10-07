@@ -1,0 +1,38 @@
+# Service deployment guide moved
+
+<a id="sidecar-deployment"></a>
+
+Start with [Run Knowl as a service](service.md). Optional vectorization has its
+own [search guide](search.md), shared by local and service deployments. The
+repository keeps deployment assets under `deploy/sidecar/` for compatibility.
+
+## What the container does
+
+See [service storage and startup](service.md#build-and-run).
+
+## Build and run
+
+Follow the [current-source service quickstart](service.md#build-and-run).
+Historical release recipes remain in [release history](releases/).
+
+## Optional browser access
+
+See [enable browser access](service.md#optional-browser-access) and the
+[Web UI guide](web-ui.md).
+
+## Optional CPU embeddings
+
+See the [local embedding server](search.md#local-embedding-server) and
+[embedding API configuration](search.md#configure-an-embedding-api).
+
+## Health checks
+
+See [health, persistence and shutdown](service.md#health-persistence-and-shutdown).
+
+## Agent-side use
+
+See [process and read a source](service.md#process-and-read-a-source).
+
+## Connect an MCP client
+
+See [connect an MCP client](service.md#connect-an-mcp-client).

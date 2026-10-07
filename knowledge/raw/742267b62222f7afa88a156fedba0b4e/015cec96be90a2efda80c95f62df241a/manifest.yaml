@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/service.md
+version: 2285613bddb8170687522ba50fcea2338864eed183b983210733ef0d8bfb7acd
+digest: 2285613bddb8170687522ba50fcea2338864eed183b983210733ef0d8bfb7acd
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: service.md
+    revision: 2285613bddb8170687522ba50fcea2338864eed183b983210733ef0d8bfb7acd
+    uri: file:///home/bigboss/Projects/knowl/docs/service.md
+received_at: 2026-10-07T14:33:32.430443Z

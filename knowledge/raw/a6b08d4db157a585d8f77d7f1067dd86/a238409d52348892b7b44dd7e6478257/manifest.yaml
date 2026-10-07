@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/examples/own-docs-wiki.md
+version: 4b076ff94b528e7e337477c9190b8aa2b59649bb07e78bd65db880b1b28c8fa2
+digest: 4b076ff94b528e7e337477c9190b8aa2b59649bb07e78bd65db880b1b28c8fa2
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: examples/own-docs-wiki.md
+    revision: 4b076ff94b528e7e337477c9190b8aa2b59649bb07e78bd65db880b1b28c8fa2
+    uri: file:///home/bigboss/Projects/knowl/docs/examples/own-docs-wiki.md
+received_at: 2026-10-07T14:33:32.272674Z
