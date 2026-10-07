@@ -41,13 +41,22 @@ func (store *Store) publishEmbeddings(ctx context.Context, scope knowl.ScopeRef,
 	if current != state.SnapshotDigest {
 		return embeddingFailure(knowl.RetrievalProjectionDrift)
 	}
+	if state.Mode == knowl.RetrievalHybrid {
+		pages, err := embeddingPageSetTx(ctx, tx, scope)
+		if err != nil {
+			return err
+		}
+		if err := hybrid.ValidatePageSet(state.Coverage, pages); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM knowl_embedding_state WHERE scope = ?`, scope); err != nil {
 		return err
 	}
 	if state.ReadyAt.IsZero() {
 		state.ReadyAt = time.Now().UTC()
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO knowl_embedding_state(scope,space,snapshot_digest,dimensions,mode,reason,chunk_count,omitted_chunks,omitted_runes,ready_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, scope, state.Space, state.SnapshotDigest, state.Dimensions, state.Mode, state.Reason, state.ChunkCount, state.OmittedChunks, state.OmittedRunes, state.ReadyAt.UTC().Format(time.RFC3339Nano))
+	_, err = tx.ExecContext(ctx, `INSERT INTO knowl_embedding_state(scope,space,snapshot_digest,dimensions,mode,reason,chunk_count,omitted_chunks,omitted_runes,ready_at,coverage) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, scope, state.Space, state.SnapshotDigest, state.Dimensions, state.Mode, state.Reason, state.ChunkCount, state.OmittedChunks, state.OmittedRunes, state.ReadyAt.UTC().Format(time.RFC3339Nano), state.Coverage)
 	if err != nil {
 		return fmt.Errorf("write embeddings readiness: %w", err)
 	}
@@ -86,6 +95,7 @@ func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef
         AND length(CAST(e.mode AS BLOB)) <= 16
         AND length(CAST(e.reason AS BLOB)) <= 64
         AND length(CAST(e.ready_at AS BLOB)) BETWEEN 1 AND 64
+		AND length(CAST(e.coverage AS BLOB)) <= 1048576
         AND typeof(e.dimensions) = 'integer'
         AND typeof(e.chunk_count) = 'integer'
         AND typeof(e.omitted_chunks) = 'integer'
@@ -102,7 +112,7 @@ func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef
 		return state, nil, embeddingFailure(knowl.RetrievalProjectionDrift)
 	}
 	var lexicalSnapshot, readyAt string
-	err = tx.QueryRowContext(ctx, `SELECT e.space,e.snapshot_digest,e.dimensions,e.mode,e.reason,e.chunk_count,e.omitted_chunks,e.omitted_runes,e.ready_at,p.snapshot_digest FROM knowl_embedding_state e JOIN knowl_projection_state p ON p.scope=e.scope WHERE e.scope=?`, scope).Scan(&state.Space, &state.SnapshotDigest, &state.Dimensions, &state.Mode, &state.Reason, &state.ChunkCount, &state.OmittedChunks, &state.OmittedRunes, &readyAt, &lexicalSnapshot)
+	err = tx.QueryRowContext(ctx, `SELECT e.space,e.snapshot_digest,e.dimensions,e.mode,e.reason,e.chunk_count,e.omitted_chunks,e.omitted_runes,e.ready_at,p.snapshot_digest,e.coverage FROM knowl_embedding_state e JOIN knowl_projection_state p ON p.scope=e.scope WHERE e.scope=?`, scope).Scan(&state.Space, &state.SnapshotDigest, &state.Dimensions, &state.Mode, &state.Reason, &state.ChunkCount, &state.OmittedChunks, &state.OmittedRunes, &readyAt, &lexicalSnapshot, &state.Coverage)
 	if errors.Is(err, sql.ErrNoRows) {
 		return state, nil, embeddingFailure(knowl.RetrievalProjectionNotReady)
 	}
@@ -111,6 +121,15 @@ func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef
 	}
 	if state.Space != space || state.SnapshotDigest != lexicalSnapshot || state.Dimensions != dimensions {
 		return state, nil, embeddingFailure(knowl.RetrievalProjectionDrift)
+	}
+	if state.Mode == knowl.RetrievalHybrid {
+		pages, err := embeddingPageSetTx(ctx, tx, scope)
+		if err != nil {
+			return state, nil, err
+		}
+		if err := hybrid.ValidatePageSet(state.Coverage, pages); err != nil {
+			return state, nil, err
+		}
 	}
 	state.ReadyAt, err = time.Parse(time.RFC3339Nano, readyAt)
 	if err != nil {
@@ -122,7 +141,7 @@ func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef
 	if err != nil {
 		return state, nil, err
 	}
-	if count > hybrid.MaxChunks || bytes+256 > hybrid.MaxProjectionBytes {
+	if count > hybrid.MaxChunks || bytes+256+len(state.Coverage) > hybrid.MaxProjectionBytes {
 		return state, nil, embeddingFailure(knowl.RetrievalProjectionCapacity)
 	}
 	if count != state.ChunkCount {
@@ -159,6 +178,39 @@ func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef
 		return state, nil, err
 	}
 	return state, chunks, nil
+}
+
+func embeddingPageSetTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef) ([]hybrid.PageCoverage, error) {
+	var count, maxIDBytes, maxDigestBytes int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX(length(CAST(page_id AS BLOB))),0),COALESCE(MAX(length(CAST(digest AS BLOB))),0) FROM (SELECT page_id,digest FROM knowl_pages WHERE scope=? LIMIT ?)`, scope, hybrid.MaxChunks+1).Scan(&count, &maxIDBytes, &maxDigestBytes); err != nil {
+		return nil, err
+	}
+	if count > hybrid.MaxChunks {
+		return nil, embeddingFailure(knowl.RetrievalProjectionCapacity)
+	}
+	if maxIDBytes > 4096 || maxDigestBytes > 256 {
+		return nil, embeddingFailure(knowl.RetrievalProjectionDrift)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT page_id,digest FROM knowl_pages WHERE scope=? ORDER BY page_id LIMIT ?`, scope, hybrid.MaxChunks+1)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	pages := make([]hybrid.PageCoverage, 0)
+	for rows.Next() {
+		var page hybrid.PageCoverage
+		if err := rows.Scan(&page.PageID, &page.PageDigest); err != nil {
+			return nil, err
+		}
+		pages = append(pages, page)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(pages) > hybrid.MaxChunks {
+		return nil, embeddingFailure(knowl.RetrievalProjectionCapacity)
+	}
+	return pages, nil
 }
 
 func embeddingFailure(code knowl.RetrievalFailure) error { return &app.EmbeddingError{Code: code} }

@@ -158,6 +158,22 @@ func RunHybrid(t *testing.T, factory HybridFactory, projectionMismatch InvalidEr
 			t.Fatalf("API fallback invented projection check: %v %+v %v", ids, metadata, err)
 		}
 	})
+	t.Run("dense-only result shows original tail evidence", func(t *testing.T) {
+		index := factory(t, app.EmbeddingOptions{Provider: tailEvidenceProvider{}, Space: space, FailurePolicy: app.EmbeddingStrict})
+		t.Cleanup(func() { _ = index.Close() })
+		snap := snapshot(t)
+		snap.Pages[0].Body = strings.Repeat("alpha ", 1000) + strings.Repeat("beta ", 200)
+		if err := index.Rebuild(t.Context(), snap); err != nil {
+			t.Fatal(err)
+		}
+		refs, report, err := index.SearchWithReport(t.Context(), snap.Scope, "paraphrasedneedle", knowl.ReadLimits{Pages: 1, Characters: 80}, nil)
+		if err != nil || report.Effective != knowl.RetrievalHybrid || len(refs) != 1 || refs[0].ID != hybridTargetID {
+			t.Fatalf("tail search: refs=%+v report=%+v err=%v", refs, report, err)
+		}
+		if !strings.Contains(refs[0].Snippet, "beta") {
+			t.Fatalf("dense-only snippet lost tail evidence: %q", refs[0].Snippet)
+		}
+	})
 	t.Run("semantic query and direct source seed", func(t *testing.T) {
 		provider := &controlledEmbeddings{}
 		index := open(t, provider, app.EmbeddingFallbackLexical)
@@ -323,4 +339,20 @@ func RunHybrid(t *testing.T, factory HybridFactory, projectionMismatch InvalidEr
 			}
 		})
 	}
+}
+
+// tailEvidenceProvider gives only windows wholly inside the final section a
+// semantic match; it keeps the repository's real indexing and search path.
+type tailEvidenceProvider struct{}
+
+func (tailEvidenceProvider) Embed(_ context.Context, inputs []string) ([][]float32, error) {
+	out := make([][]float32, len(inputs))
+	for i, input := range inputs {
+		if strings.HasPrefix(input, "query: ") || (strings.Contains(input, "beta ") && !strings.Contains(input, "alpha ")) {
+			out[i] = []float32{1, 0}
+		} else {
+			out[i] = []float32{0, 1}
+		}
+	}
+	return out, nil
 }

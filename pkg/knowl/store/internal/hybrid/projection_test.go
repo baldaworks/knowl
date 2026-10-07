@@ -12,12 +12,20 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+const testPageDigest = "digest"
+
 func TestProjectionBoundsAndCompleteness(t *testing.T) {
 	state := ProjectionState{Space: strings.Repeat("a", 64), SnapshotDigest: strings.Repeat("b", 64), Dimensions: 1, Mode: knowl.RetrievalHybrid, ChunkCount: MaxChunks}
 	chunks := make([]Chunk, MaxChunks)
 	for i := range chunks {
-		chunks[i] = Chunk{PageID: knowl.PageID(fmt.Sprintf("page-%d", i/PageChunks)), PageDigest: "digest", Ordinal: i % PageChunks, ContentHash: strings.Repeat("c", 64), Vector: []float32{1}}
+		chunks[i] = Chunk{PageID: knowl.PageID(fmt.Sprintf("page-%d", i/EmbeddingBatchChunks)), PageDigest: testPageDigest, Ordinal: i % EmbeddingBatchChunks, ContentHash: strings.Repeat("c", 64), Vector: []float32{1}}
 	}
+	coverage := make([]PageCoverage, 0, MaxChunks/EmbeddingBatchChunks)
+	for i := 0; i < MaxChunks/EmbeddingBatchChunks; i++ {
+		coverage = append(coverage, PageCoverage{PageID: knowl.PageID(fmt.Sprintf("page-%d", i)), PageDigest: testPageDigest, Chunks: EmbeddingBatchChunks})
+	}
+	slices.SortFunc(coverage, func(a, b PageCoverage) int { return strings.Compare(string(a.PageID), string(b.PageID)) })
+	state.Coverage, _ = EncodeCoverage(coverage)
 	if err := ValidateProjection(t.Context(), state, chunks); err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +48,12 @@ func TestProjectionBoundsAndCompleteness(t *testing.T) {
 	byteState := state
 	byteState.Dimensions = len(large)
 	byteState.ChunkCount = len(oversized)
+	byteCoverage := make([]PageCoverage, 0, len(oversized)/EmbeddingBatchChunks)
+	for i := 0; i < len(oversized)/EmbeddingBatchChunks; i++ {
+		byteCoverage = append(byteCoverage, PageCoverage{PageID: knowl.PageID(fmt.Sprintf("page-%d", i)), PageDigest: testPageDigest, Chunks: EmbeddingBatchChunks})
+	}
+	slices.SortFunc(byteCoverage, func(a, b PageCoverage) int { return strings.Compare(string(a.PageID), string(b.PageID)) })
+	byteState.Coverage, _ = EncodeCoverage(byteCoverage)
 	cases = append(cases, struct {
 		name   string
 		state  ProjectionState

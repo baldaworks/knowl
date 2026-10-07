@@ -238,8 +238,9 @@ reciprocal rank fusion with their existing lexical candidate order. There is no
 language-specific route, in-process model or ANN extension.
 
 Semantic inputs preserve original case and use NFC with normalized line endings.
-Fixed 384-rune chunks overlap by 64 runes; pages retain at most 16 chunks and
-queries or source signals at most four. Omitted coverage is reported. Model
+Fixed 384-rune chunks overlap by 64 runes. Every eligible page is chunked to its
+end; embedding API calls contain at most 16 chunks each. Queries and source
+signals retain at most four chunks, and their omitted coverage is reported. Model
 prefixes are applied once. Private lexical tokens, paths and provenance do not
 enter the model. Complete source and factual-page authority in maintenance stays
 unchanged; semantic chunks are only a retrieval projection.
@@ -249,8 +250,9 @@ lexical state first, invalidates dense readiness, then publishes the complete
 bounded vector projection only if its canonical snapshot still matches. SQLite
 stores little-endian float32 vectors in BLOBs; PostgreSQL uses BYTEA and the same
 scoped advisory lock for lexical replacement and dense publication. Migration
-16 adds these disposable projections and durable retrieval reports, without
-changing canonical Markdown or raw evidence.
+16 adds the original disposable projections and durable retrieval reports;
+migration 21 expands chunk ordinals and records a bounded per-page coverage
+manifest. Neither changes canonical Markdown or raw evidence.
 
 Enabled reads verify the complete projection, lexical candidates, filters and
 original references in one consistent read transaction. Each page contributes
@@ -258,11 +260,16 @@ its maximum cosine across query windows and page chunks. Each channel keeps
 `min(100, max(20, 4*k))` candidates; equal-weight RRF uses ranks starting at one
 and constant 60, deduplicating pages per channel and breaking ties by page ID.
 The fused relevance seeds feed the existing neighbor/root/recent context policy.
-Lexical-only mode retains native ordering. Results retain original evidence and
-citations; semantic similarity does not establish factual agreement.
+Lexical-only mode retains native ordering and snippets. A page found by both
+channels retains its lexical snippet; a dense-only result uses original text
+from its winning chunk, verified against the indexed page digest and chunk hash.
+Results retain original evidence and citations; semantic similarity does not
+establish factual agreement.
 
-Projection capacity is 8,192 chunks and 64 MiB per scope. Incompatible, incomplete
-or over-capacity dense state fails as a whole. `failure_policy: lexical` returns
+Projection capacity is 8,192 chunks, 1 MiB of coverage metadata and 64 MiB in
+total per scope. Ready state covers every eligible page and all its chunks;
+incompatible, incomplete or over-capacity dense state fails as a whole.
+`failure_policy: lexical` returns
 explicit degraded lexical results for classified embedding failures; `strict`
 returns a typed failure. Invalid input and caller cancellation never become
 successful fallback. Queries do not rebuild the projection. Startup retries a

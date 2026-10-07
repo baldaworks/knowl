@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -63,38 +64,58 @@ func (engine *Engine) Build(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	defer cancel()
 	pages := append([]knowl.PageSnapshot(nil), snapshot.Pages...)
 	sort.Slice(pages, func(i, j int) bool { return pages[i].ID < pages[j].ID })
+	preparedPages := make([]PreparedText, len(pages))
+	coverage := make([]PageCoverage, 0, len(pages))
 	chunks := make([]Chunk, 0)
 	bytes := 256
-	for _, page := range pages {
+	totalChunks := 0
+	for i, page := range pages {
 		prepared, err := PreparePage(buildCtx, page, engine.Space)
 		if err != nil {
 			return state, nil, err
 		}
-		state.OmittedChunks += prepared.OmittedChunks
-		state.OmittedRunes += prepared.OmittedRunes
-		if state.OmittedChunks > 2147483647 || state.OmittedRunes > 2147483647 || len(chunks)+len(prepared.Inputs) > MaxChunks {
+		if totalChunks+len(prepared.Inputs) > MaxChunks {
 			return state, nil, failure(knowl.RetrievalProjectionCapacity)
 		}
+		totalChunks += len(prepared.Inputs)
 		bytes += len(prepared.Inputs) * (len(page.ID) + len(page.Digest) + 64 + len(engine.Fingerprint) + 32 + engine.Space.Dimensions*4)
 		if bytes > MaxProjectionBytes {
 			return state, nil, failure(knowl.RetrievalProjectionCapacity)
 		}
+		preparedPages[i] = prepared
+		if projectionmeta.SemanticPage(page) {
+			coverage = append(coverage, PageCoverage{PageID: page.ID, PageDigest: page.Digest, Chunks: len(prepared.Inputs)})
+		}
+	}
+	encodedCoverage, err := EncodeCoverage(coverage)
+	if err != nil {
+		return state, nil, failure(knowl.RetrievalInvalidInput)
+	}
+	state.Coverage = encodedCoverage
+	if bytes+len(state.Coverage) > MaxProjectionBytes || len(state.Coverage) > MaxCoverageBytes || len(coverage) > MaxChunks {
+		return state, nil, failure(knowl.RetrievalProjectionCapacity)
+	}
+	for i, page := range pages {
+		prepared := preparedPages[i]
 		if len(prepared.Inputs) == 0 {
 			continue
 		}
-		vectors, err := engine.Provider.Embed(buildCtx, prepared.Inputs)
-		if err != nil {
-			return state, nil, err
-		}
-		if len(vectors) != len(prepared.Inputs) {
-			return state, nil, failure(knowl.RetrievalInvalidResponse)
-		}
-		for ordinal, input := range prepared.Inputs {
-			if err := validateVector(vectors[ordinal], engine.Space.Dimensions); err != nil {
+		for start := 0; start < len(prepared.Inputs); start += EmbeddingBatchChunks {
+			end := min(start+EmbeddingBatchChunks, len(prepared.Inputs))
+			vectors, err := engine.Provider.Embed(buildCtx, prepared.Inputs[start:end])
+			if err != nil {
 				return state, nil, err
 			}
-			hash := sha256.Sum256([]byte(input))
-			chunks = append(chunks, Chunk{PageID: page.ID, PageDigest: page.Digest, Ordinal: ordinal, ContentHash: hex.EncodeToString(hash[:]), Vector: vectors[ordinal]})
+			if len(vectors) != end-start {
+				return state, nil, failure(knowl.RetrievalInvalidResponse)
+			}
+			for ordinal := start; ordinal < end; ordinal++ {
+				if err := validateVector(vectors[ordinal-start], engine.Space.Dimensions); err != nil {
+					return state, nil, err
+				}
+				hash := sha256.Sum256([]byte(prepared.Inputs[ordinal]))
+				chunks = append(chunks, Chunk{PageID: page.ID, PageDigest: page.Digest, Ordinal: ordinal, ContentHash: hex.EncodeToString(hash[:]), Vector: vectors[ordinal-start]})
+			}
 		}
 	}
 	state.ChunkCount = len(chunks)
@@ -142,7 +163,26 @@ func CandidateLimit(limit int) int { return min(100, max(20, 4*limit)) }
 // Rank aggregates maximum cosine over all query windows and page chunks. Rows
 // must already be complete/compatible and scope/source-filtered by the adapter.
 func Rank(ctx context.Context, queries [][]float32, chunks []Chunk, limit int) ([]knowl.PageID, error) {
+	ranked, err := RankWithEvidence(ctx, queries, chunks, limit)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]knowl.PageID, len(ranked))
+	for i, match := range ranked {
+		ids[i] = match.PageID
+	}
+	return ids, nil
+}
+
+// RankedPage retains the winning chunk while ranking and fusion stay page based.
+type RankedPage struct {
+	PageID knowl.PageID
+	Chunk  Chunk
+}
+
+func RankWithEvidence(ctx context.Context, queries [][]float32, chunks []Chunk, limit int) ([]RankedPage, error) {
 	scores := make(map[knowl.PageID]float64)
+	winners := make(map[knowl.PageID]Chunk)
 	for _, chunk := range chunks {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -153,8 +193,9 @@ func Rank(ctx context.Context, queries [][]float32, chunks []Chunk, limit int) (
 				return nil, err
 			}
 			previous, seen := scores[chunk.PageID]
-			if !seen || score > previous {
+			if !seen || score > previous || (score == previous && chunk.Ordinal < winners[chunk.PageID].Ordinal) {
 				scores[chunk.PageID] = score
+				winners[chunk.PageID] = chunk
 			}
 		}
 	}
@@ -168,7 +209,11 @@ func Rank(ctx context.Context, queries [][]float32, chunks []Chunk, limit int) (
 		}
 		return ids[i] < ids[j]
 	})
-	return ids[:min(limit, len(ids))], nil
+	ranked := make([]RankedPage, min(limit, len(ids)))
+	for i, id := range ids[:len(ranked)] {
+		ranked[i] = RankedPage{PageID: id, Chunk: winners[id]}
+	}
+	return ranked, nil
 }
 
 // Fuse preserves channel rank positions, deduplicates pages per channel and

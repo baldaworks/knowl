@@ -21,20 +21,25 @@ import (
 const (
 	ChunkRunes           = 384
 	ChunkOverlap         = 64
-	PageChunks           = 16
+	EmbeddingBatchChunks = 16
 	QueryChunks          = 4
 	MaxChunks            = 8192
+	MaxCoverageBytes     = 1 << 20
 	MaxProjectionBytes   = 64 << 20
 	MaxSemanticBytes     = 4 << 20
-	PreprocessingVersion = "semantic-nfc-v1-chunk384-overlap64-page16-query4"
+	PreprocessingVersion = "semantic-nfc-v2-chunk384-overlap64-fullpage-query4"
 )
 
 // PreparedText contains bounded model inputs and explicit omitted coverage.
 type PreparedText struct {
 	Inputs        []string
+	Windows       []TextWindow
 	OmittedRunes  int
 	OmittedChunks int
 }
+
+// TextWindow identifies one input's span in normalized, trimmed semantic text.
+type TextWindow struct{ Start, End int }
 
 // PrepareText uses original NFC Unicode, fixed progress and paragraph/space
 // boundaries. Omission describes normalized semantic text, never authoritative edits.
@@ -45,7 +50,7 @@ func PrepareText(ctx context.Context, text, prefix string, maxChunks int) (Prepa
 	if err := ctx.Err(); err != nil {
 		return PreparedText{}, err
 	}
-	if !utf8.ValidString(text) || !utf8.ValidString(prefix) || maxChunks < 1 || maxChunks > PageChunks {
+	if !utf8.ValidString(text) || !utf8.ValidString(prefix) || maxChunks < 1 || maxChunks > MaxChunks {
 		return PreparedText{}, failure(knowl.RetrievalInvalidInput)
 	}
 	if len(text) > MaxSemanticBytes || len(prefix) > 256 {
@@ -76,6 +81,7 @@ func PrepareText(ctx context.Context, text, prefix string, maxChunks int) (Prepa
 			chunk := strings.TrimSpace(string(runes[start:end]))
 			if chunk != "" {
 				result.Inputs = append(result.Inputs, prefix+chunk)
+				result.Windows = append(result.Windows, TextWindow{Start: start, End: end})
 				covered = end
 			}
 		} else {
@@ -151,7 +157,15 @@ func PreparePage(ctx context.Context, page knowl.PageSnapshot, space app.Embeddi
 	if err != nil {
 		return PreparedText{}, err
 	}
-	fields := []string{page.Title, values.Tags, values.Description, values.Body}
+	return PreparePageFields(ctx, SemanticFields{Title: page.Title, Tags: values.Tags, Description: values.Description, Body: values.Body}, space)
+}
+
+// SemanticFields are the original page fields persisted by lexical projection.
+type SemanticFields struct{ Title, Tags, Description, Body string }
+
+// PreparePageFields uses the same complete page contract for build and evidence.
+func PreparePageFields(ctx context.Context, page SemanticFields, space app.EmbeddingSpace) (PreparedText, error) {
+	fields := []string{page.Title, page.Tags, page.Description, page.Body}
 	total := 0
 	for _, field := range fields {
 		if !utf8.ValidString(field) {
@@ -165,7 +179,14 @@ func PreparePage(ctx context.Context, page knowl.PageSnapshot, space app.Embeddi
 	if total > MaxSemanticBytes-6 {
 		return PreparedText{}, failure(knowl.RetrievalInputLimit)
 	}
-	return PrepareText(ctx, strings.Join(fields, "\n\n"), space.PassagePrefix, PageChunks)
+	prepared, err := PrepareText(ctx, strings.Join(fields, "\n\n"), space.PassagePrefix, MaxChunks)
+	if err != nil {
+		return PreparedText{}, err
+	}
+	if prepared.OmittedChunks != 0 || prepared.OmittedRunes != 0 {
+		return PreparedText{}, failure(knowl.RetrievalProjectionCapacity)
+	}
+	return prepared, nil
 }
 
 func failure(code knowl.RetrievalFailure) error { return &app.EmbeddingError{Code: code} }

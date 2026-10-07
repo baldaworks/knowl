@@ -64,6 +64,15 @@ func embeddingFixture(t *testing.T) (*Store, knowl.WorkspaceSnapshot, hybrid.Pro
 	for _, page := range snapshot.Pages {
 		chunks = append(chunks, hybrid.Chunk{PageID: page.ID, PageDigest: page.Digest, ContentHash: strings.Repeat("b", 64), Vector: []float32{1, 0}})
 	}
+	coverage := make([]hybrid.PageCoverage, 0, len(chunks))
+	for _, chunk := range chunks {
+		coverage = append(coverage, hybrid.PageCoverage{PageID: chunk.PageID, PageDigest: chunk.PageDigest, Chunks: 1})
+	}
+	slices.SortFunc(coverage, func(a, b hybrid.PageCoverage) int { return strings.Compare(string(a.PageID), string(b.PageID)) })
+	state.Coverage, err = hybrid.EncodeCoverage(coverage)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.publishEmbeddings(t.Context(), snapshot.Scope, state, chunks); err != nil {
 		t.Fatal(err)
 	}
@@ -225,6 +234,7 @@ func TestSQLiteEmbeddingDegradedAndCapacity(t *testing.T) {
 	degraded.Mode = knowl.RetrievalDegraded
 	degraded.Reason = knowl.RetrievalUnavailable
 	degraded.ChunkCount = 0
+	degraded.Coverage = ""
 	if err := store.publishEmbeddings(t.Context(), snapshot.Scope, degraded, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -430,10 +440,10 @@ func TestSQLiteEmbeddingExactChunkCapacity(t *testing.T) {
 	store, snapshot, state, _ := embeddingFixture(t)
 	snapshot.Pages = nil
 	chunks := make([]hybrid.Chunk, 0, hybrid.MaxChunks)
-	for i := 0; i < hybrid.MaxChunks/hybrid.PageChunks; i++ {
+	for i := 0; i < hybrid.MaxChunks/hybrid.EmbeddingBatchChunks; i++ {
 		id := knowl.PageID(fmt.Sprintf("capacity-%d", i))
 		snapshot.Pages = append(snapshot.Pages, knowl.PageSnapshot{ID: id, Path: fmt.Sprintf("wiki/capacity/%d.md", i), Title: "Capacity", Body: "bounded original", Digest: embeddingTestDigest})
-		for ordinal := 0; ordinal < hybrid.PageChunks; ordinal++ {
+		for ordinal := 0; ordinal < hybrid.EmbeddingBatchChunks; ordinal++ {
 			chunks = append(chunks, hybrid.Chunk{PageID: id, PageDigest: embeddingTestDigest, Ordinal: ordinal, ContentHash: strings.Repeat("b", 64), Vector: []float32{1, 0}})
 		}
 	}
@@ -442,6 +452,12 @@ func TestSQLiteEmbeddingExactChunkCapacity(t *testing.T) {
 	}
 	state.SnapshotDigest = snapshotDigest(snapshot)
 	state.ChunkCount = len(chunks)
+	coverage := make([]hybrid.PageCoverage, 0, len(snapshot.Pages))
+	for _, page := range snapshot.Pages {
+		coverage = append(coverage, hybrid.PageCoverage{PageID: page.ID, PageDigest: page.Digest, Chunks: hybrid.EmbeddingBatchChunks})
+	}
+	slices.SortFunc(coverage, func(a, b hybrid.PageCoverage) int { return strings.Compare(string(a.PageID), string(b.PageID)) })
+	state.Coverage, _ = hybrid.EncodeCoverage(coverage)
 	if err := store.publishEmbeddings(t.Context(), snapshot.Scope, state, chunks); err != nil {
 		t.Fatalf("exact capacity publication: %v", err)
 	}

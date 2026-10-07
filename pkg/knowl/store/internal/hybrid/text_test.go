@@ -42,7 +42,7 @@ func TestSemanticTextPreservesCaseAndCanonicalEquivalence(t *testing.T) {
 
 func TestSemanticTextExactAndOverChunkBound(t *testing.T) {
 	for _, test := range []struct{ runes, omitted int }{{384, 0}, {385, 1}} {
-		got, err := PrepareText(context.Background(), strings.Repeat("x", test.runes), "passage: ", 1)
+		got, err := PrepareText(context.Background(), strings.Repeat("x", test.runes), testPassagePrefix, 1)
 		if err != nil || len(got.Inputs) != 1 || utf8.RuneCountInString(got.Inputs[0]) != 393 || got.OmittedRunes != test.omitted {
 			t.Fatalf("boundary prepared=%#v %v", got, err)
 		}
@@ -78,10 +78,10 @@ func TestSemanticSourceUsesTextBeforeIdentityFallback(t *testing.T) {
 }
 
 func TestSemanticPageExcludesControlPagesAndUsesOriginalFields(t *testing.T) {
-	space := app.EmbeddingSpace{PassagePrefix: "passage: "}
+	space := app.EmbeddingSpace{PassagePrefix: testPassagePrefix}
 	page := knowl.PageSnapshot{ID: "private-id", Path: "wiki/concepts/one.md", Title: "OriginalTitle", Body: "OriginalBody", SourceRefs: []string{"private-ref"}}
 	got, err := PreparePage(context.Background(), page, space)
-	if err != nil || !reflect.DeepEqual(got.Inputs, []string{"passage: OriginalTitle\n\n\n\n\n\nOriginalBody"}) {
+	if err != nil || !reflect.DeepEqual(got.Inputs, []string{testPassagePrefix + "OriginalTitle\n\n\n\n\n\nOriginalBody"}) {
 		t.Fatalf("semantic page fields=%#v %v", got, err)
 	}
 	for _, path := range []string{"wiki/index.md", "wiki/log.md", "wiki/sources/mirror.md"} {
@@ -94,7 +94,7 @@ func TestSemanticPageExcludesControlPagesAndUsesOriginalFields(t *testing.T) {
 }
 
 func TestSpaceFingerprintChangesWithEveryModelPreprocessingField(t *testing.T) {
-	base := app.EmbeddingSpace{Model: "e5", Revision: "fixed-revision", Dimensions: 384, QueryPrefix: fixtureQueryPrefix, PassagePrefix: "passage: "}
+	base := app.EmbeddingSpace{Model: "e5", Revision: "fixed-revision", Dimensions: 384, QueryPrefix: fixtureQueryPrefix, PassagePrefix: testPassagePrefix}
 	original, err := SpaceFingerprint(base)
 	if err != nil {
 		t.Fatal(err)

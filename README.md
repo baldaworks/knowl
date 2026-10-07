@@ -151,7 +151,9 @@ beyond loopback.
 
 Enable optional embeddings to retrieve related evidence across paraphrases and
 word forms. Knowl combines semantic and keyword search while keeping the
-original page text and source references in its results.
+original page text and source references in its results. The semantic index
+covers the full text of each published page within the configured projection
+capacity; a dense-only match shows the matching passage as its excerpt.
 
 Use your own compatible embedding API or the
 [self-hosted CPU sidecar](docs/sidecar.md#optional-cpu-embeddings).

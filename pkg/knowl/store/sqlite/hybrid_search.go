@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -131,6 +132,7 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	}
 	report.LexicalCandidates = len(lexicalRefs)
 	var dense []knowl.PageID
+	denseMatches := make(map[knowl.PageID]hybrid.Chunk)
 	if report.Effective == knowl.RetrievalHybrid {
 		var state hybrid.ProjectionState
 		var chunks []hybrid.Chunk
@@ -154,9 +156,14 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 			if err != nil {
 				return nil, nil, report, resultMetadata, err
 			}
-			dense, err = hybrid.Rank(ctx, vectors, chunks, channelLimit)
+			var ranked []hybrid.RankedPage
+			ranked, err = hybrid.RankWithEvidence(ctx, vectors, chunks, channelLimit)
 			if err != nil {
 				return nil, nil, report, resultMetadata, err
+			}
+			for _, match := range ranked {
+				dense = append(dense, match.PageID)
+				denseMatches[match.PageID] = match.Chunk
 			}
 			report.VectorCandidates = len(dense)
 		}
@@ -203,9 +210,38 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	for i, reference := range refs {
 		if lexicalReference, ok := lexicalByID[reference.ID]; ok {
 			refs[i] = lexicalReference
+			continue
 		}
+		chunk, ok := denseMatches[reference.ID]
+		if !ok {
+			continue
+		}
+		snippet, evidenceErr := readDenseEvidence(ctx, tx, scope, reference.ID, chunk, engine.Space, limits.Characters)
+		if evidenceErr != nil {
+			failed := app.FailedRetrievalReport(ctx, report, evidenceErr)
+			resultMetadata.VectorProjection = &knowl.VectorProjectionStatus{State: knowl.VectorInvalid, Reason: failed.Reason}
+			report, err = engine.Failure(ctx, report, evidenceErr)
+			if err != nil {
+				return nil, nil, report, resultMetadata, err
+			}
+			return lexicalRefs[:min(k, len(lexicalRefs))], nil, report, resultMetadata, nil
+		}
+		refs[i].Snippet = snippet
 	}
 	return refs, nil, report, resultMetadata, ctx.Err()
+}
+
+func readDenseEvidence(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, id knowl.PageID, chunk hybrid.Chunk, space app.EmbeddingSpace, characters int) (string, error) {
+	var fields hybrid.SemanticFields
+	var digest string
+	err := tx.QueryRowContext(ctx, `SELECT digest,title,tags,description,body FROM knowl_pages WHERE scope=? AND page_id=?`, scope, id).Scan(&digest, &fields.Title, &fields.Tags, &fields.Description, &fields.Body)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && digest != chunk.PageDigest) {
+		return "", embeddingFailure(knowl.RetrievalProjectionDrift)
+	}
+	if err != nil {
+		return "", err
+	}
+	return hybrid.OriginalEvidence(ctx, fields, space, chunk, characters)
 }
 
 func filterEmbeddingChunks(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, chunks []hybrid.Chunk, sources []knowl.SourceID) ([]hybrid.Chunk, error) {
