@@ -366,12 +366,13 @@ required prefixes and server truncation disabled.
 | Request | At most 16 inputs, 2,048 UTF-8 bytes each including prefix, 64 KiB serialized body |
 | Response | At most 1 MiB; complete unique indices, exact model/dimensions, finite nonzero normalized vectors |
 | Inference | 10-second request bound or earlier caller deadline; four concurrent client requests, no hidden retry |
-| Semantic input | NFC/original case; 384 runes per chunk, 64 overlap; 16 chunks/page, four/query or source signals |
-| Projection | At most 8,192 chunks and 64 MiB per scope; 15-minute rebuild or earlier caller deadline |
+| Semantic input | NFC/original case; 384 runes per chunk, 64 overlap; full page text within projection bounds, four chunks/query or source signals |
+| Projection | At most 8,192 chunks, 1 MiB of page coverage metadata and 64 MiB total per scope; 15-minute rebuild or earlier caller deadline |
 
 Rune limits are not tokenizer limits. The service must reject token overflow
 rather than silently truncate; the pinned TEI reports `input_limit`. Chunk/rune
-coverage omissions appear in the Go report. Lexical full-field indexing and
+coverage omissions for bounded queries/source signals appear in the Go report;
+ready page projections have zero omissions. Lexical full-field indexing and
 maintenance's complete-page/request limits still apply. Larger corpora require a
 separately evaluated capacity design; these bounds are not throughput promises.
 
@@ -390,8 +391,9 @@ identifies its originating work attempt; terminal/legacy replay does not invent
 or replace historical reports. Reports omit text, endpoint URLs, credentials and
 upstream error bodies. Public transport exposes only effective mode and reason.
 
-A rebuild replaces lexical state first, then generates vectors without holding
-SQL locks. Complete dense publication checks the canonical snapshot again;
+A rebuild replaces lexical state first, then generates full-page vectors in
+batches of at most 16 without holding SQL locks. Complete dense publication
+checks the canonical snapshot and every page's expected chunk count again;
 concurrent change discards the stale build. A classified failure saves degraded
 state even under strict policy. With lexical fallback, startup may be ready
 while semantic retrieval is degraded; `/readyz` alone is not a hybrid guarantee.
@@ -407,9 +409,12 @@ canonical commit: repair the derived projection, preserving the committed
 facts and raw evidence.
 
 Migration 16 adds disposable vector state and bounded operation reports in both
-stores. Down removes those additions, preserving canonical/raw content and
-older durable state. Stop writers and pair the schema with a compatible binary
-before rollback. Disabling embeddings retains the default lexical behavior and
+stores. Migration 21 expands the ordinal range and adds a bounded page coverage
+manifest. Existing partial indexes are incompatible with the new preprocessing
+identity and are rebuilt on startup. Down removes derived vector additions while
+preserving canonical/raw content and older durable state. Stop writers and pair
+the schema with a compatible binary before rollback. Disabling embeddings retains
+the default lexical behavior and
 ignores derived vectors. See [pending-operation recovery](#upgrading-pending-operations)
 for generation changes.
 

@@ -195,6 +195,40 @@ cache 1,075 MiB and idle memory about 1.91 GiB. Network-disabled cache startup,
 fallback/strict outage behavior were also verified. Inspect per-run timings in
 the artifact rather than treating these values as deployment guarantees.
 
+### Complete-page coverage on a private technical wiki
+
+An authorized, private 51-page wiki snapshot (page-digest set SHA-256
+`ad2518dd403ce09f810085b78a1e3a745ba60e0c8989a8da0d9d1f8bf8f5654c`)
+was measured before and after full-page indexing with the same E5-base revision,
+prefixes, CPU TEI sidecar and queries. The original 16-chunk/page implementation
+indexed 644 chunks and omitted 192,332 normalized runes across 31 pages. The
+complete-page implementation indexed 1,272 chunks, at most 79 for one page,
+with zero omissions. Both fit the 8,192-chunk projection limit.
+
+| Measurement | First 16 chunks/page | Complete pages |
+| --- | ---: | ---: |
+| Rebuild, seconds | 89 | 177 |
+| Exact-title top-1 | 51/51 | 51/51 |
+| Existing 25 paraphrases, top-5 | 19/25 | 19/25 |
+| Three head / middle / tail questions, top-5 | 2/3 · 2/3 · 3/3 | 2/3 · 3/3 · 3/3 |
+| Three tail questions, top-1 | 1/3 | 2/3 |
+| Paraphrase search p50 / p95, milliseconds | 95 / 106 | 132 / 156 |
+
+Direct source-selection top-five counts matched search top-five counts in this
+run. Two passes produced the same ranks. The nine section questions were
+authored and labeled before either comparison run; they and the older 25 are a
+small diagnostic set, not traffic-weighted relevance judgments. The tail pages
+were already in top five before the change. A separate model probe found the
+best E5 window beyond ordinal 15 for two of the three tail questions and in the
+first 16 for the third. All three result excerpts lacked their selected tail
+marker because lexical evidence took priority on mixed-channel hits. The
+deterministic dense-only regression checks that a winning tail window does show
+its original text. Full coverage establishes availability to the model; it
+does not guarantee that a tail window wins ranking or that a page enters top-k.
+Timings include the API runtime and exact vector scan, and are observations for
+this machine and corpus, not deployment limits. Private page text was not added
+to the repository.
+
 For an already reachable selected reference service and disposable PostgreSQL
 fixture, run:
 
