@@ -95,6 +95,8 @@ async function visibleDetail(page,id) {
   await page.locator('.source-select').first().focus();await page.keyboard.press('Enter');await loading;
   assert.equal(await page.locator('#source-detail').getAttribute('aria-busy'),'true');await visibleDetail(page,'source-detail');
   finish();await page.locator('.source-documents').waitFor();await page.waitForFunction(()=>!document.getElementById('source-detail').hasAttribute('aria-busy'),null,{timeout:5000});await page.clock.runFor(32);await visibleDetail(page,'source-detail');
+  const firstDocument=await page.locator('.source-documents tbody .table-name').first().evaluate(e=>{const r=e.getBoundingClientRect();return {top:r.top,bottom:r.bottom,header:document.querySelector('.app-header').getBoundingClientRect().bottom,height:innerHeight};});
+  assert.ok(firstDocument.top>=firstDocument.header && firstDocument.bottom<=firstDocument.height,'selected source must reveal its first saved document: '+JSON.stringify({width,...firstDocument}));
  }
  await readable(page,'.adapter-type,.source-card-facts dt,.source-card-facts dd,.processing-strip,.subtle-note');assert.equal(await page.locator('[data-fact="last-success"]').last().textContent(),'2026-01-02 00:00 UTC');
  await readable(page,'[data-open-operation].link-button');

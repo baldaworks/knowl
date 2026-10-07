@@ -211,3 +211,17 @@ a:focus-visible,button:focus-visible,summary:focus-visible,[tabindex]:focus-visi
 }
 
 #raw-source,#source-detail,#operation-detail,#page-sources,[data-toggle-sources],[hx-target="#raw-source"] {scroll-margin-top:84px;}
+
+.source-summary-grid {gap:12px;margin-bottom:16px;}
+.source-summary .card-body {padding:14px 18px;}
+.source-list-heading {display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
+.source-list-heading h2 {margin-bottom:5px;min-width:0;}
+.source-list-heading .status-badge {flex:none;}
+.source-select {font-size:inherit;overflow-wrap:anywhere;}
+.source-documents .table td {padding-top:15px;padding-bottom:15px;}
+.source-history {border-top:1px solid var(--knowl-line);}
+.source-history h3 {font-size:13px;font-weight:600;margin:0 0 14px;}
+.source-history .source-card-facts {margin:0 0 15px;}
+.source-history .processing-strip {display:block;padding-top:12px;line-height:1.6;}
+.source-history .diagnostic-details {margin-top:15px;}
+@media(max-width:639px){.source-summary .card-body {padding:14px 16px;}.source-documents .table td {padding:5px 0;}}

@@ -17,7 +17,9 @@ const activityOperationID = "op-1"
 const activitySourceID = "docs"
 const activityAccepted = "accepted-old"
 const activityProcessed = "processed-old"
+const activityHead = "head-new"
 const hxGetAttribute = "hx-get"
+const htmlClassAttribute = "class"
 
 type activityReader struct {
 	manyOperations   bool
@@ -54,7 +56,7 @@ func (f *activityReader) ListSourceDocuments(_ context.Context, _ domain.ScopeRe
 	if o.Continuation.Key != "" {
 		return app.OperatorReadPage[domain.OperatorDocumentSummary]{Items: []domain.OperatorDocumentSummary{{ID: "deleted.md", Deleted: true, Revision: "head-old", AcceptedRevision: activityAccepted, MaintenanceRevision: activityProcessed, MaintenanceOperationID: "op-2", MaintenanceStatus: domain.StatusCommitted}}}, nil
 	}
-	return app.OperatorReadPage[domain.OperatorDocumentSummary]{Items: []domain.OperatorDocumentSummary{{ID: "guide.md", Revision: "head-new", AcceptedRevision: activityAccepted, MaintenanceRevision: activityProcessed, MaintenanceOperationID: activityOperationID, MaintenanceStatus: domain.StatusApplying}}, NextKey: "guide.md"}, nil
+	return app.OperatorReadPage[domain.OperatorDocumentSummary]{Items: []domain.OperatorDocumentSummary{{ID: "guide.md", Revision: activityHead, AcceptedRevision: activityAccepted, MaintenanceRevision: activityProcessed, MaintenanceOperationID: activityOperationID, MaintenanceStatus: domain.StatusApplying}}, NextKey: "guide.md"}, nil
 }
 func activityHandler(t *testing.T, f *activityReader) *Handler {
 	t.Helper()
@@ -179,7 +181,7 @@ func TestSourceSavedLifecycleAndDocumentContinuation(t *testing.T) {
 		t.Fatalf("status=%d", r.Code)
 	}
 	got := markedText(doc, "data-fact")
-	for k, want := range map[string]string{"sync-status": "failed", "last-success": "2026-01-02 00:00 UTC", "head-revision": "head-new", "accepted-revision": activityAccepted, "maintenance-revision": activityProcessed, "upstream-state": "Present"} {
+	for k, want := range map[string]string{"last-success": "2026-01-02 00:00 UTC", "head-revision": activityHead, "accepted-revision": activityAccepted, "maintenance-revision": activityProcessed, "upstream-state": "Present"} {
 		if got[k] != want {
 			t.Errorf("%s=%q want %q", k, got[k], want)
 		}
@@ -191,6 +193,52 @@ func TestSourceSavedLifecycleAndDocumentContinuation(t *testing.T) {
 	}
 	if got := markedText(doc, "data-fact")["upstream-state"]; got != "Confirmed deletion" {
 		t.Errorf("state=%q", got)
+	}
+}
+
+func TestSourceSelectionLeadsWithDocumentsWithoutRepeatingListFacts(t *testing.T) {
+	h := activityHandler(t, &activityReader{})
+	r, list := fragmentDocument(t, h, "/ui/fragments/sources")
+	if r.Code != 200 {
+		t.Fatalf("list status=%d", r.Code)
+	}
+	if got := markedText(list, "data-fact")["sync-status"]; got != "failed" {
+		t.Fatalf("listed sync status=%q", got)
+	}
+	r, detail := fragmentDocument(t, h, "/ui/fragments/source?source_id=docs")
+	if r.Code != 200 {
+		t.Fatalf("detail status=%d", r.Code)
+	}
+	if got := markedText(detail, "data-fact")["sync-status"]; got != "" {
+		t.Errorf("selected detail repeated listed sync status=%q", got)
+	}
+	var documentTop, factsTop, selectedID, factsBeforeDocuments bool
+	walk(detail, func(n *html.Node) {
+		if n.Type != html.ElementNode {
+			return
+		}
+		for _, a := range n.Attr {
+			if a.Key == htmlClassAttribute && a.Val == "activity-table" {
+				documentTop = true
+			}
+			if a.Key == htmlClassAttribute && a.Val == "source-card-facts" {
+				factsTop = true
+				factsBeforeDocuments = factsBeforeDocuments || !documentTop
+			}
+			if a.Key == htmlClassAttribute && a.Val == "card-title identity" && nodeText(n) == activitySourceID {
+				selectedID = true
+			}
+		}
+	})
+	if factsBeforeDocuments {
+		t.Error("source summary appears before saved documents")
+	}
+	if !documentTop || !factsTop || !selectedID {
+		t.Fatalf("documents=%t facts=%t selected identity=%t", documentTop, factsTop, selectedID)
+	}
+	got := markedText(detail, "data-fact")
+	if got["last-success"] != "2026-01-02 00:00 UTC" || got["head-revision"] != activityHead || got["accepted-revision"] != activityAccepted || got["maintenance-revision"] != activityProcessed {
+		t.Errorf("saved and sync facts=%v", got)
 	}
 }
 func TestActivityInputsRejectBeforeRead(t *testing.T) {
