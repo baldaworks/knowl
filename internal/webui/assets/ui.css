@@ -153,6 +153,8 @@ nav[aria-label="Breadcrumb"],.breadcrumb,.breadcrumb-item {min-width:0;max-width
 @media(max-width:639px){.source-summary-grid {grid-template-columns:minmax(0,1fr);}.activity-table thead {display:none;}.activity-table table,.activity-table tbody,.activity-table tr,.activity-table td {display:block;width:100%;}.activity-table tr {padding:12px 16px;border-bottom:1px solid var(--knowl-line);}.activity-table td {border:0;padding:5px 0;}.source-documents .table td {padding:5px 0;}.activity-table td:nth-child(2)::before {content:'Source: ';color:#9aa4b3;}.source-documents .activity-table td:nth-child(2)::before {content:none;}.activity-table td:nth-child(4) time::before {content:'Created: ';}.activity-table .table-name {font-size:13px;}.table-footer {flex-wrap:wrap;}.source-documents .card-header {align-items:flex-start;}.split-grid {gap:16px;}.source-summary .card-body {padding:20px;}}
 
 .operation-select .table-subtitle {text-transform:none;overflow-wrap:anywhere;font-weight:400;}.operation-history .table td:first-child {width:35%;}.operation-history .table th:first-child {width:35%;}.operation-history .table th:last-child {width:22%;}.table-filters label:first-child {min-width:155px;}
+.operation-list-id {display:block;margin-top:4px;font:400 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;text-transform:none;color:#63748c;overflow-wrap:anywhere;word-break:break-word;}
+.operation-return {margin-bottom:10px;}.operation-history [data-operation-list-heading] {scroll-margin-top:84px;}
 
 @media(max-width:639px){.table-filters label {flex-basis:100%;}.operation-history .table td:first-child {width:100%;}}
 /* The reference has a light canvas regardless of OS or vendor theme storage. */

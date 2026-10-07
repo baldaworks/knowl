@@ -28,6 +28,8 @@ async function visibleDetail(page,id) {
  const refresh=async delay=>{const position=await pollView();const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/ui/fragments/operation');await page.clock.runFor(delay);await response;await done();assert.deepEqual(await pollView(),position,'background poll must not move reading position or focus');};
  const select=async()=>{await page.locator('.operation-select').first().click();await done();await settle();};
  await page.goto(process.env.KNOWL_BROWSER_URL+'/ui/operations');await page.locator('#operator-token').fill('browser-secret-token');await page.locator('#connect-form button').click();await page.locator('.operation-select').first().waitFor();
+ assert.ok((await page.locator('.operation-select').nth(2).innerText()).includes('first'),'first opaque ID must remain visible');
+ assert.ok((await page.locator('.operation-select').nth(3).innerText()).includes('second'),'second opaque ID must remain visible');
  assert.equal(await page.evaluate(()=>getComputedStyle(document.scrollingElement).scrollBehavior),'auto','ordinary focus scrolling must finish before explicit detail reveal');
  await page.clock.runFor(10000);assert.equal(requests,0,'list rows must not poll');
  const initialDetailHeld=new Promise(resolve=>{hold=resolve;});
@@ -56,6 +58,8 @@ async function visibleDetail(page,id) {
  for(const width of [320,390,640,1024,1366]) {
   await page.setViewportSize({width,height:844});
   if(width===1366){await page.mouse.wheel(0,-10000);await page.clock.runFor(160);await page.waitForFunction(()=>scrollY===0,null,{timeout:5000});}
+  await page.locator('.operation-select').first().scrollIntoViewIfNeeded();
+  const openerScroll=await page.evaluate(()=>scrollY);
   const position=await page.evaluate(()=>({scroll:scrollY,header:Math.max(0,document.querySelector('.app-header').getBoundingClientRect().bottom),top:document.querySelector('.operation-detail h2').getBoundingClientRect().top,bottom:document.querySelector('.operation-detail h2').getBoundingClientRect().bottom}));
   if(width===1366)assert.ok(position.top>=position.header && position.bottom<=844,'desktop side-by-side heading starts visible');
   held=new Promise(resolve=>{hold=resolve});await page.locator('.operation-select').first().click();await held;
@@ -63,6 +67,13 @@ async function visibleDetail(page,id) {
   if(width===1366)assert.equal(await page.evaluate(()=>scrollY),position.scroll,'visible desktop loading does not scroll');
   release();await done();await visibleDetail(page,'operation-detail');
   if(width===1366)assert.equal(await page.evaluate(()=>scrollY),position.scroll,'visible desktop result does not scroll');
+  if([390,640,1024].includes(width)) {
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'operation ID created horizontal overflow');
+   await page.screenshot({path:path.join(artifacts,'task-021-operation-'+width+'.png'),fullPage:true});
+  }
+  await page.getByRole('button',{name:'Back to operations'}).click();
+  assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('.operation-select')),true,'return focuses the actual selected row');
+  assert.equal(await page.evaluate(()=>scrollY),openerScroll,'return restores the row reading position');
  }
  await page.locator('select[name="status"]').selectOption('applying');await page.locator('input[name="source_id"]').fill('docs');
  await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/ui/fragments/operations'),page.getByRole('button',{name:'Filter',exact:true}).click()]);
@@ -85,6 +96,12 @@ async function visibleDetail(page,id) {
  // Selection cancels an in-flight older read and ignores its eventual response.
  await page.request.get(process.env.KNOWL_BROWSER_URL+'/fixture/status?value=running');await select();held=new Promise(resolve=>{hold=resolve});await page.clock.runFor(2000);await held;
  await page.locator('.operation-select').nth(1).click();await page.waitForFunction(()=>document.querySelector('[data-operation-id="op-new"]'));release();await settle();assert.equal(await page.locator('.operation-detail').getAttribute('data-operation-id'),'op-new');
+ // Returning during a background poll must retain focus after the late response.
+ held=new Promise(resolve=>{hold=resolve});await page.clock.runFor(2000);await held;
+ await page.getByRole('button',{name:'Back to operations'}).click();
+ const selectedOpener=page.locator('.operation-select').nth(1);
+ assert.equal(await selectedOpener.evaluate(e=>document.activeElement===e),true);
+ release();await done();await settle();assert.equal(await selectedOpener.evaluate(e=>document.activeElement===e),true,'poll stole focus after return');
  // Screen exit clears the polling lifecycle.
  await page.locator('[data-screen="sources"]').click();await page.locator('.source-select').first().waitFor();count=requests;await page.clock.runFor(60000);assert.equal(requests,count);
  for(const width of [320,390,640,1024,1366]) {
@@ -135,6 +152,15 @@ async function visibleDetail(page,id) {
  await page.setViewportSize({width:1366,height:900});await page.screenshot({path:path.join(artifacts,'task-009-fixture-active-desktop.png'),fullPage:true});
  status=401;await page.clock.runFor(2000);await page.locator('#connection-card').waitFor({state:'visible'});assert.equal(await page.locator('.operation-detail').count(),0);count=requests;await page.clock.runFor(60000);assert.equal(requests,count);
  status=200;await page.locator('#operator-token').fill('browser-secret-token');await page.locator('#connect-form button').click();await page.locator('.operation-detail').waitFor();held=new Promise(resolve=>{hold=resolve});await page.clock.runFor(2000);await held;await page.locator('#disconnect').click();release();await settle();count=requests;await page.clock.runFor(60000);assert.equal(requests,count);assert.equal(await page.locator('.operation-detail').count(),0);
+ // A direct/reloaded detail has no opener in this document; return lands at list heading.
+ const direct=await browser.newPage({viewport:{width:390,height:844}});
+ await direct.goto(process.env.KNOWL_BROWSER_URL+'/ui/operations?operation_id=op-1');
+ await direct.locator('#operator-token').fill('browser-secret-token');await direct.locator('#connect-form button').click();
+ await direct.locator('.operation-detail').waitFor();
+ await direct.reload();await direct.locator('#operator-token').fill('browser-secret-token');await direct.locator('#connect-form button').click();await direct.locator('.operation-detail').waitFor();
+ await direct.getByRole('button',{name:'Back to operations'}).click();
+ assert.equal(await direct.locator('.operation-history h2').evaluate(e=>document.activeElement===e),true,'direct detail return must fall back to list heading');
+ await direct.close();
  assert.deepEqual(violations,[]);console.log('Production fragments: selected-only nonoverlapping 2s polling, capped backoff, visibility, terminal, selection, screen exit, 401, logout, source continuation and mobile layout passed. Screenshots are labeled deterministic lifecycle fixtures.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1)});

@@ -81,11 +81,11 @@ func (*responsiveActivityReader) ListSources(context.Context, domain.ScopeRef, a
 
 func (f *responsiveActivityReader) ListOperations(ctx context.Context, scope domain.ScopeRef, o app.OperatorOperationReadOptions) (app.OperatorReadPage[domain.OperatorOperationSummary], error) {
 	result, err := f.activityReader.ListOperations(ctx, scope, o)
-	for _, id := range []domain.OperationID{"op-3", "op-4", "op-5", "op-6", "op-7", "op-8", "op-9", "op-10"} {
+	for _, id := range []domain.OperationID{"operation-prefix-aaaaaaaaaaaaaaaa-first-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "operation-prefix-aaaaaaaaaaaaaaaa-second-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "op-5", "op-6", "op-7", "op-8", "op-9", "op-10"} {
 		if len(result.Items) >= o.Limit {
 			break
 		}
-		result.Items = append(result.Items, domain.OperatorOperationSummary{ID: id, Kind: "maintenance", Status: domain.StatusApplying, SourceID: activitySourceID})
+		result.Items = append(result.Items, domain.OperatorOperationSummary{ID: id, Kind: activityMaintenanceKind, Status: domain.StatusApplying, SourceID: activitySourceID})
 	}
 	return result, err
 }

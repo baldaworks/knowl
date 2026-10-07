@@ -3,6 +3,7 @@
   'use strict';
   let token = '', generation = 0, connectionState = 'disconnected', focusScreen = false;
   let sourcesOpener = null, sourcesScroll = 0, rawOpener = null;
+  let operationOpener = null, operationScroll = 0;
   let treePending = 0, treeVisitSerial = 0, renderedTreeEntry = 0;
   const treeSnapshots = new Map(), treeNodeLimit = 1000, treeSnapshotLimit = 3;
   let detailRead = null;
@@ -92,7 +93,7 @@
   }
   function disconnect(feedback = '', invalid = false, focus = true) {
     token = ''; abortRequests(); document.getElementById('operator-token').value = '';
-    sourcesOpener=null;rawOpener=null;treeSnapshots.clear();renderedTreeEntry=0;knownNavigation=false;currentTrail=[];screen.replaceChildren();
+    sourcesOpener=null;rawOpener=null;operationOpener=null;treeSnapshots.clear();renderedTreeEntry=0;knownNavigation=false;currentTrail=[];screen.replaceChildren();
     setConnectionState('disconnected',feedback,invalid);
     if(focus)document.getElementById('operator-token').focus({preventScroll:true});
   }
@@ -142,7 +143,7 @@
       if(treeSnapshots.size>treeSnapshotLimit)treeSnapshots.delete(treeSnapshots.keys().next().value);
     }
     renderedTreeEntry=0;
-    abortRequests(); sourcesOpener=null;rawOpener=null;focusScreen=true; const key = selected();
+    abortRequests(); sourcesOpener=null;rawOpener=null;operationOpener=null;focusScreen=true; const key = selected();
     document.title = names[key] + ' · Knowl'; screen.setAttribute('aria-label', names[key]);
     document.getElementById('header-view').textContent = names[key];
     for (const link of document.querySelectorAll('[data-screen]')) {link.classList.toggle('active', link.dataset.screen === key); if(link.dataset.screen === key) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');}
@@ -238,6 +239,12 @@
       const opener=rawOpener?.isConnected?rawOpener:screen.querySelector('[data-toggle-sources]') || screen;
       rawOpener=null;revealDetail(opener);return;
     }
+    if(event.target.closest('[data-return-operation]')) {
+      const opener=operationOpener?.isConnected && screen.contains(operationOpener)?operationOpener:null;
+      if(opener){scrollTo({top:operationScroll,behavior:'instant'});opener.focus({preventScroll:true});}
+      else {const heading=screen.querySelector('[data-operation-list-heading]');heading?.scrollIntoView({block:'start',behavior:'instant'});heading?.focus({preventScroll:true});}
+      return;
+    }
     const operationButton=event.target.closest('[data-open-operation]');
     if(operationButton){history.pushState(null,'','/ui/operations?operation_id='+encodeURIComponent(operationButton.dataset.openOperation));navigate();return;}
     const snippetButton=event.target.closest('[data-toggle-snippet]');
@@ -280,7 +287,10 @@
     if (!token || !url) {event.preventDefault(); return;}
     // Whole-screen replacements cancel older reads, including catalog continuation.
     // Advance before aborting so canceled requests cannot display an error.
-    if (event.detail.target === screen || event.detail.target.id==='raw-source' || url.pathname==='/ui/fragments/source') abortRequests();
+    if (event.detail.target === screen || event.detail.target.id==='raw-source' || url.pathname==='/ui/fragments/source') {
+      if(event.detail.target===screen)operationOpener=null;
+      abortRequests();
+    }
     if(url.pathname==='/ui/fragments/operation') {
       if(issuingPoll && poll) poll.xhr=event.detail.xhr;
       else abortRequests();
@@ -289,6 +299,10 @@
     const target=event.detail.target;
     if(!issuingPoll && ['operation-detail','source-detail','raw-source'].includes(target.id)) {
       focusScreen=false;detailRead={xhr:event.detail.xhr,target,generation};
+      if(target.id==='operation-detail') {
+        operationOpener=event.detail.elt?.matches('.operation-select') && screen.contains(event.detail.elt)?event.detail.elt:null;
+        if(operationOpener)operationScroll=scrollY;
+      }
       if(target.id==='raw-source') {
         const record=event.detail.elt.closest('.source-record');
         if(record && screen.contains(record)){rawOpener=event.detail.elt;record.after(target);}

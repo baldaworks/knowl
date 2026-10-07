@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,11 +19,13 @@ const activitySourceID = "docs"
 const activityAccepted = "accepted-old"
 const activityProcessed = "processed-old"
 const activityHead = "head-new"
+const activityMaintenanceKind = "maintenance"
 const hxGetAttribute = "hx-get"
 const htmlClassAttribute = "class"
 
 type activityReader struct {
 	manyOperations   bool
+	similarOperations bool
 	operationOptions []app.OperatorOperationReadOptions
 	documentOptions  []app.OperatorReadOptions
 }
@@ -36,9 +39,15 @@ func (f *activityReader) ListOperations(_ context.Context, scope domain.ScopeRef
 	if o.Continuation.Key == "" {
 		next, _ = app.EncodeOperatorOperationPosition(app.OperatorOperationPosition{CreatedAt: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), OperationID: activityOperationID})
 	}
-	items := []domain.OperatorOperationSummary{{ID: activityOperationID, Kind: "maintenance", Status: domain.StatusApplying, SourceID: activitySourceID}}
+	items := []domain.OperatorOperationSummary{{ID: activityOperationID, Kind: activityMaintenanceKind, Status: domain.StatusApplying, SourceID: activitySourceID}}
+	if f.similarOperations {
+		items = []domain.OperatorOperationSummary{
+			{ID: "operation-prefix-aaaaaaaaaaaaaaaa-first-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Kind: activityMaintenanceKind, Status: domain.StatusApplying, SourceID: activitySourceID},
+			{ID: "operation-prefix-aaaaaaaaaaaaaaaa-second-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Kind: activityMaintenanceKind, Status: domain.StatusApplying, SourceID: activitySourceID},
+		}
+	}
 	if f.manyOperations {
-		items = append(items, domain.OperatorOperationSummary{ID: "op-new", Kind: "maintenance", Status: domain.StatusApplying})
+		items = append(items, domain.OperatorOperationSummary{ID: "op-new", Kind: activityMaintenanceKind, Status: domain.StatusApplying})
 	}
 	return app.OperatorReadPage[domain.OperatorOperationSummary]{Items: items, NextKey: next}, nil
 }
@@ -118,6 +127,28 @@ func TestOperationFactsAndUnavailableReports(t *testing.T) {
 		if got[k] != want {
 			t.Errorf("%s=%q want %q", k, got[k], want)
 		}
+	}
+}
+
+func TestOperationListDistinguishesOpaqueIDsWithSameEdges(t *testing.T) {
+	h := activityHandler(t, &activityReader{similarOperations: true})
+	r, doc := fragmentDocument(t, h, "/ui/fragments/operations")
+	if r.Code != 200 {
+		t.Fatalf("status=%d", r.Code)
+	}
+	var labels []string
+	walk(doc, func(n *html.Node) {
+		if n.Data != "button" {
+			return
+		}
+		for _, a := range n.Attr {
+			if a.Key == htmlClassAttribute && a.Val == "table-name operation-select" {
+				labels = append(labels, nodeText(n))
+			}
+		}
+	})
+	if len(labels) != 2 || !strings.Contains(labels[0], "first") || !strings.Contains(labels[1], "second") {
+		t.Fatalf("operation labels do not distinguish opaque IDs: %q", labels)
 	}
 }
 func TestOperationContinuationPreservesFilters(t *testing.T) {
