@@ -86,8 +86,8 @@ func TestBrowserKnowledgeSearch(t *testing.T) {
 		t.Fatalf("browser: %v\n%s", err, output)
 	}
 	t.Log(string(output))
-	if calls.Load() != 4 {
-		t.Fatalf("retrieval calls=%d want 4 explicit submissions", calls.Load())
+	if calls.Load() != 10 {
+		t.Fatalf("retrieval calls=%d want 10 explicit submissions", calls.Load())
 	}
 }
 

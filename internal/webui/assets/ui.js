@@ -4,6 +4,8 @@
   let token = '', generation = 0, connectionState = 'disconnected', focusScreen = false;
   let sourcesOpener = null, sourcesScroll = 0, rawOpener = null;
   let operationOpener = null, operationScroll = 0;
+  let searchSnapshot = null, searchVisitSerial = 0, searchRendered = false;
+  const searchSnapshotLimit = 256 * 1024;
   let treePending = 0, treeVisitSerial = 0, renderedTreeEntry = 0;
   const treeSnapshots = new Map(), treeNodeLimit = 1000, treeSnapshotLimit = 3;
   let detailRead = null;
@@ -93,7 +95,7 @@
   }
   function disconnect(feedback = '', invalid = false, focus = true) {
     token = ''; abortRequests(); document.getElementById('operator-token').value = '';
-    sourcesOpener=null;rawOpener=null;operationOpener=null;treeSnapshots.clear();renderedTreeEntry=0;knownNavigation=false;currentTrail=[];screen.replaceChildren();
+    sourcesOpener=null;rawOpener=null;operationOpener=null;searchSnapshot=null;searchRendered=false;treeSnapshots.clear();renderedTreeEntry=0;knownNavigation=false;currentTrail=[];screen.replaceChildren();
     setConnectionState('disconnected',feedback,invalid);
     if(focus)document.getElementById('operator-token').focus({preventScroll:true});
   }
@@ -134,6 +136,16 @@
       if(token && generation===current && selected()==='operations' && params.has('operation_id')) htmx.ajax('GET','/ui/fragments/operation?operation_id='+encodeURIComponent(params.get('operation_id')),{target:'#operation-detail',swap:'innerHTML'}).catch(()=>{});
     }).catch(() => {});
   }
+  function rememberSearch() {
+    const result=screen.querySelector('#search-results');
+    if(!searchRendered || !result?.querySelector('#response-json-data'))return;
+    const markup=screen.innerHTML;
+    const query=screen.querySelector('#query').value;
+    if(markup.length+query.length>searchSnapshotLimit || new TextEncoder().encode(markup).length+new TextEncoder().encode(query).length>searchSnapshotLimit) {searchSnapshot=null;return;}
+    const entry=++searchVisitSerial;
+    history.replaceState({searchEntry:entry},'',location.href);
+    searchSnapshot={entry,view:screen.cloneNode(true),query};
+  }
   function navigate(event) {
     if(screen.querySelector('.wiki-tree') && renderedTreeEntry) {
       const snapshot=document.createElement('div');
@@ -148,6 +160,13 @@
     document.getElementById('header-view').textContent = names[key];
     for (const link of document.querySelectorAll('[data-screen]')) {link.classList.toggle('active', link.dataset.screen === key); if(link.dataset.screen === key) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');}
     const params=new URLSearchParams(location.search);
+    if(event?.type==='popstate' && token && key==='search' && searchSnapshot && Number.isSafeInteger(history.state?.searchEntry) && history.state.searchEntry===searchSnapshot.entry) {
+      screen.replaceChildren(...searchSnapshot.view.cloneNode(true).childNodes);
+      screen.querySelector('#query').value=searchSnapshot.query;
+      htmx.process(screen);
+      screen.focus({preventScroll:true});focusScreen=false;searchRendered=true;return;
+    }
+    if(key==='search') {searchSnapshot=null;searchRendered=false;}
     const treeEntry=history.state?.treeEntry;
     const snapshot=Number.isSafeInteger(treeEntry)?treeSnapshots.get(treeEntry):null;
     if(event?.type==='popstate' && token && key==='knowledge' && params.get('view')==='all' && !params.has('page_id') && snapshot?.hasChildNodes()) {
@@ -266,7 +285,7 @@
     if(jsonToggle) {const json=document.getElementById('response-json');if(json){json.hidden=!json.hidden;jsonToggle.setAttribute('aria-expanded',String(!json.hidden));}return;}
     if(event.target.closest('[data-export-json]')) {const data=document.getElementById('response-json-data');if(data){const url=URL.createObjectURL(new Blob([data.textContent],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='knowl-search.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}return;}
     const page = event.target.closest('a[href]');
-    if(page && event.button===0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !page.target && !page.hasAttribute('download')) {const u=new URL(page.href,location.href);if(u.origin===location.origin && u.pathname==='/ui/knowledge') {event.preventDefault();if(connectionState!=='connected')return;if(mobile.matches)pushMenu.collapse();history.pushState(navigationState(u),'',u.pathname+u.search);navigate();return;}}
+    if(page && event.button===0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !page.target && !page.hasAttribute('download')) {const u=new URL(page.href,location.href);if(u.origin===location.origin && u.pathname==='/ui/knowledge') {event.preventDefault();if(connectionState!=='connected')return;if(selected()==='search')rememberSearch();if(mobile.matches)pushMenu.collapse();history.pushState(navigationState(u),'',u.pathname+u.search);navigate();return;}}
     const link = event.target.closest('[data-screen]'); if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault(); if(connectionState!=='connected')return;if(mobile.matches)pushMenu.collapse();history.pushState(null, '', '/ui/' + link.dataset.screen); navigate();
   });
@@ -285,6 +304,7 @@
   document.addEventListener('htmx:beforeRequest', event => {
     const url = protectedURL(event.detail.requestConfig.path);
     if (!token || !url) {event.preventDefault(); return;}
+    if(url.pathname==='/ui/fragments/search' && event.detail.target.id==='search-results') {searchRendered=false;searchSnapshot=null;}
     // Whole-screen replacements cancel older reads, including catalog continuation.
     // Advance before aborting so canceled requests cannot display an error.
     if (event.detail.target === screen || event.detail.target.id==='raw-source' || url.pathname==='/ui/fragments/source') {
@@ -378,6 +398,7 @@
     }
   });
   document.addEventListener('htmx:afterSettle', event => {
+    if(token && selected()==='search' && event.detail.target.id==='search-results' && screen.contains(event.detail.target) && event.detail.xhr.status===200 && event.detail.target.querySelector('#response-json-data'))searchRendered=true;
     syncDisclosures();
     if(token && detailRead?.xhr===event.detail.xhr && detailRead.generation===generation) {revealDetail(detailRead.target);detailRead=null;}
     if(focusScreen && connectionState==='connected'){screen.focus({preventScroll:true});focusScreen=false;}
