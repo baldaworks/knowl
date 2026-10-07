@@ -178,8 +178,20 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	v.Breadcrumbs = []knowledgeBreadcrumb{{Title: rootBreadcrumbTitle, URL: knowledgePath}}
-	if v.All {
+	rootTitle := rootBreadcrumbTitle
+	switch {
+	case v.Page != nil && v.Page.ID == rootCatalogID:
+		rootTitle = v.Page.Title
+	case v.Parent.ID == rootCatalogID && v.Parent.Title != "":
+		rootTitle = v.Parent.Title
+	default:
+		root, readErr := h.readNavigationCatalog(ctx, rootCatalogID, app.OperatorListOptions{Limit: 1}, budget)
+		if readErr == nil && root.Parent.ID == rootCatalogID && root.Parent.Title != "" {
+			rootTitle = root.Parent.Title
+		}
+	}
+	v.Breadcrumbs = []knowledgeBreadcrumb{{Title: rootTitle, URL: knowledgePath}}
+	if v.All && (v.Page == nil || v.Page.ID != rootCatalogID) {
 		crumb := knowledgeBreadcrumb{Title: allPagesTitle}
 		if v.Page != nil {
 			crumb.URL = knowledgeURL(url.Values{viewParameter: {allPagesView}})
@@ -212,7 +224,7 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 				v.Breadcrumbs = append(v.Breadcrumbs, ancestor)
 			}
 		}
-		if v.Page.ID == rootCatalogID && !v.All {
+		if v.Page.ID == rootCatalogID {
 			v.Breadcrumbs[0] = knowledgeBreadcrumb{Title: v.Page.Title}
 		} else {
 			v.Breadcrumbs = append(v.Breadcrumbs, knowledgeBreadcrumb{Title: v.Page.Title})

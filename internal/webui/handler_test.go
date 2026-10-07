@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"bytes"
+	"image/png"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +27,7 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 		if parseErr != nil {
 			t.Fatal(parseErr)
 		}
-		var logo, connect, navigation int
+		var logo, favicon, connect, navigation int
 		var guestMenu, guestToggle bool
 		walk(doc, func(n *html.Node) {
 			attrs := map[string]string{}
@@ -52,10 +54,21 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 					navigation++
 				}
 			}
+			if n.Type == html.ElementNode && n.Data == "link" && attrs["rel"] == "icon" && attrs["type"] == "image/png" && attrs["href"] == "/ui/assets/favicon.png" {
+				favicon++
+			}
 		})
-		if logo != 2 || connect != 1 || navigation != 4 || !guestMenu || !guestToggle {
-			t.Fatalf("%s logo=%d connect=%d navigation=%d", route, logo, connect, navigation)
+		if logo != 2 || favicon != 1 || connect != 1 || navigation != 4 || !guestMenu || !guestToggle {
+			t.Fatalf("%s logo=%d favicon=%d connect=%d navigation=%d", route, logo, favicon, connect, navigation)
 		}
+	}
+	icon := httptest.NewRecorder()
+	h.ServeHTTP(icon, httptest.NewRequest(http.MethodGet, "/ui/assets/favicon.png", nil))
+	if icon.Code != http.StatusOK || icon.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("favicon response: status=%d content-type=%q", icon.Code, icon.Header().Get("Content-Type"))
+	}
+	if _, err := png.DecodeConfig(bytes.NewReader(icon.Body.Bytes())); err != nil {
+		t.Fatalf("favicon is not a PNG: %v", err)
 	}
 	for _, route := range []string{"/ui/unknown", "/ui/assets/", "/ui/assets/missing.js", "/ui/assets/../templates/shell.html", "/v1/unknown"} {
 		r := httptest.NewRecorder()

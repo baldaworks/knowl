@@ -175,6 +175,7 @@ body:not([data-connection-state="connected"]) .app-header .container-fluid {just
 .header-end {flex-shrink:0;}
 #connection-status {white-space:nowrap;color:#536278;font-size:12px;}
 a:focus-visible,button:focus-visible,summary:focus-visible,[tabindex]:focus-visible {outline:3px solid #416cbe;outline-offset:3px;}
+#screen:focus {outline:none;}
 .app-sidebar a:focus-visible {outline-color:#adcaff;}
 .detail-selected {color:#315da9;background:#e6edf8;border-radius:4px;box-shadow:0 0 0 4px #e6edf8;}
 .technical-details {grid-template-columns:minmax(0,85px) minmax(0,1fr);max-width:100%;}

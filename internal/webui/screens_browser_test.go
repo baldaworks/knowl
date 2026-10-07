@@ -40,9 +40,14 @@ func TestBrowserKnowledgeSearch(t *testing.T) {
 	fixture.catalogs[unicodeID] = app.OperatorCatalogRead{Parent: domain.OperatorCatalogSummary{ID: unicodeID, Title: "Unicode catalog"}, Children: app.OperatorReadPage[domain.OperatorCatalogChild]{Items: []domain.OperatorCatalogChild{{ID: knowledgeDistantLeaf, Title: knowledgeDistantTitle, Kind: pageKind}}}}
 	fixture.pages[unicodeID] = domain.OperatorPage{ID: unicodeID, Title: "Unicode catalog", Markdown: "# Unicode catalog\n\n* [Distant leaf](../../../sources/distant/leaf.md)\n", Digest: screenSnapshot, Version: screenSnapshot}
 	root := fixture.catalogs[rootCatalogID]
+	root.Parent.Title = "Knowl Index"
 	root.Children.Items = append(root.Children.Items, domain.OperatorCatalogChild{ID: unicodeID, Title: "Unicode catalog", Kind: "catalog"})
 	slices.SortFunc(root.Children.Items, func(a, b domain.OperatorCatalogChild) int { return strings.Compare(string(a.ID), string(b.ID)) })
 	fixture.catalogs[rootCatalogID] = root
+	rootPage := fixture.pages[rootCatalogID]
+	rootPage.Title = "Knowl Index"
+	rootPage.Markdown = "---\nokf_version: \"0.2\"\n---\n# Knowl Index\n\n* [Team](catalogs/team/index.md)\n"
+	fixture.pages[rootCatalogID] = rootPage
 	ui := screenHandler(t, fixture)
 	reader := &responsiveScreenReader{fixture}
 	operator, err := app.NewOperatorService("trusted", app.OperatorReaders{Catalogs: reader, Pages: reader, Page: reader, Revisions: reader, Directories: reader}, app.OperatorOptions{})
