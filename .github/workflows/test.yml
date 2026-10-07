@@ -36,6 +36,45 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out
 
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install pinned browser test tools
+        run: npm ci --prefix tools/webui-browser
+
+      - name: Install Chromium
+        run: npx --prefix tools/webui-browser playwright install --with-deps chromium
+
+      - name: Browser UI and security flows
+        run: go test -tags=browser ./internal/webui ./cmd/knowl -run '^TestBrowser' -count=1
+
+  native-reader:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Native canonical and wiki-directory readers
+        run: go test ./pkg/knowl/content/fs -count=1
+
   security:
     runs-on: ubuntu-latest
     steps:
