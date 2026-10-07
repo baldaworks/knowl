@@ -113,7 +113,12 @@ async function savedSourceOutcomes(page) {
   const stale=page.waitForResponse(response=>response.status()===409&&new URL(response.url()).pathname==='/ui/fragments/wiki-directory');
   await page.locator('.wiki-tree-more button').click();
   await stale;
-  await page.waitForFunction(()=>document.querySelector('.wiki-tree > .card-body > .wiki-tree-list')?.querySelectorAll(':scope > [data-wiki-path]').length===50&&document.querySelector('.wiki-tree-more button')&&!document.querySelector('[data-error-code]'));
+  try {
+   await page.waitForFunction(()=>document.querySelector('.wiki-tree > .card-body > .wiki-tree-list')?.querySelectorAll(':scope > [data-wiki-path]').length===50&&document.querySelector('.wiki-tree-more button')&&!document.querySelector('[data-error-code]'));
+  } catch(error) {
+   const state=await page.evaluate(()=>({rootCount:document.querySelector('.wiki-tree > .card-body > .wiki-tree-list')?.querySelectorAll(':scope > [data-wiki-path]').length,more:!!document.querySelector('.wiki-tree-more button'),error:document.querySelector('[data-error-code]')?.getAttribute('data-error-code')}));
+   throw new Error('stale tree recovery: '+JSON.stringify({state,requests:requests.slice(-8)}),{cause:error});
+  }
   await page.locator('.wiki-tree-more button').click();
   await page.waitForFunction(()=>document.querySelectorAll('.wiki-tree > .card-body > .wiki-tree-list > [data-wiki-path]').length===65);
   assert.equal(await page.locator('.wiki-tree-more').count(),0,'continuation appends remaining root files');
@@ -157,8 +162,8 @@ async function savedSourceOutcomes(page) {
   assert.equal(new URL(page.url()).searchParams.get('view'),'all');
   await page.goBack();await page.locator('.wiki-tree').waitFor();
   const root=page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('link',{name:'Root',exact:true});
-  const popupPromise=page.context().waitForEvent('page');await root.click({modifiers:['Control']});
-  const popup=await popupPromise;await popup.waitForLoadState();assert.equal(new URL(popup.url()).pathname,'/ui/knowledge');assert.equal(await popup.locator('#connection-status').textContent(),'Disconnected');await popup.close();
+  const [popup]=await Promise.all([page.context().waitForEvent('page'),root.click({button:'middle'})]);
+  await popup.waitForLoadState();assert.equal(new URL(popup.url()).pathname,'/ui/knowledge');assert.equal(await popup.locator('#connection-status').textContent(),'Disconnected');await popup.close();
   await page.locator('[data-wiki-path="concepts"] [data-tree-expand]').click();
   await page.locator('[data-wiki-path="concepts/article.md"] a').click();
   await page.locator('.knowledge-article').waitFor();
