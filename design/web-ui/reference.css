@@ -13,7 +13,7 @@ a { color:var(--knowl-blue); text-decoration:none; }
 .sidebar-brand { height:68px;border-bottom:1px solid #ffffff0e; justify-content:flex-start;padding:0 25px; }
 .brand-link { display:flex;gap:11px;align-items:center;color:white!important; }
 .brand-symbol { position:relative;display:block;flex-shrink:0;width:38px;height:38px;overflow:hidden;border-radius:50%; }
-.brand-logo { position:absolute;width:74.46px;height:74.46px;max-width:none;left:-18.23px;top:-10.59px; }
+.brand-logo { position:absolute;width:79px;height:79px;max-width:none;left:-20.5px;top:-12.2px; }
 .brand-text { font-size:25px!important;font-weight:650!important;letter-spacing:-.8px; }
 .sidebar-wrapper { padding:23px 12px;position:relative;min-height:calc(100vh - 68px); }
 .sidebar-context { font-size:10px;letter-spacing:1.4px;color:#91a0b7;padding:0 12px; }
