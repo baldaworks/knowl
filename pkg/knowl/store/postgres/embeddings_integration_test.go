@@ -358,7 +358,7 @@ func runPostgresEmbeddingMigrationDownPreservesLexicalAndOperations(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, dir)
+	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, dir, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatal(err)
 	}

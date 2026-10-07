@@ -35,6 +35,11 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get PostgreSQL Testcontainer connection string: %v", err)
 	}
+	t.Run("operator-documents", func(t *testing.T) { runOperatorDocumentsPostgres(t, dsn) })
+	t.Run("operator-cursor", func(t *testing.T) { runOperatorCursorBoundsPostgres(t, dsn) })
+	t.Run("operator-retry", func(t *testing.T) { runOperatorRetryOperationsPostgres(t, dsn) })
+	t.Run("operator-migration", func(t *testing.T) { runOperatorMigrationPostgres(t, dsn) })
+	t.Run("operator-operations", func(t *testing.T) { runOperatorOperationsPostgres(t, dsn) })
 	t.Run("operation-details", func(t *testing.T) { runOperationDetailsPostgres(t, dsn) })
 	t.Run("correction-reports", func(t *testing.T) { runCorrectionReportPostgres(t, dsn) })
 	t.Run("correction-report-migration", func(t *testing.T) { runCorrectionReportMigrationPostgres(t, dsn) })

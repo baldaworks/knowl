@@ -167,7 +167,7 @@ func runGenericPostgresMigration(t *testing.T, dsn string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, directory)
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func runGenericPostgresMigration(t *testing.T, dsn string) {
 	if err := reopened.CheckProjection(ctx, snapshot); err != nil {
 		t.Fatal(err)
 	}
-	provider, err = goose.NewProvider(goose.DialectPostgres, reopened.db, directory)
+	provider, err = goose.NewProvider(goose.DialectPostgres, reopened.db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatal(err)
 	}

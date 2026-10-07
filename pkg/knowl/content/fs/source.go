@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -178,26 +177,27 @@ func (workspace *Workspace) ReadSource(ctx context.Context, source knowl.Accepte
 }
 
 func (workspace *Workspace) readSourceLocked(source knowl.AcceptedSource, limits knowl.ReadLimits) ([]byte, error) {
-	maxBytes := limits.Bytes
-	if maxBytes <= 0 || maxBytes > workspace.maxSourceBytes {
-		maxBytes = workspace.maxSourceBytes
-	}
-	path := filepath.Join(workspace.root, workspaceRawDir, token(string(source.Scope)+"\x00"+source.Source.Adapter+"\x00"+source.Source.ID), token(source.Version.Version), "source")
-	if err := rejectSymlinkPath(workspace.root, path); err != nil {
+	if err := workspace.checkPublishedLocked(); err != nil {
 		return nil, err
 	}
-	content, err := os.ReadFile(path)
+	raw, err := openReadRoot(workspace.root, workspaceRawDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%s: %w", source.Source.ID, ErrSourceNotFound)
 		}
+		return nil, err
+	}
+	defer raw.close()
+	relative := token(string(source.Scope)+"\x00"+source.Source.Adapter+"\x00"+source.Source.ID) + "/" + token(source.Version.Version) + "/source"
+	content, _, err := raw.read(relative, limits, workspace.maxSourceBytes)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%s: %w", source.Source.ID, ErrSourceNotFound)
+		}
+		if errors.Is(err, app.ErrOperatorReadLimitExceeded) {
+			return nil, errors.Join(ErrInvalidSource, err)
+		}
 		return nil, fmt.Errorf("read source: %w", err)
-	}
-	if len(content) > maxBytes {
-		return nil, fmt.Errorf("source exceeds %d bytes: %w", maxBytes, ErrInvalidSource)
-	}
-	if limits.Characters > 0 && utf8.RuneCount(content) > limits.Characters {
-		return nil, fmt.Errorf("source exceeds %d characters: %w", limits.Characters, ErrInvalidSource)
 	}
 	if source.Version.Digest != "" && digestBytes(content) != strings.ToLower(source.Version.Digest) {
 		return nil, ErrDigestMismatch

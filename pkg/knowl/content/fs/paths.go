@@ -118,6 +118,9 @@ func validateRecoveryBackup(backup, recoveryRoot string) error {
 }
 
 func pageRelativePath(raw string) (string, error) {
+	if !validReadPath(raw) {
+		return "", ErrPathRejected
+	}
 	clean := filepath.ToSlash(filepath.Clean(raw))
 	if !strings.HasPrefix(clean, workspaceWikiDir+"/") {
 		clean = filepath.ToSlash(filepath.Join(workspaceWikiDir, clean))

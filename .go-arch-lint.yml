@@ -44,6 +44,12 @@ components:
     in: internal/cmd/**
   httpapi:
     in: internal/httpapi/**
+  knowlapi:
+    in: internal/httpapi/knowlapi
+  operatorapi:
+    in: internal/httpapi/operatorapi
+  webui:
+    in: internal/webui/**
   source:
     in: internal/source/**
   testsupport:
@@ -107,9 +113,22 @@ deps:
   httpapi:
     mayDependOn:
       - httpapi
+      - knowlapi
+      - operatorapi
       - app
       - types
       - okf
+      - webui
+  webui:
+    mayDependOn:
+      - knowlapi
+      - app
+      - types
+      - okf
+      - wiki
+  operatorapi:
+    mayDependOn:
+      - types
   source:
     mayDependOn:
       - source
@@ -140,6 +159,7 @@ deps:
       - provider
       - types
       - httpapi
+      - knowlapi
       - okf
       - llmstxt
       - mcpsdk

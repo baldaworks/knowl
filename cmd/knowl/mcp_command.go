@@ -46,8 +46,7 @@ func runMCPStdio(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	// These HTTP-only values are deliberately irrelevant to stdio operation.
-	config.ListenAddr = "127.0.0.1:0"
-	config.OperatorToken = ""
+	config = stdioHostConfig(config)
 	ctx, stopSignal := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignal()
 
@@ -75,4 +74,11 @@ func runMCPStdio(cmd *cobra.Command, _ []string) error {
 		runErr = fmt.Errorf("run Knowl MCP stdio: %w", runErr)
 	}
 	return errors.Join(runErr, stopHost())
+}
+
+func stdioHostConfig(config knowlruntime.Config) knowlruntime.Config {
+	config.ListenAddr = "127.0.0.1:0"
+	config.OperatorToken = ""
+	config.Web = knowlruntime.WebConfig{}
+	return config
 }

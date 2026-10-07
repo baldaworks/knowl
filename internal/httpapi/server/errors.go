@@ -20,7 +20,7 @@ func classifyServiceError(err error) (int, string) {
 	case errors.Is(err, os.ErrNotExist), errors.Is(err, app.ErrPageNotFound), errors.Is(err, app.ErrOperationNotFound):
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, app.ErrQueryInvalid), errors.Is(err, app.ErrFilingInvalid):
-		return http.StatusBadRequest, "invalid_request"
+		return http.StatusBadRequest, invalidRequestCode
 	case errors.Is(err, app.ErrSourceInvalid):
 		return http.StatusBadRequest, "invalid_source_filter"
 	case errors.Is(err, app.ErrProjection):

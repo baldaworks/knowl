@@ -1,0 +1,66 @@
+[
+  {
+    "file": "adminlte.min.css",
+    "package": "admin-lte",
+    "version": "4.10.0",
+    "source": "https://registry.npmjs.org/admin-lte/-/admin-lte-4.10.0.tgz",
+    "member": "package/dist/css/adminlte.min.css",
+    "sha256": "f96a340f2a464d0778d086a20cdf28ec2df433d37d4b101b2070bce5e35d62ab"
+  },
+  {
+    "file": "adminlte.min.js",
+    "package": "admin-lte",
+    "version": "4.10.0",
+    "source": "https://registry.npmjs.org/admin-lte/-/admin-lte-4.10.0.tgz",
+    "member": "package/dist/js/adminlte.min.js",
+    "sha256": "c0126e88bd3f051519fb1a95da29b19807f6790a81d5f421c1e569f272c66c2d"
+  },
+  {
+    "file": "admin-lte-LICENSE.txt",
+    "package": "admin-lte",
+    "version": "4.10.0",
+    "source": "https://registry.npmjs.org/admin-lte/-/admin-lte-4.10.0.tgz",
+    "member": "package/LICENSE",
+    "sha256": "9e8b0d4e7ce8c13e67a2373d5094910c263fd95b1e49bdf45dc2a9813be5996b"
+  },
+  {
+    "file": "bootstrap.min.css",
+    "package": "bootstrap",
+    "version": "5.3.8",
+    "source": "https://registry.npmjs.org/bootstrap/-/bootstrap-5.3.8.tgz",
+    "member": "package/dist/css/bootstrap.min.css",
+    "sha256": "d85327d99c7a3ee1f9b5d0500d1370acea3ad2db39c163c2f51f232baedbdede"
+  },
+  {
+    "file": "bootstrap.bundle.min.js",
+    "package": "bootstrap",
+    "version": "5.3.8",
+    "source": "https://registry.npmjs.org/bootstrap/-/bootstrap-5.3.8.tgz",
+    "member": "package/dist/js/bootstrap.bundle.min.js",
+    "sha256": "e4fd49181388c48ec5040bd3fe66f57c29c8e67fcd8502b3354b96ec7ab47cc7"
+  },
+  {
+    "file": "bootstrap-LICENSE.txt",
+    "package": "bootstrap",
+    "version": "5.3.8",
+    "source": "https://registry.npmjs.org/bootstrap/-/bootstrap-5.3.8.tgz",
+    "member": "package/LICENSE",
+    "sha256": "4620c84ad5ce8602ff65640ed6b7c8b78ebb9e036584f0ebc1ccc88206a4bb51"
+  },
+  {
+    "file": "htmx.min.js",
+    "package": "htmx.org",
+    "version": "2.0.11",
+    "source": "https://registry.npmjs.org/htmx.org/-/htmx.org-2.0.11.tgz",
+    "member": "package/dist/htmx.min.js",
+    "sha256": "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717"
+  },
+  {
+    "file": "htmx-org-LICENSE.txt",
+    "package": "htmx.org",
+    "version": "2.0.11",
+    "source": "https://registry.npmjs.org/htmx.org/-/htmx.org-2.0.11.tgz",
+    "member": "package/LICENSE",
+    "sha256": "d3d2456f76414f2456104660ebd65aff1c04cd7966b942bdabd63f3cdb316a38"
+  }
+]

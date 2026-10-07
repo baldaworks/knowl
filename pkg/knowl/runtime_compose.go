@@ -265,6 +265,20 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		mcp:              runtime.mcp,
 		serverErr:        make(chan error, 1),
 	}
+	readers := app.OperatorReaders{Sources: newOperatorSourceReader(host)}
+	if runtime.workspace != nil {
+		readers.Catalogs = runtime.workspace
+		readers.Directories = runtime.workspace
+		readers.Pages = runtime.workspace
+		readers.Page = runtime.workspace
+		readers.Revisions = runtime.workspace
+	}
+	readers.Operations, _ = runtime.operations.(app.OperationLister)
+	readers.Documents, _ = runtime.sourceState.(app.SourceDocumentLister)
+	host.operator, err = app.NewOperatorService(runtime.config.Scope, readers, app.OperatorOptions{ReadLimits: runtime.config.ReadLimits})
+	if err != nil {
+		return nil, fmt.Errorf("compose operator reads: %w", err)
+	}
 	httpHandler := httpserver.NewHandler(httpserver.Dependencies{
 		Scope:  runtime.config.Scope,
 		Ingest: runtime.service,
@@ -277,9 +291,20 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		return nil, fmt.Errorf("compose Knowl MCP HTTP handler: %w", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp", httpserver.WithOperatorAuth(mcpHandler, runtime.config.OperatorToken))
+	mux.Handle("/mcp/", httpserver.WithOperatorAuth(httpHandler, runtime.config.OperatorToken))
+	mux.Handle("/v1", httpHandler)
+	mux.Handle("/v1/", httpserver.WithOperatorAuth(httpHandler, runtime.config.OperatorToken))
 	mux.Handle("/", httpHandler)
-	host.handler = httpserver.WithOperatorAuth(mux, runtime.config.OperatorToken)
+	if runtime.config.Web.Enabled {
+		ui, uiErr := httpserver.NewWebHandler(host.operator, httpserver.Dependencies{EmbeddingsEnabled: runtime.config.Embeddings.Enabled, Scope: runtime.config.Scope, Query: runtime.query, Ready: host.Ready}, runtime.config.OperatorToken)
+		if uiErr != nil {
+			return nil, fmt.Errorf("compose web UI: %w", uiErr)
+		}
+		mux.Handle("/ui/", ui)
+		mux.Handle("/operator/v1/", httpserver.WithOperatorAuth(httpserver.NewOperatorHandler(host.operator, host.Ready), runtime.config.OperatorToken))
+	}
+	host.handler = mux
 	return host, nil
 }
 

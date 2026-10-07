@@ -5,9 +5,10 @@ knowl:
   id: concepts/service-operations
   source_refs:
     - wiki-filesystem:knowl-docs/local-codex.md@2ba53250fc8e94bf95fb84e0c188a320f5670719b4daddf61ce2cfa8557dbafa
-    - wiki-filesystem:knowl-docs/operations.md@a8d940886adea2001c407905f2d47f917ad2702bde8c86af930c71bc49bcefb2
-    - wiki-filesystem:knowl-docs/sidecar.md@e0961bf5d26c3b48b1b3973abde1453a7d849e7493f80215c09b20cac7e439dc
+    - wiki-filesystem:knowl-docs/operations.md@2054c49f67e051de123d967fc81a984ff96292c970a215f1d0e86dd1516649ad
+    - wiki-filesystem:knowl-docs/sidecar.md@16a5d0b29e4d14c9d1f6b5e23df89b50f47de8a6cb2555a10ca5ff24a7605ccf
     - wiki-filesystem:knowl-docs/testing.md@9b27371ec8377d553b279f4be2f1304defc9e8b316ad2186379d24311dd85724
+    - wiki-filesystem:knowl-docs/web-ui.md@87191e228d60139852c21653b38d3d02d1659893279ab85a9e9b0b51fef6aa85
 ---
 # Service Operations
 
@@ -39,6 +40,7 @@ Knowl operates as a standalone knowledge service providing canonical workspace m
 - **Container Build & Metadata**: Production images build via root `Dockerfile` using build arguments `VERSION`, `REVISION`, and `CREATED`, run non-root, and include standard OCI metadata. Local persistence and auth can be verified via `scripts/smoke-test-sidecar.sh`.
 - **Direct & Compose Execution**: Direct container run binds published ports to loopback (`-p 127.0.0.1:8080:8080`). Standard compose setup is provided via `deploy/sidecar/compose.yaml`, with `KNOWL_IMAGE` allowing prebuilt image overrides. Production deployments should pin immutable manifest digests.
 - **Source Sync on Start**: Each source configures `sync.on_start` explicitly. Source sync failures do not make the service unready or discard prior snapshots.
+- **Container Web Access**: The optional web UI is built into current images with Go templates and local assets (no Node or CDN dependencies). Container overlay configures `web.enabled: true`, `server.listen_addr: 0.0.0.0:8080`, and `operator.token: ${KNOWL_OPERATOR_TOKEN}`. Host operator secrets must be explicitly passed into Docker/Compose or mounted as local config overrides under `/etc/knowl/`.
 
 ## Configuration
 
@@ -51,12 +53,25 @@ Configuration is loaded by default from `.config/knowl/config.yaml`, selectable 
   - `workspace.path`: Path to workspace (defaults to `.`).
   - `storage.type`: Chooses `sqlite` (default, `sqlite.path: .knowl/knowl.sqlite`) or `postgres` (`postgres.dsn: ${KNOWL_POSTGRES_DSN}`).
   - `server.listen_addr`: Listening address (default `127.0.0.1:8080`).
-  - `operator.token`: When non-empty, requests to `/v1/*` and `/mcp` require `Authorization: Bearer <token>`; probes remain unauthenticated.
+  - `web.enabled`: Controls optional web UI and operator read endpoints (boolean, default `false`).
+  - `operator.token`: When non-empty, requests to `/v1/*`, `/mcp`, and operator endpoints require `Authorization: Bearer <token>`; probes remain unauthenticated. Required when web UI is enabled.
   - `sources`: Configures filesystem and Git sources:
     - **Filesystem Sources**: `type: filesystem`, `filesystem.root`, `filesystem.include`, `filesystem.flavor` (`obsidian`, `markdown`, `okf`), and `sync` settings.
     - **Git Sources**: `type: git`, `git.remote`, `git.ref`, `git.ref_kind: branch`, `git.include`, `git.flavor`, `git.uri_base`, and authentication (`auth.secret_env` or `auth.key_file`). Managed via a bare cache under `<workspace>/.knowl/cache/git/<source-id>` with default 500 MiB transfer and 512 MiB cache limits.
 
 Common environment variable overrides include `KNOWL_PROVIDER`, `KNOWL_WORKSPACE_PATH`, `KNOWL_STORAGE_TYPE`, `KNOWL_STORAGE_SQLITE_PATH`, `KNOWL_STORAGE_POSTGRES_DSN`, `KNOWL_SERVER_LISTEN_ADDR`, and `KNOWL_OPERATOR_TOKEN`.
+
+## Optional Web UI and Operator Reads
+
+- **Activation**: Enabled by setting `knowl.web.enabled: true` and providing `knowl.operator.token`. Embedded applications use `Config.Web.Enabled` and `Config.OperatorToken`. MCP stdio explicitly disables web access.
+- **Web Shell & Authentication**: UI connects at `http://127.0.0.1:8080/ui/`. Public shell and assets contain no workspace data; `/ui/fragments/*` and `/operator/v1/*` require bearer authentication. Tokens remain in browser memory for the document session, never stored in cookies, local storage, or URLs. Responses set `Cache-Control: no-store`.
+- **Network Boundary**: Recommended for loopback. Remote access requires terminating HTTPS at a trusted reverse proxy forwarding the bearer header without logging credentials or query parameters. Direct UI browsing loads assets locally and avoids external requests; deliberate clicks on external links do not forward bearer credentials.
+- **Operator Read API**: Exposes seven GET routes (`/operator/v1/catalogs`, `/operator/v1/pages`, `/operator/v1/page`, `/operator/v1/source-revision`, `/operator/v1/sources`, `/operator/v1/sources/{source_id}`, `/operator/v1/operations`). Pagination defaults to 50 items (limit 1–100, Operations UI starts at 10) with opaque 8 KiB restart-invalidated cursors. Query strings exceeding 16 KiB or duplicate parameters fail closed.
+- **Screen Workflows**:
+  - **Knowledge**: Renders the canonical root and actual `index.md` body. Follows verified catalog links and breadcrumbs without inferring deeper file-path ancestry. Includes an **All pages** expandable directory tree with on-demand child loading and bounded in-memory state restored on browser Back. An expandable **Details** panel displays page metadata, while **Page sources** allows reading immutable accepted source text via **Read saved source** without upstream fetches. **Open original** appears only when provenance contains allowed credential-free HTTP/HTTPS URLs.
+  - **Search**: Executes standard retrieval once per explicit submission (no live search on typing). Displays server-ordered evidence with original snippets and retrieval diagnostic badges (lexical, hybrid, degraded, failed). Supports **View JSON** and **Export JSON** without credentials; browser Back restores query and results without repeating retrieval.
+  - **Operations**: Lists processing history with status and source filters. Detail views reveal execution/retry facts, retrieval reports, context fitting budgets, plan summaries, and correction outcomes. Polling refreshes queued/running operations while tabs are visible, pausing in hidden tabs and halting on terminal status.
+  - **Sources**: Displays configured sources and document inventories (upstream head, accepted revision, processing revision) with links to associated operations and processing history.
 
 ## Optional Embeddings and Hybrid Retrieval
 

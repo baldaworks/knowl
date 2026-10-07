@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -46,6 +47,8 @@ func TestWorkspaceRecoversSourceCommitAtEveryFaultPoint(t *testing.T) {
 			if err := os.Chmod(filepath.Join(workspace.Root(), filepath.FromSlash(replacePath)), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			deleteMode := observedRecoveryMode(t, filepath.Join(workspace.Root(), filepath.FromSlash(deletePath)), 0o640)
+			replaceMode := observedRecoveryMode(t, filepath.Join(workspace.Root(), filepath.FromSlash(replacePath)), 0o644)
 			plan := sourcePlan("sync-crash-"+knowl.SyncRunID(token(test.name)), testSourceID,
 				knowl.SourceMutation{Action: knowl.SourceMutationWrite, Path: createPath, Content: []byte("create-after")},
 				knowl.SourceMutation{Action: knowl.SourceMutationDelete, Path: deletePath, ExpectedDigest: digestBytes([]byte("delete-before"))},
@@ -77,7 +80,7 @@ func TestWorkspaceRecoversSourceCommitAtEveryFaultPoint(t *testing.T) {
 					t.Fatalf("recovery results = %#v, want %q", results, test.wantAction)
 				}
 			}
-			assertSourceCrashState(t, reopened, createPath, deletePath, replacePath, test.wantAfter)
+			assertSourceCrashState(t, reopened, createPath, deletePath, replacePath, deleteMode, replaceMode, test.wantAfter)
 			assertDirectoryEmpty(t, filepath.Join(workspace.Root(), knowlDir, "recovery"))
 			if test.wantAfter {
 				commit, err := reopened.CommitSource(context.Background(), staged)
@@ -238,7 +241,20 @@ func TestWorkspaceRecoveryPreservesLegacyUnboundedMaintainerOperationID(t *testi
 	}
 }
 
-func assertSourceCrashState(t *testing.T, workspace *Workspace, createPath, deletePath, replacePath string, after bool) {
+func observedRecoveryMode(t *testing.T, path string, requested os.FileMode) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := info.Mode().Perm()
+	if runtime.GOOS != "windows" && mode != requested {
+		t.Fatalf("mode after Chmod = %#o, want %#o", mode, requested)
+	}
+	return mode
+}
+
+func assertSourceCrashState(t *testing.T, workspace *Workspace, createPath, deletePath, replacePath string, deleteMode, replaceMode os.FileMode, after bool) {
 	t.Helper()
 	create, createErr := os.ReadFile(filepath.Join(workspace.Root(), filepath.FromSlash(createPath)))
 	deleted, deleteErr := os.ReadFile(filepath.Join(workspace.Root(), filepath.FromSlash(deletePath)))
@@ -253,12 +269,12 @@ func assertSourceCrashState(t *testing.T, workspace *Workspace, createPath, dele
 		t.Fatalf("before state: create=%q/%v delete=%q/%v replace=%q/%v", create, createErr, deleted, deleteErr, replaced, replaceErr)
 	}
 	deleteInfo, err := os.Stat(filepath.Join(workspace.Root(), filepath.FromSlash(deletePath)))
-	if err != nil || deleteInfo.Mode().Perm() != 0o640 {
-		t.Fatalf("delete mode = %v, %v; want 0640", deleteInfo, err)
+	if err != nil || deleteInfo.Mode().Perm() != deleteMode {
+		t.Fatalf("delete mode = %v, %v; want %#o", deleteInfo, err, deleteMode)
 	}
 	replaceInfo, err := os.Stat(filepath.Join(workspace.Root(), filepath.FromSlash(replacePath)))
-	if err != nil || replaceInfo.Mode().Perm() != 0o644 {
-		t.Fatalf("replace mode = %v, %v; want 0644", replaceInfo, err)
+	if err != nil || replaceInfo.Mode().Perm() != replaceMode {
+		t.Fatalf("replace mode = %v, %v; want %#o", replaceInfo, err, replaceMode)
 	}
 }
 

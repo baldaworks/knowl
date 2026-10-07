@@ -109,7 +109,7 @@ func (store *Store) configure(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open embedded sqlite migrations: %w", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, directory)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		return fmt.Errorf("create sqlite migration provider: %w", err)
 	}

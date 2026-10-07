@@ -364,7 +364,7 @@ func TestSourceMigrationPreservesVersionTwoOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestMaintenanceGenerationMigrationDownPreservesRepresentableHistory(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +470,7 @@ func TestSourceMaintenanceMigrationPreservesLegacyDocumentState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func TestResumableMigrationPreservesVersionOneOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open migration fixtures: %v", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatalf("create version-one provider: %v", err)
 	}

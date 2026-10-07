@@ -1,0 +1,1 @@
+{"name":"knowl-webui-browser-tests","private":true,"version":"0.0.0","description":"Development-only embedded UI security checks","dependencies":{"playwright":"1.63.0"}}

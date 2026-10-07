@@ -13,12 +13,13 @@ import (
 // Health probes remain public, and trusted in-process workflows bypass HTTP auth.
 func WithOperatorAuth(next http.Handler, token string) http.Handler {
 	configured := strings.TrimSpace(token)
-	if configured == "" {
-		return next
-	}
+
 	configuredDigest := sha256.Sum256([]byte(configured))
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if !requiresOperatorAuth(request.URL.Path) || trustedrequest.IsMarked(request.Context()) {
+		if requiresOperatorAuth(request.URL.Path) {
+			response.Header().Set("Cache-Control", "no-store")
+		}
+		if configured == "" || !requiresOperatorAuth(request.URL.Path) || trustedrequest.IsMarked(request.Context()) {
 			next.ServeHTTP(response, request)
 			return
 		}
@@ -34,5 +35,5 @@ func WithOperatorAuth(next http.Handler, token string) http.Handler {
 }
 
 func requiresOperatorAuth(path string) bool {
-	return strings.HasPrefix(path, "/v1/") || path == "/mcp" || strings.HasPrefix(path, "/mcp/")
+	return strings.HasPrefix(path, "/operator/v1/") || strings.HasPrefix(path, "/ui/fragments/") || strings.HasPrefix(path, "/v1/") || path == "/mcp" || strings.HasPrefix(path, "/mcp/")
 }

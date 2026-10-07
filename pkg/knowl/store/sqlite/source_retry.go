@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/operationlist"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -216,7 +218,8 @@ func (store *Store) retrySourceMaintenanceGeneration(ctx context.Context, reques
 		}
 		return result, nil
 	}
-	now := nowString()
+	createdAt := time.Now().UTC()
+	now := createdAt.Format(time.RFC3339Nano)
 	processed := make(map[knowl.OperationID]struct{}, len(candidates))
 	for _, candidate := range candidates {
 		if _, exists := processed[candidate.operationID]; exists {
@@ -235,7 +238,7 @@ func (store *Store) retrySourceMaintenanceGeneration(ctx context.Context, reques
 		key := candidate.key
 		key.MaintenanceGeneration = request.MaintenanceGeneration
 		newID, _ := app.SourceOperationID(key)
-		_, insertErr := tx.ExecContext(ctx, `INSERT INTO knowl_operations (operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest, status, created_at, updated_at, accepted_media_type, source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at, work_kind, maintenance_generation, manual_retry_count) SELECT ?, scope, source_adapter, source_id, source_version, source_digest, ?, ?, ?, ?, accepted_media_type, source_manifest_ref, accepted_source_document, ?, ?, ?, work_kind, ?, manual_retry_count + 1 FROM knowl_operations WHERE operation_id = ? ON CONFLICT(scope, source_adapter, source_id, source_version, maintenance_generation) DO NOTHING`, newID, request.Schema.Digest, knowl.StatusReceived, now, now, request.Schema.Version, request.Schema.Content, now, request.MaintenanceGeneration, candidate.operationID)
+		_, insertErr := tx.ExecContext(ctx, `INSERT INTO knowl_operations (operation_id, scope, source_adapter, source_id, source_version, source_digest, schema_digest, status, created_at, updated_at, accepted_media_type, source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at, work_kind, maintenance_generation, manual_retry_count, configured_source_id, created_at_sort) SELECT ?, scope, source_adapter, source_id, source_version, source_digest, ?, ?, ?, ?, accepted_media_type, source_manifest_ref, accepted_source_document, ?, ?, ?, work_kind, ?, manual_retry_count + 1, configured_source_id, ? FROM knowl_operations WHERE operation_id = ? ON CONFLICT(scope, source_adapter, source_id, source_version, maintenance_generation) DO NOTHING`, newID, request.Schema.Digest, knowl.StatusReceived, now, now, request.Schema.Version, request.Schema.Content, now, request.MaintenanceGeneration, operationlist.SortTime(createdAt), candidate.operationID)
 		if insertErr != nil {
 			return result, insertErr
 		}

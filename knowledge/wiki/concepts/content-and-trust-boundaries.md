@@ -6,7 +6,7 @@ knowl:
   source_refs:
     - wiki-filesystem:knowl-docs/design.md@15d3f23357e10afc7a1f9e7ba3dda84f262521d5ae864d5fbc4ed95c822ec4e0
     - wiki-filesystem:knowl-docs/design.md@3a68ce3bd879e93c51035a4f8f0cf5c198e5019718caf580e388c947b63f1749
-    - wiki-filesystem:knowl-docs/workspace.md@dd7f4ae47072b5a774920628d5aef1a861fa5840e12854cc58cf3d5d9351d386
+    - wiki-filesystem:knowl-docs/workspace.md@df6e46c335deb68c9ecd6769ffe5a36d3c3d953716ee37bee83c8fdfac44aa45
 ---
 # Content and Trust Boundaries
 
@@ -30,6 +30,12 @@ Curated semantic pages must follow enforced OKF v0.2 conventions:
 - **Provenance Citations**: The `knowl.source_refs` extension retains stable citations in the form `adapter:source-id@version`. Every maintained factual page must cite at least one accepted raw source. Manifests record structured `source_document` metadata (`source_id`, `document_id`, `revision`, `uri`), resolved into sorted collections during snapshots.
 - **Link Integrity**: Curated pages use strict double-bracket wiki links (`[[concepts/architecture]]`) targeting confirmed bundle-relative page identities. Imported OKF concepts use standard Markdown links (`[Related](related.md)`). Unresolved internal targets are rejected; external URLs and assets are excluded from the concept graph.
 - **Edit Bounds**: Maintainer edit plans may target safe semantic paths under `wiki/**/*.md`, but cannot modify `wiki/log.md`, `schema.md`, or the reserved legacy `wiki/sources/**` boundary.
+
+## Browser Inspection and Provenance Safety
+
+- **Web UI Provenance Inspection**: The optional web UI reads current canonical `wiki/` pages and immutable accepted revisions from `raw/` without upstream fetching. Missing, oversize, or non-text revisions report failures rather than substituting newer upstream documents.
+- **URI Sanitization for Original Sources**: "Open original" links appear only for provenance recording safe HTTP/HTTPS URIs with user credentials, query strings, and fragments removed. Filesystem paths, unsafe schemes, and credentials are never exposed as clickable originals, and navigation never forwards the operator bearer token.
+- **Whole-Page Attribution**: Source citations support the page as a whole rather than sentence-level claims. Browser reads reflect current canonical state; accepted raw revisions retain immutable historical identity independently.
 
 ## Export for Publication
 

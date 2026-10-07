@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +16,23 @@ import (
 )
 
 const workspaceLockHelperEnv = "KNOWL_TEST_WORKSPACE_LOCK_HELPER"
+
+type lockHelperStderr struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (buffer *lockHelperStderr) Write(data []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.Buffer.Write(data)
+}
+
+func (buffer *lockHelperStderr) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.Buffer.String()
+}
 
 func TestWorkspaceLockCoordinatesInstancesAndCancellation(t *testing.T) {
 	root := t.TempDir()
@@ -144,15 +163,27 @@ func TestWorkspaceLockReleasedAfterProcessExit(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
 	command := exec.Command(os.Args[0], "-test.run=^TestWorkspaceLockHelperProcess$")
 	command.Env = append(os.Environ(), workspaceLockHelperEnv+"=1", "KNOWL_TEST_WORKSPACE_ROOT="+root, "KNOWL_TEST_WORKSPACE_READY="+ready)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
+	stdin, signal, err := os.Pipe()
+	if err != nil {
 		t.Fatal(err)
 	}
+	command.Stdin = stdin
+	var stderr lockHelperStderr
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		_ = signal.Close()
+		t.Fatal(err)
+	}
+	_ = stdin.Close()
+	exited := make(chan error, 1)
+	go func() { exited <- command.Wait() }()
+	childExited := false
 	defer func() {
-		if command.ProcessState == nil {
+		_ = signal.Close()
+		if !childExited {
 			_ = command.Process.Kill()
-			_ = command.Wait()
+			<-exited
 		}
 	}()
 
@@ -161,23 +192,47 @@ func TestWorkspaceLockReleasedAfterProcessExit(t *testing.T) {
 		if _, err := os.Stat(ready); err == nil {
 			break
 		}
+		select {
+		case exitErr := <-exited:
+			childExited = true
+			t.Fatalf("helper exited before acquiring lock: %v; stderr: %s", exitErr, stderr.String())
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatalf("helper did not acquire lock: %s", stderr.String())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	select {
+	case exitErr := <-exited:
+		childExited = true
+		t.Fatalf("helper exited after reporting ready: %v; stderr: %s", exitErr, stderr.String())
+	default:
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	if _, err := workspace.lock(ctx); !errors.Is(err, ErrWorkspaceBusy) {
+	unexpectedUnlock, err := workspace.lock(ctx)
+	if err == nil {
+		unexpectedUnlock()
+	}
+	if !errors.Is(err, ErrWorkspaceBusy) {
 		cancel()
-		t.Fatalf("lock while helper is alive = %v, want busy", err)
+		select {
+		case exitErr := <-exited:
+			childExited = true
+			t.Fatalf("lock while helper is alive = %v, want busy; helper exit: %v; stderr: %s", err, exitErr, stderr.String())
+		default:
+			t.Fatalf("lock while helper is alive = %v, want busy; helper stderr: %s", err, stderr.String())
+		}
 	}
 	cancel()
 	if err := command.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	if err := command.Wait(); err == nil {
+	if err := <-exited; err == nil {
+		childExited = true
 		t.Fatal("killed helper exited without an error")
 	}
+	childExited = true
 
 	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -204,5 +259,7 @@ func TestWorkspaceLockHelperProcess(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("KNOWL_TEST_WORKSPACE_READY"), []byte("ready"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	select {}
+	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+		t.Fatal(err)
+	}
 }

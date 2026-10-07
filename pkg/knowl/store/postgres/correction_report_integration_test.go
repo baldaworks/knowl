@@ -60,7 +60,7 @@ func runCorrectionReportMigrationPostgres(t *testing.T, dsn string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, directory)
+	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatal(err)
 	}

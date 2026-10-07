@@ -523,7 +523,7 @@ func assertResumableMigration(t *testing.T, ctx context.Context, root *Store, ds
 	if err != nil {
 		t.Fatalf("open migration fixtures: %v", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, directory)
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
 	if err != nil {
 		t.Fatalf("create version-one provider: %v", err)
 	}
