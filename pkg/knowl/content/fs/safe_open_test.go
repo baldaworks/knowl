@@ -94,6 +94,11 @@ func TestReadRootBoundsSparseFilesAndRunes(t *testing.T) {
 }
 
 func TestReadRootRejectsComponentReplacementRace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows may deny renaming a directory while another thread has a child
+		// open. The direct pinned-root and symlink rejection test still runs.
+		t.Skip("component replacement by rename requires POSIX rename semantics")
+	}
 	directory := t.TempDir()
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "page"), []byte("secret"), 0o600); err != nil {
