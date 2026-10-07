@@ -1,8 +1,11 @@
-# Knowl UI reference
+# Knowl UI historical design reference
 
-Static HTML design reference for Story `knowl-d8b`. All documents, revisions,
-search results and operation states are demonstration fixtures. This directory
-is a visual review artifact; it does not implement or call the Knowl API.
+Static HTML reference approved for Story `knowl-d8b` before implementation.
+This historical prototype records that design review; the running UI has since
+changed. Use the [web UI guide](../../docs/web-ui.md) for current setup,
+navigation, and behavior. All documents, revisions, search results, and
+operation states here are demonstration fixtures. This directory does not
+implement or call the Knowl API.
 
 The reference uses HTMX 2.0.11, Bootstrap 5.3.8 and AdminLTE 4.10.0.
 Libraries and their licenses are saved locally in `vendor/`; `manifest.json`
@@ -24,10 +27,10 @@ The footer's **Reference state** selector exposes empty knowledge, a missing
 saved revision, degraded search and unavailable retrieval diagnostics. Wiki
 states apply on Knowledge; search states apply on Search.
 
-Application work follows review of this HTML reference. Backend integration,
-authentication, live retrieval, consistent canonical reads and real polling
-remain pending in the parent Story. The prototype contains no real operator
-token or production workspace data.
+The implemented Go service includes authentication, live retrieval, canonical
+reads, and selected-operation polling. Those runtime features are not provided
+by this prototype. It contains no real operator token or production workspace
+data.
 
 ## Brand asset
 

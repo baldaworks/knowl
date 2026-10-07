@@ -34,18 +34,23 @@ and [container setup](sidecar.md#optional-browser-access).
 
 ## Knowledge
 
-Knowledge opens the canonical wiki root and renders its actual index body.
-Follow catalog and page links, use the breadcrumb to return through verified
-catalogs, or choose **All pages**. Back and Forward preserve navigation within
-the connected document. Direct links and reload use the root and any verified
-current catalog; deeper ancestry is not inferred from file paths.
+Knowledge opens the canonical wiki root and renders its actual `index.md` body.
+Follow catalog and page links, or use the breadcrumb to return through verified
+catalogs. Direct links and reload use the root and any verified current catalog;
+deeper catalog ancestry is not inferred from file paths.
+
+**All pages** opens a file tree grouped by wiki directory paths. Expand folders
+to load their children as needed, and use **More files** when a branch has additional
+files. Each `index.md` appears as an ordinary file in this tree. Select a file
+explicitly to open its article. Browser Back restores the loaded, expanded tree
+within the same connected tab while its bounded in-memory view is retained.
+Reload or disconnect clears that view.
 
 **Details** starts closed and contains page identity, digest/version, and
 available type, description, tags, status, trust and stale metadata.
 **Page sources** starts closed at every screen width; open it explicitly to
 inspect saved revisions supporting a leaf page. A leaf with no references says
-so. Catalog indexes have no source panel. On a small screen, **Browse knowledge**
-opens the catalog panel.
+so. Catalog indexes have no source panel.
 
 Select **Read saved source** to read immutable accepted text with its digest
 and media type. This uses Knowl's saved revision and does not fetch upstream.
@@ -78,13 +83,21 @@ failed retrieval. Missing diagnostics are shown as unavailable.
 **View JSON** and **Export JSON** expose the same safe response used for the
 cards, without another retrieval or the operator token. Select an evidence title
 to read its current page, which may differ from the earlier search
-snapshot. The search is evidence retrieval, not a chat or generated answer.
+snapshot. After a successful search, open an evidence page in the same tab and
+use browser Back to restore the last query and results without another
+retrieval. Only one bounded results view is kept in memory; an oversized view
+cannot be restored. Opening a fresh Search view, reloading, or disconnecting
+starts with a blank query and results. The search is evidence retrieval, not a
+chat or generated answer.
 
 ## Operations
 
 Read stored processing history, filter by status or source ID, and select an
-operation. Details show available execution/retry facts, retrieval and selected
-context reports, a plan digest/count summary, and correction facts. Selected
+operation. Full operation IDs are visible in the list and available in the
+detail's expandable identity. **Back to operations** returns you to the selected
+row, or the list heading when there is no selected row. Details show available
+execution/retry facts, retrieval and selected context reports, a plan digest/count
+summary, and correction facts. Selected
 context describes what the maintainer read; it is not a changed-page list or
 changeset preview. Plan corrections are separate from execution retries. Context
 reports distinguish candidates excluded by the request byte budget from entries
@@ -101,11 +114,12 @@ does not start work or retry failed operations.
 
 ## Sources
 
-Select a configured source to inspect synchronization facts, accepted documents,
-and maintenance status. Document rows distinguish the upstream head, accepted
-revision, and processing revision. **View operation** opens a stored associated
-operation when available. Selecting a source or **Next documents** reveals and
-focuses the requested details, including loading and failures, beneath tall lists.
+Select a configured source to open its saved documents first. Document rows
+distinguish the upstream head, accepted revision, and processing revision.
+**View operation** opens a stored associated operation when available. **Sync
+and processing** history follows below the document table. Selecting a source
+or **Next documents** reveals and focuses the requested details, including
+loading and failures, beneath tall lists.
 
 Successful synchronization accepts data and reserves work; wiki processing may
 still be queued or failed. A later failed sync preserves the last successful
@@ -189,12 +203,14 @@ Keep the service running and open `http://127.0.0.1:8086/ui/`:
 2. In **Sources**, select `engineering-docs`. Check the accepted revision and
    completed processing for `authentication-service.md`. If processing failed,
    inspect the associated operation before proceeding.
-3. In **Knowledge**, open **All pages** and choose a generated authentication
-   page. Open **Page sources**, then **Read saved source**. The text is the
-   accepted authentication document; it remains immutable if the source changes.
+3. In **Knowledge**, open **All pages**, expand the directory containing a
+   generated authentication page, and select that file. Open **Page sources**,
+   then **Read saved source**. The text is the accepted authentication document;
+   it remains immutable if the source changes.
 4. In **Search**, submit `session revocation JWT` across the wiki. Inspect the
    evidence and **View JSON**. With embeddings disabled, this query is searched
-   locally. Follow an evidence title to read its current page.
+   locally. Follow an evidence title to read its current page, then use browser
+   Back to restore the query and results without searching again.
 5. In **Sources**, open the document's **View operation** link. Compare its saved
    processing facts with the accepted revision. Legacy absent reports remain
    unavailable.
