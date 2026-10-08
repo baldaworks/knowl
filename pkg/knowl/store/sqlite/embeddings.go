@@ -15,6 +15,10 @@ import (
 // publishEmbeddings atomically publishes staged vectors if the lexical snapshot
 // is still current. Preparation and inference take place before this method.
 func (store *Store) publishEmbeddings(ctx context.Context, scope knowl.ScopeRef, state hybrid.ProjectionState, chunks []hybrid.Chunk) error {
+	return store.publishEmbeddingsChecked(ctx, scope, state, chunks, nil, 0)
+}
+
+func (store *Store) publishEmbeddingsChecked(ctx context.Context, scope knowl.ScopeRef, state hybrid.ProjectionState, chunks []hybrid.Chunk, version *projectionVersion, observed int64) error {
 	if err := validateScope(scope); err != nil {
 		return err
 	}
@@ -30,6 +34,11 @@ func (store *Store) publishEmbeddings(ctx context.Context, scope knowl.ScopeRef,
 		return fmt.Errorf("begin embeddings publication: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if version != nil {
+		if err := version.check(ctx, observed); err != nil {
+			return err
+		}
+	}
 	var current string
 	err = tx.QueryRowContext(ctx, `SELECT snapshot_digest FROM knowl_projection_state WHERE scope = ?`, scope).Scan(&current)
 	if errors.Is(err, sql.ErrNoRows) {

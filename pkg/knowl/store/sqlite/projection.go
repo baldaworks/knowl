@@ -23,6 +23,10 @@ func (store *Store) Project(ctx context.Context, commit knowl.ContentCommit) err
 
 // Rebuild recreates all projections from canonical Markdown snapshots.
 func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
+	return store.rebuildLexicalChecked(ctx, snapshot, nil, 0)
+}
+
+func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.WorkspaceSnapshot, version *projectionVersion, observed int64) error {
 	if err := validateScope(snapshot.Scope); err != nil {
 		return err
 	}
@@ -36,6 +40,11 @@ func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.Workspace
 	}
 	rollback := func() { _ = tx.Rollback() }
 	defer rollback()
+	if version != nil {
+		if err := version.check(ctx, observed); err != nil {
+			return err
+		}
+	}
 	for _, statement := range []string{"DELETE FROM knowl_pages_fts WHERE scope = ?", "DELETE FROM knowl_links WHERE scope = ?", "DELETE FROM knowl_page_sources WHERE scope = ?", "DELETE FROM knowl_pages WHERE scope = ?", "DELETE FROM knowl_projection_state WHERE scope = ?"} {
 		var execErr error
 		_, execErr = tx.ExecContext(ctx, statement, snapshot.Scope)

@@ -21,11 +21,25 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	}
 	ctx, cancel := context.WithTimeout(ctx, hybrid.RebuildTimeout)
 	defer cancel()
+	version, err := openProjectionVersion(ctx, store.path)
+	if err != nil {
+		return err
+	}
+	defer version.close()
+	observed, err := version.current(ctx)
+	if err != nil {
+		return err
+	}
 	previous, chunks, pages, err := store.previousProjection(ctx, snapshot)
 	if err != nil {
 		return err
 	}
-	if err := store.rebuildLexical(ctx, snapshot); err != nil {
+	if err := store.rebuildLexicalChecked(ctx, snapshot, version, observed); err != nil {
+		return err
+	}
+	// The lexical rebuild is this monitor's sole expected external commit.
+	// Any other change, including a larger version jump, fails closed.
+	if err := version.check(ctx, observed+1); err != nil {
 		return err
 	}
 	state, staged, err := store.embedding.BuildWithReuse(ctx, snapshot, snapshotDigest(snapshot), previous, chunks, pages)
@@ -35,9 +49,9 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 			return failure
 		}
 		state = hybrid.ProjectionState{Space: store.embedding.Fingerprint, SnapshotDigest: snapshotDigest(snapshot), Dimensions: store.embedding.Space.Dimensions, Mode: knowl.RetrievalDegraded, Reason: report.Reason}
-		return errors.Join(failure, store.publishEmbeddings(ctx, snapshot.Scope, state, nil))
+		return errors.Join(failure, store.publishEmbeddingsChecked(ctx, snapshot.Scope, state, nil, version, observed+1))
 	}
-	return store.publishEmbeddings(ctx, snapshot.Scope, state, staged)
+	return store.publishEmbeddingsChecked(ctx, snapshot.Scope, state, staged, version, observed+1)
 }
 
 // previousProjection captures the old lexical pages and dense rows together;

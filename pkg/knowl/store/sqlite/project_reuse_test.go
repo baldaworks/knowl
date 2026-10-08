@@ -2,17 +2,44 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
+
+type gatedProjectionProvider struct {
+	entered chan struct{}
+	release chan struct{}
+	block   bool
+	vector  []float32
+}
+
+func (provider *gatedProjectionProvider) Embed(ctx context.Context, inputs []string) ([][]float32, error) {
+	if provider.block {
+		close(provider.entered)
+		select {
+		case <-provider.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	vectors := make([][]float32, len(inputs))
+	for i := range vectors {
+		vectors[i] = append([]float32(nil), provider.vector...)
+	}
+	return vectors, nil
+}
 
 type recordingProjectionProvider struct{ inputs []string }
 
 const (
 	projectDigestA1  = "a-1"
+	projectDigestA2  = "a-2"
 	projectPathA     = "wiki/a.md"
 	projectBodyAlpha = "# Alpha\nFirst section"
 )
@@ -62,7 +89,7 @@ func TestSQLiteProjectReusesUnchangedInputs(t *testing.T) {
 	if err := store.CheckProjection(t.Context(), updated); err != nil {
 		t.Fatal(err)
 	}
-	updated.Pages[0].Digest = "a-2"
+	updated.Pages[0].Digest = projectDigestA2
 	updated.Pages[0].Body = "# Alpha\nChanged first section"
 	if err := store.Project(t.Context(), knowl.ContentCommit{Snapshot: updated}); err != nil {
 		t.Fatal(err)
@@ -116,7 +143,7 @@ func TestSQLiteProjectReusesLaterSectionAfterInsertion(t *testing.T) {
 	if initial != 2 {
 		t.Fatalf("initial section inputs=%d, want 2", initial)
 	}
-	snapshot.Pages[0].Digest = "a-2"
+	snapshot.Pages[0].Digest = projectDigestA2
 	snapshot.Pages[0].Body = "# Alpha\nFirst section\n\n# Inserted\nNew section\n\n# Beta\nSecond section"
 	if err := store.Project(t.Context(), knowl.ContentCommit{Snapshot: snapshot}); err != nil {
 		t.Fatal(err)
@@ -220,5 +247,118 @@ func TestSQLiteProjectRepairsSameCountLexicalAndProvenanceDrift(t *testing.T) {
 	}
 	if len(provider.inputs) != initial {
 		t.Fatalf("repair embedded %d unchanged inputs", len(provider.inputs)-initial)
+	}
+}
+
+func TestSQLiteProjectRejectsPeerSameDigestReplacement(t *testing.T) {
+	path := t.TempDir() + "/peer.sqlite"
+	provider := &gatedProjectionProvider{entered: make(chan struct{}), release: make(chan struct{}), vector: []float32{1, 0}}
+	space := app.EmbeddingSpace{Model: testFixture, Revision: "1", Dimensions: 2}
+	store, err := Open(t.Context(), path, app.EmbeddingOptions{Provider: provider, Space: space})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	peerProvider := &gatedProjectionProvider{vector: []float32{0, 1}}
+	peer, err := Open(t.Context(), path, app.EmbeddingOptions{Provider: peerProvider, Space: space})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	snapshot := knowl.WorkspaceSnapshot{Scope: "peer", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha}}}
+	if err := store.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Pages[0].Digest = projectDigestA2
+	snapshot.Pages[0].Body = "# Alpha\nUpdated section"
+	provider.block = true
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- store.Project(ctx, knowl.ContentCommit{Snapshot: snapshot}) }()
+	select {
+	case <-provider.entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := peer.Rebuild(ctx, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	close(provider.release)
+	assertEmbeddingFailure(t, <-done, knowl.RetrievalProjectionDrift)
+	if err := peer.CheckProjection(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	state, chunks, err := readEmbeddingFixture(t.Context(), peer, snapshot.Scope, hybrid.ProjectionState{Space: peer.embedding.Fingerprint, Dimensions: space.Dimensions})
+	if err != nil || state.Mode != knowl.RetrievalHybrid || len(chunks) != 1 || chunks[0].Vector[0] != 0 || chunks[0].Vector[1] != 1 {
+		t.Fatalf("peer vectors changed: state=%+v chunks=%v err=%v", state, chunks, err)
+	}
+}
+
+func TestSQLiteProjectRejectsPeerReplacementBeforeLexicalWrite(t *testing.T) {
+	path := t.TempDir() + "/prior.sqlite"
+	store, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	peer, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	snapshot := knowl.WorkspaceSnapshot{Scope: "prior", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha}}}
+	if err := store.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	version, err := openProjectionVersion(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer version.close()
+	observed, err := version.current(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	assertEmbeddingFailure(t, store.rebuildLexicalChecked(t.Context(), snapshot, version, observed), knowl.RetrievalProjectionDrift)
+	if err := peer.CheckProjection(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteProjectCancellationDuringInference(t *testing.T) {
+	path := t.TempDir() + "/cancel.sqlite"
+	provider := &gatedProjectionProvider{entered: make(chan struct{}), release: make(chan struct{}), vector: []float32{1, 0}}
+	store, err := Open(t.Context(), path, app.EmbeddingOptions{Provider: provider, Space: app.EmbeddingSpace{Model: testFixture, Revision: "1", Dimensions: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	snapshot := knowl.WorkspaceSnapshot{Scope: "cancel", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha}}}
+	if err := store.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Pages[0].Digest = projectDigestA2
+	snapshot.Pages[0].Body = "# Alpha\nUpdated section"
+	provider.block = true
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- store.Project(ctx, knowl.ContentCommit{Snapshot: snapshot}) }()
+	select {
+	case <-provider.entered:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("Project did not reach inference")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Project error=%v", err)
+	}
+	provider.block = false
+	if err := store.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatalf("repair after cancellation: %v", err)
 	}
 }
