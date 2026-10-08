@@ -12,9 +12,9 @@
 - Run `go tool golangci-lint run ./...` before pushing.
 - Run `go mod verify` after dependency changes.
 - Run every Prism Story and Epic phase in a subagent, including Human and Verify.
-  Use a separate subagent invocation for each phase; the primary agent only
-  routes input, checks the persisted result, and advances to the next phase.
-  Keep the phase's approval and completion gates in force.
+  Use a separate subagent invocation for each phase. Each subagent executes its
+  phase and persists the transition; the primary agent only routes input and
+  checks the persisted result. Keep approval and completion gates in force.
 - Close a Prism Story only after all required GitHub checks are green and all changes belonging to the Story have been merged.
 
 ## Repository Conventions
