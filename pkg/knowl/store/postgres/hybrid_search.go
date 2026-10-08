@@ -234,12 +234,17 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 func readDenseEvidence(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, id knowl.PageID, chunk hybrid.Chunk, space app.EmbeddingSpace, characters int) (string, error) {
 	var fields hybrid.SemanticFields
 	var digest string
-	err := tx.QueryRowContext(ctx, `SELECT digest,title,tags,description,body FROM knowl_pages WHERE scope=$1 AND page_id=$2`, scope, id).Scan(&digest, &fields.Title, &fields.Tags, &fields.Description, &fields.Body)
+	var metadata []byte
+	err := tx.QueryRowContext(ctx, `SELECT digest,title,tags,description,body,format,okf_metadata FROM knowl_pages WHERE scope=$1 AND page_id=$2`, scope, id).Scan(&digest, &fields.Title, &fields.Tags, &fields.Description, &fields.Body, &fields.Format, &metadata)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && digest != chunk.PageDigest) {
 		return "", embeddingFailure(knowl.RetrievalProjectionDrift)
 	}
 	if err != nil {
 		return "", err
+	}
+	fields.OKF, err = projectionmeta.Decode(fields.Format, metadata)
+	if err != nil {
+		return "", embeddingFailure(knowl.RetrievalProjectionDrift)
 	}
 	return hybrid.OriginalEvidence(ctx, fields, space, chunk, characters)
 }

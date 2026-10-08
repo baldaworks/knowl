@@ -18,7 +18,7 @@ func TestOriginalEvidencePreservesOriginalUnicodeAndCRLF(t *testing.T) {
 	}
 	hash := sha256.Sum256([]byte(prepared.Inputs[0]))
 	snippet, err := OriginalEvidence(t.Context(), fields, space, Chunk{Ordinal: 0, ContentHash: hex.EncodeToString(hash[:])}, 100)
-	if err != nil || snippet != "Cafe\u0301\r\nпроверка" {
+	if err != nil || snippet != "Résumé\n\nCafe\u0301\r\nпроверка" {
 		t.Fatalf("original evidence=%q error=%v", snippet, err)
 	}
 	_, err = OriginalEvidence(t.Context(), fields, space, Chunk{Ordinal: 0, ContentHash: strings.Repeat("0", 64)}, 100)

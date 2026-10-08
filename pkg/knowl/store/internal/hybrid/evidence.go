@@ -30,7 +30,20 @@ func OriginalEvidence(ctx context.Context, fields SemanticFields, space app.Embe
 		return "", failure(knowl.RetrievalProjectionDrift)
 	}
 	original := fields.Body[span.Start:span.End]
-	if span.Start == span.End {
+	section := evidenceSection(fields.Body, span)
+	if section != nil {
+		parts := make([]string, 0, len(section.ancestry)+2)
+		if fields.Title != "" {
+			parts = append(parts, fields.Title)
+		}
+		for _, heading := range section.ancestry {
+			parts = append(parts, fields.Body[heading.start:heading.end])
+		}
+		if original != "" && (section.heading.start != span.Start || section.heading.end != span.End) {
+			parts = append(parts, original)
+		}
+		original = strings.Join(parts, "\n\n")
+	} else if span.Start == span.End {
 		parts := []string{fields.Title}
 		if fields.OKF != nil {
 			parts = append(parts, fields.OKF.Type, strings.Join(fields.OKF.Tags, "\n"), fields.OKF.Description)
@@ -51,4 +64,22 @@ func OriginalEvidence(ctx context.Context, fields SemanticFields, space app.Embe
 	characters = min(characters, lexical.MaxSnippetRunes)
 	runes := []rune(original)
 	return string(runes[:min(len(runes), characters)]), nil
+}
+
+func evidenceSection(body string, span TextWindow) *sourceSection {
+	for _, section := range parseSections(body) {
+		if section.heading.end > section.heading.start && section.heading.start == span.Start && section.heading.end == span.End {
+			return &section
+		}
+		for _, block := range section.blocks {
+			if block.start <= span.Start && span.End <= block.end {
+				return &section
+			}
+		}
+		// One input can contain consecutive blocks from this section.
+		if len(section.blocks) > 0 && section.blocks[0].start <= span.Start && span.End <= section.blocks[len(section.blocks)-1].end {
+			return &section
+		}
+	}
+	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -31,6 +32,7 @@ const (
 
 func runEmbeddingPostgres(t *testing.T, dsn string) {
 	t.Helper()
+	t.Run("StructuredOKFEvidence", func(t *testing.T) { runPostgresStructuredOKFEvidence(t, dsn) })
 	t.Run("RebuildDeadline", func(t *testing.T) { runPostgresRebuildDeadline(t, dsn) })
 	t.Run("InferenceFreeProjectionCancellation", func(t *testing.T) { runPostgresInferenceFreeProjectionCancellation(t, dsn) })
 	t.Run("EmbeddingPersistenceAndScope", func(t *testing.T) { runPostgresEmbeddingPersistenceAndScope(t, dsn) })
@@ -44,6 +46,43 @@ func runEmbeddingPostgres(t *testing.T, dsn string) {
 	t.Run("BoundedMetadata", func(t *testing.T) { runPostgresEmbeddingBoundedMetadata(t, dsn) })
 	t.Run("ConcurrentPublication", func(t *testing.T) { runPostgresEmbeddingConcurrentPublication(t, dsn) })
 	t.Run("RetrievalReportRetainsHistoricalAttempt", func(t *testing.T) { runPostgresRetrievalReportRetainsHistoricalAttempt(t, dsn) })
+}
+
+type structuredEvidenceProvider struct{}
+
+func (structuredEvidenceProvider) Embed(_ context.Context, inputs []string) ([][]float32, error) {
+	vectors := make([][]float32, len(inputs))
+	for i := range vectors {
+		vectors[i] = []float32{1, 0}
+	}
+	return vectors, nil
+}
+
+func runPostgresStructuredOKFEvidence(t *testing.T, dsn string) {
+	t.Helper()
+	store, err := Open(t.Context(), dsn, app.EmbeddingOptions{Provider: structuredEvidenceProvider{}, Space: app.EmbeddingSpace{Model: "fixture", Revision: "1", Dimensions: 2, QueryPrefix: "query: ", PassagePrefix: "passage: "}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	snapshot := knowl.WorkspaceSnapshot{Scope: knowl.ScopeRef("okf_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())), SchemaDigest: embeddingTestDigest, Pages: []knowl.PageSnapshot{{ID: "concept", Path: "wiki/concept.md", Title: "Decision record", Body: "# Rationale\nKeep stable records.", Digest: embeddingTestDigest, OKF: &okf.Metadata{Type: "Decision", Title: "Decision record", Description: "Reviewable choice", Tags: []string{"records"}, Extensions: map[string]any{"secret": "do-not-cite"}}}}}
+	if err := store.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	refs, report, err := store.SearchWithReport(t.Context(), snapshot.Scope, "paraphrasedneedle", knowl.ReadLimits{Pages: 1, Characters: 200}, nil)
+	if err != nil || report.Effective != knowl.RetrievalHybrid || len(refs) != 1 || refs[0].ID != "concept" {
+		t.Fatalf("OKF search refs=%v report=%+v err=%v", refs, report, err)
+	}
+	if refs[0].Snippet != "Decision record\n\n# Rationale\n\nKeep stable records." {
+		t.Fatalf("OKF evidence=%q", refs[0].Snippet)
+	}
+	if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_pages SET okf_metadata=CAST($1 AS jsonb) WHERE scope=$2 AND page_id=$3`, `{"type":""}`, snapshot.Scope, "concept"); err != nil {
+		t.Fatal(err)
+	}
+	refs, report, err = store.SearchWithReport(t.Context(), snapshot.Scope, "paraphrasedneedle", knowl.ReadLimits{Pages: 1, Characters: 200}, nil)
+	if err != nil || len(refs) != 0 || report.Effective != knowl.RetrievalDegraded || report.Reason != knowl.RetrievalProjectionDrift {
+		t.Fatalf("invalid OKF evidence refs=%v report=%+v err=%v", refs, report, err)
+	}
 }
 
 func embeddingFixture(t *testing.T, dsn string) (*Store, knowl.WorkspaceSnapshot, hybrid.ProjectionState, []hybrid.Chunk) {

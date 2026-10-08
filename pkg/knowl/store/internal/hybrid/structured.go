@@ -17,9 +17,10 @@ import (
 // metadata. Query windows remain rune spans in normalized query text.
 type sourceBlock struct{ start, end int }
 type sourceSection struct {
-	path    string
-	heading sourceBlock
-	blocks  []sourceBlock
+	path     string
+	heading  sourceBlock
+	ancestry []sourceBlock
+	blocks   []sourceBlock
 }
 
 func prepareStructuredPage(ctx context.Context, page SemanticFields, space app.EmbeddingSpace) (PreparedText, error) {
@@ -163,6 +164,7 @@ func parseSections(body string) []sourceSection {
 	sections := []sourceSection{{}}
 	var headings []string
 	var levels []int
+	var headingSpans []sourceBlock
 	for node := root.FirstChild(); node != nil; node = node.NextSibling() {
 		start := node.Pos()
 		if start < 0 || start >= len(body) {
@@ -176,6 +178,7 @@ func parseSections(body string) []sourceSection {
 		if heading, ok := node.(*ast.Heading); ok {
 			for len(levels) > 0 && levels[len(levels)-1] >= heading.Level {
 				levels, headings = levels[:len(levels)-1], headings[:len(headings)-1]
+				headingSpans = headingSpans[:len(headingSpans)-1]
 			}
 			lineEnd := strings.IndexByte(body[start:end], '\n')
 			if lineEnd < 0 {
@@ -187,7 +190,9 @@ func parseSections(body string) []sourceSection {
 			name := strings.TrimSpace(strings.Trim(body[start:start+lineEnd], "# \r\t"))
 			levels = append(levels, heading.Level)
 			headings = append(headings, name)
-			sections = append(sections, sourceSection{path: strings.Join(headings, " / "), heading: sourceBlock{start, start + lineEnd}})
+			span := sourceBlock{start, start + lineEnd}
+			headingSpans = append(headingSpans, span)
+			sections = append(sections, sourceSection{path: strings.Join(headings, " / "), heading: span, ancestry: append([]sourceBlock(nil), headingSpans...)})
 			continue
 		}
 		end = trimBlockEnd(body, start, end)

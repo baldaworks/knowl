@@ -106,7 +106,7 @@ func TestStructuredEmptyHeadingCitesOriginalHeading(t *testing.T) {
 	}
 	hash := sha256.Sum256([]byte(prepared.Inputs[0]))
 	excerpt, err := OriginalEvidence(t.Context(), fields, space, Chunk{ContentHash: hex.EncodeToString(hash[:])}, 100)
-	if err != nil || excerpt != "# Empty" {
+	if err != nil || excerpt != "Guide\n\n# Empty" {
 		t.Fatalf("evidence=%q, %v", excerpt, err)
 	}
 }
@@ -123,7 +123,7 @@ func TestStructuredIndentedCodePreservesSourceIndentation(t *testing.T) {
 	}
 	hash := sha256.Sum256([]byte(prepared.Inputs[0]))
 	excerpt, err := OriginalEvidence(t.Context(), fields, space, Chunk{ContentHash: hex.EncodeToString(hash[:])}, 100)
-	if err != nil || excerpt != "    code\n    second" {
+	if err != nil || excerpt != "Code\n\n# Example\n\n    code\n    second" {
 		t.Fatalf("evidence=%q, %v", excerpt, err)
 	}
 }
