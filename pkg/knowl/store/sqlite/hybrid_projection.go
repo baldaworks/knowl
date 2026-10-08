@@ -2,9 +2,7 @@ package sqlite
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"time"
 
@@ -19,23 +17,13 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		return err
 	}
 	if store.embedding == nil {
-		healthy, err := store.lexicalSnapshotHealthy(ctx, snapshot)
-		if err != nil {
-			return err
-		}
-		if healthy {
-			return nil
-		}
 		return store.Rebuild(ctx, snapshot)
 	}
 	ctx, cancel := context.WithTimeout(ctx, hybrid.RebuildTimeout)
 	defer cancel()
-	previous, chunks, pages, same, err := store.previousProjection(ctx, snapshot)
+	previous, chunks, pages, err := store.previousProjection(ctx, snapshot)
 	if err != nil {
 		return err
-	}
-	if same && previous != nil && previousInputsMatch(ctx, pages, chunks, store.embedding.Space) {
-		return nil
 	}
 	if err := store.rebuildLexical(ctx, snapshot); err != nil {
 		return err
@@ -52,76 +40,57 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	return store.publishEmbeddings(ctx, snapshot.Scope, state, staged)
 }
 
-func (store *Store) lexicalSnapshotHealthy(ctx context.Context, snapshot knowl.WorkspaceSnapshot) (bool, error) {
-	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	state, err := projectionStatusUsing(ctx, tx, snapshot.Scope)
-	if errors.Is(err, ErrProjectionNotReady) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if state.SchemaDigest != snapshot.SchemaDigest || state.SnapshotDigest != snapshotDigest(snapshot) {
-		return false, nil
-	}
-	return lexicalProjectionHealthyTx(ctx, tx, state)
-}
-
 // previousProjection captures the old lexical pages and dense rows together;
 // inference runs only after this read transaction has released its locks.
-func (store *Store) previousProjection(ctx context.Context, snapshot knowl.WorkspaceSnapshot) (*hybrid.ProjectionState, []hybrid.Chunk, []knowl.PageSnapshot, bool, error) {
+func (store *Store) previousProjection(ctx context.Context, snapshot knowl.WorkspaceSnapshot) (*hybrid.ProjectionState, []hybrid.Chunk, []knowl.PageSnapshot, error) {
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	lexical, err := projectionStatusUsing(ctx, tx, snapshot.Scope)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, nil, false, ctx.Err()
+			return nil, nil, nil, ctx.Err()
 		}
 		if errors.Is(err, ErrProjectionNotReady) {
-			return nil, nil, nil, false, nil
+			return nil, nil, nil, nil
 		}
-		return nil, nil, nil, false, err
+		return nil, nil, nil, err
 	}
 	healthy, err := lexicalProjectionHealthyTx(ctx, tx, lexical)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, nil, nil, err
 	}
 	if !healthy {
-		return nil, nil, nil, false, nil
+		return nil, nil, nil, nil
 	}
 	state, chunks, err := embeddingProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, nil, false, ctx.Err()
+			return nil, nil, nil, ctx.Err()
 		}
 		var failure *app.EmbeddingError
 		if !errors.As(err, &failure) {
-			return nil, nil, nil, false, err
+			return nil, nil, nil, err
 		}
-		return nil, nil, nil, false, nil
+		return nil, nil, nil, nil
 	}
 	if state.Mode != knowl.RetrievalHybrid {
-		return nil, nil, nil, false, nil
+		return nil, nil, nil, nil
 	}
 	pages, err := previousPagesTx(ctx, tx, snapshot.Scope)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, nil, false, ctx.Err()
+			return nil, nil, nil, ctx.Err()
 		}
 		var failure *app.EmbeddingError
 		if errors.As(err, &failure) {
-			return nil, nil, nil, false, nil
+			return nil, nil, nil, nil
 		}
-		return nil, nil, nil, false, err
+		return nil, nil, nil, err
 	}
-	return &state, chunks, pages, lexical.SchemaDigest == snapshot.SchemaDigest && lexical.SnapshotDigest == snapshotDigest(snapshot), nil
+	return &state, chunks, pages, nil
 }
 
 func lexicalProjectionHealthyTx(ctx context.Context, tx *sql.Tx, state ProjectionState) (bool, error) {
@@ -171,26 +140,6 @@ func previousPagesTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef) ([]k
 		return nil, embeddingFailure(knowl.RetrievalProjectionCapacity)
 	}
 	return pages, nil
-}
-
-func previousInputsMatch(ctx context.Context, pages []knowl.PageSnapshot, chunks []hybrid.Chunk, space app.EmbeddingSpace) bool {
-	byPage := make(map[knowl.PageID][]hybrid.Chunk)
-	for _, chunk := range chunks {
-		byPage[chunk.PageID] = append(byPage[chunk.PageID], chunk)
-	}
-	for _, page := range pages {
-		prepared, err := hybrid.PreparePage(ctx, page, space)
-		if err != nil || len(prepared.Inputs) != len(byPage[page.ID]) {
-			return false
-		}
-		for ordinal, input := range prepared.Inputs {
-			hash := sha256.Sum256([]byte(input))
-			if byPage[page.ID][ordinal].ContentHash != hex.EncodeToString(hash[:]) {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {

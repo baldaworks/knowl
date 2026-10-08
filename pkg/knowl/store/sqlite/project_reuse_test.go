@@ -186,3 +186,39 @@ func TestSQLiteProjectModelChangeReembeds(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSQLiteProjectRepairsSameCountLexicalAndProvenanceDrift(t *testing.T) {
+	provider := &recordingProjectionProvider{}
+	store, err := Open(t.Context(), t.TempDir()+"/drift.sqlite", app.EmbeddingOptions{Provider: provider, Space: app.EmbeddingSpace{Model: testFixture, Revision: "1", Dimensions: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	snapshot := knowl.WorkspaceSnapshot{Scope: "drift", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha, SourceDocuments: []knowl.SourceDocument{{SourceID: "source", DocumentID: "doc", Revision: "1"}}}}}
+	if err := store.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	initial := len(provider.inputs)
+	if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_pages_fts SET body=? WHERE scope=?`, "corrupt body", snapshot.Scope); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_page_sources SET revision=? WHERE scope=?`, "corrupt", snapshot.Scope); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Project(t.Context(), knowl.ContentCommit{Snapshot: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	var body, revision string
+	if err := store.db.QueryRowContext(t.Context(), `SELECT body FROM knowl_pages_fts WHERE scope=?`, snapshot.Scope).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(t.Context(), `SELECT revision FROM knowl_page_sources WHERE scope=?`, snapshot.Scope).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if body == "corrupt body" || revision != "1" {
+		t.Fatalf("projection drift remained: body=%q revision=%q", body, revision)
+	}
+	if len(provider.inputs) != initial {
+		t.Fatalf("repair embedded %d unchanged inputs", len(provider.inputs)-initial)
+	}
+}
