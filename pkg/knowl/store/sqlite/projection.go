@@ -18,7 +18,7 @@ import (
 
 // Project indexes a canonical content commit snapshot.
 func (store *Store) Project(ctx context.Context, commit knowl.ContentCommit) error {
-	return store.Rebuild(ctx, commit.Snapshot)
+	return store.project(ctx, commit.Snapshot)
 }
 
 // Rebuild recreates all projections from canonical Markdown snapshots.
