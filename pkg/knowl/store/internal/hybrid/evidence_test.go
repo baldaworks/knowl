@@ -18,7 +18,7 @@ func TestOriginalEvidencePreservesOriginalUnicodeAndCRLF(t *testing.T) {
 	}
 	hash := sha256.Sum256([]byte(prepared.Inputs[0]))
 	snippet, err := OriginalEvidence(t.Context(), fields, space, Chunk{Ordinal: 0, ContentHash: hex.EncodeToString(hash[:])}, 100)
-	if err != nil || snippet != "Résumé\n\nCafe\u0301\r\nпроверка" {
+	if err != nil || snippet != "Cafe\u0301\r\nпроверка" {
 		t.Fatalf("original evidence=%q error=%v", snippet, err)
 	}
 	_, err = OriginalEvidence(t.Context(), fields, space, Chunk{Ordinal: 0, ContentHash: strings.Repeat("0", 64)}, 100)
@@ -27,17 +27,17 @@ func TestOriginalEvidencePreservesOriginalUnicodeAndCRLF(t *testing.T) {
 	}
 }
 
-func TestOriginalEvidenceIdentifiesTagOnlyWindow(t *testing.T) {
-	fields := SemanticFields{Title: "Title", Tags: strings.Repeat("metatag ", 200)}
+func TestOriginalEvidenceCitesMetadataOnlyPage(t *testing.T) {
+	fields := SemanticFields{Title: "Title", Tags: "metatag"}
 	space := app.EmbeddingSpace{PassagePrefix: testPassagePrefix}
 	prepared, err := PreparePageFields(t.Context(), fields, space)
-	if err != nil || len(prepared.Inputs) < 2 {
+	if err != nil || len(prepared.Inputs) != 1 {
 		t.Fatalf("prepare tags: %+v %v", prepared, err)
 	}
-	ordinal := len(prepared.Inputs) - 1
+	ordinal := 0
 	hash := sha256.Sum256([]byte(prepared.Inputs[ordinal]))
 	snippet, err := OriginalEvidence(t.Context(), fields, space, Chunk{Ordinal: ordinal, ContentHash: hex.EncodeToString(hash[:])}, 80)
-	if err != nil || !strings.HasPrefix(snippet, "tag: metatag") {
+	if err != nil || !strings.Contains(snippet, "metatag") {
 		t.Fatalf("tag evidence=%q error=%v", snippet, err)
 	}
 }

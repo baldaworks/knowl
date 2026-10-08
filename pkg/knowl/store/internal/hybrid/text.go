@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -27,7 +28,7 @@ const (
 	MaxCoverageBytes     = 1 << 20
 	MaxProjectionBytes   = 64 << 20
 	MaxSemanticBytes     = 4 << 20
-	PreprocessingVersion = "semantic-nfc-v2-chunk384-overlap64-fullpage-query4"
+	PreprocessingVersion = "semantic-nfc-v3-structured-sections-blocks-query4"
 )
 
 // PreparedText contains bounded model inputs and explicit omitted coverage.
@@ -157,36 +158,19 @@ func PreparePage(ctx context.Context, page knowl.PageSnapshot, space app.Embeddi
 	if err != nil {
 		return PreparedText{}, err
 	}
-	return PreparePageFields(ctx, SemanticFields{Title: page.Title, Tags: values.Tags, Description: values.Description, Body: values.Body}, space)
+	return PreparePageFields(ctx, SemanticFields{Title: page.Title, Tags: values.Tags, Description: values.Description, Body: values.Body, Format: values.Format, OKF: page.OKF}, space)
 }
 
 // SemanticFields are the original page fields persisted by lexical projection.
-type SemanticFields struct{ Title, Tags, Description, Body string }
+type SemanticFields struct {
+	Title, Tags, Description, Body string
+	Format                         string
+	OKF                            *okf.Metadata
+}
 
 // PreparePageFields uses the same complete page contract for build and evidence.
 func PreparePageFields(ctx context.Context, page SemanticFields, space app.EmbeddingSpace) (PreparedText, error) {
-	fields := []string{page.Title, page.Tags, page.Description, page.Body}
-	total := 0
-	for _, field := range fields {
-		if !utf8.ValidString(field) {
-			return PreparedText{}, failure(knowl.RetrievalInvalidInput)
-		}
-		total += len(field)
-		if total > MaxSemanticBytes {
-			return PreparedText{}, failure(knowl.RetrievalInputLimit)
-		}
-	}
-	if total > MaxSemanticBytes-6 {
-		return PreparedText{}, failure(knowl.RetrievalInputLimit)
-	}
-	prepared, err := PrepareText(ctx, strings.Join(fields, "\n\n"), space.PassagePrefix, MaxChunks)
-	if err != nil {
-		return PreparedText{}, err
-	}
-	if prepared.OmittedChunks != 0 || prepared.OmittedRunes != 0 {
-		return PreparedText{}, failure(knowl.RetrievalProjectionCapacity)
-	}
-	return prepared, nil
+	return prepareStructuredPage(ctx, page, space)
 }
 
 func failure(code knowl.RetrievalFailure) error { return &app.EmbeddingError{Code: code} }
