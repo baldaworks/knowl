@@ -33,6 +33,11 @@ const (
 func runEmbeddingPostgres(t *testing.T, dsn string) {
 	t.Helper()
 	t.Run("StructuredOKFEvidence", func(t *testing.T) { runPostgresStructuredOKFEvidence(t, dsn) })
+	t.Run("ProjectReusesPreparedInputs", func(t *testing.T) { runPostgresProjectReusesPreparedInputs(t, dsn) })
+	t.Run("ProjectRepairsCorruptPriorInputs", func(t *testing.T) { runPostgresProjectRepairsCorruptPriorInputs(t, dsn) })
+	t.Run("ProjectRepairsSameCountLexicalDrift", func(t *testing.T) { runPostgresProjectRepairsSameCountLexicalDrift(t, dsn) })
+	t.Run("ProjectModelChangeReembeds", func(t *testing.T) { runPostgresProjectModelChangeReembeds(t, dsn) })
+	t.Run("ProjectProviderFailureDoesNotPublishPartialVectors", func(t *testing.T) { runPostgresProjectProviderFailure(t, dsn) })
 	t.Run("RebuildDeadline", func(t *testing.T) { runPostgresRebuildDeadline(t, dsn) })
 	t.Run("InferenceFreeProjectionCancellation", func(t *testing.T) { runPostgresInferenceFreeProjectionCancellation(t, dsn) })
 	t.Run("EmbeddingPersistenceAndScope", func(t *testing.T) { runPostgresEmbeddingPersistenceAndScope(t, dsn) })
