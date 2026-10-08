@@ -1,5 +1,7 @@
 # Knowl
 
+<a href="design/web-ui/assets/knowl-logo.png"><img src="design/web-ui/assets/knowl-logo.png" alt="Knowl owl mascot logo" width="160" align="right"></a>
+
 [![test](https://github.com/baldaworks/knowl/actions/workflows/test.yml/badge.svg)](https://github.com/baldaworks/knowl/actions/workflows/test.yml)
 [![lint](https://github.com/baldaworks/knowl/actions/workflows/lint.yml/badge.svg)](https://github.com/baldaworks/knowl/actions/workflows/lint.yml)
 [![release](https://img.shields.io/github/v/release/baldaworks/knowl)](https://github.com/baldaworks/knowl/releases/latest)
