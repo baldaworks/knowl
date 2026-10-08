@@ -1,6 +1,8 @@
 # Knowl
 
-<a href="design/web-ui/assets/knowl-logo.png"><img src="design/web-ui/assets/knowl-logo.png" alt="Knowl owl mascot logo" width="160" align="right"></a>
+<a href="design/web-ui/assets/knowl-logo.png">
+  <img src="internal/webui/assets/favicon.png" alt="Knowl owl mascot sticker" width="144" align="right">
+</a>
 
 [![test](https://github.com/baldaworks/knowl/actions/workflows/test.yml/badge.svg)](https://github.com/baldaworks/knowl/actions/workflows/test.yml)
 [![lint](https://github.com/baldaworks/knowl/actions/workflows/lint.yml/badge.svg)](https://github.com/baldaworks/knowl/actions/workflows/lint.yml)
