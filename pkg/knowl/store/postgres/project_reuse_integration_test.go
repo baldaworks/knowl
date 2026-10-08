@@ -4,8 +4,10 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -163,5 +165,121 @@ func runPostgresProjectProviderFailure(t *testing.T, dsn string) {
 	}
 	if count != 0 {
 		t.Fatalf("failed Project left %d dense chunks", count)
+	}
+}
+
+func runPostgresProjectRejectsConcurrentLexicalReplacement(t *testing.T, dsn string) {
+	runPostgresProjectRejectsConcurrentRewrite(t, dsn, false)
+}
+
+func runPostgresProjectRejectsConcurrentSameDigestRewrite(t *testing.T, dsn string) {
+	runPostgresProjectRejectsConcurrentRewrite(t, dsn, true)
+}
+
+func runPostgresProjectRejectsConcurrentRewrite(t *testing.T, dsn string, sameDigest bool) {
+	store, _, snapshot := projectFixture(t, dsn)
+	peer, err := Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	changed := snapshot
+	changed.Pages = append([]knowl.PageSnapshot(nil), snapshot.Pages...)
+	changed.Pages[0].Digest = "a-2"
+	changed.Pages[0].Body = "# Alpha\nPeer section"
+	replacementDigest := snapshotDigest(changed)
+	if sameDigest {
+		replacementDigest = snapshotDigest(snapshot)
+	}
+	tx, err := peer.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockEmbeddingScope(t.Context(), tx, snapshot.Scope); err != nil {
+		t.Fatal(err)
+	}
+	// The peer has begun replacing the lexical authority while Project still
+	// sees the old committed state. It publishes before Project gets the lock.
+	if _, err := tx.ExecContext(t.Context(), `UPDATE knowl_projection_state SET snapshot_digest=$1 WHERE scope=$2`, replacementDigest, snapshot.Scope); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- store.Project(ctx, knowl.ContentCommit{Snapshot: snapshot}) }()
+	waitForProjectionLock(t, ctx, peer, done)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	assertEmbeddingFailure(t, <-done, knowl.RetrievalProjectionDrift)
+	status, err := peer.ProjectionStatus(t.Context(), snapshot.Scope)
+	if err != nil || status.SnapshotDigest != replacementDigest {
+		t.Fatalf("concurrent lexical authority=%+v, err=%v", status, err)
+	}
+}
+
+func runPostgresProjectCancelsWhileWaitingForScopeLock(t *testing.T, dsn string) {
+	store, _, snapshot := projectFixture(t, dsn)
+	peer, err := Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	tx, err := peer.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockEmbeddingScope(t.Context(), tx, snapshot.Scope); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	err = store.Project(ctx, knowl.ContentCommit{Snapshot: snapshot})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Project cancellation error=%v", err)
+	}
+	status, err := peer.ProjectionStatus(t.Context(), snapshot.Scope)
+	if err != nil || status.SnapshotDigest != snapshotDigest(snapshot) {
+		t.Fatalf("canceled Project changed lexical authority=%+v, err=%v", status, err)
+	}
+}
+
+func runPostgresProjectRejectsConcurrentFirstProjection(t *testing.T, dsn string) {
+	provider := &recordingProjectProvider{}
+	store, err := Open(t.Context(), dsn, app.EmbeddingOptions{Provider: provider, Space: app.EmbeddingSpace{Model: "project-fixture", Revision: "1", Dimensions: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	peer, err := Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	snapshot := knowl.WorkspaceSnapshot{Scope: knowl.ScopeRef("project_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())), SchemaDigest: embeddingTestDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: "wiki/a.md", Digest: "a-1", Title: "A", Body: "# A\nText"}}}
+	tx, err := peer.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockEmbeddingScope(t.Context(), tx, snapshot.Scope); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowl_projection_state(scope,schema_digest,snapshot_digest,page_count,link_count,ready_at) VALUES($1,$2,$3,0,0,now())`, snapshot.Scope, snapshot.SchemaDigest, snapshotDigest(snapshot)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- store.Project(ctx, knowl.ContentCommit{Snapshot: snapshot}) }()
+	waitForProjectionLock(t, ctx, peer, done)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	assertEmbeddingFailure(t, <-done, knowl.RetrievalProjectionDrift)
+	if len(provider.inputs) != 0 {
+		t.Fatalf("rejected first Project inferred %d inputs", len(provider.inputs))
 	}
 }

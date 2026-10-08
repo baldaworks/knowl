@@ -21,14 +21,14 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	}
 	ctx, cancel := context.WithTimeout(ctx, hybrid.RebuildTimeout)
 	defer cancel()
-	previous, chunks, pages, err := store.previousProjection(ctx, snapshot.Scope)
+	prior, err := store.previousProjection(ctx, snapshot.Scope)
 	if err != nil {
 		return err
 	}
-	if err := store.rebuildLexical(ctx, snapshot); err != nil {
+	if err := store.rebuildLexicalIfCurrent(ctx, snapshot, prior.lexical); err != nil {
 		return err
 	}
-	state, staged, err := store.embedding.BuildWithReuse(ctx, snapshot, snapshotDigest(snapshot), previous, chunks, pages)
+	state, staged, err := store.embedding.BuildWithReuse(ctx, snapshot, snapshotDigest(snapshot), prior.state, prior.chunks, prior.pages)
 	if err != nil {
 		report, failure := store.embedding.Failure(ctx, store.embedding.Report(), err)
 		if ctx.Err() != nil || report.Reason == knowl.RetrievalInvalidInput || report.Reason == knowl.RetrievalInvalidConfiguration {
@@ -42,55 +42,74 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 
 // previousProjection reads the old lexical pages and dense state from one
 // consistent snapshot. Inference starts only after the transaction is closed.
-func (store *Store) previousProjection(ctx context.Context, scope knowl.ScopeRef) (*hybrid.ProjectionState, []hybrid.Chunk, []knowl.PageSnapshot, error) {
+type lexicalObservation struct {
+	exists  bool
+	digest  string
+	version string
+}
+
+type priorProjection struct {
+	lexical lexicalObservation
+	state   *hybrid.ProjectionState
+	chunks  []hybrid.Chunk
+	pages   []knowl.PageSnapshot
+}
+
+func (store *Store) previousProjection(ctx context.Context, scope knowl.ScopeRef) (priorProjection, error) {
+	var prior priorProjection
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
-		return nil, nil, nil, err
+		return prior, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	lexical, err := projectionStatusUsing(ctx, tx, scope)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, nil, ctx.Err()
+			return prior, ctx.Err()
 		}
 		if errors.Is(err, ErrProjectionNotReady) {
-			return nil, nil, nil, nil
+			return prior, nil
 		}
-		return nil, nil, nil, err
+		return prior, err
+	}
+	prior.lexical = lexicalObservation{exists: true, digest: lexical.SnapshotDigest}
+	if err := tx.QueryRowContext(ctx, `SELECT xmin::text FROM knowl_projection_state WHERE scope=$1`, scope).Scan(&prior.lexical.version); err != nil {
+		return priorProjection{}, err
 	}
 	healthy, err := lexicalProjectionHealthyTx(ctx, tx, lexical)
 	if err != nil {
-		return nil, nil, nil, err
+		return priorProjection{}, err
 	}
 	if !healthy {
-		return nil, nil, nil, nil
+		return prior, nil
 	}
 	state, chunks, err := embeddingProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, nil, ctx.Err()
+			return priorProjection{}, ctx.Err()
 		}
 		var failure *app.EmbeddingError
 		if errors.As(err, &failure) {
-			return nil, nil, nil, nil
+			return prior, nil
 		}
-		return nil, nil, nil, err
+		return priorProjection{}, err
 	}
 	if state.Mode != knowl.RetrievalHybrid {
-		return nil, nil, nil, nil
+		return prior, nil
 	}
 	pages, err := previousPagesTx(ctx, tx, scope)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, nil, ctx.Err()
+			return priorProjection{}, ctx.Err()
 		}
 		var failure *app.EmbeddingError
 		if errors.As(err, &failure) {
-			return nil, nil, nil, nil
+			return prior, nil
 		}
-		return nil, nil, nil, err
+		return priorProjection{}, err
 	}
-	return &state, chunks, pages, nil
+	prior.state, prior.chunks, prior.pages = &state, chunks, pages
+	return prior, nil
 }
 
 func lexicalProjectionHealthyTx(ctx context.Context, tx *sql.Tx, state ProjectionState) (bool, error) {

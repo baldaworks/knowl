@@ -23,6 +23,14 @@ func (store *Store) Project(ctx context.Context, commit knowl.ContentCommit) err
 
 // Rebuild recreates all projections from canonical Markdown snapshots.
 func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
+	return store.rebuildLexicalChecked(ctx, snapshot, nil)
+}
+
+func (store *Store) rebuildLexicalIfCurrent(ctx context.Context, snapshot knowl.WorkspaceSnapshot, observed lexicalObservation) error {
+	return store.rebuildLexicalChecked(ctx, snapshot, &observed)
+}
+
+func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.WorkspaceSnapshot, observed *lexicalObservation) error {
 	if err := validateScope(snapshot.Scope); err != nil {
 		return err
 	}
@@ -38,6 +46,20 @@ func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.Workspace
 
 	if err := lockEmbeddingScope(ctx, tx, snapshot.Scope); err != nil {
 		return err
+	}
+	if observed != nil {
+		var current lexicalObservation
+		err := tx.QueryRowContext(ctx, `SELECT snapshot_digest,xmin::text FROM knowl_projection_state WHERE scope=$1`, snapshot.Scope).Scan(&current.digest, &current.version)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if observed.exists {
+				return embeddingFailure(knowl.RetrievalProjectionDrift)
+			}
+		case err != nil:
+			return err
+		case !observed.exists || observed.digest != current.digest || observed.version != current.version:
+			return embeddingFailure(knowl.RetrievalProjectionDrift)
+		}
 	}
 	for _, statement := range []string{
 		"DELETE FROM knowl_links WHERE scope = $1",
