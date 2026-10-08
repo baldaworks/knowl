@@ -63,11 +63,12 @@ func (engine *Engine) Build(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 }
 
 // BuildWithReuse accepts only a complete prior projection in the current model
-// space. Invalid prior state falls back to full inference. The caller must also
-// validate the prior projection against its lexical snapshot.
-func (engine *Engine) BuildWithReuse(ctx context.Context, snapshot knowl.WorkspaceSnapshot, digest string, previous *ProjectionState, previousChunks []Chunk) (ProjectionState, []Chunk, error) {
+// space whose chunk hashes match the prior lexical pages. Invalid prior state
+// falls back to full inference. The caller must read prior pages, state and
+// chunks in one consistent transaction and verify their snapshot identity.
+func (engine *Engine) BuildWithReuse(ctx context.Context, snapshot knowl.WorkspaceSnapshot, digest string, previous *ProjectionState, previousChunks []Chunk, previousPages []knowl.PageSnapshot) (ProjectionState, []Chunk, error) {
 	var reusable map[knowl.PageID]map[string][]float32
-	if previous != nil && previous.Space == engine.Fingerprint && previous.Dimensions == engine.Space.Dimensions && previous.Mode == knowl.RetrievalHybrid && ValidateProjection(ctx, *previous, previousChunks) == nil {
+	if previous != nil && previous.Space == engine.Fingerprint && previous.Dimensions == engine.Space.Dimensions && previous.Mode == knowl.RetrievalHybrid && ValidateProjection(ctx, *previous, previousChunks) == nil && engine.authenticatedPrevious(ctx, *previous, previousChunks, previousPages) {
 		reusable = make(map[knowl.PageID]map[string][]float32)
 		for _, chunk := range previousChunks {
 			if reusable[chunk.PageID] == nil {
@@ -77,6 +78,52 @@ func (engine *Engine) BuildWithReuse(ctx context.Context, snapshot knowl.Workspa
 		}
 	}
 	return engine.build(ctx, snapshot, digest, reusable)
+}
+
+func (engine *Engine) authenticatedPrevious(ctx context.Context, state ProjectionState, chunks []Chunk, pages []knowl.PageSnapshot) bool {
+	coverage, err := DecodeCoverage(state.Coverage)
+	if err != nil {
+		return false
+	}
+	expected := make(map[knowl.PageID]PageCoverage, len(coverage))
+	for _, page := range coverage {
+		expected[page.PageID] = page
+	}
+	inputHashes := make(map[knowl.PageID][]string, len(coverage))
+	for _, page := range pages {
+		if err := ctx.Err(); err != nil {
+			return false
+		}
+		if !projectionmeta.SemanticPage(page) {
+			continue
+		}
+		manifest, found := expected[page.ID]
+		if !found || manifest.PageDigest != page.Digest {
+			return false
+		}
+		if _, duplicate := inputHashes[page.ID]; duplicate {
+			return false
+		}
+		prepared, err := PreparePage(ctx, page, engine.Space)
+		if err != nil || len(prepared.Inputs) != manifest.Chunks {
+			return false
+		}
+		hashes := make([]string, len(prepared.Inputs))
+		for i, input := range prepared.Inputs {
+			hash := sha256.Sum256([]byte(input))
+			hashes[i] = hex.EncodeToString(hash[:])
+		}
+		inputHashes[page.ID] = hashes
+	}
+	if len(inputHashes) != len(coverage) {
+		return false
+	}
+	for _, chunk := range chunks {
+		if chunk.ContentHash != inputHashes[chunk.PageID][chunk.Ordinal] {
+			return false
+		}
+	}
+	return true
 }
 
 func (engine *Engine) build(ctx context.Context, snapshot knowl.WorkspaceSnapshot, digest string, reusable map[knowl.PageID]map[string][]float32) (ProjectionState, []Chunk, error) {

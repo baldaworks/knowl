@@ -37,9 +37,10 @@ func reuseFixture(t *testing.T, body string) (*Engine, *reuseProvider, knowl.Wor
 
 func TestBuildWithReusePreservesCurrentOrdinalsAndDigests(t *testing.T) {
 	engine, provider, snapshot, previous, old := reuseFixture(t, "# A\nalpha\n\n# B\nbeta\n")
+	previousPages := append([]knowl.PageSnapshot(nil), snapshot.Pages...)
 	snapshot.Pages[0].Digest = strings.Repeat("d", 64)
 	snapshot.Pages[0].Body = "# New\nnew\n\n# B\nbeta\n\n# A\nalpha\n"
-	state, chunks, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &previous, old)
+	state, chunks, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &previous, old, previousPages)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,13 +62,14 @@ func TestBuildWithReusePreservesCurrentOrdinalsAndDigests(t *testing.T) {
 
 func TestBuildWithReuseSkipsUnchangedAndEmbedsChangedContext(t *testing.T) {
 	engine, provider, snapshot, previous, old := reuseFixture(t, "# A\nalpha\n\n# B\nbeta\n")
-	_, same, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("d", 64), &previous, old)
+	previousPages := append([]knowl.PageSnapshot(nil), snapshot.Pages...)
+	_, same, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("d", 64), &previous, old, previousPages)
 	if err != nil || len(provider.inputs) != 0 || !reflect.DeepEqual(old, same) {
 		t.Fatalf("unchanged reuse inputs=%d err=%v", len(provider.inputs), err)
 	}
 	snapshot.Pages[0].Body = "# Renamed\nalpha\n\n# B\nbeta\n"
 	snapshot.Pages[0].Digest = strings.Repeat("e", 64)
-	_, changed, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("f", 64), &previous, old)
+	_, changed, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("f", 64), &previous, old, previousPages)
 	if err != nil || len(provider.inputs) != 1 || changed[0].ContentHash == old[0].ContentHash || changed[1].ContentHash != old[1].ContentHash {
 		t.Fatalf("heading edit inputs=%d err=%v", len(provider.inputs), err)
 	}
@@ -78,12 +80,12 @@ func TestBuildWithReuseSharesValidDuplicateInput(t *testing.T) {
 	if len(old) != 2 || old[0].ContentHash != old[1].ContentHash {
 		t.Fatalf("fixture lacks equal inputs: %v", old)
 	}
-	_, chunks, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("d", 64), &previous, old[:1])
+	_, chunks, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("d", 64), &previous, old[:1], snapshot.Pages)
 	if err != nil || len(provider.inputs) != 2 {
 		t.Fatalf("incomplete prior failed full inference: inputs=%d chunks=%d err=%v", len(provider.inputs), len(chunks), err)
 	}
 	provider.inputs = nil
-	_, chunks, err = engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &previous, old)
+	_, chunks, err = engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &previous, old, snapshot.Pages)
 	if err != nil || len(provider.inputs) != 0 || len(chunks) != 2 {
 		t.Fatalf("duplicate reuse inputs=%d chunks=%d err=%v", len(provider.inputs), len(chunks), err)
 	}
@@ -101,18 +103,52 @@ func TestBuildWithReuseRejectsMismatchedOrCorruptPriorState(t *testing.T) {
 	} {
 		engine, provider, snapshot, state, chunks := reuseFixture(t, "# A\nalpha\n")
 		mutate(&state, chunks)
-		_, _, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &state, chunks)
+		_, _, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &state, chunks, snapshot.Pages)
 		if err != nil || len(provider.inputs) != 1 {
 			t.Fatalf("unsafe prior reuse inputs=%d err=%v", len(provider.inputs), err)
 		}
 	}
 }
 
+func TestBuildWithReuseRejectsPlausibleButFalsePriorHashes(t *testing.T) {
+	engine, provider, snapshot, previous, old := reuseFixture(t, "# A\nalpha\n\n# B\nbeta\n")
+	old[0].ContentHash, old[1].ContentHash = old[1].ContentHash, old[0].ContentHash
+	if err := ValidateProjection(t.Context(), previous, old); err != nil {
+		t.Fatalf("fixture must pass structural validation: %v", err)
+	}
+	_, _, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &previous, old, snapshot.Pages)
+	if err != nil || len(provider.inputs) != 2 {
+		t.Fatalf("false prior hashes reused: inputs=%d err=%v", len(provider.inputs), err)
+	}
+}
+
+func TestBuildWithReuseRequiresMatchingPriorLexicalPages(t *testing.T) {
+	for _, priorPages := range []func([]knowl.PageSnapshot) []knowl.PageSnapshot{
+		func([]knowl.PageSnapshot) []knowl.PageSnapshot { return nil },
+		func(pages []knowl.PageSnapshot) []knowl.PageSnapshot {
+			pages[0].Body = "# A\nchanged\n"
+			return pages
+		},
+		func(pages []knowl.PageSnapshot) []knowl.PageSnapshot {
+			pages[0].Digest = strings.Repeat("d", 64)
+			return pages
+		},
+	} {
+		engine, provider, snapshot, previous, chunks := reuseFixture(t, "# A\nalpha\n")
+		oldPages := priorPages(append([]knowl.PageSnapshot(nil), snapshot.Pages...))
+		_, _, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &previous, chunks, oldPages)
+		if err != nil || len(provider.inputs) != 1 {
+			t.Fatalf("unverified lexical pages reused: inputs=%d err=%v", len(provider.inputs), err)
+		}
+	}
+}
+
 func TestBuildWithReusePropagatesProviderFailureWithoutPartialChunks(t *testing.T) {
 	engine, _, snapshot, state, chunks := reuseFixture(t, "# A\nalpha\n")
+	previousPages := append([]knowl.PageSnapshot(nil), snapshot.Pages...)
 	engine.Provider = failingReuseProvider{}
 	snapshot.Pages[0].Body = "# A\nchanged\n"
-	_, result, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &state, chunks)
+	_, result, err := engine.BuildWithReuse(t.Context(), snapshot, strings.Repeat("e", 64), &state, chunks, previousPages)
 	var classified *app.EmbeddingError
 	if !errors.As(err, &classified) || classified.Code != knowl.RetrievalUnavailable || result != nil {
 		t.Fatalf("partial failure chunks=%v err=%v", result, err)
