@@ -39,7 +39,8 @@ type PreparedText struct {
 	OmittedChunks int
 }
 
-// TextWindow identifies one input's span in normalized, trimmed semantic text.
+// TextWindow identifies one input's source span: rune positions for generic
+// text preparation, or byte positions in SemanticFields.Body for page inputs.
 type TextWindow struct{ Start, End int }
 
 // PrepareText uses original NFC Unicode, fixed progress and paragraph/space
