@@ -38,10 +38,11 @@ func (provider *gatedProjectionProvider) Embed(ctx context.Context, inputs []str
 type recordingProjectionProvider struct{ inputs []string }
 
 const (
-	projectDigestA1  = "a-1"
-	projectDigestA2  = "a-2"
-	projectPathA     = "wiki/a.md"
-	projectBodyAlpha = "# Alpha\nFirst section"
+	projectDigestA1    = "a-1"
+	projectDigestA2    = "a-2"
+	projectPathA       = "wiki/a.md"
+	projectBodyAlpha   = "# Alpha\nFirst section"
+	projectBodyUpdated = "# Alpha\nUpdated section"
 )
 
 func (provider *recordingProjectionProvider) Embed(_ context.Context, inputs []string) ([][]float32, error) {
@@ -270,7 +271,7 @@ func TestSQLiteProjectRejectsPeerSameDigestReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot.Pages[0].Digest = projectDigestA2
-	snapshot.Pages[0].Body = "# Alpha\nUpdated section"
+	snapshot.Pages[0].Body = projectBodyUpdated
 	provider.block = true
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -295,6 +296,62 @@ func TestSQLiteProjectRejectsPeerSameDigestReplacement(t *testing.T) {
 	}
 }
 
+func TestSQLiteProjectIgnoresUnrelatedPeerWrites(t *testing.T) {
+	for _, kind := range []string{"other scope", "operation"} {
+		t.Run(kind, func(t *testing.T) {
+			path := t.TempDir() + "/unrelated.sqlite"
+			provider := &gatedProjectionProvider{entered: make(chan struct{}), release: make(chan struct{}), vector: []float32{1, 0}}
+			space := app.EmbeddingSpace{Model: testFixture, Revision: "1", Dimensions: 2}
+			store, err := Open(t.Context(), path, app.EmbeddingOptions{Provider: provider, Space: space})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			peer, err := Open(t.Context(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = peer.Close() })
+			snapshot := knowl.WorkspaceSnapshot{Scope: "active", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha}}}
+			if err := store.Rebuild(t.Context(), snapshot); err != nil {
+				t.Fatal(err)
+			}
+			snapshot.Pages[0].Digest = projectDigestA2
+			snapshot.Pages[0].Body = projectBodyUpdated
+			provider.block = true
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- store.Project(ctx, knowl.ContentCommit{Snapshot: snapshot}) }()
+			select {
+			case <-provider.entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			switch kind {
+			case "other scope":
+				foreign := snapshot
+				foreign.Scope = "foreign"
+				if err := peer.Rebuild(ctx, foreign); err != nil {
+					t.Fatal(err)
+				}
+			case "operation":
+				key, meta := executionFixture("foreign", "unrelated", time.Unix(1, 0).UTC())
+				if _, err := peer.Reserve(ctx, key, meta); err != nil {
+					t.Fatal(err)
+				}
+			}
+			close(provider.release)
+			if err := <-done; err != nil {
+				t.Fatalf("unrelated peer write rejected Project: %v", err)
+			}
+			if err := store.CheckProjection(t.Context(), snapshot); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestSQLiteProjectRejectsPeerReplacementBeforeLexicalWrite(t *testing.T) {
 	path := t.TempDir() + "/prior.sqlite"
 	store, err := Open(t.Context(), path)
@@ -311,19 +368,42 @@ func TestSQLiteProjectRejectsPeerReplacementBeforeLexicalWrite(t *testing.T) {
 	if err := store.Rebuild(t.Context(), snapshot); err != nil {
 		t.Fatal(err)
 	}
-	version, err := openProjectionVersion(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer version.close()
-	observed, err := version.current(t.Context())
+	observed, err := readProjectionIdentity(t.Context(), store.db, snapshot.Scope)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := peer.Rebuild(t.Context(), snapshot); err != nil {
 		t.Fatal(err)
 	}
-	assertEmbeddingFailure(t, store.rebuildLexicalChecked(t.Context(), snapshot, version, observed), knowl.RetrievalProjectionDrift)
+	var nonce int64
+	assertEmbeddingFailure(t, store.rebuildLexicalChecked(t.Context(), snapshot, &observed, &nonce), knowl.RetrievalProjectionDrift)
+	if err := peer.CheckProjection(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteProjectRejectsPeerFirstProjection(t *testing.T) {
+	path := t.TempDir() + "/first.sqlite"
+	store, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	peer, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	snapshot := knowl.WorkspaceSnapshot{Scope: "first", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha}}}
+	observed, err := readProjectionIdentity(t.Context(), store.db, snapshot.Scope)
+	if err != nil || observed.exists {
+		t.Fatalf("first projection identity=%+v err=%v", observed, err)
+	}
+	if err := peer.Rebuild(t.Context(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	var nonce int64
+	assertEmbeddingFailure(t, store.rebuildLexicalChecked(t.Context(), snapshot, &observed, &nonce), knowl.RetrievalProjectionDrift)
 	if err := peer.CheckProjection(t.Context(), snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +422,7 @@ func TestSQLiteProjectCancellationDuringInference(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot.Pages[0].Digest = projectDigestA2
-	snapshot.Pages[0].Body = "# Alpha\nUpdated section"
+	snapshot.Pages[0].Body = projectBodyUpdated
 	provider.block = true
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
