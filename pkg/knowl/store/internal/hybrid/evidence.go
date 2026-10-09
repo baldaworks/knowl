@@ -4,15 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"sort"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
-	"golang.org/x/text/unicode/norm"
 )
 
 // OriginalEvidence returns a bounded excerpt of the actual winning page window.
@@ -29,71 +25,61 @@ func OriginalEvidence(ctx context.Context, fields SemanticFields, space app.Embe
 	if hex.EncodeToString(digest[:]) != chunk.ContentHash {
 		return "", failure(knowl.RetrievalProjectionDrift)
 	}
-	parts := []string{fields.Title, fields.Tags, fields.Description, fields.Body}
-	raw := strings.Join(parts, "\n\n")
 	span := prepared.Windows[chunk.Ordinal]
-	start, end, ok := originalWindow(raw, span)
-	if !ok {
+	if span.Start < 0 || span.End < span.Start || span.End > len(fields.Body) {
 		return "", failure(knowl.RetrievalProjectionDrift)
 	}
-	selected := make([]string, 0, len(parts))
-	tagOnly := true
-	position := 0
-	for index, part := range parts {
-		partEnd := position + len(part)
-		if left, right := max(start, position), min(end, partEnd); left < right {
-			selected = append(selected, part[left-position:right-position])
-			tagOnly = tagOnly && index == 1
+	original := fields.Body[span.Start:span.End]
+	section := evidenceSection(fields.Body, span)
+	if section != nil {
+		parts := make([]string, 0, len(section.ancestry)+2)
+		if fields.Title != "" {
+			parts = append(parts, fields.Title)
 		}
-		position = partEnd + 2
+		for _, heading := range section.ancestry {
+			parts = append(parts, fields.Body[heading.start:heading.end])
+		}
+		if original != "" && (section.heading.start != span.Start || section.heading.end != span.End) {
+			parts = append(parts, original)
+		}
+		original = strings.Join(parts, "\n\n")
+	} else if span.Start == span.End {
+		parts := []string{fields.Title}
+		if fields.OKF != nil {
+			parts = append(parts, fields.OKF.Type, strings.Join(fields.OKF.Tags, "\n"), fields.OKF.Description)
+		} else {
+			parts = append(parts, fields.Tags, fields.Description)
+		}
+		selected := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if part != "" {
+				selected = append(selected, part)
+			}
+		}
+		original = strings.Join(selected, "\n\n")
 	}
-	original := strings.Join(selected, "\n\n")
-	if tagOnly && len(selected) > 0 {
-		original = "tag: " + original
+	if characters <= 0 {
+		characters = lexical.DefaultSnippetRunes
 	}
-	return lexical.Excerpt(original, "", "", nil, characters), nil
+	characters = min(characters, lexical.MaxSnippetRunes)
+	runes := []rune(original)
+	return string(runes[:min(len(runes), characters)]), nil
 }
 
-func originalWindow(raw string, window TextWindow) (int, int, bool) {
-	pre := strings.ReplaceAll(raw, "\r\n", "\n")
-	normalized := norm.NFC.String(pre)
-	leading := utf8.RuneCountInString(normalized) - utf8.RuneCountInString(strings.TrimLeftFunc(normalized, unicode.IsSpace))
-	start, end := leading+window.Start, leading+window.End
-	if start < 0 || end <= start || end > utf8.RuneCountInString(normalized) {
-		return 0, 0, false
-	}
-	// Each collapsed CRLF adds one byte to positions in the original string.
-	crlf := make([]int, 0)
-	for i, j := 0, 0; i < len(raw); {
-		if i+1 < len(raw) && raw[i] == '\r' && raw[i+1] == '\n' {
-			crlf = append(crlf, j)
-			i += 2
-			j++
-		} else {
-			i++
-			j++
+func evidenceSection(body string, span TextWindow) *sourceSection {
+	for _, section := range parseSections(body) {
+		if section.heading.end > section.heading.start && section.heading.start == span.Start && section.heading.end == span.End {
+			return &section
+		}
+		for _, block := range section.blocks {
+			if block.start <= span.Start && span.End <= block.end {
+				return &section
+			}
+		}
+		// One input can contain consecutive blocks from this section.
+		if len(section.blocks) > 0 && section.blocks[0].start <= span.Start && span.End <= section.blocks[len(section.blocks)-1].end {
+			return &section
 		}
 	}
-	rawPosition := func(pos int) int { return pos + sort.SearchInts(crlf, pos) }
-	var iterator norm.Iter
-	iterator.InitString(norm.NFC, pre)
-	normalizedPos, rawStart, rawEnd := 0, -1, -1
-	for !iterator.Done() {
-		preStart := iterator.Pos()
-		segment := iterator.Next()
-		preEnd := iterator.Pos()
-		segmentEnd := normalizedPos + utf8.RuneCount(segment)
-		if rawStart < 0 && start < segmentEnd {
-			rawStart = rawPosition(preStart)
-		}
-		if end <= segmentEnd {
-			rawEnd = rawPosition(preEnd)
-			break
-		}
-		normalizedPos = segmentEnd
-	}
-	if rawStart < 0 || rawEnd < rawStart || rawEnd > len(raw) {
-		return 0, 0, false
-	}
-	return rawStart, rawEnd, true
+	return nil
 }

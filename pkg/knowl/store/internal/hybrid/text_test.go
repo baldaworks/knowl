@@ -81,7 +81,7 @@ func TestSemanticPageExcludesControlPagesAndUsesOriginalFields(t *testing.T) {
 	space := app.EmbeddingSpace{PassagePrefix: testPassagePrefix}
 	page := knowl.PageSnapshot{ID: "private-id", Path: "wiki/concepts/one.md", Title: "OriginalTitle", Body: "OriginalBody", SourceRefs: []string{"private-ref"}}
 	got, err := PreparePage(context.Background(), page, space)
-	if err != nil || !reflect.DeepEqual(got.Inputs, []string{testPassagePrefix + "OriginalTitle\n\n\n\n\n\nOriginalBody"}) {
+	if err != nil || !reflect.DeepEqual(got.Inputs, []string{testPassagePrefix + "OriginalTitle\nOriginalBody"}) {
 		t.Fatalf("semantic page fields=%#v %v", got, err)
 	}
 	for _, path := range []string{"wiki/index.md", "wiki/log.md", "wiki/sources/mirror.md"} {

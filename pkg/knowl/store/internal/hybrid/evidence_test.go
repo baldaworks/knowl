@@ -27,17 +27,17 @@ func TestOriginalEvidencePreservesOriginalUnicodeAndCRLF(t *testing.T) {
 	}
 }
 
-func TestOriginalEvidenceIdentifiesTagOnlyWindow(t *testing.T) {
-	fields := SemanticFields{Title: "Title", Tags: strings.Repeat("metatag ", 200)}
+func TestOriginalEvidenceCitesMetadataOnlyPage(t *testing.T) {
+	fields := SemanticFields{Title: "Title", Tags: "metatag"}
 	space := app.EmbeddingSpace{PassagePrefix: testPassagePrefix}
 	prepared, err := PreparePageFields(t.Context(), fields, space)
-	if err != nil || len(prepared.Inputs) < 2 {
+	if err != nil || len(prepared.Inputs) != 1 {
 		t.Fatalf("prepare tags: %+v %v", prepared, err)
 	}
-	ordinal := len(prepared.Inputs) - 1
+	ordinal := 0
 	hash := sha256.Sum256([]byte(prepared.Inputs[ordinal]))
 	snippet, err := OriginalEvidence(t.Context(), fields, space, Chunk{Ordinal: ordinal, ContentHash: hex.EncodeToString(hash[:])}, 80)
-	if err != nil || !strings.HasPrefix(snippet, "tag: metatag") {
+	if err != nil || !strings.Contains(snippet, "metatag") {
 		t.Fatalf("tag evidence=%q error=%v", snippet, err)
 	}
 }

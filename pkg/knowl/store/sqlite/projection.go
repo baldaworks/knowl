@@ -18,11 +18,15 @@ import (
 
 // Project indexes a canonical content commit snapshot.
 func (store *Store) Project(ctx context.Context, commit knowl.ContentCommit) error {
-	return store.Rebuild(ctx, commit.Snapshot)
+	return store.project(ctx, commit.Snapshot)
 }
 
 // Rebuild recreates all projections from canonical Markdown snapshots.
 func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
+	return store.rebuildLexicalChecked(ctx, snapshot, nil, nil)
+}
+
+func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.WorkspaceSnapshot, observed *projectionIdentity, written *int64) error {
 	if err := validateScope(snapshot.Scope); err != nil {
 		return err
 	}
@@ -36,6 +40,17 @@ func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.Workspace
 	}
 	rollback := func() { _ = tx.Rollback() }
 	defer rollback()
+	current, err := readProjectionIdentity(ctx, tx, snapshot.Scope)
+	if err != nil {
+		return err
+	}
+	if observed != nil && current != *observed {
+		return embeddingFailure(knowl.RetrievalProjectionDrift)
+	}
+	nonce, err := newProjectionIdentity(ctx, tx, current)
+	if err != nil {
+		return err
+	}
 	for _, statement := range []string{"DELETE FROM knowl_pages_fts WHERE scope = ?", "DELETE FROM knowl_links WHERE scope = ?", "DELETE FROM knowl_page_sources WHERE scope = ?", "DELETE FROM knowl_pages WHERE scope = ?", "DELETE FROM knowl_projection_state WHERE scope = ?"} {
 		var execErr error
 		_, execErr = tx.ExecContext(ctx, statement, snapshot.Scope)
@@ -122,12 +137,15 @@ func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.Workspace
 		projectedLinks++
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO knowl_projection_state (scope, schema_digest, snapshot_digest, page_count, link_count, ready_at)
-		VALUES (?, ?, ?, ?, ?, ?)`, snapshot.Scope, snapshot.SchemaDigest, snapshotDigest(snapshot), len(semanticPages), projectedLinks, now.Format(time.RFC3339Nano)); err != nil {
+		INSERT INTO knowl_projection_state (rowid, scope, schema_digest, snapshot_digest, page_count, link_count, ready_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, nonce, snapshot.Scope, snapshot.SchemaDigest, snapshotDigest(snapshot), len(semanticPages), projectedLinks, now.Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("record projection readiness: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit projection rebuild: %w", err)
+	}
+	if written != nil {
+		*written = nonce
 	}
 	return nil
 }

@@ -59,6 +59,74 @@ func New(options []app.EmbeddingOptions) (*Engine, error) {
 // Build stages complete bounded vectors outside all SQL locks. Its caller first
 // commits the lexical snapshot and later publishes this result by snapshot CAS.
 func (engine *Engine) Build(ctx context.Context, snapshot knowl.WorkspaceSnapshot, digest string) (ProjectionState, []Chunk, error) {
+	return engine.build(ctx, snapshot, digest, nil)
+}
+
+// BuildWithReuse accepts only a complete prior projection in the current model
+// space whose chunk hashes match the prior lexical pages. Invalid prior state
+// falls back to full inference. The caller must read prior pages, state and
+// chunks in one consistent transaction and verify their snapshot identity.
+func (engine *Engine) BuildWithReuse(ctx context.Context, snapshot knowl.WorkspaceSnapshot, digest string, previous *ProjectionState, previousChunks []Chunk, previousPages []knowl.PageSnapshot) (ProjectionState, []Chunk, error) {
+	var reusable map[knowl.PageID]map[string][]float32
+	if previous != nil && previous.Space == engine.Fingerprint && previous.Dimensions == engine.Space.Dimensions && previous.Mode == knowl.RetrievalHybrid && ValidateProjection(ctx, *previous, previousChunks) == nil && engine.authenticatedPrevious(ctx, *previous, previousChunks, previousPages) {
+		reusable = make(map[knowl.PageID]map[string][]float32)
+		for _, chunk := range previousChunks {
+			if reusable[chunk.PageID] == nil {
+				reusable[chunk.PageID] = make(map[string][]float32)
+			}
+			reusable[chunk.PageID][chunk.ContentHash] = chunk.Vector
+		}
+	}
+	return engine.build(ctx, snapshot, digest, reusable)
+}
+
+func (engine *Engine) authenticatedPrevious(ctx context.Context, state ProjectionState, chunks []Chunk, pages []knowl.PageSnapshot) bool {
+	coverage, err := DecodeCoverage(state.Coverage)
+	if err != nil {
+		return false
+	}
+	expected := make(map[knowl.PageID]PageCoverage, len(coverage))
+	for _, page := range coverage {
+		expected[page.PageID] = page
+	}
+	inputHashes := make(map[knowl.PageID][]string, len(coverage))
+	for _, page := range pages {
+		if err := ctx.Err(); err != nil {
+			return false
+		}
+		if !projectionmeta.SemanticPage(page) {
+			continue
+		}
+		manifest, found := expected[page.ID]
+		if !found || manifest.PageDigest != page.Digest {
+			return false
+		}
+		if _, duplicate := inputHashes[page.ID]; duplicate {
+			return false
+		}
+		prepared, err := PreparePage(ctx, page, engine.Space)
+		if err != nil || len(prepared.Inputs) != manifest.Chunks {
+			return false
+		}
+		hashes := make([]string, len(prepared.Inputs))
+		for i, input := range prepared.Inputs {
+			hash := sha256.Sum256([]byte(input))
+			hashes[i] = hex.EncodeToString(hash[:])
+		}
+		inputHashes[page.ID] = hashes
+	}
+	if len(inputHashes) != len(coverage) {
+		return false
+	}
+	for _, chunk := range chunks {
+		if chunk.ContentHash != inputHashes[chunk.PageID][chunk.Ordinal] {
+			return false
+		}
+	}
+	return true
+}
+
+func (engine *Engine) build(ctx context.Context, snapshot knowl.WorkspaceSnapshot, digest string, reusable map[knowl.PageID]map[string][]float32) (ProjectionState, []Chunk, error) {
 	state := ProjectionState{Space: engine.Fingerprint, SnapshotDigest: digest, Dimensions: engine.Space.Dimensions, Mode: knowl.RetrievalHybrid, ReadyAt: time.Now().UTC()}
 	buildCtx, cancel := context.WithTimeout(ctx, RebuildTimeout)
 	defer cancel()
@@ -100,23 +168,53 @@ func (engine *Engine) Build(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 		if len(prepared.Inputs) == 0 {
 			continue
 		}
-		for start := 0; start < len(prepared.Inputs); start += EmbeddingBatchChunks {
-			end := min(start+EmbeddingBatchChunks, len(prepared.Inputs))
-			vectors, err := engine.Provider.Embed(buildCtx, prepared.Inputs[start:end])
+		pendingInputs := make([]string, 0, EmbeddingBatchChunks)
+		pendingOrdinals := make([]int, 0, EmbeddingBatchChunks)
+		pageChunks := make([]Chunk, len(prepared.Inputs))
+		flush := func() error {
+			if len(pendingInputs) == 0 {
+				return nil
+			}
+			vectors, err := engine.Provider.Embed(buildCtx, pendingInputs)
 			if err != nil {
+				return err
+			}
+			if len(vectors) != len(pendingInputs) {
+				return failure(knowl.RetrievalInvalidResponse)
+			}
+			for i, ordinal := range pendingOrdinals {
+				if err := validateVector(vectors[i], engine.Space.Dimensions); err != nil {
+					return err
+				}
+				pageChunks[ordinal].Vector = vectors[i]
+			}
+			pendingInputs = pendingInputs[:0]
+			pendingOrdinals = pendingOrdinals[:0]
+			return nil
+		}
+		for ordinal, input := range prepared.Inputs {
+			if err := buildCtx.Err(); err != nil {
 				return state, nil, err
 			}
-			if len(vectors) != end-start {
-				return state, nil, failure(knowl.RetrievalInvalidResponse)
+			hash := sha256.Sum256([]byte(input))
+			contentHash := hex.EncodeToString(hash[:])
+			pageChunks[ordinal] = Chunk{PageID: page.ID, PageDigest: page.Digest, Ordinal: ordinal, ContentHash: contentHash}
+			if vector, found := reusable[page.ID][contentHash]; found {
+				pageChunks[ordinal].Vector = append([]float32(nil), vector...)
+				continue
 			}
-			for ordinal := start; ordinal < end; ordinal++ {
-				if err := validateVector(vectors[ordinal-start], engine.Space.Dimensions); err != nil {
+			pendingInputs = append(pendingInputs, input)
+			pendingOrdinals = append(pendingOrdinals, ordinal)
+			if len(pendingInputs) == EmbeddingBatchChunks {
+				if err := flush(); err != nil {
 					return state, nil, err
 				}
-				hash := sha256.Sum256([]byte(prepared.Inputs[ordinal]))
-				chunks = append(chunks, Chunk{PageID: page.ID, PageDigest: page.Digest, Ordinal: ordinal, ContentHash: hex.EncodeToString(hash[:]), Vector: vectors[ordinal-start]})
 			}
 		}
+		if err := flush(); err != nil {
+			return state, nil, err
+		}
+		chunks = append(chunks, pageChunks...)
 	}
 	state.ChunkCount = len(chunks)
 	if err := ctx.Err(); err != nil {
