@@ -65,7 +65,7 @@ required prefixes and server truncation disabled.
 | Request | At most 16 inputs, 2,048 UTF-8 bytes each including prefix, 64 KiB serialized body |
 | Response | At most 1 MiB; complete unique indices, exact model/dimensions, finite nonzero normalized vectors |
 | Inference | 10-second request bound or earlier caller deadline; four concurrent client requests, no hidden retry |
-| Semantic input | NFC/original case; 384 runes per chunk, 64 overlap; full page text within projection bounds, four chunks/query or source signals |
+| Semantic input | Markdown/OKF pages: heading sections, up to 384 runes per input, split at block boundaries; queries and source signals: up to four 384-rune windows with 64-rune overlap |
 | Projection | At most 8,192 chunks, 1 MiB of page coverage metadata and 64 MiB total per scope; 15-minute rebuild or earlier caller deadline |
 
 Rune limits are not tokenizer limits. The service must reject token overflow
@@ -90,10 +90,20 @@ identifies its originating work attempt; terminal/legacy replay does not invent
 or replace historical reports. Reports omit text, endpoint URLs, credentials and
 upstream error bodies. Public transport exposes only effective mode and reason.
 
-A rebuild replaces lexical state first, then generates full-page vectors in
-batches of at most 16 without holding SQL locks. Complete dense publication
-checks the canonical snapshot and every page's expected chunk count again;
-concurrent change discards the stale build. A classified failure saves degraded
+A projection refresh after source synchronization or a canonical edit updates
+lexical search, links and source provenance. For Markdown and OKF pages, dense
+inputs follow document sections and their heading ancestry; long sections split
+at block boundaries, and an oversized block splits into bounded pieces. The
+title and semantic metadata accompany the page inputs; dense citations retain
+the original document text. The projection reuses a prior vector only when its
+model space, complete prior state and prepared input match. An unchanged
+snapshot or a source-only revision therefore needs no new page embeddings;
+changed sections require new embeddings.
+
+An explicit rebuild replaces lexical state and computes every page vector again
+in batches of at most 16 without holding SQL locks during inference. Dense
+publication checks the current snapshot and complete page coverage; a
+conflicting update discards a stale build. A classified failure saves degraded
 state even under strict policy. With lexical fallback, startup may be ready
 while semantic retrieval is degraded; `/readyz` alone is not a hybrid guarantee.
 Read the retrieval status. Invalid input and caller cancellation never return
@@ -102,10 +112,12 @@ successful fallback.
 Queries never trigger a rebuild or download a model. After repairing a degraded
 service, restart Knowl to retry the projection once during startup. Embedded
 applications can call `knowl.RebuildProjection(ctx, config, snapshot)` explicitly.
-Changing model/revision/dimensions/prefixes requires a complete projection rebuild
-and changes maintenance identity. A strict projection error can occur after a
-canonical commit: repair the derived projection, preserving the committed
-facts and raw evidence.
+Changing model/revision/dimensions/prefixes requires fresh embeddings for the
+new model space and changes maintenance identity. The structured page input
+version also changes model-space identity: existing dense state is rebuilt once
+on startup before later projections can reuse unchanged inputs. A strict
+projection error can occur after a canonical commit: repair the derived
+projection, preserving the committed facts and raw evidence.
 
 Migration 16 adds disposable vector state and bounded operation reports in both
 stores. Migration 21 expands the ordinal range and adds a bounded page coverage
