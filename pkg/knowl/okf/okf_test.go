@@ -2,6 +2,7 @@ package okf_test
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -124,8 +125,7 @@ Use the sanctioned query.
 	if err != nil {
 		t.Fatalf("ParseConcept(rendered) error = %v", err)
 	}
-	if roundTrip.Body != document.Body || roundTrip.Metadata.Type != metadata.Type ||
-		roundTrip.Metadata.Extensions["producer_extension"] == nil || len(roundTrip.Metadata.Verified) != 1 {
+	if !reflect.DeepEqual(roundTrip, document) {
 		t.Fatalf("semantic round trip failed: %#v", roundTrip)
 	}
 }
@@ -274,5 +274,57 @@ func assertViolation(t *testing.T, err error, path string, rule okf.Rule) {
 	}
 	if violation.Path != path || violation.Rule != rule {
 		t.Fatalf("violation = %#v; want path %q rule %q", violation, path, rule)
+	}
+}
+
+func TestOptionalMetadataConformance(t *testing.T) {
+	t.Parallel()
+	for _, fields := range []string{
+		"type: Reference\n",
+		"type: Future Type\nproducer: {enabled: true}\n",
+		"type: Reference\ngenerated: {by: agent:test}\n",
+		"type: Reference\nverified: [{by: human:reader, at: '2026-10-14T06:00:00+06:00'}]\nstale_after: '2026-12-14T06:00:00-04:00'\n",
+	} {
+		t.Run(fields, func(t *testing.T) {
+			t.Parallel()
+			doc, err := okf.ParseConcept("page.md", []byte("---\n"+fields+"---\nBody.\n"), okf.DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := okf.RenderConcept("page.md", doc, okf.DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := okf.ParseConcept("page.md", data, okf.DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, doc) {
+				t.Fatalf("metadata changed: got %#v want %#v", got, doc)
+			}
+			if doc.Metadata.Status == "" && got.Metadata.EffectiveStatus() != okf.StatusStable {
+				t.Fatal("absent status lost default")
+			}
+			if doc.Metadata.Generated != nil && doc.Metadata.Generated.At == nil && got.Metadata.Generated.At != nil {
+				t.Fatal("fabricated generation timestamp")
+			}
+		})
+	}
+	for _, fields := range []string{
+		"sources: [{title: Missing resource}]", "sources: [{resource: file.md, usage_count: -1}]",
+		"generated: {at: '2026-10-14T00:00:00Z'}", "verified: {by: human:reader}",
+		"runtime: 42", "parameters: [{name: x, type: string}]", "executor: {receipt: [id]}", "attester: {}",
+	} {
+		t.Run("invalid "+fields, func(t *testing.T) {
+			t.Parallel()
+			_, err := okf.ParseConcept("page.md", []byte("---\ntype: Reference\n"+fields+"\n---\n"), okf.DefaultLimits())
+			var v *okf.Violation
+			if !errors.Is(err, okf.ErrInvalid) || !errors.As(err, &v) || v.Path != "page.md" {
+				t.Fatalf("expected typed field violation, got %v", err)
+			}
+			if v.Rule != okf.RuleMetadataInvalid && v.Rule != okf.RuleTimestampInvalid {
+				t.Fatalf("unexpected field rule: %s", v.Rule)
+			}
+		})
 	}
 }
