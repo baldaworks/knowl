@@ -17,6 +17,7 @@ import (
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	gitclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -24,6 +25,8 @@ import (
 )
 
 const (
+	sshProtocol = "ssh"
+
 	// DefaultDialTimeout bounds connection establishment to a remote repository.
 	DefaultDialTimeout = 30 * time.Second
 	// DefaultNetworkTimeout bounds complete HTTP operations, including large pack transfers.
@@ -80,7 +83,7 @@ func NewRemoteClient() *RemoteClient {
 	installGitTransports.Do(func() {
 		httpsTransport := githttp.NewClient(client.httpClient)
 		gitclient.InstallProtocol("https", limitingTransport{base: httpsTransport})
-		for _, protocol := range []string{"ssh", "file"} {
+		for _, protocol := range []string{sshProtocol, "file"} {
 			if base := gitclient.Protocols[protocol]; base != nil {
 				gitclient.InstallProtocol(protocol, limitingTransport{base: base})
 			}
@@ -125,7 +128,10 @@ func (t limitingTransport) NewUploadPackSession(endpoint *transport.Endpoint, au
 	if err != nil {
 		return nil, err
 	}
-	return limitingUploadPackSession{UploadPackSession: session}, nil
+	return limitingUploadPackSession{
+		UploadPackSession: session,
+		azureSSH:          endpoint.Protocol == sshProtocol && strings.EqualFold(endpoint.Host, "ssh.dev.azure.com"),
+	}, nil
 }
 
 func (t limitingTransport) NewReceivePackSession(endpoint *transport.Endpoint, auth transport.AuthMethod) (transport.ReceivePackSession, error) {
@@ -134,9 +140,20 @@ func (t limitingTransport) NewReceivePackSession(endpoint *transport.Endpoint, a
 
 type limitingUploadPackSession struct {
 	transport.UploadPackSession
+	azureSSH bool
 }
 
 func (s limitingUploadPackSession) UploadPack(ctx context.Context, request *packp.UploadPackRequest) (*packp.UploadPackResponse, error) {
+	if s.azureSSH {
+		// Azure SSH returns an empty pack without acknowledgement negotiation.
+		// go-git cannot handle incremental multi_ack_detailed exchanges, so ask
+		// for a complete pack. Unchanged refs still skip upload-pack entirely;
+		// changed refs retain the same transfer and cache limits.
+		if err := request.Capabilities.Set(capability.MultiACKDetailed); err != nil {
+			return nil, err
+		}
+		request.Haves = nil
+	}
 	response, err := s.UploadPackSession.UploadPack(ctx, request)
 	if err != nil {
 		return nil, err

@@ -279,7 +279,13 @@ func DocumentURI(sourceID knowl.SourceID, uriBase, snapshot, relPath string) str
 			return base.String()
 		}
 	}
-	return fmt.Sprintf("knowl://sources/%s/%s", sourceID, relPath)
+	legacy := fmt.Sprintf("knowl://sources/%s/%s", sourceID, relPath)
+	// Accepted manifests retain immutable provenance. Keep already canonical
+	// fallback URIs, including existing percent escapes, stable on replay.
+	if parsed, err := url.Parse(legacy); err == nil && parsed.String() == legacy {
+		return legacy
+	}
+	return (&url.URL{Scheme: "knowl", Host: "sources", Path: "/" + string(sourceID) + "/" + relPath}).String()
 }
 
 // DocumentMediaType reports the deterministic media type of a Git document path.
