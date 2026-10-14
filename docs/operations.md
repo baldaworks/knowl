@@ -224,6 +224,9 @@ Credentials must be external: `auth.secret_env` supplies an HTTPS token or SSH
 private key, while `auth.key_file` supplies an SSH key file. SSH configuration
 must also provide host-bound public keys in `known_hosts`. Do not place secrets
 in `remote`, `uri_base`, or `repository_id`.
+Fallback `knowl://sources/...` provenance URIs escape names containing Unicode,
+spaces, or invalid percent escapes. Existing canonical provenance URIs remain
+stable when an accepted revision is replayed.
 
 The default policy rejects non-fast-forward branch changes and moved tags while
 preserving the last successful checkpoint and active catalog. Set
@@ -238,6 +241,11 @@ path-level network filtering. These directories are rebuildable cache, not
 canonical evidence, and can be removed while Knowl is stopped. A cache created
 by an older Knowl version may retain previously mirrored objects until it is
 removed, but subsequent refreshes use the scoped tracked-ref fetch.
+Azure DevOps SSH sources at `ssh.dev.azure.com` negotiate `multi_ack_detailed`
+and request a complete pack for a changed tracked ref. This avoids empty Azure
+responses and go-git's unsupported incremental acknowledgement exchange. An
+unchanged ref skips pack transfer; configured transfer and cache limits still
+apply to changed refs.
 The defaults cap one pack transfer at 500 MiB and one source cache at 512 MiB;
 override `max_transfer_bytes` and `max_cache_bytes` within the documented 8 GiB
 maximum when repository size requires it.
