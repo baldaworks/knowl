@@ -14,6 +14,7 @@ import (
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -64,6 +65,7 @@ func (router terminalRouter) RunToTerminal(ctx context.Context, claim domain.Wor
 
 type schedulerOptions struct {
 	slots                  *executionSlots
+	logger                 *zerolog.Logger
 	wakeSize               int
 	claimBatch             int
 	descriptorFailureBatch int
@@ -354,9 +356,9 @@ func (scheduler *operationScheduler) drainWorker(ctx context.Context) (DrainResu
 		failureClass := ""
 		failureReason := ""
 		failureDetail := ""
-		event := log.Info()
+		event := scheduler.infoEvent()
 		if runErr != nil {
-			event = log.Error()
+			event = scheduler.errorEvent()
 			failureClass = schedulerRunnerFailureClass
 			if failure, ok := app.ClassifyExecutionFailure(runErr); ok {
 				failureClass = failure.Class
@@ -387,6 +389,7 @@ func (scheduler *operationScheduler) drainWorker(ctx context.Context) (DrainResu
 			Str("maintenance_status", string(opResult.Operation.Status)).
 			Int("work_attempt", claim.Operation.WorkAttempt).
 			Int("retry_attempt", claim.Operation.RetryAttempt)
+		addMaintenanceDiagnostics(event, opResult.Operation.Diagnostics)
 		if failureReason != "" {
 			event.Str("reason", failureReason)
 		}
@@ -439,7 +442,7 @@ func (scheduler *operationScheduler) dispatch(ctx context.Context) {
 	ready, err := scheduler.inspect(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Error().Str("class", schedulerScanFailureClass).Msg("knowl scheduler scan failed")
+			scheduler.errorEvent().Str("class", schedulerScanFailureClass).Msg("knowl scheduler scan failed")
 		}
 		return
 	}
@@ -499,7 +502,7 @@ func (scheduler *operationScheduler) cycle(ctx context.Context) {
 	ready, err := scheduler.inspect(ctx)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			log.Error().Str("class", schedulerScanFailureClass).Msg("knowl scheduler scan failed")
+			scheduler.errorEvent().Str("class", schedulerScanFailureClass).Msg("knowl scheduler scan failed")
 		}
 		return
 	}
@@ -524,7 +527,7 @@ func (scheduler *operationScheduler) cycle(ctx context.Context) {
 		if claimErr != nil {
 			use.release()
 			if !errors.Is(claimErr, context.Canceled) {
-				log.Error().Str("class", schedulerScanFailureClass).Msg("knowl scheduler claim failed")
+				scheduler.errorEvent().Str("class", schedulerScanFailureClass).Msg("knowl scheduler claim failed")
 			}
 			return
 		}
@@ -535,9 +538,9 @@ func (scheduler *operationScheduler) cycle(ctx context.Context) {
 		failureClass := ""
 		failureReason := ""
 		failureDetail := ""
-		event := log.Info()
+		event := scheduler.infoEvent()
 		if runErr != nil {
-			event = log.Error()
+			event = scheduler.errorEvent()
 			failureClass = schedulerRunnerFailureClass
 			if failure, ok := app.ClassifyExecutionFailure(runErr); ok {
 				failureClass = failure.Class
@@ -556,6 +559,7 @@ func (scheduler *operationScheduler) cycle(ctx context.Context) {
 			Str("maintenance_status", string(result.Operation.Status)).
 			Int("work_attempt", claim.Operation.WorkAttempt).
 			Int("retry_attempt", claim.Operation.RetryAttempt)
+		addMaintenanceDiagnostics(event, result.Operation.Diagnostics)
 		if failureReason != "" {
 			event.Str("reason", failureReason)
 		}
@@ -578,6 +582,31 @@ func (scheduler *operationScheduler) cycle(ctx context.Context) {
 	if claimed == scheduler.options.claimBatch && ctx.Err() == nil && !scheduler.isStopping() {
 		scheduler.Wake("")
 	}
+}
+
+func addMaintenanceDiagnostics(event *zerolog.Event, diagnostics []domain.MaintenanceDiagnostic) {
+	if len(diagnostics) == 0 {
+		return
+	}
+	encoded, err := app.EncodeMaintenanceDiagnostics(diagnostics)
+	if err != nil {
+		return
+	}
+	event.RawJSON("diagnostics", []byte(encoded))
+}
+
+func (scheduler *operationScheduler) infoEvent() *zerolog.Event {
+	if scheduler.options.logger != nil {
+		return scheduler.options.logger.Info()
+	}
+	return log.Info()
+}
+
+func (scheduler *operationScheduler) errorEvent() *zerolog.Event {
+	if scheduler.options.logger != nil {
+		return scheduler.options.logger.Error()
+	}
+	return log.Error()
 }
 
 func (scheduler *operationScheduler) isStopping() bool {

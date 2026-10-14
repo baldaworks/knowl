@@ -21,6 +21,8 @@ import (
 const maxStageManifestBytes = 1 << 20
 
 // StagePlan writes a validated plan below .knowl/staging without touching canonical files.
+// When a newly created stage rejects every edit, the returned change contains
+// rejection diagnostics alongside the validation error and no new artifact is retained.
 func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedEditPlan) (knowl.StagedChange, error) {
 	if err := contextErr(ctx); err != nil {
 		return knowl.StagedChange{}, err
@@ -59,7 +61,11 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		}
 		acceptedEdits, derivedDiagnostics, validateErr := workspace.filterProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan), plan.RequiredSourceRef, plan.SourceRefs)
 		if validateErr != nil {
-			return knowl.StagedChange{}, validateErr
+			combinedDiagnostics, combineErr := app.NormalizeMaintenanceDiagnostics(append(append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), derivedDiagnostics...))
+			if combineErr != nil {
+				return knowl.StagedChange{}, ErrPlanConflict
+			}
+			return knowl.StagedChange{OperationID: plan.OperationID, Diagnostics: combinedDiagnostics}, validateErr
 		}
 		plan.Edits = retainedFileEdits(plan.Edits, acceptedEdits)
 		combinedDiagnostics, combineErr := app.NormalizeMaintenanceDiagnostics(append(append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), derivedDiagnostics...))
@@ -126,7 +132,11 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 	}
 	acceptedEdits, derivedDiagnostics, err := workspace.filterProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan), plan.RequiredSourceRef, plan.SourceRefs)
 	if err != nil {
-		return knowl.StagedChange{}, err
+		combinedDiagnostics, combineErr := app.NormalizeMaintenanceDiagnostics(append(append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), derivedDiagnostics...))
+		if combineErr != nil {
+			return knowl.StagedChange{}, ErrPlanConflict
+		}
+		return knowl.StagedChange{OperationID: plan.OperationID, Diagnostics: combinedDiagnostics}, err
 	}
 	acceptedTargets := make(map[string]struct{}, len(acceptedEdits))
 	for _, edit := range acceptedEdits {

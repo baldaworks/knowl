@@ -877,6 +877,36 @@ func TestAutoApplyCommitsValidSubsetAndPersistsDiagnostics(t *testing.T) {
 	}
 }
 
+func TestIngestReportsDiagnosticsWhenEveryEditIsRejected(t *testing.T) {
+	ctx := context.Background()
+	_, store, service, _ := newWorkflow(t, true, nil, func(schema knowl.SchemaDocument) knowl.ModelEditPlan {
+		return knowl.ModelEditPlan{
+			SchemaDigest: schema.Digest,
+			SourceRefs:   []string{testSourceRef, "fixture:missing@1"},
+			Edits:        []knowl.FileEdit{{Path: testRejectedPagePath, Content: []byte("---\nid: entities/rejected\ntitle: Rejected\ntype: entity\nsource_refs:\n  - fixture:missing@1\n---\n# Rejected\n\nmust not publish\n")}},
+		}
+	})
+	want := []knowl.MaintenanceDiagnostic{
+		{Code: knowl.DiagnosticCitationUnknownSource, Path: testRejectedPagePath},
+		{Code: knowl.DiagnosticCatalogDependencyReject, Path: testRootCatalogPath, Target: "entities/rejected.md"},
+	}
+
+	result, err := service.Ingest(ctx, sourceEnvelope([]byte("rejected source text")))
+	if !errors.Is(err, contentfs.ErrContentInvalid) {
+		t.Fatalf("Ingest() error = %v, want content invalid", err)
+	}
+	if result.Operation.Status != knowl.StatusFailed || !slices.Equal(result.Operation.Diagnostics, want) {
+		t.Fatalf("Ingest() operation = %#v, want failed with diagnostics %#v", result.Operation, want)
+	}
+	if !slices.Equal(result.Staged.Diagnostics, want) {
+		t.Fatalf("Ingest() staged diagnostics = %#v, want %#v", result.Staged.Diagnostics, want)
+	}
+	durable, readErr := store.Operation(ctx, testSourceScope, result.Operation.ID)
+	if readErr != nil || durable.Status != knowl.StatusFailed {
+		t.Fatalf("durable operation = %#v, error = %v", durable, readErr)
+	}
+}
+
 func TestSubmitReservesWithoutPlanningAndMarksReplay(t *testing.T) {
 	ctx := context.Background()
 	_, _, service, maintainer := newWorkflow(t, false, nil)

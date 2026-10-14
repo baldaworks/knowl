@@ -158,7 +158,11 @@ func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, ed
 		}
 	}
 	if len(accepted) == 0 && len(edits) > 0 {
-		return nil, nil, contentInvalidError("<plan>", "plan.empty_safe_subset")
+		diagnostics, err = app.NormalizeMaintenanceDiagnostics(diagnostics)
+		if err != nil {
+			return nil, nil, contentInvalidError("<plan>", "diagnostic.limit")
+		}
+		return nil, diagnostics, contentInvalidError("<plan>", "plan.empty_safe_subset")
 	}
 	documents := make(map[string]string, len(existingDocuments)+len(accepted))
 	for target, content := range existingDocuments {
