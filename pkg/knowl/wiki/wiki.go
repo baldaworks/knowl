@@ -487,7 +487,7 @@ func Links(from knowl.PageID, content string) []knowl.LinkReference {
 // unsafe, and malformed destinations are ignored.
 func ConceptLinks(from knowl.PageID, content string) []knowl.LinkReference {
 	const maxConceptLinks = 4096
-	destinations := markdownDestinations(content, maxConceptLinks)
+	destinations := conceptDestinations(content, maxConceptLinks)
 	links := make([]knowl.LinkReference, 0, len(destinations))
 	seen := make(map[string]struct{}, len(destinations))
 	for _, destination := range destinations {

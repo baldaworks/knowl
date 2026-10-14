@@ -191,3 +191,43 @@ func TestRenderDirectoryLinksStayInert(t *testing.T) {
 		t.Fatalf("links=%v want %v", links, want)
 	}
 }
+
+func TestPortableConceptNavigation(t *testing.T) {
+	rendered, err := renderPageMarkdown("# Article\n\n[Same](other.md#part) [Nested](nested/leaf.md) [Cross](../../entities/two.md) [Unicode](%D0%9E%D0%B1%D0%B7%D0%BE%D1%80.md) [External](https://example.test/doc) [Missing](missing.md)\n\n`[Inline](inline.md)`\n\n    [Indented](indented.md)\n\n```md\n[Fenced](fenced.md)\n```\n", "concepts/deep/article")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := html.Parse(strings.NewReader(string(rendered)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	var code int
+	walk(document, func(n *html.Node) {
+		if n.Type != html.ElementNode {
+			return
+		}
+		if n.DataAtom == atom.Code {
+			code++
+		}
+		if n.DataAtom != atom.A {
+			return
+		}
+		for _, attr := range n.Attr {
+			if attr.Key == linkHrefAttribute {
+				got[nodeText(n)] = attr.Val
+			}
+		}
+	})
+	want := map[string]string{
+		"Same":     "/ui/knowledge?page_id=concepts%2Fdeep%2Fother",
+		"Nested":   "/ui/knowledge?page_id=concepts%2Fdeep%2Fnested%2Fleaf",
+		"Cross":    "/ui/knowledge?page_id=entities%2Ftwo",
+		"Unicode":  "/ui/knowledge?page_id=concepts%2Fdeep%2F%D0%9E%D0%B1%D0%B7%D0%BE%D1%80",
+		"Missing":  "/ui/knowledge?page_id=concepts%2Fdeep%2Fmissing",
+		"External": "https://example.test/doc",
+	}
+	if !reflect.DeepEqual(got, want) || code != 3 {
+		t.Fatalf("links=%#v code=%d", got, code)
+	}
+}

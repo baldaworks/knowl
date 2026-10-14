@@ -151,3 +151,28 @@ func generatedDestination(relative, raw string) (string, string) {
 	}
 	return strings.TrimSuffix(target, ".md"), ""
 }
+
+// conceptDestinations uses the same Markdown syntax as the browser so literal
+// code, images and unused reference definitions cannot fabricate graph edges.
+func conceptDestinations(body string, limit int) []string {
+	source := []byte(body)
+	document := parser.New().Parse(source)
+	destinations := make([]string, 0)
+	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if _, image := node.(*ast.Image); image {
+			return ast.WalkSkipChildren, nil
+		}
+		if link, ok := node.(*ast.Link); ok {
+			if len(destinations) >= limit {
+				return ast.WalkStop, nil
+			}
+			destinations = append(destinations, link.Destination.Value(source))
+			return ast.WalkSkipChildren, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	return destinations
+}

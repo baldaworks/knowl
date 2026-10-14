@@ -59,4 +59,4 @@ Supported Go import paths are `pkg/knowl`, `pkg/knowlfx`, `pkg/knowl/mcp`, and `
 - Non-goals include session memory, user-fact memory, agent orchestration, final-answer generation, vector database canonical storage, web crawling, image/binary comprehension.
 - Configured remote Git sources are synchronized into the workspace. Operators own version control and publication of the generated workspace; Knowl does not commit or push it to Git.
 
-See [[concepts/public-contract]] for interface endpoints and [[concepts/content-and-trust-boundaries]] for storage and trust models.
+See [concepts/public-contract](public-contract.md) for interface endpoints and [concepts/content-and-trust-boundaries](content-and-trust-boundaries.md) for storage and trust models.

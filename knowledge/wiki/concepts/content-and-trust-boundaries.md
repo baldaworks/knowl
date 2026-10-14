@@ -27,7 +27,7 @@ Curated semantic pages must follow enforced OKF v0.2 conventions:
 - **Concept Identity**: The safe bundle-relative path without `.md` defines the concept identity (`knowl.id`).
 - **Metadata Fields**: `type` is required; `title`, `description`, `resource`, and `tags` follow OKF v0.2. Unknown producer fields round-trip as OKF extensions.
 - **Provenance Citations**: The `knowl.source_refs` extension retains stable citations in the form `adapter:source-id@version`. Every maintained factual page must cite at least one accepted raw source. Manifests record structured `source_document` metadata (`source_id`, `document_id`, `revision`, `uri`), resolved into sorted collections during snapshots.
-- **Link Integrity**: Curated pages use strict double-bracket wiki links (`[[concepts/architecture]]`) targeting confirmed bundle-relative page identities. Imported OKF concepts use standard Markdown links (`[Related](related.md)`). Unresolved internal targets are rejected; external URLs and assets are excluded from the concept graph.
+- **Link Integrity**: Curated pages use standard Markdown links with explicit `.md` destinations relative to the originating article, such as `[Architecture](architecture.md)`. Generated links identify confirmed concepts; missing article targets produce navigation warnings and no graph edge. Imported OKF may retain bundle-relative links, and legacy wikilinks remain readable. External URLs and assets are excluded from the concept graph.
 - **Edit Bounds**: Maintainer edit plans may target safe semantic paths under `wiki/**/*.md`, but cannot modify `wiki/log.md`, `schema.md`, or the reserved legacy `wiki/sources/**` boundary.
 
 ## Browser Inspection and Provenance Safety
@@ -97,4 +97,4 @@ SQL stores (SQLite FTS and PostgreSQL) and search state are rebuildable operatio
 - **Maintainer Provider**: Resolved via `knowl.provider` under `runtime.providers`. Operates under bounded untrusted context and structured-output constraints, without unrestricted filesystem access. Proposed plans are validated before commit.
 - **Attested Computation**: OKF Attested Computation declarations are stored and exposed as inert data; they are never executed or dereferenced.
 
-See [[concepts/architecture]] for overall architecture, [[concepts/public-contract]] for service APIs, and [[concepts/service-operations]] for operational CLI commands and maintenance workflows.
+See [concepts/architecture](architecture.md) for overall architecture, [concepts/public-contract](public-contract.md) for service APIs, and [concepts/service-operations](service-operations.md) for operational CLI commands and maintenance workflows.
