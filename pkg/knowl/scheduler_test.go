@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +19,6 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -65,9 +66,7 @@ func TestTerminalRouterDispatchesByDurableWorkKind(t *testing.T) {
 
 func TestSchedulerLogsSafeMaintenanceCorrelation(t *testing.T) {
 	var output bytes.Buffer
-	previous := log.Logger
-	log.Logger = zerolog.New(&output)
-	t.Cleanup(func() { log.Logger = previous })
+	logger := zerolog.New(&output)
 
 	claim := schedulerClaim("logged")
 	claim.Descriptor.Source.SourceDocument = domain.SourceDocument{
@@ -80,7 +79,7 @@ func TestSchedulerLogsSafeMaintenanceCorrelation(t *testing.T) {
 		claim.Operation.Status = domain.StatusFailed
 		claim.Operation.Failure = &domain.Failure{Class: testProviderFailureClass, OperationID: string(claim.Operation.ID)}
 		return app.IngestResult{Operation: claim.Operation}, schedulerSafeDetailError{}
-	}), schedulerOptions{claimBatch: 1})
+	}), schedulerOptions{claimBatch: 1, logger: &logger})
 	scheduler.cycle(context.Background())
 
 	encoded := output.String()
@@ -99,11 +98,38 @@ func TestSchedulerLogsSafeMaintenanceCorrelation(t *testing.T) {
 	}
 }
 
+func TestSchedulerLogsMaintenanceDiagnostics(t *testing.T) {
+	var output bytes.Buffer
+	logger := zerolog.New(&output)
+
+	want := []domain.MaintenanceDiagnostic{
+		{Code: domain.DiagnosticCitationUnknownSource, Path: "wiki/entities/rejected.md"},
+		{Code: domain.DiagnosticCatalogDependencyReject, Path: "wiki/rejected/index.md", Target: "entities/rejected.md"},
+	}
+	claim := schedulerClaim("diagnostic-failure")
+	store := &schedulerStore{claims: []domain.WorkClaim{claim}}
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		claim.Operation.Status = domain.StatusFailed
+		claim.Operation.Failure = &domain.Failure{Class: "staging", OperationID: string(claim.Operation.ID)}
+		claim.Operation.Diagnostics = want
+		return app.IngestResult{Operation: claim.Operation}, schedulerSafeDetailError{}
+	}), schedulerOptions{claimBatch: 1, logger: &logger})
+	scheduler.cycle(context.Background())
+
+	var event struct {
+		Diagnostics []domain.MaintenanceDiagnostic `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &event); err != nil {
+		t.Fatalf("decode maintenance log: %v", err)
+	}
+	if !slices.Equal(event.Diagnostics, want) {
+		t.Fatalf("logged diagnostics = %#v, want %#v", event.Diagnostics, want)
+	}
+}
+
 func TestSchedulerSchedulesTransientRetryThenSucceeds(t *testing.T) {
 	var output bytes.Buffer
-	previous := log.Logger
-	log.Logger = zerolog.New(&output)
-	t.Cleanup(func() { log.Logger = previous })
+	logger := zerolog.New(&output)
 
 	first := schedulerClaim("transient-recovery")
 	first.Operation.WorkAttempt = 1
@@ -119,7 +145,7 @@ func TestSchedulerSchedulesTransientRetryThenSucceeds(t *testing.T) {
 		}
 		claim.Operation.Status = domain.StatusCommitted
 		return app.IngestResult{Operation: claim.Operation}, nil
-	}), schedulerOptions{retryInitialDelay: 30 * time.Second, retryMaximumDelay: 5 * time.Minute})
+	}), schedulerOptions{logger: &logger, retryInitialDelay: 30 * time.Second, retryMaximumDelay: 5 * time.Minute})
 	scheduler.cycle(context.Background())
 
 	retries := store.recordedRetries()
@@ -887,6 +913,37 @@ func TestSchedulerDrain(t *testing.T) {
 	}
 	if store.claimCount() != 0 {
 		t.Errorf("remaining claims = %d, want 0", store.claimCount())
+	}
+}
+
+func TestSchedulerDrainLogsMaintenanceDiagnostics(t *testing.T) {
+	var output bytes.Buffer
+	logger := zerolog.New(&output)
+
+	want := []domain.MaintenanceDiagnostic{
+		{Code: domain.DiagnosticCitationUnknownSource, Path: "wiki/entities/rejected.md"},
+		{Code: domain.DiagnosticCatalogDependencyReject, Path: "wiki/index.md", Target: "entities/rejected.md"},
+	}
+	claim := schedulerClaim("drain-diagnostic-failure")
+	store := &schedulerStore{claims: []domain.WorkClaim{claim}}
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		claim.Operation.Status = domain.StatusFailed
+		claim.Operation.Failure = &domain.Failure{Class: "staging", OperationID: string(claim.Operation.ID)}
+		claim.Operation.Diagnostics = want
+		return app.IngestResult{Operation: claim.Operation}, schedulerSafeDetailError{}
+	}), schedulerOptions{claimBatch: 1, logger: &logger})
+	if _, err := scheduler.Drain(context.Background()); err != nil {
+		t.Fatalf("Drain() error = %v", err)
+	}
+
+	var event struct {
+		Diagnostics []domain.MaintenanceDiagnostic `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &event); err != nil {
+		t.Fatalf("decode maintenance drain log: %v", err)
+	}
+	if !slices.Equal(event.Diagnostics, want) {
+		t.Fatalf("logged drain diagnostics = %#v, want %#v", event.Diagnostics, want)
 	}
 }
 

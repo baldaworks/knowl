@@ -24,6 +24,7 @@ const (
 	testFixtureAdapter     = "fixture"
 	testMarkdownMediaType  = "text/markdown"
 	testWorkspaceSourceRef = "fixture:source-1@1"
+	testMissingSourceRef   = "fixture:missing@1"
 	testWikiSourceAdapter  = "wiki-filesystem"
 	testSourceRevision     = "revision-1"
 	testPageOnePath        = "wiki/entities/one.md"
@@ -695,7 +696,7 @@ func TestWorkspaceStagePlanRejectsInvalidProspectiveContentWithoutCanonicalMutat
 		{name: "missing type", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\nid: entities/one\ntitle: One\nsource_refs:\n  - " + testWorkspaceSourceRef + "\n---\n# One\n")}}},
 		{name: "missing source refs", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\nid: entities/one\ntitle: One\ntype: entity\n---\n# One\n")}}},
 		{name: "id mismatch", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/two", "One", testWorkspaceSourceRef, "")}}},
-		{name: "unknown source ref", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", "fixture:missing@1", "")}}},
+		{name: "unknown source ref", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testMissingSourceRef, "")}}},
 		{name: "malformed link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[broken")}}},
 		{name: "escaping link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[../escape]]")}}},
 		{name: "missing link target", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/missing]]")}}},
@@ -818,9 +819,9 @@ func TestWorkspaceStagePlanIsolatesInvalidDocument(t *testing.T) {
 	}
 	plan := knowl.ValidatedEditPlan{
 		OperationID: "mixed-documents", Scope: testScope, SchemaDigest: schema.Digest,
-		RequiredSourceRef: testWorkspaceSourceRef, SourceRefs: []string{testWorkspaceSourceRef, "fixture:missing@1"},
+		RequiredSourceRef: testWorkspaceSourceRef, SourceRefs: []string{testWorkspaceSourceRef, testMissingSourceRef},
 		Edits: []knowl.FileEdit{
-			{Path: testRejectedPagePath, ExpectedDigest: digestBytes(rejectedBefore), Content: validWorkspacePage("entities/rejected", "Rejected", "fixture:missing@1", "must not publish")},
+			{Path: testRejectedPagePath, ExpectedDigest: digestBytes(rejectedBefore), Content: validWorkspacePage("entities/rejected", "Rejected", testMissingSourceRef, "must not publish")},
 			{Path: testGoodPagePath, ExpectedDigest: digestBytes(goodBefore), Content: validWorkspacePage("entities/good", "Good", testWorkspaceSourceRef, "new good")},
 		},
 	}
@@ -853,6 +854,47 @@ func TestWorkspaceStagePlanIsolatesInvalidDocument(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStagePlanReportsDiagnosticsWhenEveryEditIsRejected(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	acceptWorkspaceSource(t, workspace)
+	schema, err := workspace.Schema(context.Background(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := knowl.ValidatedEditPlan{
+		OperationID: "rejected-plan", Scope: testScope, SchemaDigest: schema.Digest,
+		RequiredSourceRef: testWorkspaceSourceRef, SourceRefs: []string{testWorkspaceSourceRef, testMissingSourceRef},
+		Edits: []knowl.FileEdit{
+			{Path: testRejectedPagePath, Content: validWorkspacePage("entities/rejected", "Rejected", testMissingSourceRef, "must not publish")},
+			{Path: "wiki/rejected/index.md", Content: []byte("# Rejected\n\n* [Rejected](../entities/rejected.md)\n")},
+		},
+	}
+	want := []knowl.MaintenanceDiagnostic{
+		{Code: knowl.DiagnosticCitationUnknownSource, Path: testRejectedPagePath},
+		{Code: knowl.DiagnosticCatalogDependencyReject, Path: "wiki/rejected/index.md", Target: "entities/rejected.md"},
+	}
+
+	staged, err := workspace.StagePlan(context.Background(), plan)
+	if !errors.Is(err, ErrContentInvalid) {
+		t.Fatalf("StagePlan() error = %v, want content invalid", err)
+	}
+	if !slices.Equal(staged.Diagnostics, want) {
+		t.Fatalf("StagePlan() diagnostics = %#v, want %#v", staged.Diagnostics, want)
+	}
+	if staged.OperationID != plan.OperationID || len(staged.Files) != 0 || staged.Digest != "" {
+		t.Fatalf("StagePlan() rejected result = %#v", staged)
+	}
+	if _, err := workspace.LoadStage(context.Background(), testScope, knowl.OperationID(plan.OperationID)); !errors.Is(err, app.ErrStageNotFound) {
+		t.Fatalf("LoadStage() error = %v, want stage not found", err)
+	}
+}
+
 func TestWorkspaceStagePlanWithholdsRejectedCatalogClosure(t *testing.T) {
 	workspace, err := New(t.TempDir())
 	if err != nil {
@@ -877,9 +919,9 @@ func TestWorkspaceStagePlanWithholdsRejectedCatalogClosure(t *testing.T) {
 	}
 	plan := knowl.ValidatedEditPlan{
 		OperationID: "catalog-closure", Scope: testScope, SchemaDigest: schema.Digest,
-		RequiredSourceRef: testWorkspaceSourceRef, SourceRefs: []string{testWorkspaceSourceRef, "fixture:missing@1"},
+		RequiredSourceRef: testWorkspaceSourceRef, SourceRefs: []string{testWorkspaceSourceRef, testMissingSourceRef},
 		Edits: []knowl.FileEdit{
-			{Path: testBadPagePath, Content: validWorkspacePage("entities/bad", "Bad", "fixture:missing@1", "rejected")},
+			{Path: testBadPagePath, Content: validWorkspacePage("entities/bad", "Bad", testMissingSourceRef, "rejected")},
 			{Path: testGoodPagePath, ExpectedDigest: digestBytes(goodBefore), Content: validWorkspacePage("entities/good", "Good", testWorkspaceSourceRef, "updated")},
 			{Path: testIndexPath, ExpectedDigest: digestBytes(rootBefore), Content: []byte(rootIndexContent + "\n* [Good](entities/good.md)\n* [Safe](safe/index.md)\n* [Parent](parent/index.md)\n")},
 			{Path: testParentCatalogPath, Content: []byte("# Parent\n\n* [Unsafe](../unsafe/index.md)\n")},

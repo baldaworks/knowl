@@ -624,6 +624,10 @@ type preparedStage struct {
 
 func (result *IngestResult) withPreparation(prepared preparedStage, attempt int) {
 	result.Correction = prepared.Correction
+	result.Staged = prepared.Staged
+	if len(prepared.Staged.Diagnostics) > 0 {
+		result.Operation.Diagnostics = append([]knowl.MaintenanceDiagnostic(nil), prepared.Staged.Diagnostics...)
+	}
 	if prepared.CorrectionPersisted {
 		result.Operation.Correction = prepared.Correction
 	}
@@ -775,10 +779,11 @@ func (service *IngestService) prepareStage(ctx context.Context, submission Inges
 	}
 	validated.OperationID = string(submission.Operation.ID)
 	staged, err := service.content.StagePlan(ctx, validated)
+	prepared.Staged = staged
 	if err != nil {
 		return prepared, fmt.Errorf("staging: %w", err)
 	}
-	prepared.Plan, prepared.Staged = validated, staged
+	prepared.Plan = validated
 	return prepared, nil
 }
 
