@@ -29,6 +29,7 @@ in this repository. Compare [source documentation](.) with the
 - [HTTP API](../api/openapi/knowl.yaml): the public OpenAPI contract.
 - [Go application integration](operations.md#go-application-integration).
 - [Release history](releases/): version-specific changes and historical instructions.
+- [Publishing](publishing.md): release gates and one-time npm trusted-publisher setup.
 
 Current guides describe the checked-in source. A recipe that uses a published
 release names that version explicitly; historical release recipes do not imply

@@ -9,8 +9,8 @@ choose the wiki maintainer separately in the [agent guide](agents.md).
 
 ## Install
 
-These instructions require the v0.6.0 npm release to be published. See the
-[release notes](releases/v0.6.0.md) for availability and supported scope.
+These instructions require the v0.6.1 npm release to be published. See the
+[release notes](releases/v0.6.1.md) for availability and supported scope.
 The npm package is `@baldaworks/knowl`; it selects the native binary for your
 platform at the exact release version.
 
@@ -19,7 +19,7 @@ project configuration also requires an installed and authenticated
 `opencode acp` runtime. Run this once from the project root:
 
 ```bash
-npx --yes @baldaworks/knowl@0.6.0 setup codex
+npx --yes @baldaworks/knowl@0.6.1 setup codex
 ```
 
 Setup creates only missing project state (`.config/knowl`, `schema.md`, `raw/`,
@@ -38,15 +38,15 @@ two workflow skills:
   and reports structured results and changes under Knowl-owned paths.
 
 The run skill uses a local `knowl` only when `knowl version --json` identifies
-the exact `0.6.0` release; otherwise it uses the pinned
-`npx --yes @baldaworks/knowl@0.6.0` launcher for the whole workflow. Maintenance
+the exact `0.6.1` release; otherwise it uses the pinned
+`npx --yes @baldaworks/knowl@0.6.1` launcher for the whole workflow. Maintenance
 also requires the configured provider; the default local configuration expects
 an installed and authenticated `opencode acp` runtime.
 
 ## MCP connection
 
 Plugin installation also registers the project-scoped MCP server. Codex starts
-`npx --yes @baldaworks/knowl@0.6.0 mcp stdio` with the active project as its
+`npx --yes @baldaworks/knowl@0.6.1 mcp stdio` with the active project as its
 working directory and owns that child process. Do not run a daemon, configure
 `codex mcp add`, set an operator token, or allocate a port for this path.
 

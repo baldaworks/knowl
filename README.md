@@ -78,10 +78,10 @@ the configured ACP agent, generation commands and saved source provenance.
 ### Local Codex plugin
 
 Use Knowl from a local Codex project with setup and maintenance skills plus
-MCP tools. For the v0.6.0 npm release, setup is:
+MCP tools. For the v0.6.1 npm release, setup is:
 
 ```bash
-npx --yes @baldaworks/knowl@0.6.0 setup codex
+npx --yes @baldaworks/knowl@0.6.1 setup codex
 ```
 
 The npm instructions require that release to be published.

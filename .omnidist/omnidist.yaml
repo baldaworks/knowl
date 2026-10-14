@@ -30,6 +30,6 @@ profiles:
         license: MIT
         registry: https://registry.npmjs.org
         access: public
-        publish-auth: token
+        publish-auth: trusted
         repository-url: git+https://github.com/baldaworks/knowl.git
         include-readme: true

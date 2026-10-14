@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	testVersion         = "0.6.0"
-	driftedPackagePin   = "@baldaworks/knowl@0.6.1"
-	driftedVersion      = "0.6.1"
+	testVersion         = "0.6.1"
+	driftedPackagePin   = "@baldaworks/knowl@0.6.2"
+	driftedVersion      = "0.6.2"
 	packageNameKey      = "name"
 	packageVersionKey   = "version"
 	expectedPackageName = "@baldaworks/knowl"
@@ -122,7 +122,7 @@ func TestRepositoryContractRejectsVersionDrift(t *testing.T) {
 		{
 			name: "release documentation metadata",
 			mutate: func(t *testing.T, root string) {
-				mutateJSONObject(t, filepath.Join(root, "docs/releases/v0.6.0.json"), func(object map[string]any) {
+				mutateJSONObject(t, filepath.Join(root, "docs/releases/v0.6.1.json"), func(object map[string]any) {
 					object["npm_package"] = "@baldaworks/other"
 				})
 			},
@@ -243,6 +243,8 @@ func TestOmnidistRejectsNPMMetadataDrift(t *testing.T) {
 		{name: "native base", field: "platform-package", value: expectedBinaryName},
 		{name: descriptionKey, field: descriptionKey, value: ""},
 		{name: licenseKey, field: licenseKey, value: invalidLicense},
+		{name: "token publication", field: "publish-auth", value: "token"},
+		{name: "missing repository identity", field: "repository-url", value: ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -284,7 +286,7 @@ func copyContractFixture(t *testing.T) string {
 	paths := []string{
 		".omnidist/omnidist.yaml",
 		".agents/plugins/marketplace.json",
-		"docs/releases/v0.6.0.json",
+		"docs/releases/v0.6.1.json",
 		"plugins/knowl/.codex-plugin/plugin.json",
 		"plugins/knowl/.mcp.json",
 		"plugins/knowl/skills/run/contract.json",

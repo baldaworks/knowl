@@ -304,7 +304,7 @@ func checkOmnidist(root string) error {
 	if !reflect.DeepEqual(profile.EnabledDistributions, []string{"npm"}) || len(profile.Distributions) != 1 ||
 		npm.Package != npmPackage || len(npm.Aliases) != 0 ||
 		(npm.PlatformPackage != "" && npm.PlatformPackage != npmPackage) || npm.Description != npmDescription || npm.License != npmLicense || npm.Registry != "https://registry.npmjs.org" || npm.Access != "public" ||
-		npm.PublishAuth != "token" || npm.RepositoryURL != "git+https://github.com/baldaworks/knowl.git" {
+		npm.PublishAuth != "trusted" || npm.RepositoryURL != "git+https://github.com/baldaworks/knowl.git" {
 		return fmt.Errorf("%w: npm distribution", errOmnidistContract)
 	}
 	wantLDFlags := []string{
