@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 )
 
 const exportFaultCopied = "copied"
@@ -62,6 +64,10 @@ func (workspace *Workspace) ExportOKF(ctx context.Context, destination string, l
 	if err != nil {
 		return fmt.Errorf("read export source: %w", err)
 	}
+	if err := validateExportDocuments(ctx, before, limits); err != nil {
+		return fmt.Errorf("validate captured OKF export: %w", err)
+	}
+
 	temporary, err := os.MkdirTemp(filepath.Dir(destination), "."+filepath.Base(destination)+".knowl-export-")
 	if err != nil {
 		return fmt.Errorf("create export temporary directory: %w", err)
@@ -210,4 +216,35 @@ func sameExportEntries(left, right []exportEntry) bool {
 		}
 	}
 	return true
+}
+
+func validateExportDocuments(ctx context.Context, entries []exportEntry, limits ExportLimits) error {
+	parserLimits := okf.DefaultLimits()
+	parserLimits.MaxBytes = int(min(limits.MaxFileBytes, int64(64<<20)))
+	for _, entry := range entries {
+		if err := contextErr(ctx); err != nil {
+			return err
+		}
+		if entry.dir {
+			continue
+		}
+		kind, err := okf.ClassifyPath(entry.path)
+		if err != nil {
+			return err
+		}
+		switch kind {
+		case okf.DocumentConcept:
+			_, err = okf.ParseConcept(entry.path, entry.data, parserLimits)
+		case okf.DocumentIndex:
+			_, err = okf.ValidateIndex(entry.path, entry.data, parserLimits)
+		case okf.DocumentLog:
+			_, err = okf.ValidateLog(entry.path, entry.data, parserLimits)
+		case okf.DocumentAsset:
+			// Assets are opaque bytes, never parsed or interpreted.
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
