@@ -4,13 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/baldaworks/knowl/pkg/knowl/wiki"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
 )
+
+const portableConceptID = "concepts/portable"
 
 type portableMaintainer struct {
 	exhaust     bool
@@ -78,13 +87,63 @@ func TestIngestCorrectsNonportableNavigation(t *testing.T) {
 			if err != nil || len(snapshot.Pages) != 1 {
 				t.Fatalf("snapshot: %#v %v", snapshot, err)
 			}
+			if len(snapshot.Links) != 1 || snapshot.Links[0].From != portableConceptID || snapshot.Links[0].To != portableConceptID {
+				t.Fatalf("generated graph contains fabricated literal edges: %#v", snapshot.Links)
+			}
 			doc, err := okf.ParseConcept("concepts/portable.md", []byte(snapshot.Pages[0].Content), okf.DefaultLimits())
 			if err != nil {
 				t.Fatal(err)
 			}
 			links := wiki.InspectNavigation("concepts/portable.md", doc.Body, 64)
-			if links.Rule != "" || len(links.Targets) != 1 || links.Targets[0] != "concepts/portable" {
+			if links.Rule != "" || len(links.Targets) != 1 || links.Targets[0] != portableConceptID {
 				t.Fatalf("published navigation: %#v", links)
+			}
+			destination := filepath.Join(t.TempDir(), "standalone")
+			if err := workspace.ExportOKF(t.Context(), destination, contentfs.DefaultExportLimits()); err != nil {
+				t.Fatal(err)
+			}
+			exported, err := os.ReadFile(filepath.Join(destination, "concepts", "portable.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			standalone, err := okf.ParseConcept("concepts/portable.md", exported, okf.DefaultLimits())
+			if err != nil || !reflect.DeepEqual(standalone, doc) {
+				t.Fatalf("standalone metadata/content changed: %#v %v", standalone, err)
+			}
+			// Independently consume ordinary Markdown nodes and GitHub file URL rules.
+			body := []byte(standalone.Body)
+			tree := parser.New().Parse(body)
+			base, err := url.Parse("https://github.com/baldaworks/knowl/blob/main/knowledge/wiki/concepts/portable.md")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var internal int
+			if err := ast.Walk(tree, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+				if !entering {
+					return ast.WalkContinue, nil
+				}
+				link, ok := node.(*ast.Link)
+				if !ok {
+					return ast.WalkContinue, nil
+				}
+				target, err := url.Parse(link.Destination.Value(body))
+				if err != nil {
+					return ast.WalkStop, err
+				}
+				if target.IsAbs() {
+					return ast.WalkSkipChildren, nil
+				}
+				resolved := base.ResolveReference(target)
+				if resolved.Path != base.Path {
+					t.Errorf("GitHub destination=%s want %s", resolved.Path, base.Path)
+				}
+				internal++
+				return ast.WalkSkipChildren, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if internal != 1 {
+				t.Fatalf("ordinary exported internal links=%d", internal)
 			}
 		})
 	}

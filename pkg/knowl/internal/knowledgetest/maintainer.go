@@ -151,7 +151,7 @@ func decisionMarkdown(refs []string, stage decisionStage) string {
 
 func runbookMarkdown(refs []string) string {
 	return frontmatter("runbooks/session-recovery", "Session Recovery Runbook", "runbook", refs) +
-		"# Session Recovery Runbook\n\nThis recovery procedure supports [[decisions/session-memory]].\n\n" +
+		"# Session Recovery Runbook\n\nThis recovery procedure supports [decisions/session-memory](../decisions/session-memory.md).\n\n" +
 		"1. Restart the sidecar.\n2. Poll the durable operation.\n3. Verify the recovery lease.\n4. Rebuild the projection when required.\n"
 }
 

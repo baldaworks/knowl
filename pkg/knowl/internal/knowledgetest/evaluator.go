@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 // Retriever is the narrow evidence operation evaluated by the golden corpus.
@@ -76,7 +77,8 @@ func ValidateFinalSnapshot(snapshot knowl.WorkspaceSnapshot) error {
 	if len(decision.SourceRefs) != 3 || len(runbook.SourceRefs) != 1 {
 		return fmt.Errorf("final provenance counts are decision=%d runbook=%d", len(decision.SourceRefs), len(runbook.SourceRefs))
 	}
-	if !strings.Contains(runbook.Content, "[[decisions/session-memory]]") {
+	links := wiki.ConceptLinks(runbook.ID, wiki.Body(runbook.Content))
+	if len(links) != 1 || links[0].To != DecisionPageID {
 		return fmt.Errorf("runbook omits decision link")
 	}
 	return nil

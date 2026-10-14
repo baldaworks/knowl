@@ -2,6 +2,7 @@ package fs
 
 import (
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,8 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
 )
 
 // Exercise the checked-in result as standalone OKF, ordinary file navigation,
@@ -58,6 +61,7 @@ func TestRepositoryWikiPortableBundle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			assertGitHubCorpusLinks(t, relative, doc.Body, docs)
 			id := knowl.PageID(strings.TrimSuffix(relative, ".md"))
 			concepts[id] = doc
 			metadata, err := knowlwiki.FrontmatterFromMetadata(doc.Metadata)
@@ -80,6 +84,7 @@ func TestRepositoryWikiPortableBundle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			assertGitHubCorpusLinks(t, relative, index.Body, docs)
 			destinations, invalid := knowlwiki.IndexDestinations(index.Body, 4096)
 			if invalid {
 				t.Fatal("invalid catalog navigation")
@@ -136,5 +141,50 @@ func TestRepositoryWikiPortableBundle(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(parsed, doc) {
 			t.Fatalf("page reader changed %s: %v", id, err)
 		}
+	}
+}
+
+// This consumer deliberately uses URL resolution instead of Knowl's resolver.
+func assertGitHubCorpusLinks(t *testing.T, relative, markdown string, docs map[string][]byte) {
+	t.Helper()
+	const bundleURL = "https://github.com/baldaworks/knowl/blob/main/knowledge/wiki/"
+	base, err := url.Parse(bundleURL + relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(markdown)
+	tree := parser.New().Parse(body)
+	err = ast.Walk(tree, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if _, image := node.(*ast.Image); image {
+			return ast.WalkSkipChildren, nil
+		}
+		link, ok := node.(*ast.Link)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		reference, err := url.Parse(link.Destination.Value(body))
+		if err != nil {
+			return ast.WalkStop, err
+		}
+		if reference.IsAbs() || reference.Host != "" || reference.Path == "" {
+			return ast.WalkSkipChildren, nil
+		}
+		resolved := base.ResolveReference(reference)
+		prefix := "/baldaworks/knowl/blob/main/knowledge/wiki/"
+		if !strings.HasPrefix(resolved.Path, prefix) {
+			t.Errorf("GitHub link leaves bundle: %s -> %s", relative, resolved.Path)
+			return ast.WalkSkipChildren, nil
+		}
+		destination := strings.TrimPrefix(resolved.Path, prefix)
+		if _, present := docs[destination]; !present {
+			t.Errorf("GitHub link missing: %s -> %s", relative, destination)
+		}
+		return ast.WalkSkipChildren, nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
