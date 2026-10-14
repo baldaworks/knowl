@@ -1,8 +1,8 @@
 {
-  "release_version": "0.6.0",
+  "release_version": "0.6.1",
   "argv": {
     "local_version": ["knowl", "version", "--json"],
-    "fallback_prefix": ["npx", "--yes", "@baldaworks/knowl@0.6.0"],
+    "fallback_prefix": ["npx", "--yes", "@baldaworks/knowl@0.6.1"],
     "all_sources": ["run"],
     "one_source": ["run", "--source", "<validated-source-id>"]
   },

@@ -108,8 +108,12 @@ func TestReleaseWorkflowGatesVerifiedNPMArtifacts(t *testing.T) {
 	}
 	publishStep, found := workflowStep(publish.Steps, "Publish npm artifacts")
 	if !found || publishStep.Run != "omnidist --profile default npm publish" ||
-		publishStep.Env["NPM_PUBLISH_TOKEN"] != "${{ secrets.NPM_PUBLISH_TOKEN }}" {
+		len(publishStep.Env) != 0 {
 		t.Fatalf("unexpected npm publish step: %#v", publishStep)
+	}
+	npmCLI, found := workflowStep(publish.Steps, "Install npm CLI")
+	if !found || npmCLI.Run != "npm install --global npm@12.2.0" {
+		t.Fatalf("unexpected npm CLI installation: %#v", npmCLI)
 	}
 }
 

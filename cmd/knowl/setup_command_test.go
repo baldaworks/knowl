@@ -20,7 +20,7 @@ const (
 	fakeCodexEnabledEnv   = "KNOWL_TEST_FAKE_CODEX"
 	fakeCodexFixtureEnv   = "KNOWL_TEST_FAKE_CODEX_FIXTURE"
 	fakeCodexCallLogEnv   = "KNOWL_TEST_FAKE_CODEX_CALL_LOG"
-	testReleaseVersion    = "v0.6.0"
+	testReleaseVersion    = "v0.6.1"
 	fakeCodexArgSeparator = "\x1f"
 	marketplaceAddedJSON  = `{"marketplaceName":"knowl","alreadyAdded":false}`
 )
@@ -81,16 +81,16 @@ func TestSetupCodexInstallsAbsentIntegrationWithPinnedSparseArgv(t *testing.T) {
 		fakeCodexKey(codexPluginAction, codexMarketplaceAction, sourceListCommandName, codexJSONFlag): {{Stdout: `{"marketplaces":[]}`}},
 		fakeCodexKey(marketplaceAddArgs()...): {{Stdout: marketplaceAddedJSON}},
 		fakeCodexKey(pluginListArgs()...): {
-			{Stdout: pluginListJSON(nil, []codexPlugin{testPlugin(false, true, "0.6.0")})},
+			{Stdout: pluginListJSON(nil, []codexPlugin{testPlugin(false, true, "0.6.1")})},
 		},
-		fakeCodexKey(codexPluginAction, codexAddAction, knowlPluginID, codexJSONFlag): {{Stdout: `{"pluginId":"knowl@knowl","marketplaceName":"knowl","version":"0.6.0"}`}},
+		fakeCodexKey(codexPluginAction, codexAddAction, knowlPluginID, codexJSONFlag): {{Stdout: `{"pluginId":"knowl@knowl","marketplaceName":"knowl","version":"0.6.1"}`}},
 	})
 
 	result, err := executeSetupCodex(t, fixture, false)
 	if err != nil {
 		t.Fatalf("setup codex: %v", err)
 	}
-	want := setupCodexResult{Version: "0.6.0", Project: "skipped", Marketplace: "added", Plugin: "installed", RestartRequired: true}
+	want := setupCodexResult{Version: "0.6.1", Project: "skipped", Marketplace: "added", Plugin: "installed", RestartRequired: true}
 	if !reflect.DeepEqual(result, want) {
 		t.Fatalf("result = %#v, want %#v", result, want)
 	}
@@ -107,7 +107,7 @@ func TestSetupCodexIsNoOpForCompatibleIntegration(t *testing.T) {
 	fixture := newFakeCodexFixture(t, map[string][]fakeCodexResponse{
 		fakeCodexKey(codexPluginAction, codexMarketplaceAction, sourceListCommandName, codexJSONFlag): {{Stdout: compatibleMarketplaceJSON()}},
 		fakeCodexKey(pluginListArgs()...): {
-			{Stdout: pluginListJSON([]codexPlugin{testPlugin(true, true, "0.6.0")}, nil)},
+			{Stdout: pluginListJSON([]codexPlugin{testPlugin(true, true, "0.6.1")}, nil)},
 		},
 		fakeCodexKey(marketplaceAddArgs()...): {{Stdout: `{"marketplaceName":"knowl","alreadyAdded":true}`}},
 	})
@@ -144,12 +144,12 @@ func TestSetupCodexReplacesOnlyAfterExplicitAuthorization(t *testing.T) {
 		fakeCodexKey(codexPluginAction, codexMarketplaceAction, sourceListCommandName, codexJSONFlag): {{Stdout: `{"marketplaces":[{"name":"knowl","marketplaceSource":{"sourceType":"local","source":"/tmp/not-knowl"}}]}`}},
 		fakeCodexKey(pluginListArgs()...): {
 			{Stdout: pluginListJSON([]codexPlugin{testPlugin(true, true, "0.5.0")}, nil)},
-			{Stdout: pluginListJSON(nil, []codexPlugin{testPlugin(false, true, "0.6.0")})},
+			{Stdout: pluginListJSON(nil, []codexPlugin{testPlugin(false, true, "0.6.1")})},
 		},
 		fakeCodexKey(codexPluginAction, "remove", knowlPluginID, codexJSONFlag):                                {{Stdout: `{"pluginId":"knowl@knowl","name":"knowl","marketplaceName":"knowl"}`}},
 		fakeCodexKey(codexPluginAction, codexMarketplaceAction, "remove", knowlMarketplaceName, codexJSONFlag): {{Stdout: `{"marketplaceName":"knowl"}`}},
 		fakeCodexKey(marketplaceAddArgs()...):                                                                  {{Stdout: marketplaceAddedJSON}},
-		fakeCodexKey(codexPluginAction, codexAddAction, knowlPluginID, codexJSONFlag):                          {{Stdout: `{"pluginId":"knowl@knowl","marketplaceName":"knowl","version":"0.6.0"}`}},
+		fakeCodexKey(codexPluginAction, codexAddAction, knowlPluginID, codexJSONFlag):                          {{Stdout: `{"pluginId":"knowl@knowl","marketplaceName":"knowl","version":"0.6.1"}`}},
 	})
 
 	result, err := executeSetupCodex(t, fixture, true)
@@ -216,7 +216,7 @@ func TestSetupCodexPluginFailurePreservesProjectFiles(t *testing.T) {
 	fixture := newFakeCodexFixture(t, map[string][]fakeCodexResponse{
 		fakeCodexKey(codexPluginAction, codexMarketplaceAction, sourceListCommandName, codexJSONFlag): {{Stdout: `{"marketplaces":[]}`}},
 		fakeCodexKey(marketplaceAddArgs()...):                                         {{Stdout: marketplaceAddedJSON}},
-		fakeCodexKey(pluginListArgs()...):                                             {{Stdout: pluginListJSON(nil, []codexPlugin{testPlugin(false, true, "0.6.0")})}},
+		fakeCodexKey(pluginListArgs()...):                                             {{Stdout: pluginListJSON(nil, []codexPlugin{testPlugin(false, true, "0.6.1")})}},
 		fakeCodexKey(codexPluginAction, codexAddAction, knowlPluginID, codexJSONFlag): {{Stderr: "token=top-secret", Exit: 29}},
 	})
 

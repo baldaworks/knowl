@@ -165,13 +165,8 @@ jobs:
       - name: Install Omnidist
         run: npm install --global '@omnidist/omnidist@0.1.40'
 
-      - name: Check npm publication authority
-        shell: bash
-        env:
-          NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "$NPM_PUBLISH_TOKEN"
+      - name: Install npm CLI
+        run: npm install --global npm@12.2.0
 
       - name: Download verified npm artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -245,8 +240,6 @@ jobs:
           jq -e '.manifests | map(.platform.architecture) | index("arm64")' manifest.json >/dev/null
 
       - name: Publish npm artifacts
-        env:
-          NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
         run: omnidist --profile default npm publish
 
       - name: Publish GitHub Release

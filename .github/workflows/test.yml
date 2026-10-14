@@ -113,7 +113,7 @@ jobs:
         run: npm install --global '@omnidist/omnidist@0.1.40'
 
       - name: Verify checked-in release contract
-        run: go run ./internal/cmd/releasecheck --version 0.6.0
+        run: go run ./internal/cmd/releasecheck --version 0.6.1
 
       - name: Build native artifacts
         run: omnidist --profile default build
