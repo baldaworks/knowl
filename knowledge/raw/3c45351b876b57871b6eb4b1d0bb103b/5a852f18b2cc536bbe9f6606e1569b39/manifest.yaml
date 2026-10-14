@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/search.md
+version: 8edcc0f5bb92cbd71623973266306b8fc0e2398e5a10e39ca0637680e2231952
+digest: 8edcc0f5bb92cbd71623973266306b8fc0e2398e5a10e39ca0637680e2231952
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: search.md
+    revision: 8edcc0f5bb92cbd71623973266306b8fc0e2398e5a10e39ca0637680e2231952
+    uri: file:///home/bigboss/Projects/knowl/docs/search.md
+received_at: 2026-10-14T07:25:23.389457Z
