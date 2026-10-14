@@ -10,6 +10,13 @@ import (
 	"github.com/yuin/goldmark/v2/parser"
 )
 
+// Stable generated-navigation rules, independent of OKF structural violations.
+const (
+	RuleLinkLimit       = "link.limit"
+	RuleLinkNonportable = "link.nonportable"
+	RuleLinkUnsafe      = "link.unsafe"
+)
+
 // Navigation is bounded generated-page navigation, separate from OKF syntax
 // validity. Targets are bundle-relative concept IDs; existence is a caller concern.
 type Navigation struct {
@@ -23,7 +30,7 @@ type Navigation struct {
 func InspectNavigation(relative, body string, limit int) Navigation {
 	result := Navigation{Targets: make([]string, 0)}
 	if limit <= 0 {
-		result.Rule = "link.limit"
+		result.Rule = RuleLinkLimit
 		return result
 	}
 	source := []byte(body)
@@ -33,7 +40,7 @@ func InspectNavigation(relative, body string, limit int) Navigation {
 	candidate := func() bool {
 		count++
 		if count > limit {
-			result.Rule = "link.limit"
+			result.Rule = RuleLinkLimit
 			return false
 		}
 		return true
@@ -61,7 +68,7 @@ func InspectNavigation(relative, body string, limit int) Navigation {
 			if !candidate() {
 				return
 			}
-			result.Rule = "link.nonportable"
+			result.Rule = RuleLinkNonportable
 			return
 		}
 	}
@@ -109,7 +116,7 @@ func InspectNavigation(relative, body string, limit int) Navigation {
 func generatedDestination(relative, raw string) (string, string) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", "link.unsafe"
+		return "", RuleLinkUnsafe
 	}
 	if parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(raw, "//") {
 		return "", ""
@@ -119,25 +126,25 @@ func generatedDestination(relative, raw string) (string, string) {
 		return "", ""
 	}
 	if strings.ContainsAny(decoded, "\\\x00\r\n") {
-		return "", "link.unsafe"
+		return "", RuleLinkUnsafe
 	}
 	if strings.HasPrefix(decoded, "/") {
-		return "", "link.nonportable"
+		return "", RuleLinkNonportable
 	}
 	target := path.Clean(path.Join(path.Dir(relative), decoded))
 	if target == ".." || strings.HasPrefix(target, "../") || path.IsAbs(target) {
-		return "", "link.unsafe"
+		return "", RuleLinkUnsafe
 	}
 	extension := path.Ext(decoded)
 	if extension != "" && extension != ".md" {
 		return "", ""
 	}
 	if extension != ".md" {
-		return "", "link.nonportable"
+		return "", RuleLinkNonportable
 	}
 	kind, err := okf.ClassifyPath(target)
 	if err != nil {
-		return "", "link.unsafe"
+		return "", RuleLinkUnsafe
 	}
 	if kind != okf.DocumentConcept {
 		return "", ""

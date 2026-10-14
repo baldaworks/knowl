@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 var (
@@ -83,6 +84,12 @@ func ValidatePlan(ctx context.Context, input knowl.MaintenanceInput, plan knowl.
 		seen[path] = struct{}{}
 		if len(edit.Content) > limits.MaxFileBytes {
 			return knowl.ValidatedEditPlan{}, fmt.Errorf("file %q: %w", path, ErrPlanLimitExceeded)
+		}
+		if !strings.HasSuffix(path, "/index.md") {
+			navigation := wiki.InspectNavigation(strings.TrimPrefix(path, "wiki/"), wiki.Body(string(edit.Content)), 4096)
+			if navigation.Rule != "" {
+				return knowl.ValidatedEditPlan{}, fmt.Errorf("generated navigation %s: %w", navigation.Rule, ErrPlanInvalid)
+			}
 		}
 		edit.Path = path
 		edit.Content = append([]byte(nil), edit.Content...)

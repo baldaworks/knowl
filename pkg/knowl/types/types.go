@@ -98,6 +98,7 @@ type MaintenanceDiagnostic struct {
 const (
 	DiagnosticCitationUnknownSource   = "citation.unknown_source"
 	DiagnosticOriginalLinkUnresolved  = "link.original_unresolved"
+	DiagnosticLinkUnresolved          = "link.unresolved"
 	DiagnosticCatalogDependencyReject = "catalog.dependency_rejected"
 )
 

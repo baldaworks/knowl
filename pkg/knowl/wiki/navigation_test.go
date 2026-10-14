@@ -17,15 +17,15 @@ func TestInspectNavigation(t *testing.T) {
 		{name: "external", body: "[URL](https://example.test/a.md) <https://example.test> [Asset](image.png) [Anchor](#part)"},
 		{name: "literals", body: "`[[inline]]`\n\n    [[indented]]\n    [Example](code.md)\n\n```md\n[[fenced]]\n```\n\n[External](https://example.test/[[destination]])"},
 		{name: "escaped", body: `\[[literal]]`},
-		{name: "wiki", body: "See [[concepts/two|Two]].", rule: "link.nonportable"},
-		{name: "wiki emphasized", body: "See [[**concepts/two**]].", rule: "link.nonportable"},
-		{name: "unterminated", body: "See [[concepts/two", rule: "link.nonportable"},
-		{name: "root", body: "[Two](/concepts/two.md)", rule: "link.nonportable"},
-		{name: "extensionless", body: "[Two](two)", rule: "link.nonportable"},
-		{name: "escape", body: "[Escape](../../outside.md)", rule: "link.unsafe"},
-		{name: "encoded escape", body: "[Escape](%2e%2e/%2e%2e/outside.md)", rule: "link.unsafe"},
-		{name: "encoded slash", body: "[Escape](..%2f..%2foutside.md)", rule: "link.unsafe"},
-		{name: "encoded backslash", body: "[Escape](a%5Cb.md)", rule: "link.unsafe"},
+		{name: "wiki", body: "See [[concepts/two|Two]].", rule: RuleLinkNonportable},
+		{name: "wiki emphasized", body: "See [[**concepts/two**]].", rule: RuleLinkNonportable},
+		{name: "unterminated", body: "See [[concepts/two", rule: RuleLinkNonportable},
+		{name: "root", body: "[Two](/concepts/two.md)", rule: RuleLinkNonportable},
+		{name: "extensionless", body: "[Two](two)", rule: RuleLinkNonportable},
+		{name: "escape", body: "[Escape](../../outside.md)", rule: RuleLinkUnsafe},
+		{name: "encoded escape", body: "[Escape](%2e%2e/%2e%2e/outside.md)", rule: RuleLinkUnsafe},
+		{name: "encoded slash", body: "[Escape](..%2f..%2foutside.md)", rule: RuleLinkUnsafe},
+		{name: "encoded backslash", body: "[Escape](a%5Cb.md)", rule: RuleLinkUnsafe},
 		{name: "missing is caller concern", body: "[Missing](missing.md)", targets: []string{"concepts/missing"}},
 	}
 	for _, tc := range tests {
@@ -46,7 +46,7 @@ func TestInspectNavigationBound(t *testing.T) {
 	t.Parallel()
 	for _, limit := range []int{0, 1} {
 		got := InspectNavigation("one.md", "[One](one.md) [Two](two.md)", limit)
-		if got.Rule != "link.limit" {
+		if got.Rule != RuleLinkLimit {
 			t.Fatalf("rule = %q", got.Rule)
 		}
 	}

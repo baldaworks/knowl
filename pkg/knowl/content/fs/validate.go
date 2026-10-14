@@ -373,7 +373,8 @@ func validateCatalogGraph(documents map[string]string, editedPages map[string]st
 
 func validateOrdinaryPageEdit(target string, pageID knowl.PageID, content string, rawRefs map[string]struct{}, pageTargets map[knowl.PageID]struct{}, originalTargets map[string]struct{}) ([]knowl.MaintenanceDiagnostic, error) {
 	bundleRelative := strings.TrimPrefix(target, workspaceWikiDir+"/")
-	if _, err := okf.ParseConcept(bundleRelative, []byte(content), okfLimits(len(content))); err != nil {
+	document, err := okf.ParseConcept(bundleRelative, []byte(content), okfLimits(len(content)))
+	if err != nil {
 		return nil, okfContentInvalidError(target, err)
 	}
 	metadata, err := knowlwiki.ParseFrontmatter(content)
@@ -405,18 +406,20 @@ func validateOrdinaryPageEdit(target string, pageID knowl.PageID, content string
 	if nonEmptySourceRefs == 0 {
 		return nil, contentInvalidError(target, "citation.missing")
 	}
-	targets, malformed := knowlwiki.MarkdownTargets(content)
-	if malformed {
-		return nil, contentInvalidError(target, "link.malformed")
+	navigation := knowlwiki.InspectNavigation(bundleRelative, document.Body, maxCatalogLinks)
+	if navigation.Rule != "" {
+		return nil, contentInvalidError(target, navigation.Rule)
 	}
 	diagnostics := make([]knowl.MaintenanceDiagnostic, 0)
-	for _, linkedTarget := range targets {
-		if _, exists := pageTargets[knowl.PageID(linkedTarget)]; !exists {
-			if _, original := originalTargets[linkedTarget]; !original {
-				return nil, contentInvalidError(target, "link.broken")
-			}
-			diagnostics = append(diagnostics, knowl.MaintenanceDiagnostic{Code: knowl.DiagnosticOriginalLinkUnresolved, Path: target, Target: linkedTarget})
+	for _, linkedTarget := range navigation.Targets {
+		if _, exists := pageTargets[knowl.PageID(linkedTarget)]; exists {
+			continue
 		}
+		code := knowl.DiagnosticLinkUnresolved
+		if _, original := originalTargets[linkedTarget]; original {
+			code = knowl.DiagnosticOriginalLinkUnresolved
+		}
+		diagnostics = append(diagnostics, knowl.MaintenanceDiagnostic{Code: code, Path: target, Target: linkedTarget})
 	}
 	return diagnostics, nil
 }

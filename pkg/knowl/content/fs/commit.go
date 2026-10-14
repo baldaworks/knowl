@@ -97,7 +97,7 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	}
 	persistedLinkDiagnostics := make([]knowl.MaintenanceDiagnostic, 0, len(derivedDiagnostics))
 	for _, diagnostic := range manifest.Diagnostics {
-		if diagnostic.Code == knowl.DiagnosticOriginalLinkUnresolved {
+		if diagnostic.Code == knowl.DiagnosticOriginalLinkUnresolved || diagnostic.Code == knowl.DiagnosticLinkUnresolved {
 			persistedLinkDiagnostics = append(persistedLinkDiagnostics, diagnostic)
 		}
 	}

@@ -750,7 +750,7 @@ func TestWorkspaceStagePlanPreservesUnresolvedOriginalLinks(t *testing.T) {
 	if err := workspace.Init(); err != nil {
 		t.Fatal(err)
 	}
-	boundaryTarget := "entities/" + strings.Repeat("x", 2048-len("entities/"))
+	boundaryTarget := "entities/" + strings.Repeat("x", 2048-len("entities/")-len(".md"))
 	sourceContent := []byte("[[entities/z-missing]] [[entities/a-missing]] [[" + boundaryTarget + "]]\n")
 	accepted, err := workspace.AcceptSource(context.Background(), knowl.SourceEnvelope{
 		Scope: testScope, Source: knowl.SourceRef{Adapter: testFixtureAdapter, ID: "original-links"},
@@ -765,7 +765,7 @@ func TestWorkspaceStagePlanPreservesUnresolvedOriginalLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := "[[entities/z-missing]] [[entities/a-missing]] [[entities/a-missing]] [[" + boundaryTarget + "]]"
+	body := "[Z](z-missing.md) [A](a-missing.md) [A](a-missing.md) [Boundary](" + strings.TrimPrefix(boundaryTarget, "entities/") + ".md)"
 	plan := knowl.ValidatedEditPlan{
 		OperationID: "original-links", Scope: testScope, SchemaDigest: schema.Digest,
 		RequiredSourceRef: sourceRef, SourceRefs: []string{sourceRef},
@@ -944,7 +944,7 @@ func TestWorkspaceStagePlanAllowsExistingAndSamePlanTargets(t *testing.T) {
 		Scope:        testScope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
-		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")}},
+		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[Two](two.md)")}},
 	}); err != nil {
 		t.Fatalf("stage existing target: %v", err)
 	}
@@ -954,7 +954,7 @@ func TestWorkspaceStagePlanAllowsExistingAndSamePlanTargets(t *testing.T) {
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
 		Edits: []knowl.FileEdit{
-			{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")},
+			{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[Two](two.md)")},
 			{Path: "wiki/entities/two.md", ExpectedDigest: digestBytes(validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, "")), Content: validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, "")},
 		},
 	}); err != nil {
@@ -1568,7 +1568,7 @@ func TestWorkspaceCommitRejectsBrokenProspectiveStateBeforeJournal(t *testing.T)
 		Scope:        testScope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
-		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/two]]")}},
+		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[Two](two.md)")}},
 	})
 	if err != nil {
 		t.Fatalf("stage plan: %v", err)
