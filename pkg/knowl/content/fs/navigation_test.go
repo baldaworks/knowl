@@ -82,7 +82,7 @@ func TestGeneratedMissingNavigationWarningStageCommitReplay(t *testing.T) {
 func TestPortableSnapshotNavigationExcludesLiteralCode(t *testing.T) {
 	workspace := newExportWorkspace(t)
 	bodies := map[string]string{
-		"concepts/deep/article": "[Same](other.md#part) [Nested](nested/leaf.md) [Cross](../../entities/two.md) [Unicode](%D0%9E%D0%B1%D0%B7%D0%BE%D1%80.md) [Missing](missing.md) [External](https://example.test) ![Image [Description link](code.md)](image.png)\n\n`[Inline](code.md)`\n\n    [Indented](code.md)\n\n```md\n[Fenced](code.md)\n```\n",
+		"concepts/deep/article": "[Same](other.md#part) [Nested](nested/leaf.md) [Cross](../../entities/two.md) [Unicode](%D0%9E%D0%B1%D0%B7%D0%BE%D1%80.md) [Missing](missing.md) [External](https://example.test) ![Image [Description link](code.md)](image.png) `[[concepts/deep/code]]`\n\n`[Inline](code.md)`\n\n    [Indented](code.md)\n\n```md\n[Fenced](code.md)\n```\n",
 		"concepts/deep/other":   "Other", "concepts/deep/nested/leaf": "Nested", portableCrossPageID: "Cross", "concepts/deep/Обзор": "Unicode", "concepts/deep/code": "Code target exists",
 	}
 	for id, body := range bodies {

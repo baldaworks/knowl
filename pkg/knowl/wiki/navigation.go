@@ -176,3 +176,31 @@ func conceptDestinations(body string, limit int) []string {
 	})
 	return destinations
 }
+
+// legacyNavigationProse preserves legacy reader syntax while excluding literal
+// code and image/link destinations from the graph just as the browser does.
+func legacyNavigationProse(body string) string {
+	source := []byte(body)
+	document := parser.New().Parse(source)
+	var prose strings.Builder
+	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if _, block := node.(ast.BlockNode); block {
+			prose.WriteByte('\n')
+		}
+		switch n := node.(type) {
+		case *ast.CodeSpan, *ast.CodeBlock, *ast.Image, *ast.Link, *ast.AutoLink, *ast.RawHTML, *ast.HTMLBlock:
+			prose.WriteByte('\n')
+			return ast.WalkSkipChildren, nil
+		case *ast.Text:
+			prose.Write(n.Value.Bytes(source))
+			if n.SoftLineBreak() || n.HardLineBreak() {
+				prose.WriteByte('\n')
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	return prose.String()
+}
