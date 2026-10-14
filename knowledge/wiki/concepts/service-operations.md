@@ -154,4 +154,4 @@ Source sync stores immutable evidence in `raw/` and reserves maintenance operati
   - Evaluated via `go test -count=2 -json ./pkg/knowl ./pkg/knowl/app -run 'TestContextBaselineBlockedExecution|TestHostComposesDistinctRuntimeSessions|TestConcurrentPreparedSourcePlansFailSafely|TestOverlappingSourceAndHierarchyPreserveFirstCommit'`.
   - Enforces serial execution under capacity 1, parallel progress under capacity 2, and typed conflict preservation for concurrent overlapping plans without automatic replanning.
 
-See [[concepts/architecture]] for system design, [[concepts/public-contract]] for service APIs, and [[concepts/content-and-trust-boundaries]] for storage and security models.
+See [concepts/architecture](architecture.md) for system design, [concepts/public-contract](public-contract.md) for service APIs, and [concepts/content-and-trust-boundaries](content-and-trust-boundaries.md) for storage and security models.

@@ -33,7 +33,7 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
 	diagnostics = slices.DeleteFunc(diagnostics, func(diagnostic knowl.MaintenanceDiagnostic) bool {
-		return diagnostic.Code == knowl.DiagnosticOriginalLinkUnresolved
+		return diagnostic.Code == knowl.DiagnosticOriginalLinkUnresolved || diagnostic.Code == knowl.DiagnosticLinkUnresolved
 	})
 	plan.Diagnostics = diagnostics
 	unlock, err := workspace.lock(ctx)

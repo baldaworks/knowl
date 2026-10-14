@@ -32,4 +32,4 @@ Transports do not expose direct page CRUD, raw workspace file writes, search sub
 
 Public ingest accepts source text or a URI reference; submitting a URI does not download its contents. Configured filesystem and remote Git sources use the separate operator synchronization lifecycle to fetch documents and reserve durable maintenance work. Git synchronization preserves the same three-operation public contract.
 
-See [[concepts/architecture]] for system design and [[concepts/content-and-trust-boundaries]] for workspace structure.
+See [concepts/architecture](architecture.md) for system design and [concepts/content-and-trust-boundaries](content-and-trust-boundaries.md) for workspace structure.

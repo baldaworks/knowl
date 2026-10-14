@@ -122,17 +122,21 @@ The enforced and linted conventions are:
 - `type` is required; `title`, `description`, `resource`, `tags`, `sources`,
   lifecycle, generation, and verification fields follow OKF v0.2;
 - unknown producer fields round-trip as OKF extensions;
-- internal links must resolve to a page in the current bundle;
+- generated cross-references should identify confirmed concepts in the current bundle;
 - the `knowl` namespaced extension carries Knowl provenance. Its `source_refs`
   contains stable citations in the form
   `adapter:source-id@version`; every maintained page must cite at least one
   accepted raw source.
-- Curated Knowl pages use double-bracket wiki links whose target is an existing
-  bundle-relative page identity; these links remain strict. Imported OKF
-  concepts use standard Markdown links such as `[Related](related.md)`. Local
-  concept targets are resolved deterministically; unresolved internal targets
-  are rejected, while external URLs and assets are excluded from the concept
-  graph.
+- Curated pages use standard Markdown cross-references with explicit `.md`
+  destinations relative to the originating page, such as
+  `[Related](related.md)` or `[Other](../entities/other.md)`. Encode path
+  characters when necessary. These links work in OKF readers and GitHub.
+  Generated navigational double-bracket links, bundle-root paths, and escaping
+  paths are rejected; literal code examples are preserved. Imported OKF may
+  retain the specification's bundle-relative links, and legacy wikilinks remain
+  readable. Missing article targets produce navigation warnings rather than
+  OKF structural failures or successful concept graph edges; external URLs and
+  assets are excluded from the concept graph. Catalogs require existing targets.
 - Maintainer edit plans may target safe semantic `wiki/**/*.md` except
   `wiki/log.md` and the reserved legacy `wiki/sources/**` boundary. The plan must carry the
   current schema digest, cite the accepted source, use unique paths, and stay

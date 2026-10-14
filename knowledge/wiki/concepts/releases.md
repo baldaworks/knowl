@@ -160,4 +160,4 @@ Knowl v0.6.0 introduces the repository-supplied local Codex plugin and stages th
 - **Verified Scope & Concurrency**: Supported exclusively for local Codex projects with local filesystem storage. Concurrent processes for a single project coordinate durable storage and workspace while separate working directories remain isolated.
 - **Publication Requirements**: Publication requires an authorized release workflow with a v0.6.0 tag on `main`, green verification checks (repository, integration, container, npm), and publish authority credentials for `@baldaworks/knowl` and native packages.
 
-See [[concepts/architecture]] for architectural details, [[concepts/public-contract]] for service APIs, [[concepts/service-operations]] for operational procedures, and [[concepts/content-and-trust-boundaries]] for trust models.
+See [concepts/architecture](architecture.md) for architectural details, [concepts/public-contract](public-contract.md) for service APIs, [concepts/service-operations](service-operations.md) for operational procedures, and [concepts/content-and-trust-boundaries](content-and-trust-boundaries.md) for trust models.

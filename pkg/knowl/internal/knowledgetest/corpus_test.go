@@ -74,6 +74,41 @@ func TestMaintainerBuildsTwoPageCorpusAndRequiresUpdateContext(t *testing.T) {
 	}
 }
 
+func TestFinalSnapshotMarkdownNavigation(t *testing.T) {
+	t.Parallel()
+	const decisionLink = "[decision](../decisions/session-memory.md)"
+	for _, test := range []struct {
+		name    string
+		content string
+		body    string
+		valid   bool
+	}{
+		{name: "content with empty body", content: decisionLink, valid: true},
+		{name: "reference link and fragment", content: "[decision][target]\n\n[target]: ../decisions/session-memory.md#history", valid: true},
+		{name: "stale body", content: decisionLink, body: "[[wrong]]", valid: true},
+		{name: "body cannot hide wrong content", content: "[wrong](../decisions/missing.md)", body: decisionLink},
+		{name: "legacy link", content: "[[decisions/session-memory]]"},
+		{name: "inline literal", content: "`[decision](../decisions/session-memory.md)`"},
+		{name: "fenced literal", content: "```markdown\n[decision](../decisions/session-memory.md)\n```"},
+		{name: "image", content: "![decision](../decisions/session-memory.md)"},
+		{name: "external", content: "[decision](https://example.com/decisions/session-memory.md)"},
+		{name: "absolute", content: "[decision](/wiki/decisions/session-memory.md)"},
+		{name: "metadata link", content: "---\ntype: runbook\nnote: '[decision](../decisions/session-memory.md)'\n---\nNo navigation."},
+		{name: "extra concept", content: "[decision](../decisions/session-memory.md) [missing](missing.md)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			snapshot := FinalSnapshot("local")
+			snapshot.Pages[1].Content = test.content
+			snapshot.Pages[1].Body = test.body
+			err := ValidateFinalSnapshot(snapshot)
+			if (err == nil) != test.valid {
+				t.Fatalf("ValidateFinalSnapshot() error = %v, want valid %t", err, test.valid)
+			}
+		})
+	}
+}
+
 func TestEvaluatorMetricsAndEvidenceValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

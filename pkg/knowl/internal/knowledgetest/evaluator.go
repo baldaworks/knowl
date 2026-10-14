@@ -3,11 +3,15 @@ package knowledgetest
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"path"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
 )
 
 // Retriever is the narrow evidence operation evaluated by the golden corpus.
@@ -76,10 +80,41 @@ func ValidateFinalSnapshot(snapshot knowl.WorkspaceSnapshot) error {
 	if len(decision.SourceRefs) != 3 || len(runbook.SourceRefs) != 1 {
 		return fmt.Errorf("final provenance counts are decision=%d runbook=%d", len(decision.SourceRefs), len(runbook.SourceRefs))
 	}
-	if !strings.Contains(runbook.Content, "[[decisions/session-memory]]") {
+	links := goldenLinkTargets(runbook.Path, runbook.Content)
+	if len(links) != 1 || links[0] != decision.Path {
 		return fmt.Errorf("runbook omits decision link")
 	}
 	return nil
+}
+
+// goldenLinkTargets independently reads ordinary Markdown navigation from the
+// authoritative content; synthetic corpus snapshots need not populate Body.
+func goldenLinkTargets(origin, content string) []string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		for index := 1; index < len(lines); index++ {
+			if strings.TrimSpace(lines[index]) == "---" {
+				content = strings.Join(lines[index+1:], "\n")
+				break
+			}
+		}
+	}
+	var targets []string
+	source := []byte(content)
+	document := parser.New().Parse(source)
+	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		link, ok := node.(*ast.Link)
+		if !entering || !ok {
+			return ast.WalkContinue, nil
+		}
+		destination, err := url.Parse(link.Destination.Value(source))
+		if err == nil && destination.Scheme == "" && destination.Host == "" &&
+			!path.IsAbs(destination.Path) && path.Ext(destination.Path) == ".md" {
+			targets = append(targets, path.Join(path.Dir(origin), destination.Path))
+		}
+		return ast.WalkContinue, nil
+	})
+	return targets
 }
 
 func containsAnyToken(text string, terms []string) bool {

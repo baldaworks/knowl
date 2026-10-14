@@ -90,7 +90,7 @@ func (m *detailsMaintainer) Plan(ctx context.Context, input domain.MaintenanceIn
 	m.calls++
 	return (provider.Fixture{Error: m.failure, Result: domain.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest, SourceRefs: []string{app.SourceRefKey(input.Source)}, Rationale: detailsRationaleSecret,
-		Edits: []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + app.SourceRefKey(input.Source) + "\n---\n# One\n\n[[entities/missing]]\n")}},
+		Edits: []domain.FileEdit{{Path: "wiki/entities/one.md", Content: []byte("---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + app.SourceRefKey(input.Source) + "\n---\n# One\n\n[Missing](missing.md)\n")}},
 	}}).Plan(ctx, input)
 }
 

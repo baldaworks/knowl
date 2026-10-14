@@ -468,7 +468,7 @@ func PageIDFromPath(path string) (knowl.PageID, bool) {
 
 // Links converts normalized page targets into unique wiki link references.
 func Links(from knowl.PageID, content string) []knowl.LinkReference {
-	targets, _ := MarkdownTargets(content)
+	targets, _ := MarkdownTargets(legacyNavigationProse(content))
 	links := make([]knowl.LinkReference, 0, len(targets))
 	seen := make(map[string]struct{}, len(targets))
 	for _, target := range targets {
@@ -487,7 +487,7 @@ func Links(from knowl.PageID, content string) []knowl.LinkReference {
 // unsafe, and malformed destinations are ignored.
 func ConceptLinks(from knowl.PageID, content string) []knowl.LinkReference {
 	const maxConceptLinks = 4096
-	destinations := markdownDestinations(content, maxConceptLinks)
+	destinations := conceptDestinations(content, maxConceptLinks)
 	links := make([]knowl.LinkReference, 0, len(destinations))
 	seen := make(map[string]struct{}, len(destinations))
 	for _, destination := range destinations {
