@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,24 +88,30 @@ func TestSourceAcceptanceWaitsForFinalProvenanceFence(t *testing.T) {
 		},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-			defer cancel()
 			harness := newStageHarness(t, nil)
 			scenario.setup(t, harness)
 			gate := &syncApplyCoordinator{occupied: make(chan struct{}, 1), requested: make(chan struct{}, 2)}
 			harness.service = coordinatedStageService(t, harness.service, gate)
 			owner, cursor, limits := prepareReconcileZeroProvenanceContinuation(t, harness)
+			// Give publication its own bounded budget after expensive fixture setup.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
 			release, err := gate.Acquire(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
+			release = sync.OnceFunc(release)
+			var workers sync.WaitGroup
+			defer func() { cancel(); release(); workers.Wait() }()
 			<-gate.requested
 			type completion struct {
 				result Result
 				err    error
 			}
 			done := make(chan completion, 1)
+			workers.Add(1)
 			go func() {
+				defer workers.Done()
 				result, syncErr := harness.service.SyncSource(ctx, harness.scope, harness.source(knowl.SourceFlavorMarkdown))
 				done <- completion{result: result, err: syncErr}
 			}()

@@ -20,17 +20,17 @@ import (
 )
 
 func TestApplyCoordinatorOrdersCompleteProjectionTails(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
 	workspace, store, _, _ := newWorkflow(t, false, nil)
 	gate := newTestApplyCoordinator()
 	index := &delayedApplyIndex{SearchIndex: store, entered: make(chan struct{}), resume: make(chan struct{}, 1)}
-	var workers sync.WaitGroup
-	defer func() { cancel(); close(index.resume); workers.Wait() }()
 	service, err := app.NewIngestService(workspace, store, index, applyFactMaintainer{}, app.IngestOptions{AutoApply: true, ApplyCoordinator: gate})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Bound completion under race/coverage load without charging fixture setup.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	var workers sync.WaitGroup
+	defer func() { cancel(); close(index.resume); workers.Wait() }()
 	firstDone := make(chan error, 1)
 	workers.Add(1)
 	go func() {
@@ -176,18 +176,23 @@ func TestCanceledApplyCoordinatorWaitCannotCommit(t *testing.T) {
 }
 
 func TestSubmitAcceptSourceWaitsForFinalProvenanceFence(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
 	gate := newTestApplyCoordinator()
 	workspace, _, service, _ := newWorkflowWithOptions(t, app.IngestOptions{ApplyCoordinator: gate}, nil)
 	owner, cursor, limits := prepareZeroProvenanceContinuation(t, workspace)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 	release, err := gate.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	release = sync.OnceFunc(release)
+	var workers sync.WaitGroup
+	defer func() { cancel(); release(); workers.Wait() }()
 	<-gate.requests
 	done := make(chan error, 1)
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		_, submitErr := service.Submit(ctx, sourceEnvelope([]byte("coordinated source publication")))
 		done <- submitErr
 	}()
@@ -376,8 +381,6 @@ func applyEnvelope(id string) knowl.SourceEnvelope {
 }
 
 func TestOverlappingSourceAndHierarchyPreserveFirstCommit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
 	workspace, store := hierarchyWorkflow(t)
 	gate := newTestApplyCoordinator()
 	maintainer := &blockedApplyHierarchy{ready: make(chan struct{}), resume: make(chan struct{}, 1)}
@@ -385,12 +388,20 @@ func TestOverlappingSourceAndHierarchyPreserveFirstCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	var workers sync.WaitGroup
+	defer func() { cancel(); close(maintainer.resume); workers.Wait() }()
 	type completed struct {
 		result app.IngestResult
 		err    error
 	}
 	done := make(chan completed, 1)
-	go func() { result, err := hierarchy.Reconcile(ctx, testSourceScope); done <- completed{result, err} }()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		result, err := hierarchy.Reconcile(ctx, testSourceScope)
+		done <- completed{result, err}
+	}()
 	select {
 	case <-maintainer.ready:
 	case <-ctx.Done():
