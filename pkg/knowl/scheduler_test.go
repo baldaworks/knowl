@@ -31,6 +31,7 @@ func TestTerminalRouterDispatchesByDurableWorkKind(t *testing.T) {
 
 	sourceCalls := 0
 	hierarchyCalls := 0
+	retirementCalls := 0
 	router := terminalRouter{
 		source: runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
 			sourceCalls++
@@ -38,6 +39,10 @@ func TestTerminalRouterDispatchesByDurableWorkKind(t *testing.T) {
 		}),
 		hierarchy: runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
 			hierarchyCalls++
+			return app.IngestResult{Operation: claim.Operation}, nil
+		}),
+		retirement: runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+			retirementCalls++
 			return app.IngestResult{Operation: claim.Operation}, nil
 		}),
 	}
@@ -51,8 +56,13 @@ func TestTerminalRouterDispatchesByDurableWorkKind(t *testing.T) {
 	if _, err := router.RunToTerminal(context.Background(), hierarchy); err != nil {
 		t.Fatalf("route hierarchy: %v", err)
 	}
-	if sourceCalls != 1 || hierarchyCalls != 1 {
-		t.Fatalf("route calls = source %d, hierarchy %d", sourceCalls, hierarchyCalls)
+	retirement := schedulerClaim("retirement")
+	retirement.Descriptor.Kind = domain.WorkSourceRetirementPage
+	if _, err := router.RunToTerminal(context.Background(), retirement); err != nil {
+		t.Fatalf("route retirement: %v", err)
+	}
+	if sourceCalls != 1 || hierarchyCalls != 1 || retirementCalls != 1 {
+		t.Fatalf("route calls = source %d, hierarchy %d, retirement %d", sourceCalls, hierarchyCalls, retirementCalls)
 	}
 	unknown := schedulerClaim("unknown")
 	unknown.Descriptor.Kind = domain.WorkKind("unknown")
@@ -61,6 +71,52 @@ func TestTerminalRouterDispatchesByDurableWorkKind(t *testing.T) {
 	}
 	if _, err := (terminalRouter{source: router.source}).RunToTerminal(context.Background(), hierarchy); !errors.Is(err, app.ErrMaintainerUnavailable) {
 		t.Fatalf("missing hierarchy runner error = %v, want maintainer unavailable", err)
+	}
+	if _, err := (terminalRouter{source: router.source}).RunToTerminal(context.Background(), retirement); !errors.Is(err, app.ErrMaintainerUnavailable) {
+		t.Fatalf("missing retirement runner error = %v, want maintainer unavailable", err)
+	}
+}
+
+func TestSchedulerBoundsConsecutiveRetirementClaims(t *testing.T) {
+	t.Parallel()
+	store := &schedulerStore{claims: []domain.WorkClaim{
+		retirementSchedulerClaim("retirement-1"),
+		retirementSchedulerClaim("retirement-2"),
+		retirementSchedulerClaim("retirement-3"),
+		schedulerClaim("ordinary"),
+	}}
+	scheduler := newTestScheduler(t, store, runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		return app.IngestResult{Operation: claim.Operation}, nil
+	}), schedulerOptions{maxConsecutiveRetirement: 2, claimBatch: 4})
+
+	first, err := scheduler.claim(t.Context())
+	if err != nil || first.Descriptor.Kind != domain.WorkSourceRetirementPage {
+		t.Fatalf("first claim = %#v, %v", first, err)
+	}
+	second, err := scheduler.claim(t.Context())
+	if err != nil || second.Descriptor.Kind != domain.WorkSourceRetirementPage {
+		t.Fatalf("second claim = %#v, %v", second, err)
+	}
+	third, err := scheduler.claim(t.Context())
+	if err != nil || third.Operation.ID != "ordinary" {
+		t.Fatalf("third claim = %#v, %v; want ordinary work", third, err)
+	}
+}
+
+func TestSchedulerDiscoversRetirementWorkBeforeDurableInspection(t *testing.T) {
+	store := &schedulerStore{}
+	discoverCalls := 0
+	scheduler := newTestScheduler(t, store, runnerFunc(func(context.Context, domain.WorkClaim) (app.IngestResult, error) {
+		return app.IngestResult{}, nil
+	}), schedulerOptions{discover: func(context.Context) error {
+		discoverCalls++
+		store.addClaim(retirementSchedulerClaim("discovered-retirement"))
+		return nil
+	}})
+
+	ready, err := scheduler.inspect(t.Context())
+	if err != nil || !ready || discoverCalls != 1 {
+		t.Fatalf("inspect after discovery = ready %v, calls %d, err %v", ready, discoverCalls, err)
 	}
 }
 
@@ -734,6 +790,31 @@ func (store *schedulerStore) ClaimReady(_ context.Context, _ domain.ScopeRef, le
 	return claim, nil
 }
 
+func (store *schedulerStore) Execution(_ context.Context, _ domain.ScopeRef, id domain.OperationID) (domain.ExecutionDescriptor, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, claim := range store.claims {
+		if claim.Operation.ID == id {
+			return claim.Descriptor, nil
+		}
+	}
+	return domain.ExecutionDescriptor{}, app.ErrExecutionDescriptorUnavailable
+}
+
+func (store *schedulerStore) ClaimOperation(_ context.Context, _ domain.ScopeRef, id domain.OperationID, lease domain.WorkLease) (domain.WorkClaim, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for index, claim := range store.claims {
+		if claim.Operation.ID == id {
+			store.claims = append(store.claims[:index], store.claims[index+1:]...)
+			claim.Lease = lease
+			store.claimCalls++
+			return claim, nil
+		}
+	}
+	return domain.WorkClaim{}, app.ErrNoReadyOperation
+}
+
 func (store *schedulerStore) RenewClaim(context.Context, domain.ScopeRef, domain.OperationID, string, domain.WorkLease) error {
 	store.mu.Lock()
 	err := store.renewErr
@@ -826,6 +907,12 @@ func (store *schedulerStore) maxClaimCallsBetweenInspections() int {
 
 func schedulerClaim(id domain.OperationID) domain.WorkClaim {
 	return domain.WorkClaim{Operation: domain.Operation{ID: id, Key: domain.OperationKey{Scope: DefaultScope}, Status: domain.StatusReceived}}
+}
+
+func retirementSchedulerClaim(id domain.OperationID) domain.WorkClaim {
+	claim := schedulerClaim(id)
+	claim.Descriptor.Kind = domain.WorkSourceRetirementPage
+	return claim
 }
 
 type schedulerClassifiedError struct {

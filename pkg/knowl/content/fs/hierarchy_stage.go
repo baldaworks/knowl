@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/internal/maintenanceauthority"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
@@ -19,6 +20,12 @@ import (
 // StageHierarchyPlan stages catalog-only writes and managed deletes without
 // changing canonical content.
 func (workspace *Workspace) StageHierarchyPlan(ctx context.Context, id knowl.OperationID, plan knowl.ValidatedHierarchyPlan) (knowl.StagedChange, error) {
+	if workspace.maintenanceAuthority {
+		return knowl.StagedChange{}, ErrPlanConflict
+	}
+	return workspace.stageHierarchyPlan(ctx, id, plan, nil)
+}
+func (workspace *Workspace) stageHierarchyPlan(ctx context.Context, id knowl.OperationID, plan knowl.ValidatedHierarchyPlan, authority *maintenanceauthority.Stamp) (knowl.StagedChange, error) {
 	if err := contextErr(ctx); err != nil {
 		return knowl.StagedChange{}, err
 	}
@@ -85,7 +92,8 @@ func (workspace *Workspace) StageHierarchyPlan(ctx context.Context, id knowl.Ope
 	manifest := stageManifest{
 		OperationID: string(id), Writer: stageWriterHierarchy, Scope: string(plan.Scope),
 		SchemaDigest: plan.SchemaDigest, SnapshotDigest: plan.SnapshotDigest, Entries: entries,
-		LogDate: workspace.now().UTC().Format(time.DateOnly),
+		MaintenanceAuthority: authority,
+		LogDate:              workspace.now().UTC().Format(time.DateOnly),
 	}
 	coreMetadata, err := yaml.Marshal(manifest)
 	if err != nil {

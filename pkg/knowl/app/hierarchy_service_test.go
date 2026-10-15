@@ -292,7 +292,7 @@ func (maintainer *hierarchyMaintainer) PlanHierarchy(_ context.Context, input kn
 	return knowl.HierarchyModelPlan{
 		SchemaDigest: input.SchemaDigest, SnapshotDigest: input.SnapshotDigest,
 		Catalogs: []knowl.HierarchyCatalogSpec{
-			{Path: "wiki/index.md", Title: "Knowl", Children: []string{hierarchyArchitectureCatalog, hierarchyProductCatalog}},
+			{Path: testRootCatalogPath, Title: "Knowl", Children: []string{hierarchyArchitectureCatalog, hierarchyProductCatalog}},
 			{Path: hierarchyArchitectureCatalog, Title: "Architecture", Children: architecture},
 			{Path: hierarchyProductCatalog, Title: "Product", Children: product},
 		},

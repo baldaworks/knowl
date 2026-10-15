@@ -188,9 +188,13 @@ func TestMaintenanceReconciliationTrigger(t *testing.T) {
 }
 
 type recordingMaintenanceQueue struct {
-	requests []app.AcceptedMaintenanceRequest
-	seen     map[knowl.OperationID]struct{}
-	err      error
+	requests         []app.AcceptedMaintenanceRequest
+	seen             map[knowl.OperationID]struct{}
+	err              error
+	after            func()
+	outcome          app.MaintenanceOutcome
+	generation       string
+	policyGeneration string
 }
 
 func newRecordingMaintenanceQueue() *recordingMaintenanceQueue {
@@ -208,13 +212,31 @@ func (queue *recordingMaintenanceQueue) ReserveAccepted(_ context.Context, reque
 	if queue.err != nil {
 		return app.MaintenanceReservation{}, queue.err
 	}
+	if queue.after != nil {
+		queue.after()
+		queue.after = nil
+	}
 	_, replayed := queue.seen[id]
 	queue.seen[id] = struct{}{}
-	outcome := app.MaintenanceQueued
-	if replayed {
-		outcome = app.MaintenanceReplayed
+	outcome := queue.outcome
+	if outcome == "" {
+		outcome = app.MaintenanceQueued
+		if replayed {
+			outcome = app.MaintenanceReplayed
+		}
 	}
-	return app.MaintenanceReservation{OperationID: id, Generation: strings.Repeat("f", 64), Outcome: outcome, Replayed: replayed}, nil
+	generation := queue.generation
+	if generation == "" {
+		generation = strings.Repeat("f", 64)
+	}
+	policyGeneration := queue.policyGeneration
+	if policyGeneration == "" {
+		policyGeneration = generation
+	}
+	return app.MaintenanceReservation{
+		OperationID: id, Generation: generation, PolicyGeneration: policyGeneration,
+		Outcome: outcome, Replayed: replayed,
+	}, nil
 }
 
 func (harness *stageHarness) source(flavor string) knowl.Source {
@@ -331,6 +353,230 @@ func TestStageRepeatSyncIsConvergentWithZeroFetchAndZeroMutations(t *testing.T) 
 	if second.Changed {
 		t.Fatal("unchanged sync claimed canonical change")
 	}
+}
+
+func TestStageSameRevisionUnderAnotherAdapterFetchesIndependentEvidence(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	body := "# Independent Git evidence\n"
+	harness.seedFinalized(t, []seededDoc{{path: "docs/page.md", body: body}})
+	ref := harness.descriptor("docs/page.md", body)
+	harness.adapter.script(ref.ExternalID, body)
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+	harness.service.adapters[knowl.SourceTypeGit] = harness.adapter
+	gitSource := knowl.Source{
+		ID: harness.sourceID, Type: knowl.SourceTypeGit, Enabled: true,
+		Config: knowl.SourceConfig{Git: &knowl.GitSourceConfig{
+			Remote: "https://example.test/wiki.git", Ref: "main", RefKind: knowl.GitRefKindBranch,
+		}},
+		ConfigDigest: strings.Repeat("2", 64),
+	}
+
+	result, err := harness.service.SyncSource(context.Background(), harness.scope, gitSource)
+	requireSyncSuccess(t, result, err)
+	if harness.adapter.fetches != 1 {
+		t.Fatalf("Git replacement fetches = %d, want one independent fetch", harness.adapter.fetches)
+	}
+	head, err := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, ref.ExternalID)
+	if err != nil {
+		t.Fatalf("read Git document head: %v", err)
+	}
+	wantSource := knowl.SourceRef{Adapter: gitAdapterName, ID: string(harness.sourceID) + "/" + string(ref.ExternalID)}
+	if head.AcceptedSource.Source != wantSource || head.AcceptedSource.Version.Version != ref.Revision ||
+		head.MaintenanceOperationID != knowl.OperationID(app.SourceRefKey(head.AcceptedSource)) {
+		t.Fatalf("Git document head = %#v, want independent accepted identity %#v", head, wantSource)
+	}
+}
+
+func TestStageMarksExactLifecycleReadyOnlyAfterSuccessfulFinalization(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	ref := harness.descriptor("docs/ready.md", "# Ready\n")
+	harness.adapter.script(ref.ExternalID, "# Ready\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+
+	result, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+	requireSyncSuccess(t, result, err)
+	state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, knowl.SourceOwner{
+		Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID,
+	})
+	if err != nil || !state.Ready || state.ConfigDigest != source.ConfigDigest {
+		t.Fatalf("source readiness = %#v, %v", state, err)
+	}
+}
+
+func TestMarkSourceReadyIsIdempotentForCurrentConfig(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID}
+	current, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, owner)
+	if err != nil {
+		t.Fatalf("read active lifecycle: %v", err)
+	}
+	readyAt := time.Unix(2_000, 0).UTC()
+	ready, err := lifecycle.MarkSourceLifecycleReady(context.Background(), app.SourceLifecycleReadyUpdate{
+		Scope: harness.scope, Owner: owner, AuthorityGeneration: current.AuthorityGeneration,
+		AuthorityEpoch: current.AuthorityEpoch, ActivatedEpoch: current.ActivatedEpoch,
+		ConfigDigest: source.ConfigDigest, ReadyAt: readyAt,
+	})
+	if err != nil {
+		t.Fatalf("prepare ready lifecycle: %v", err)
+	}
+	harness.service.options.Clock = func() time.Time { return readyAt.Add(-time.Second) }
+
+	err = harness.service.markSourceReady(context.Background(), source, knowl.SyncRun{
+		Scope: harness.scope, ConfigDigest: source.ConfigDigest,
+	})
+	if err != nil {
+		t.Fatalf("repeat current-config readiness: %v", err)
+	}
+	after, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, owner)
+	if err != nil || after != ready {
+		t.Fatalf("idempotent readiness = %#v, %v; want %#v", after, err, ready)
+	}
+}
+
+func TestStageDocumentTombstoneDoesNotRetireConfiguredSource(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	ref := harness.descriptor("docs/removed.md", "# Removed\n")
+	harness.adapter.script(ref.ExternalID, "# Removed\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+	result, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+	requireSyncSuccess(t, result, err)
+
+	harness.adapter.enqueue(harness.adapter.page(nil, ""))
+	result, err = harness.service.SyncSource(context.Background(), harness.scope, source)
+	requireSyncSuccess(t, result, err)
+	document, err := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, ref.ExternalID)
+	if err != nil || !document.Deleted {
+		t.Fatalf("document tombstone = %#v, %v", document, err)
+	}
+	state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, knowl.SourceOwner{
+		Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID,
+	})
+	if err != nil || state.State != knowl.SourceLifecycleActive || !state.Ready {
+		t.Fatalf("configured source lifecycle = %#v, %v", state, err)
+	}
+}
+
+func TestStageFailedReservationLeavesLifecycleNotReady(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	ref := harness.descriptor("docs/blocked.md", "# Blocked\n")
+	harness.adapter.script(ref.ExternalID, "# Blocked\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+	harness.queue.err = errors.New("reservation unavailable")
+
+	if _, err := harness.service.SyncSource(context.Background(), harness.scope, source); err == nil {
+		t.Fatal("SyncSource() succeeded despite failed maintenance reservation")
+	}
+	state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, knowl.SourceOwner{
+		Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID,
+	})
+	if err != nil || state.Ready {
+		t.Fatalf("failed-sync readiness = %#v, %v", state, err)
+	}
+}
+
+func TestStageManualMaintenanceGateLeavesLifecycleNotReady(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		generation       string
+		policyGeneration string
+	}{
+		{name: "exhausted current policy", generation: strings.Repeat("f", 64), policyGeneration: strings.Repeat("f", 64)},
+		{name: "stale policy", generation: strings.Repeat("e", 64), policyGeneration: strings.Repeat("f", 64)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newStageHarness(t, nil)
+			source, lifecycle := prepareStageLifecycle(t, harness)
+			ref := harness.descriptor("docs/manual-gate.md", "# Manual gate\n")
+			harness.adapter.script(ref.ExternalID, "# Manual gate\n")
+			harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+			harness.queue.outcome = app.MaintenanceManualGate
+			harness.queue.generation = test.generation
+			harness.queue.policyGeneration = test.policyGeneration
+
+			result, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+			requireSyncSuccess(t, result, err)
+			prepared, err := harness.state.PreparedSync(context.Background(), harness.scope, result.Run.ID)
+			if err != nil {
+				t.Fatalf("read prepared sync: %v", err)
+			}
+			state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, knowl.SourceOwner{
+				Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID,
+			})
+			if err != nil || state.Ready || prepared.MaintenanceReady {
+				t.Fatalf("manual-gated readiness = lifecycle %#v prepared %#v, %v", state, prepared, err)
+			}
+			resumable, err := harness.state.ResumableSyncRuns(context.Background(), harness.scope, 10)
+			if err != nil || len(resumable) != 0 {
+				t.Fatalf("manual-gated resumable runs = %#v, %v", resumable, err)
+			}
+		})
+	}
+}
+
+func TestStageStaleConfigCannotOpenLifecycleReadiness(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	ref := harness.descriptor("docs/stale.md", "# Stale\n")
+	harness.adapter.script(ref.ExternalID, "# Stale\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+	changedDigest := strings.Repeat("c", 64)
+	harness.queue.after = func() {
+		authority, err := lifecycle.SourceLifecycleAuthority(context.Background(), harness.scope)
+		if err != nil {
+			t.Errorf("read lifecycle authority: %v", err)
+			return
+		}
+		desired := []app.DesiredSourceOwner{{
+			Owner: knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID}, ConfigDigest: changedDigest,
+		}}
+		err = lifecycle.ReconcileSourceLifecycles(context.Background(), app.SourceLifecycleReconcileRequest{
+			Scope: harness.scope, Desired: desired, AuthorityGeneration: app.SourceLifecycleGeneration(desired),
+			ExpectedAuthorityEpoch: authority.Epoch, UpdatedAt: time.Unix(995, 0).UTC(),
+		})
+		if err != nil {
+			t.Errorf("change lifecycle config: %v", err)
+		}
+	}
+
+	result, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+	if !errors.Is(err, app.ErrSourceLifecycleConflict) || result.Run.Status != knowl.SyncStatusSucceeded {
+		t.Fatalf("stale-config sync = %#v, %v", result, err)
+	}
+	state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, knowl.SourceOwner{
+		Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID,
+	})
+	if err != nil || state.Ready || state.ConfigDigest != changedDigest {
+		t.Fatalf("stale-config readiness = %#v, %v", state, err)
+	}
+}
+
+func prepareStageLifecycle(t *testing.T, harness *stageHarness) (knowl.Source, app.SourceLifecycleStore) {
+	t.Helper()
+	source := harness.source(knowl.SourceFlavorMarkdown)
+	digest, err := app.SourceConfigDigest(source)
+	if err != nil {
+		t.Fatalf("source config digest: %v", err)
+	}
+	source.ConfigDigest = digest
+	lifecycle, ok := harness.state.(app.SourceLifecycleStore)
+	if !ok {
+		t.Fatal("stage state store does not expose source lifecycle")
+	}
+	desired := []app.DesiredSourceOwner{{
+		Owner: knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID}, ConfigDigest: digest,
+	}}
+	if err := lifecycle.ReconcileSourceLifecycles(context.Background(), app.SourceLifecycleReconcileRequest{
+		Scope: harness.scope, Desired: desired, AuthorityGeneration: app.SourceLifecycleGeneration(desired),
+		UpdatedAt: time.Unix(990, 0).UTC(),
+	}); err != nil {
+		t.Fatalf("prepare source lifecycle: %v", err)
+	}
+	harness.service.sourceLifecycle = lifecycle
+	return source, lifecycle
 }
 
 func TestStageBackfillsMaintenanceFromRawWithoutFetch(t *testing.T) {

@@ -73,6 +73,7 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 	candidates := make([]app.PreparedDocumentState, 0, len(sorted))
 	counts := knowl.SyncCounts{}
 	changed := false
+	maintenanceReady := true
 
 	for _, ref := range sorted {
 		catalog[ref.ExternalID] = struct{}{}
@@ -80,20 +81,22 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 		switch {
 		case !isActive:
 			previous, reappeared := tombstoned[ref.ExternalID]
-			if reappeared && previous.Revision == ref.Revision {
-				candidate, _, err := service.candidateFromAccepted(ctx, source, run, ref, previous.AcceptedSource, &previous)
+			if reappeared && previous.Revision == ref.Revision && acceptedMatchesCandidate(scope, source, ref, previous.AcceptedSource) {
+				candidate, _, candidateReady, err := service.candidateFromAccepted(ctx, source, run, ref, previous.AcceptedSource, &previous)
 				if err != nil {
 					return sagaInput{}, err
 				}
+				maintenanceReady = maintenanceReady && candidateReady
 				candidates = append(candidates, candidate)
 				counts.Updated++
 				changed = true
 				continue
 			}
-			candidate, err := service.fetchAcceptCandidate(ctx, adapter, source, run, ref)
+			candidate, candidateReady, err := service.fetchAcceptCandidate(ctx, adapter, source, run, ref)
 			if err != nil {
 				return sagaInput{}, err
 			}
+			maintenanceReady = maintenanceReady && candidateReady
 			candidates = append(candidates, candidate)
 			changed = true
 			if reappeared {
@@ -101,19 +104,21 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 			} else {
 				counts.Added++
 			}
-		case head.Revision != ref.Revision:
-			candidate, err := service.fetchAcceptCandidate(ctx, adapter, source, run, ref)
+		case head.Revision != ref.Revision || !acceptedMatchesCandidate(scope, source, ref, head.AcceptedSource):
+			candidate, candidateReady, err := service.fetchAcceptCandidate(ctx, adapter, source, run, ref)
 			if err != nil {
 				return sagaInput{}, err
 			}
+			maintenanceReady = maintenanceReady && candidateReady
 			candidates = append(candidates, candidate)
 			counts.Updated++
 			changed = true
 		default:
-			candidate, reserved, err := service.candidateFromAccepted(ctx, source, run, ref, head.AcceptedSource, &head)
+			candidate, reserved, candidateReady, err := service.candidateFromAccepted(ctx, source, run, ref, head.AcceptedSource, &head)
 			if err != nil {
 				return sagaInput{}, err
 			}
+			maintenanceReady = maintenanceReady && candidateReady
 			candidates = append(candidates, candidate)
 			counts.Unchanged++
 			changed = changed || reserved
@@ -127,7 +132,7 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 		tombstone := head
 		tombstone.LastSeenRunID = run.ID
 		tombstone.Deleted = true
-		tombstone.DeletedAt = service.options.Clock()
+		tombstone.DeletedAt = service.sourceTransitionTime(run)
 		tombstone.MirrorPath = ""
 		tombstone.MirrorDigest = ""
 		candidates = append(candidates, app.PreparedDocumentState{Action: app.SyncDocumentTombstone, State: tombstone})
@@ -142,9 +147,13 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 	})
 	sort.Slice(mutations, func(left, right int) bool { return mutations[left].Path < mutations[right].Path })
 	checkpoint := sourceCheckpoint(source, sorted, snapshotCheckpoint)
+	preparedAt := service.sourceTransitionTime(run)
+	for _, candidate := range candidates {
+		preparedAt = app.SourceTransitionTime(preparedAt, candidate.State.DeletedAt)
+	}
 	prepared := app.PreparedSyncState{
-		RunID: run.ID, Scope: scope, SourceID: source.ID, CompleteScan: true,
-		Checkpoint: checkpoint, Counts: counts, Documents: candidates, PreparedAt: service.options.Clock(),
+		RunID: run.ID, Scope: scope, SourceID: source.ID, CompleteScan: true, MaintenanceReady: maintenanceReady,
+		Checkpoint: checkpoint, Counts: counts, Documents: candidates, PreparedAt: preparedAt,
 	}
 	digest, err := app.PreparedSyncDigest(prepared)
 	if err != nil {
@@ -156,11 +165,24 @@ func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.Scop
 		return sagaInput{}, failStage(classState, err)
 	}
 	return sagaInput{
-		run:       preparedRun,
-		prepared:  app.PreparedSyncRead{RunID: run.ID, Scope: scope, SourceID: source.ID, Checkpoint: checkpoint, Counts: counts, Documents: candidates, CandidateDigest: digest},
+		run: preparedRun,
+		prepared: app.PreparedSyncRead{
+			RunID: run.ID, Scope: scope, SourceID: source.ID, MaintenanceReady: maintenanceReady,
+			Checkpoint: checkpoint, Counts: counts, Documents: candidates, CandidateDigest: digest,
+		},
 		changed:   changed,
 		mutations: mutations,
 	}, nil
+}
+
+func acceptedMatchesCandidate(scope knowl.ScopeRef, source knowl.Source, ref knowl.DocumentRef, accepted knowl.AcceptedSource) bool {
+	expected := knowl.SourceRef{Adapter: sourceAdapterName(source.Type), ID: string(source.ID) + "/" + string(ref.ExternalID)}
+	if accepted.Scope != scope || accepted.Source != expected || accepted.Version.Version != ref.Revision {
+		return false
+	}
+	document := accepted.SourceDocument
+	return document == (knowl.SourceDocument{}) ||
+		document.SourceID == source.ID && document.DocumentID == ref.ExternalID && document.Revision == ref.Revision
 }
 
 func cleanupMutations(inventory map[string]string) []knowl.SourceMutation {
@@ -192,16 +214,31 @@ func sortedRefs(refs []knowl.DocumentRef) []knowl.DocumentRef {
 	return sorted
 }
 
+// acceptSourcePublication owns the coordinator boundary for raw-source
+// creation and enrichment. Classification invokes it before finalizeSaga, so
+// it never nests the later canonical publication coordinator section.
+func (service *Service) acceptSourcePublication(ctx context.Context, envelope knowl.SourceEnvelope) (knowl.AcceptedSource, error) {
+	if service.applyCoordinator == nil {
+		return service.content.AcceptSource(ctx, envelope)
+	}
+	release, err := service.applyCoordinator.Acquire(ctx)
+	if err != nil {
+		return knowl.AcceptedSource{}, err
+	}
+	defer release()
+	return service.content.AcceptSource(ctx, envelope)
+}
+
 // fetchAcceptCandidate selectively fetches and accepts one exact immutable raw
 // revision before reserving textual maintenance.
-func (service *Service) fetchAcceptCandidate(ctx context.Context, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef) (app.PreparedDocumentState, error) {
+func (service *Service) fetchAcceptCandidate(ctx context.Context, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef) (app.PreparedDocumentState, bool, error) {
 	document, err := adapter.Fetch(ctx, source, ref)
 	if err != nil {
-		return app.PreparedDocumentState{}, failStage(classFetch, err)
+		return app.PreparedDocumentState{}, false, failStage(classFetch, err)
 	}
 	if document.ExternalID != ref.ExternalID || document.Revision != ref.Revision || document.Path != ref.Path ||
 		app.ValidateDocument(document, service.options.MaxRawBytes) != nil {
-		return app.PreparedDocumentState{}, failStage(classFetch, app.ErrSourceInvalid)
+		return app.PreparedDocumentState{}, false, failStage(classFetch, app.ErrSourceInvalid)
 	}
 	envelope := knowl.SourceEnvelope{
 		Scope:     run.Scope,
@@ -212,17 +249,17 @@ func (service *Service) fetchAcceptCandidate(ctx context.Context, adapter app.So
 			SourceID: source.ID, DocumentID: document.ExternalID, Revision: document.Revision, URI: document.URI,
 		},
 		Content:    document.Content,
-		ReceivedAt: service.options.Clock(),
+		ReceivedAt: service.sourceTransitionTime(run),
 	}
-	accepted, err := service.content.AcceptSource(ctx, envelope)
+	accepted, err := service.acceptSourcePublication(ctx, envelope)
 	if err != nil {
-		return app.PreparedDocumentState{}, failStage(classRaw, err)
+		return app.PreparedDocumentState{}, false, failStage(classRaw, err)
 	}
-	candidate, _, err := service.candidateFromAccepted(ctx, source, run, ref, accepted, nil)
-	return candidate, err
+	candidate, _, maintenanceReady, err := service.candidateFromAccepted(ctx, source, run, ref, accepted, nil)
+	return candidate, maintenanceReady, err
 }
 
-func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef, accepted knowl.AcceptedSource, previous *knowl.DocumentState) (app.PreparedDocumentState, bool, error) {
+func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.Source, run knowl.SyncRun, ref knowl.DocumentRef, accepted knowl.AcceptedSource, previous *knowl.DocumentState) (app.PreparedDocumentState, bool, bool, error) {
 	fallback := knowl.SourceDocument{
 		SourceID: source.ID, DocumentID: ref.ExternalID, Revision: ref.Revision,
 		URI: sourceDocumentURI(source, ref),
@@ -230,20 +267,20 @@ func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.
 	if accepted.SourceDocument == (knowl.SourceDocument{}) {
 		content, readErr := service.content.ReadSource(ctx, accepted, knowl.ReadLimits{Bytes: service.options.MaxRawBytes})
 		if readErr != nil {
-			return app.PreparedDocumentState{}, false, failStage(classRaw, readErr)
+			return app.PreparedDocumentState{}, false, false, failStage(classRaw, readErr)
 		}
-		enriched, acceptErr := service.content.AcceptSource(ctx, knowl.SourceEnvelope{
+		enriched, acceptErr := service.acceptSourcePublication(ctx, knowl.SourceEnvelope{
 			Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version, MediaType: accepted.MediaType,
-			SourceDocument: fallback, Content: content, ReceivedAt: service.options.Clock(),
+			SourceDocument: fallback, Content: content, ReceivedAt: service.sourceTransitionTime(run),
 		})
 		if acceptErr != nil {
-			return app.PreparedDocumentState{}, false, failStage(classRaw, acceptErr)
+			return app.PreparedDocumentState{}, false, false, failStage(classRaw, acceptErr)
 		}
 		accepted = enriched
 	}
 	document, err := app.ResolveSourceDocument(source.ID, accepted, fallback)
 	if err != nil {
-		return app.PreparedDocumentState{}, false, failStage(classRaw, err)
+		return app.PreparedDocumentState{}, false, false, failStage(classRaw, err)
 	}
 	accepted.SourceDocument = document
 	state := knowl.DocumentState{
@@ -258,9 +295,10 @@ func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.
 	}
 	textual, err := textualMediaType(accepted.MediaType)
 	if err != nil {
-		return app.PreparedDocumentState{}, false, failStage(classRaw, err)
+		return app.PreparedDocumentState{}, false, false, failStage(classRaw, err)
 	}
 	reserved := false
+	maintenanceReady := true
 	if textual {
 		reservation, reserveErr := service.maintenance.ReserveAccepted(ctx, app.AcceptedMaintenanceRequest{
 			Source: accepted, SourceDocument: document, ContentType: accepted.MediaType,
@@ -272,7 +310,7 @@ func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.
 			log.Warn().Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
 				Str("revision", document.Revision).Str("failure_class", classMaintenance).
 				Msg("knowl maintenance reservation failed")
-			return app.PreparedDocumentState{}, false, failStage(classMaintenance, reserveErr)
+			return app.PreparedDocumentState{}, false, false, failStage(classMaintenance, reserveErr)
 		}
 		outcome := reservation.Outcome
 		if outcome == "" {
@@ -287,7 +325,7 @@ func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.
 		}
 		generationPrefix, prefixErr := app.MaintenanceGenerationPrefix(policyGeneration)
 		if prefixErr != nil {
-			return app.PreparedDocumentState{}, false, failStage(classMaintenance, app.ErrSourceInvalid)
+			return app.PreparedDocumentState{}, false, false, failStage(classMaintenance, app.ErrSourceInvalid)
 		}
 		trigger := maintenanceReconciliationTrigger(state.MaintenanceRevision, ref.Revision, state.MaintenanceGeneration, policyGeneration)
 		switch outcome {
@@ -296,16 +334,18 @@ func (service *Service) candidateFromAccepted(ctx context.Context, source knowl.
 			state.MaintenanceRevision = ref.Revision
 			state.MaintenanceOperationID = reservation.OperationID
 			state.MaintenanceGeneration = reservation.Generation
-		case app.MaintenanceConverged, app.MaintenanceManualGate:
+		case app.MaintenanceConverged:
+		case app.MaintenanceManualGate:
+			maintenanceReady = false
 		default:
-			return app.PreparedDocumentState{}, false, failStage(classMaintenance, app.ErrSourceInvalid)
+			return app.PreparedDocumentState{}, false, false, failStage(classMaintenance, app.ErrSourceInvalid)
 		}
 		log.Info().Str("source_id", string(document.SourceID)).Str("document_id", string(document.DocumentID)).
 			Str("revision", document.Revision).Str("operation_id", string(reservation.OperationID)).
 			Str("maintenance_trigger", trigger).Str("maintenance_outcome", string(outcome)).
 			Str("maintenance_generation", generationPrefix).Msg("knowl maintenance reconciled")
 	}
-	return app.PreparedDocumentState{Action: app.SyncDocumentActive, State: state}, reserved, nil
+	return app.PreparedDocumentState{Action: app.SyncDocumentActive, State: state}, reserved, maintenanceReady, nil
 }
 
 func maintenanceReconciliationTrigger(previousRevision, currentRevision, previousGeneration, currentGeneration string) string {

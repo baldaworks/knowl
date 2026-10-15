@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	httpserver "github.com/baldaworks/knowl/internal/httpapi/server"
 	"github.com/baldaworks/knowl/internal/mcphttp"
@@ -24,24 +25,28 @@ import (
 )
 
 type composedRuntime struct {
-	config           Config
-	workspace        *contentfs.Workspace
-	closer           io.Closer
-	maintainerCloser io.Closer
-	slots            *executionSlots
-	operations       app.OperationStore
-	index            app.SearchIndex
-	sourceState      app.SourceStateStore
-	sourceSync       *reconcile.Service
-	sources          []domain.Source
-	sourceObserver   SourceObserver
-	scheduler        *operationScheduler
-	service          *app.IngestService
-	hierarchy        *app.HierarchyService
-	query            *app.QueryService
-	lint             *app.LintService
-	mcp              *mcp.Server
-	handler          http.Handler
+	config              Config
+	workspace           *contentfs.Workspace
+	closer              io.Closer
+	maintainerCloser    io.Closer
+	slots               *executionSlots
+	operations          app.OperationStore
+	index               app.SearchIndex
+	sourceState         app.SourceStateStore
+	sourceLifecycle     app.SourceLifecycleStore
+	retirementCommitter app.RetirementCommitter
+	sourceSync          *reconcile.Service
+	sources             []domain.Source
+	sourceObserver      SourceObserver
+	scheduler           *operationScheduler
+	service             *app.IngestService
+	hierarchy           *app.HierarchyService
+	retirement          *app.RetirementPageService
+	retirementControl   *app.SourceRetirementCoordinator
+	query               *app.QueryService
+	lint                *app.LintService
+	mcp                 *mcp.Server
+	handler             http.Handler
 }
 
 // New composes and preflights a host. Recovery, migrations, and projection readiness complete before return.
@@ -110,36 +115,88 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 	runtime.operations = store.operations
 	runtime.index = store.index
 	runtime.sourceState = store.sources
+	runtime.sourceLifecycle = store.lifecycle
+	maintenance, err := newHostMaintenanceContent(runtime.workspace, runtime.sourceLifecycle, config.IngestOptions.ApplyCoordinator)
+	if err != nil {
+		return composedRuntime{}, err
+	}
+	runtime.retirementCommitter, err = newHostRetirementCommitter(config.IngestOptions.ApplyCoordinator, runtime.sourceLifecycle, runtime.workspace, maintenance)
+	if err != nil {
+		return composedRuntime{}, fmt.Errorf("compose retirement committer: %w", err)
+	}
 	runtime.closer = store.closer
+	if err = reconcileConfiguredSourceLifecycles(
+		ctx,
+		runtime.sourceLifecycle,
+		config.Scope,
+		config.Sources,
+		time.Now().UTC().Truncate(time.Microsecond),
+	); err != nil {
+		return composedRuntime{}, fmt.Errorf("prepare configured source lifecycles: %w", err)
+	}
 	maintainer := slots.all[0].maintainer
-	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, runtime.workspace, runtime.operations, runtime.index, store.checker, maintainer, slots)
+	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, maintenance, runtime.operations, runtime.index, store.checker, maintainer, slots)
 	if err != nil {
 		return composedRuntime{}, err
 	}
 	runtime.sources = cloneSources(config.Sources)
-	runner := terminalRunner(runtime.service)
+	runtime.retirement, err = app.NewRetirementPageService(maintenance, runtime.operations, runtime.index, runtime.sourceLifecycle, runtime.retirementCommitter, maintainer, hostRetirementPageOptions(config))
+	if err != nil {
+		return composedRuntime{}, fmt.Errorf("compose retirement page service: %w", err)
+	}
+	runner := terminalRunner(terminalRouter{source: runtime.service, retirement: runtime.retirement})
 	if hierarchyMaintainer, ok := maintainer.(app.HierarchyMaintainer); ok {
-		runtime.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, hierarchyMaintainer, hostHierarchyOptions(config))
+		runtime.hierarchy, err = app.NewHierarchyService(maintenance, runtime.operations, runtime.index, hierarchyMaintainer, hostHierarchyOptions(config))
 		if err != nil {
 			return composedRuntime{}, fmt.Errorf("compose hierarchy service: %w", err)
 		}
-		runner = terminalRouter{source: runtime.service, hierarchy: runtime.hierarchy}
+		runner = terminalRouter{source: runtime.service, hierarchy: runtime.hierarchy, retirement: runtime.retirement}
 	}
 	slots.all[0].source = runtime.service
 	slots.all[0].hierarchy = runtime.hierarchy
+	slots.all[0].retirement = runtime.retirement
 	for _, slot := range slots.all[1:] {
-		slot.source, err = app.NewIngestService(runtime.workspace, runtime.operations, runtime.index, slot.maintainer, hostIngestOptions(config))
+		slot.source, err = app.NewIngestService(maintenance, runtime.operations, runtime.index, slot.maintainer, hostIngestOptions(config))
 		if err != nil {
 			return composedRuntime{}, err
 		}
 		if maintainer, ok := slot.maintainer.(app.HierarchyMaintainer); ok {
-			slot.hierarchy, err = app.NewHierarchyService(runtime.workspace, runtime.operations, runtime.index, maintainer, hostHierarchyOptions(config))
+			slot.hierarchy, err = app.NewHierarchyService(maintenance, runtime.operations, runtime.index, maintainer, hostHierarchyOptions(config))
 			if err != nil {
 				return composedRuntime{}, err
 			}
 		}
+		slot.retirement, err = app.NewRetirementPageService(maintenance, runtime.operations, runtime.index, runtime.sourceLifecycle, runtime.retirementCommitter, slot.maintainer, hostRetirementPageOptions(config))
+		if err != nil {
+			return composedRuntime{}, fmt.Errorf("compose retirement page service: %w", err)
+		}
 	}
-	runtime.scheduler, err = newOperationScheduler(runtime.operations, runner, config.Scope, schedulerOptions{wakeSize: config.WorkerQueueSize, slots: slots})
+	retirementOperations, ok := runtime.operations.(app.RetirementOperationStore)
+	if !ok {
+		return composedRuntime{}, fmt.Errorf("compose retirement operation store: %w", app.ErrSourceLifecycleInvalid)
+	}
+	var scheduler *operationScheduler
+	runtime.retirementControl, err = app.NewSourceRetirementCoordinator(app.SourceRetirementCoordinatorDependencies{
+		Scope: config.Scope, Lifecycles: runtime.sourceLifecycle, Provenance: runtime.workspace,
+		Pages: runtime.retirement, Operations: retirementOperations, Projection: runtime.workspace,
+		ApplyCoordinator: config.IngestOptions.ApplyCoordinator,
+		Wake: func(id domain.OperationID) {
+			if scheduler != nil {
+				scheduler.Wake(id)
+			}
+		},
+	})
+	if err != nil {
+		return composedRuntime{}, fmt.Errorf("compose source retirement coordinator: %w", err)
+	}
+	scheduler, err = newOperationScheduler(runtime.operations, runner, config.Scope, schedulerOptions{
+		wakeSize: config.WorkerQueueSize, slots: slots,
+		discover: func(ctx context.Context) error {
+			_, discoverErr := runtime.retirementControl.Advance(ctx)
+			return discoverErr
+		},
+	})
+	runtime.scheduler = scheduler
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose operation scheduler: %w", err)
 	}
@@ -148,6 +205,7 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 		Adapters:         adapters, State: runtime.sourceState, Content: runtime.workspace,
 		SourceContent: runtime.workspace, Search: runtime.index,
 		Maintenance: sourceMaintenanceQueue{service: runtime.service, waker: runtime.scheduler},
+		Lifecycle:   runtime.sourceLifecycle,
 	}, reconcile.Options{})
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose source reconciliation: %w", err)
@@ -200,7 +258,7 @@ func openWorkspace(path string) (*contentfs.Workspace, error) {
 func composeServices(
 	ctx context.Context,
 	config Config,
-	workspace *contentfs.Workspace,
+	workspace app.ContentStore,
 	operations app.OperationStore,
 	index app.SearchIndex,
 	checker projectionChecker,
@@ -243,29 +301,36 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		return nil, fmt.Errorf("compose source scheduler: %w", err)
 	}
 	host := &Host{
-		config:           runtime.config,
-		workspace:        runtime.workspace,
-		closer:           runtime.closer,
-		maintainerCloser: runtime.maintainerCloser,
-		slots:            runtime.slots,
-		operations:       runtime.operations,
-		index:            runtime.index,
-		sourceState:      runtime.sourceState,
-		sourceSync:       runtime.sourceSync,
-		sources:          cloneSources(runtime.sources),
-		sourceByID:       sourceIndex(runtime.sources),
-		sourceJobs:       sourceJobs,
-		startGate:        make(chan struct{}, 1),
-		stopGate:         make(chan struct{}, 1),
-		scheduler:        runtime.scheduler,
-		service:          runtime.service,
-		hierarchy:        runtime.hierarchy,
-		query:            runtime.query,
-		lint:             runtime.lint,
-		mcp:              runtime.mcp,
-		serverErr:        make(chan error, 1),
+		config:              runtime.config,
+		workspace:           runtime.workspace,
+		closer:              runtime.closer,
+		maintainerCloser:    runtime.maintainerCloser,
+		slots:               runtime.slots,
+		operations:          runtime.operations,
+		index:               runtime.index,
+		sourceState:         runtime.sourceState,
+		sourceLifecycle:     runtime.sourceLifecycle,
+		retirementCommitter: runtime.retirementCommitter,
+		retirementControl:   runtime.retirementControl,
+		sourceSync:          runtime.sourceSync,
+		sources:             cloneSources(runtime.sources),
+		sourceByID:          sourceIndex(runtime.sources),
+		sourceJobs:          sourceJobs,
+		startGate:           make(chan struct{}, 1),
+		stopGate:            make(chan struct{}, 1),
+		scheduler:           runtime.scheduler,
+		service:             runtime.service,
+		hierarchy:           runtime.hierarchy,
+		retirement:          runtime.retirement,
+		query:               runtime.query,
+		lint:                runtime.lint,
+		mcp:                 runtime.mcp,
+		serverErr:           make(chan error, 1),
 	}
 	readers := app.OperatorReaders{Sources: newOperatorSourceReader(host)}
+	if runtime.retirementControl != nil {
+		readers.Retirements = operatorRetirementReader{host: host}
+	}
 	if runtime.workspace != nil {
 		readers.Catalogs = runtime.workspace
 		readers.Directories = runtime.workspace
@@ -394,4 +459,15 @@ func hostIngestOptions(config Config) app.IngestOptions {
 
 func hostHierarchyOptions(config Config) app.HierarchyOptions {
 	return app.HierarchyOptions{Output: config.Output, ApplyCoordinator: config.IngestOptions.ApplyCoordinator}
+}
+
+func hostRetirementPageOptions(config Config) app.RetirementPageOptions {
+	ingest := hostIngestOptions(config)
+	return app.RetirementPageOptions{
+		Planner: app.RetirementPlannerOptions{
+			InputLimits: ingest.InputLimits, CatalogLimits: ingest.CatalogLimits,
+			PlanLimits: ingest.PlanLimits, ReadLimits: ingest.ReadLimits,
+		},
+		LeaseDuration: ingest.LeaseDuration,
+	}
 }

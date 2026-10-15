@@ -20,6 +20,8 @@ type localSourceHost interface {
 	SyncAll(ctx context.Context) (knowl.SourceSyncAllResult, error)
 	SourceStatus(ctx context.Context, id domain.SourceID) (domain.SourceStatus, error)
 	RetrySourceMaintenance(ctx context.Context, id domain.SourceID, failureClasses []string, dryRun bool) (app.SourceMaintenanceRetryResult, error)
+	SourceRetirementStatus(ctx context.Context, owner domain.SourceOwner) (domain.SourceRetirementStatus, error)
+	RetrySourceRetirement(ctx context.Context, request app.SourceRetirementRetryRequest) (app.SourceRetirementRetryResult, error)
 	Stop(ctx context.Context) error
 }
 
@@ -55,6 +57,8 @@ func newSourceCommand() *cobra.Command {
 func newSourceRetryCommand() *cobra.Command {
 	var failureClasses []string
 	var dryRun bool
+	var retirementAdapter string
+	var pageID string
 	command := &cobra.Command{
 		Use:           sourceRetryCommandName + " <source-id>",
 		Short:         "Preview or requeue failed source maintenance operations",
@@ -68,11 +72,33 @@ func newSourceRetryCommand() *cobra.Command {
 			if app.ValidateSourceID(id) != nil {
 				return app.ErrSourceInvalid
 			}
+			if retirementAdapter != "" {
+				if len(failureClasses) != 0 {
+					return fmt.Errorf("--failure-class and --retirement-adapter are mutually exclusive")
+				}
+				return app.ValidateSourceOwner(domain.SourceOwner{Adapter: domain.SourceAdapterID(retirementAdapter), SourceID: id})
+			}
+			if pageID != "" {
+				return fmt.Errorf("--page-id requires --retirement-adapter")
+			}
 			_, err := app.NormalizeRetryFailureClasses(failureClasses)
 			return err
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := domain.SourceID(strings.TrimSpace(args[0]))
+			if retirementAdapter != "" {
+				request := app.SourceRetirementRetryRequest{
+					Owner:  domain.SourceOwner{Adapter: domain.SourceAdapterID(retirementAdapter), SourceID: id},
+					PageID: domain.PageID(pageID), DryRun: dryRun,
+				}
+				return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+					result, retryErr := host.RetrySourceRetirement(cmd.Context(), request)
+					if err := writeSourceResult(cmd, result); err != nil {
+						return err
+					}
+					return retryErr
+				})
+			}
 			classes, err := app.NormalizeRetryFailureClasses(failureClasses)
 			if err != nil {
 				return err
@@ -88,6 +114,8 @@ func newSourceRetryCommand() *cobra.Command {
 	}
 	command.Flags().StringArrayVar(&failureClasses, "failure-class", nil, "terminal failure class to requeue (repeatable; required)")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "preview the exact eligible set without changing state")
+	command.Flags().StringVar(&retirementAdapter, "retirement-adapter", "", "retry retirement work for this exact source adapter")
+	command.Flags().StringVar(&pageID, "page-id", "", "retry only this failed retirement page")
 	return command
 }
 
@@ -152,7 +180,8 @@ func newSourceSyncCommand() *cobra.Command {
 }
 
 func newSourceStatusCommand() *cobra.Command {
-	return &cobra.Command{
+	var retirementAdapter string
+	command := &cobra.Command{
 		Use:           sourceStatusCommandName + " <source-id>",
 		Short:         "Read durable status for one configured source",
 		Args:          cobra.ExactArgs(1),
@@ -163,6 +192,19 @@ func newSourceStatusCommand() *cobra.Command {
 			if id == "" {
 				return fmt.Errorf("source ID is required")
 			}
+			if retirementAdapter != "" {
+				owner := domain.SourceOwner{Adapter: domain.SourceAdapterID(retirementAdapter), SourceID: id}
+				if err := app.ValidateSourceOwner(owner); err != nil {
+					return err
+				}
+				return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+					status, err := host.SourceRetirementStatus(cmd.Context(), owner)
+					if err != nil {
+						return err
+					}
+					return writeSourceResult(cmd, status)
+				})
+			}
 			return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
 				status, err := host.SourceStatus(cmd.Context(), id)
 				if err != nil {
@@ -172,6 +214,8 @@ func newSourceStatusCommand() *cobra.Command {
 			})
 		},
 	}
+	command.Flags().StringVar(&retirementAdapter, "retirement-adapter", "", "read retirement status for this exact source adapter")
+	return command
 }
 
 func newProductionLocalSourceSession(ctx context.Context) (localSourceSession, error) {

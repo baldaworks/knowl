@@ -7,7 +7,7 @@ knowl:
     - wiki-filesystem:knowl-docs/agents.md@d87e9854e3ae341cefe5b533604ec9d35aac50c8d89f91598cad158e58f09bb9
     - wiki-filesystem:knowl-docs/local-codex.md@50fcfaf27cd8c671650b42f050c7b90bfcef1355619133c9d9da92ffa3ccc0f9
     - wiki-filesystem:knowl-docs/local.md@b72ed8a3f8d255df1843e32445e50fa7be99e752b764711b7494cd76f325c5e0
-    - wiki-filesystem:knowl-docs/operations.md@c4dc7e57ca23dc8864f014dc283faf6fee92c4de46685fea364e4bade6fd6e14
+    - wiki-filesystem:knowl-docs/operations.md@ae3c7b6ee1583fd88681e5a3ee4bb1cdf2a9b007235663169cf7e59a41b60baa
     - wiki-filesystem:knowl-docs/search.md@0c24dcc0dd1409c464a9bb667634d9b439b3bcbf2a6e29537981b0c753b00d74
     - wiki-filesystem:knowl-docs/service.md@646948819ed449ec0af05909f13981d098c69e75cd4e7c9b09749f4c76799754
     - wiki-filesystem:knowl-docs/sidecar.md@a49cb8614961df7fbb475965018e0531ca85dca60964863716d383e52b526f78
@@ -92,7 +92,7 @@ Knowl connects to maintainer agents through ACP over stdio, distinguishing maint
 - **Activation**: Enabled by setting `knowl.web.enabled: true` and providing `knowl.operator.token`. Embedded applications use `Config.Web.Enabled` and `Config.OperatorToken`. MCP stdio explicitly disables web access.
 - **Web Shell & Authentication**: UI connects at `http://127.0.0.1:8080/ui/`. Public shell and assets contain no workspace data; `/ui/fragments/*` and `/operator/v1/*` require bearer authentication. Tokens remain in browser memory for the document session, never stored in cookies, local storage, or URLs. Responses set `Cache-Control: no-store`.
 - **Network Boundary**: Recommended for loopback. Remote access requires terminating HTTPS at a trusted reverse proxy forwarding the bearer header without logging credentials or query parameters. Direct UI browsing loads assets locally and avoids external requests; deliberate clicks on external links do not forward bearer credentials.
-- **Operator Read API**: Exposes seven GET routes (`/operator/v1/catalogs`, `/operator/v1/pages`, `/operator/v1/page`, `/operator/v1/source-revision`, `/operator/v1/sources`, `/operator/v1/sources/{source_id}`, `/operator/v1/operations`). Pagination defaults to 50 items (limit 1–100, Operations UI starts at 10) with opaque 8 KiB restart-invalidated cursors. Query strings exceeding 16 KiB or duplicate parameters fail closed.
+- **Operator Read API**: Exposes eight GET routes (`/operator/v1/catalogs`, `/operator/v1/pages`, `/operator/v1/page`, `/operator/v1/source-revision`, `/operator/v1/sources`, `/operator/v1/sources/{source_id}`, `/operator/v1/operations`, `/operator/v1/source-retirement`). Pagination defaults to 50 items (limit 1–100, Operations UI starts at 10) with opaque 8 KiB restart-invalidated cursors. Query strings exceeding 16 KiB or duplicate parameters fail closed.
 - **Screen Workflows**:
   - **Knowledge**: Renders the canonical root and actual `index.md` body. Follows verified catalog links and breadcrumbs without inferring deeper file-path ancestry. Includes an **All pages** expandable directory tree with on-demand child loading and bounded in-memory state restored on browser Back. An expandable **Details** panel displays page metadata, while **Page sources** allows reading immutable accepted source text via **Read saved source** without upstream fetches. **Open original** appears only when provenance contains allowed credential-free HTTP/HTTPS URLs.
   - **Search**: Executes standard retrieval once per explicit submission (no live search on typing). Displays server-ordered evidence with original snippets and retrieval diagnostic badges (lexical, hybrid, degraded, failed). Supports **View JSON** and **Export JSON** without credentials; browser Back restores query and results without repeating retrieval.
@@ -114,7 +114,7 @@ Knowl connects to maintainer agents through ACP over stdio, distinguishing maint
 - **Workspace Adoption**: `knowl bootstrap wiki <path>`, `knowl bootstrap obsidian <path>`, or `knowl bootstrap okf <path>` (bootstrap remains optional).
 - **Migration**: `knowl migrate okf-v0.2` converts legacy workspaces idempotently.
 - **One-Shot Execution**: `knowl run` executes sync, drains maintenance operations, and reconciles hierarchy without a background daemon (supports `--source <id>`, `--no-sync`, `--no-hierarchy`).
-- **Source Synchronization**: `knowl source list`, `knowl source sync <id>`, `knowl source sync --all`, and `knowl source status <id>`.
+- **Source Synchronization and Retirement**: `knowl source list`, `knowl source sync <id>`, `knowl source sync --all`, and `knowl source status <id>`. Gradual source retirement tracks disappearing owners transitioning from `active` to `retiring` before page cleanup. Retirement status and progress are inspected via `knowl source status <source-id> --retirement-adapter <adapter>` or `GET /operator/v1/source-retirement?adapter=...&source_id=...`. Failed page retirement operations can be dry-run previewed and requeued via `knowl source retry <source-id> --retirement-adapter <adapter> [--page-id <path>] [--dry-run]`.
 - **Hierarchy Reconciliation**: `knowl hierarchy reconcile` triggers subject-first OKF catalog organization under durable planner identity `hierarchy-v3`.
 
 ## Local Codex Plugin and Workflow

@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Knowl operator read API
   version: 1.0.0
-  description: 'Opt-in host-bound reads. Exactly seven GET routes, no caller scope/workspace
+  description: 'Opt-in host-bound reads. Exactly eight GET routes, no caller scope/workspace
     selection. Unknown or duplicate query parameters and GET bodies are rejected.
     Total query budget 16 KiB. All data/errors use Cache-Control: no-store. No reads
     start workers or fetch upstream. Canonical snapshot versions describe the current
@@ -500,6 +500,63 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /operator/v1/source-retirement:
+    get:
+      operationId: getSourceRetirement
+      parameters:
+      - name: adapter
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: source_id
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Typed status for one exact adapter-qualified source owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceRetirementStatus'
+        '400':
+          description: invalid_request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: scope_override_forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: source_retirement_not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: capability_unavailable, not_ready or workspace_unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: internal_error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     OperatorBearer:
@@ -523,6 +580,126 @@ components:
       description: Signed process-local cursor; restart invalidates it with cursor_invalid.
         Bound to endpoint, scope, filters, limit and canonical snapshot where applicable.
   schemas:
+    SourceOwner:
+      type: object
+      additionalProperties: false
+      description: Exact adapter-qualified configured-source owner; equal source IDs under different adapters are independent.
+      properties:
+        adapter:
+          type: string
+          enum: [wiki-filesystem, git]
+        source_id:
+          type: string
+      required:
+      - adapter
+      - source_id
+      x-go-type: domain.SourceOwner
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    SourceRetirementDiscovery:
+      type: object
+      additionalProperties: false
+      description: Bounded canonical discovery state; cursor is opaque and never exposes a page path.
+      properties:
+        cursor:
+          type: string
+        eof:
+          type: boolean
+        round_matches:
+          type: integer
+          format: int64
+        remaining_references:
+          type: integer
+          format: int64
+      required:
+      - eof
+      - round_matches
+      - remaining_references
+      x-go-type: domain.SourceRetirementDiscovery
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    SourceRetirementOperationCounts:
+      type: object
+      additionalProperties: false
+      description: Page-unit counts for the current retirement generation; projection_pending is canonical-committed work awaiting rebuildable projection or outcome replay.
+      properties:
+        pending: {type: integer, format: int64}
+        planned: {type: integer, format: int64}
+        applying: {type: integer, format: int64}
+        projection_pending: {type: integer, format: int64}
+        committed: {type: integer, format: int64}
+        failed: {type: integer, format: int64}
+        total: {type: integer, format: int64}
+      required: [pending, planned, applying, projection_pending, committed, failed, total]
+      x-go-type: domain.SourceRetirementOperationCounts
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    SourceRetirementReadinessStatus:
+      type: object
+      additionalProperties: false
+      description: Independent-source readiness gate. Pending owners are not aliases or provenance replacements.
+      properties:
+        ready: {type: boolean}
+        blocker_code: {type: string}
+        pending_count: {type: integer}
+        pending:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceOwner'
+        truncated: {type: boolean}
+      required: [ready, pending_count, truncated]
+      x-go-type: domain.SourceRetirementReadinessStatus
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    MaintenanceDiagnostic:
+      type: object
+      additionalProperties: false
+      properties:
+        code: {type: string}
+        path: {type: string}
+        target: {type: string}
+      required: [code, path]
+      x-go-type: domain.MaintenanceDiagnostic
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
+    SourceRetirementStatus:
+      type: object
+      additionalProperties: false
+      description: Typed gradual retirement status for one exact owner. Different pages may be reconciled at different times while state is retiring.
+      properties:
+        owner: {$ref: '#/components/schemas/SourceOwner'}
+        state:
+          type: string
+          enum: [active, retiring, deleted]
+        authority_generation: {type: string}
+        authority_epoch: {type: integer, format: int64}
+        activated_generation: {type: string}
+        activated_epoch: {type: integer, format: int64}
+        retirement_generation: {type: string}
+        retirement_epoch: {type: integer, format: int64}
+        readiness: {$ref: '#/components/schemas/SourceRetirementReadinessStatus'}
+        discovery: {$ref: '#/components/schemas/SourceRetirementDiscovery'}
+        operations: {$ref: '#/components/schemas/SourceRetirementOperationCounts'}
+        blocker_code: {type: string}
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/MaintenanceDiagnostic'
+        diagnostics_truncated: {type: boolean}
+        activated_at: {type: string, format: date-time}
+        retiring_at: {type: string, format: date-time}
+        deleted_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+      required: [owner, state, authority_generation, authority_epoch, activated_generation, activated_epoch, readiness, discovery, operations, diagnostics_truncated, activated_at, updated_at]
+      x-go-type: domain.SourceRetirementStatus
+      x-go-type-import:
+        path: github.com/baldaworks/knowl/pkg/knowl/types
+        name: domain
     OperatorCatalogSummary:
       type: object
       additionalProperties: false

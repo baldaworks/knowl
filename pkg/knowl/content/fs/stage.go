@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/internal/maintenanceauthority"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,11 +26,20 @@ const maxStageManifestBytes = 1 << 20
 // When a newly created stage rejects every edit, the returned change contains
 // rejection diagnostics alongside the validation error and no new artifact is retained.
 func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedEditPlan) (knowl.StagedChange, error) {
+	if workspace.maintenanceAuthority {
+		return knowl.StagedChange{}, ErrPlanConflict
+	}
+	return workspace.stagePlan(ctx, plan, nil)
+}
+func (workspace *Workspace) stagePlan(ctx context.Context, plan knowl.ValidatedEditPlan, authority *maintenanceauthority.Stamp) (knowl.StagedChange, error) {
 	if err := contextErr(ctx); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	if strings.TrimSpace(plan.OperationID) == "" {
 		return knowl.StagedChange{}, ErrPlanConflict
+	}
+	if err := validatePlanRetirementBoundary(plan); err != nil {
+		return knowl.StagedChange{}, err
 	}
 	diagnostics, err := app.NormalizeMaintenanceDiagnostics(plan.Diagnostics)
 	if err != nil {
@@ -59,7 +70,7 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		if stagedErr != nil {
 			return knowl.StagedChange{}, stagedErr
 		}
-		acceptedEdits, derivedDiagnostics, validateErr := workspace.filterProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan), plan.RequiredSourceRef, plan.SourceRefs)
+		acceptedEdits, derivedDiagnostics, validateErr := workspace.filterProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan), plan.RequiredSourceRef, plan.SourceRefs, plan.Retirement)
 		if validateErr != nil {
 			combinedDiagnostics, combineErr := app.NormalizeMaintenanceDiagnostics(append(append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), derivedDiagnostics...))
 			if combineErr != nil {
@@ -76,7 +87,7 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		if !sameStagePlan(manifest, plan) {
 			return knowl.StagedChange{}, ErrPlanConflict
 		}
-		if _, validateErr := workspace.validateProspectivePlanLocked(plan.Scope, stagedEdits, plan.RequiredSourceRef, plan.SourceRefs); validateErr != nil {
+		if _, validateErr := workspace.validateProspectivePlanLocked(plan.Scope, stagedEdits, plan.RequiredSourceRef, plan.SourceRefs, plan.Retirement); validateErr != nil {
 			return knowl.StagedChange{}, validateErr
 		}
 		return stagedChangeFromManifest(stageDir, manifest)
@@ -121,6 +132,17 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		if exists && edit.ExpectedDigest != digestBytes(current) {
 			return knowl.StagedChange{}, fmt.Errorf("target %q digest changed: %w", edit.Path, ErrPrecondition)
 		}
+		action := fileEditAction(edit)
+		if action == knowl.SourceMutationDelete {
+			if !exists || edit.ExpectedDigest == "" || len(edit.Content) != 0 || plan.Retirement == nil || edit.Path != plan.Retirement.PagePath || edit.ExpectedDigest != plan.Retirement.PageDigest {
+				return knowl.StagedChange{}, ErrPlanConflict
+			}
+			entries = append(entries, stageEntry{Action: knowl.SourceMutationDelete, Target: edit.Path, ExpectedDigest: edit.ExpectedDigest})
+			continue
+		}
+		if action != knowl.SourceMutationWrite || len(edit.Content) == 0 {
+			return knowl.StagedChange{}, ErrPlanConflict
+		}
 		stagedPath := filepath.Join(stageDir, filepath.FromSlash(edit.Path))
 		if err := os.MkdirAll(filepath.Dir(stagedPath), 0o700); err != nil {
 			return knowl.StagedChange{}, fmt.Errorf("create staged parent: %w", err)
@@ -128,9 +150,9 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		if err := writeAtomic(stagedPath, edit.Content, 0o600); err != nil {
 			return knowl.StagedChange{}, fmt.Errorf("stage %q: %w", edit.Path, err)
 		}
-		entries = append(entries, stageEntry{Target: edit.Path, ExpectedDigest: edit.ExpectedDigest, Digest: digestBytes(edit.Content)})
+		entries = append(entries, stageEntry{Action: edit.Action, Target: edit.Path, ExpectedDigest: edit.ExpectedDigest, Digest: digestBytes(edit.Content)})
 	}
-	acceptedEdits, derivedDiagnostics, err := workspace.filterProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan), plan.RequiredSourceRef, plan.SourceRefs)
+	acceptedEdits, derivedDiagnostics, err := workspace.filterProspectivePlanLocked(plan.Scope, prospectiveEditsFromPlan(plan), plan.RequiredSourceRef, plan.SourceRefs, plan.Retirement)
 	if err != nil {
 		combinedDiagnostics, combineErr := app.NormalizeMaintenanceDiagnostics(append(append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), derivedDiagnostics...))
 		if combineErr != nil {
@@ -148,7 +170,7 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 			filteredEntries = append(filteredEntries, entry)
 			continue
 		}
-		if err := os.Remove(filepath.Join(stageDir, filepath.FromSlash(entry.Target))); err != nil {
+		if err := os.Remove(filepath.Join(stageDir, filepath.FromSlash(entry.Target))); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return knowl.StagedChange{}, fmt.Errorf("remove rejected staged file %q: %w", entry.Target, err)
 		}
 	}
@@ -162,8 +184,9 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 	manifest := stageManifest{
 		OperationID: plan.OperationID, Scope: string(plan.Scope), SchemaDigest: plan.SchemaDigest,
 		RequiredSourceRef: plan.RequiredSourceRef, SourceRefs: append([]string(nil), plan.SourceRefs...),
-		Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), Entries: entries,
-		LogDate: time.Now().UTC().Format(time.DateOnly),
+		Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), Retirement: cloneRetirementContext(plan.Retirement), Entries: entries,
+		MaintenanceAuthority: authority,
+		LogDate:              time.Now().UTC().Format(time.DateOnly),
 	}
 	coreMetadata, err := yaml.Marshal(manifest)
 	if err != nil {
@@ -192,7 +215,7 @@ func (workspace *Workspace) StagePlan(ctx context.Context, plan knowl.ValidatedE
 		return knowl.StagedChange{}, fmt.Errorf("write staging manifest: %w", err)
 	}
 	complete = true
-	return knowl.StagedChange{OperationID: plan.OperationID, Digest: generation, Files: entryTargets(entries), CreatedAt: time.Now().UTC(), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...)}, nil
+	return knowl.StagedChange{OperationID: plan.OperationID, Digest: generation, Files: entryTargets(entries), CreatedAt: time.Now().UTC(), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), Retirement: cloneRetirementContext(plan.Retirement)}, nil
 }
 
 func entryTargets(entries []stageEntry) []string {
@@ -278,7 +301,8 @@ func validStageManifest(manifest stageManifest) bool {
 func validMaintainerStageManifest(manifest stageManifest) bool {
 	limits := app.DefaultPlanLimits()
 	if manifest.SourceID != "" || !validSHA256(manifest.SchemaDigest) || !validSHA256(manifest.LogExpectedDigest) || !validSHA256(manifest.LogDigest) ||
-		len(manifest.SourceRefs) == 0 || len(manifest.SourceRefs) > limits.MaxSourceRefs || len(manifest.Entries) > limits.MaxFiles {
+		len(manifest.SourceRefs) > limits.MaxSourceRefs || len(manifest.Entries) > limits.MaxFiles ||
+		(manifest.Retirement == nil && len(manifest.SourceRefs) == 0) || (manifest.Retirement != nil && app.ValidateRetirementPlanContext(manifest.Retirement) != nil) {
 		return false
 	}
 	normalizedDiagnostics, err := app.NormalizeMaintenanceDiagnostics(manifest.Diagnostics)
@@ -307,14 +331,31 @@ func validMaintainerStageManifest(manifest stageManifest) bool {
 		}
 	}
 	seenTargets := make(map[string]struct{}, len(manifest.Entries))
+	deleteCount := 0
 	for _, entry := range manifest.Entries {
-		if entryAction(entry) != knowl.SourceMutationWrite || validateCommitTarget(entry.Target) != nil || !validSHA256(entry.Digest) || (entry.ExpectedDigest != "" && !validSHA256(entry.ExpectedDigest)) {
+		if validateCommitTarget(entry.Target) != nil || (entry.ExpectedDigest != "" && !validSHA256(entry.ExpectedDigest)) {
+			return false
+		}
+		switch entryAction(entry) {
+		case knowl.SourceMutationWrite:
+			if !validSHA256(entry.Digest) {
+				return false
+			}
+		case knowl.SourceMutationDelete:
+			deleteCount++
+			if manifest.Retirement == nil || entry.Target != manifest.Retirement.PagePath || entry.ExpectedDigest != manifest.Retirement.PageDigest || entry.Digest != "" {
+				return false
+			}
+		default:
 			return false
 		}
 		if _, exists := seenTargets[entry.Target]; exists {
 			return false
 		}
 		seenTargets[entry.Target] = struct{}{}
+	}
+	if (manifest.Retirement != nil && deleteCount > 1) || (manifest.Retirement == nil && deleteCount != 0) {
+		return false
 	}
 	return stageGeneration(manifest) != ""
 }
@@ -385,11 +426,11 @@ func stagedChangeFromManifest(stageDir string, manifest stageManifest) (knowl.St
 	if !stagedFilesMatch(stageDir, manifest.Entries) {
 		return knowl.StagedChange{}, fmt.Errorf("staged file content changed: %w", ErrPlanConflict)
 	}
-	return knowl.StagedChange{OperationID: manifest.OperationID, Digest: stageGeneration(manifest), Files: entryTargets(manifest.Entries), CreatedAt: time.Now().UTC(), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), manifest.Diagnostics...)}, nil
+	return knowl.StagedChange{OperationID: manifest.OperationID, Digest: stageGeneration(manifest), Files: entryTargets(manifest.Entries), CreatedAt: time.Now().UTC(), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), manifest.Diagnostics...), Retirement: cloneRetirementContext(manifest.Retirement)}, nil
 }
 
 func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
-	if manifest.OperationID != plan.OperationID || manifest.SchemaDigest != plan.SchemaDigest || manifest.RequiredSourceRef != plan.RequiredSourceRef || len(manifest.SourceRefs) != len(plan.SourceRefs) || len(manifest.Diagnostics) != len(plan.Diagnostics) || len(manifest.Entries) != len(plan.Edits) {
+	if manifest.OperationID != plan.OperationID || manifest.SchemaDigest != plan.SchemaDigest || manifest.RequiredSourceRef != plan.RequiredSourceRef || len(manifest.SourceRefs) != len(plan.SourceRefs) || len(manifest.Diagnostics) != len(plan.Diagnostics) || len(manifest.Entries) != len(plan.Edits) || !sameRetirementContext(manifest.Retirement, plan.Retirement) {
 		return false
 	}
 	if scope := manifestScope(manifest); scope != "" && scope != plan.Scope {
@@ -407,7 +448,8 @@ func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {
 	}
 	for index, entry := range manifest.Entries {
 		edit := plan.Edits[index]
-		if entry.Target != edit.Path || entry.ExpectedDigest != edit.ExpectedDigest || entry.Digest != digestBytes(edit.Content) {
+		if entryAction(entry) != fileEditAction(edit) || entry.Target != edit.Path || entry.ExpectedDigest != edit.ExpectedDigest ||
+			(entryAction(entry) == knowl.SourceMutationWrite && entry.Digest != digestBytes(edit.Content)) || (entryAction(entry) == knowl.SourceMutationDelete && entry.Digest != "") {
 			return false
 		}
 	}
@@ -419,7 +461,8 @@ func stageGeneration(manifest stageManifest) string {
 		OperationID: manifest.OperationID, Writer: manifest.Writer, SourceID: manifest.SourceID,
 		Scope: manifest.Scope, SchemaDigest: manifest.SchemaDigest, SnapshotDigest: manifest.SnapshotDigest,
 		RequiredSourceRef: manifest.RequiredSourceRef, SourceRefs: manifest.SourceRefs,
-		Diagnostics: manifest.Diagnostics, Entries: manifest.Entries, LogDate: manifest.LogDate,
+		Diagnostics: manifest.Diagnostics, Retirement: manifest.Retirement, Entries: manifest.Entries, LogDate: manifest.LogDate,
+		MaintenanceAuthority: manifest.MaintenanceAuthority,
 	}
 	metadata, err := yaml.Marshal(core)
 	if err != nil {
@@ -429,6 +472,7 @@ func stageGeneration(manifest stageManifest) string {
 }
 
 type prospectiveEdit struct {
+	Action  knowl.SourceMutationAction
 	Target  string
 	Content string
 }
@@ -436,7 +480,7 @@ type prospectiveEdit struct {
 func prospectiveEditsFromPlan(plan knowl.ValidatedEditPlan) []prospectiveEdit {
 	edits := make([]prospectiveEdit, 0, len(plan.Edits))
 	for _, edit := range plan.Edits {
-		edits = append(edits, prospectiveEdit{Target: edit.Path, Content: string(edit.Content)})
+		edits = append(edits, prospectiveEdit{Action: fileEditAction(edit), Target: edit.Path, Content: string(edit.Content)})
 	}
 	return edits
 }
@@ -459,16 +503,75 @@ func retainedFileEdits(edits []knowl.FileEdit, accepted []prospectiveEdit) []kno
 func readStagedPlanEdits(stageDir string, entries []stageEntry) ([]prospectiveEdit, error) {
 	edits := make([]prospectiveEdit, 0, len(entries))
 	for _, entry := range entries {
-		if entryAction(entry) != knowl.SourceMutationWrite {
+		edit := prospectiveEdit{Action: entryAction(entry), Target: entry.Target}
+		if edit.Action == knowl.SourceMutationWrite {
+			content, err := os.ReadFile(filepath.Join(stageDir, filepath.FromSlash(entry.Target)))
+			if err != nil {
+				return nil, fmt.Errorf("read staged file %q: %w", entry.Target, err)
+			}
+			edit.Content = string(content)
+		} else if edit.Action != knowl.SourceMutationDelete {
 			return nil, ErrPlanConflict
 		}
-		content, err := os.ReadFile(filepath.Join(stageDir, filepath.FromSlash(entry.Target)))
-		if err != nil {
-			return nil, fmt.Errorf("read staged file %q: %w", entry.Target, err)
-		}
-		edits = append(edits, prospectiveEdit{Target: entry.Target, Content: string(content)})
+		edits = append(edits, edit)
 	}
 	return edits, nil
+}
+
+func fileEditAction(edit knowl.FileEdit) knowl.SourceMutationAction {
+	if edit.Action == "" {
+		return knowl.SourceMutationWrite
+	}
+	return edit.Action
+}
+
+func validatePlanRetirementBoundary(plan knowl.ValidatedEditPlan) error {
+	if plan.Retirement == nil {
+		for _, edit := range plan.Edits {
+			if fileEditAction(edit) != knowl.SourceMutationWrite {
+				return ErrPlanConflict
+			}
+		}
+		return nil
+	}
+	if app.ValidateRetirementPlanContext(plan.Retirement) != nil || plan.Scope != plan.Retirement.Scope || plan.RequiredSourceRef != "" {
+		return ErrPlanConflict
+	}
+	ordinary := 0
+	for _, edit := range plan.Edits {
+		pageID, isPage := knowlwiki.PageIDFromPath(edit.Path)
+		if !isPage {
+			if fileEditAction(edit) != knowl.SourceMutationWrite {
+				return ErrPlanConflict
+			}
+			continue
+		}
+		ordinary++
+		if pageID != plan.Retirement.PageID || edit.Path != plan.Retirement.PagePath || edit.ExpectedDigest != plan.Retirement.PageDigest {
+			return ErrPlanConflict
+		}
+	}
+	if ordinary != 1 {
+		return ErrPlanConflict
+	}
+	return nil
+}
+
+func cloneRetirementContext(input *knowl.RetirementPlanContext) *knowl.RetirementPlanContext {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	result.Owners = slices.Clone(input.Owners)
+	return &result
+}
+
+func sameRetirementContext(left, right *knowl.RetirementPlanContext) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Scope == right.Scope && left.PageID == right.PageID && left.PagePath == right.PagePath && left.PageDigest == right.PageDigest &&
+		left.AuthorityGeneration == right.AuthorityGeneration && left.AuthorityEpoch == right.AuthorityEpoch && slices.Equal(left.Owners, right.Owners)
 }
 
 func manifestScope(manifest stageManifest) knowl.ScopeRef {

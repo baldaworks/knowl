@@ -316,6 +316,43 @@ go test -race -tags integration -count=1 ./pkg/knowl/store/postgres \
   -run TestStoreContractWithTestcontainers
 ```
 
+## Gradual source-retirement gates
+
+The source-retirement suite is split by the real consistency boundaries rather
+than one global-cutover fixture. Together the following observable tests cover
+the complete contract:
+
+| Requirement | Primary regression evidence |
+| --- | --- |
+| Independent replacement | Shared lifecycle contracts keep equal-ID filesystem/Git owners distinct; source reconcile independently fetches an equal revision under the Git adapter. |
+| Durable lifecycle | SQLite and integration-tagged PostgreSQL lifecycle contracts exercise active/retiring/deleted CAS, restart, cancellation, re-addition, and concurrent finalization. |
+| Replacement ordering | runtime lifecycle and coordinator fixtures block discovery until all additions are ready and allow pure deletion immediately. |
+| Retiring-ref containment | filesystem staging rejects retained or newly introduced refs with typed owner/path diagnostics while canonical pre-transition pages remain readable. |
+| Old-only deletion | planner and real workspace fixtures delete one page with its exact catalog closure and preimages. |
+| Mixed recomputation | planner fixtures supply only sorted active evidence; the real workspace gradual-visibility fixture replaces a mixed page without changing its catalog membership. |
+| Complete current plans | missing, unknown, undeclared, stale-page, stale-catalog, lifecycle-generation, and evidence-limit fixtures fail through stable typed results. |
+| Page-unit atomicity | retirement recovery injects faults before the journal, after preimages, after each target, after durable commit, and after receipt creation. |
+| Independent progress | durable page-service fixtures keep A failed while B commits, then retry only A without replaying B. |
+| Preserved failure | planning, staging, commit, projection, outcome, cancellation, and stale-state fixtures retain the page and bounded diagnostics. |
+| Zero-only deletion | coordinator multi-window verification and store CAS fixtures reject remaining refs/work and finalize only a fresh authoritative zero round. |
+| Fail-closed diagnostics | retirement safe-subset staging asserts `plan.empty_safe_subset` plus accumulated page and catalog path/target diagnostics; ordinary lineage removal remains rejected. |
+| Operator recovery | typed coordinator status, CLI JSON, HTTP OpenAPI routing, targeted dry-run, and retry fixtures avoid log-text assertions. |
+| Deterministic bounds | provenance pager, planner limits, owner rotation, scheduler fairness, cancellation, and cursor-mutation fixtures cover finite windows and permutations. |
+| Idempotent restart | generic operation/store contracts, canonical receipt replay, projection retry, lease expiry, and coordinator cursor replay preserve completed work. |
+
+Run the focused boundaries with:
+
+```sh
+go test -count=1 ./pkg/knowl/app ./pkg/knowl/content/fs \
+  ./pkg/knowl/store/sqlite ./internal/source/reconcile \
+  ./internal/httpapi/operatorapi ./internal/httpapi/server ./cmd/knowl
+go test -tags integration -count=1 ./pkg/knowl/store/postgres \
+  -run 'TestPostgresSourceLifecycleContract|TestStoreContractWithTestcontainers'
+```
+
+The full repository race run remains mandatory for this contract; focused race
+runs are diagnostic aids, not substitutes.
+
 
 ## Durable operation diagnostics gates
 

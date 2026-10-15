@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -288,26 +289,31 @@ func seedGenericPostgresSource(t *testing.T, store *Store) {
 	at := time.Unix(50, 0).UTC()
 	run := knowl.SyncRun{ID: "generic-upgrade", Scope: genericSourceScope, SourceID: testSourceID, ConfigDigest: strings.Repeat("a", 64), Status: knowl.SyncStatusScanning, StartedAt: at, UpdatedAt: at}
 	state := knowl.DocumentState{Scope: run.Scope, SourceID: run.SourceID, DocumentID: genericDocumentID, Revision: "1", LastSeenRunID: run.ID, AcceptedSource: knowl.AcceptedSource{Scope: run.Scope, Source: knowl.SourceRef{Adapter: "wiki-filesystem", ID: "engineering/docs/page.md"}, Version: knowl.SourceVersion{Version: "1", Digest: strings.Repeat("d", 64)}, MediaType: "text/markdown", ManifestRef: "raw/manifest.json"}}
-	if _, _, err := store.BeginSync(ctx, app.BeginSyncRequest{Run: run, Type: knowl.SourceTypeFilesystem}); err != nil {
-		t.Fatal(err)
-	}
-	prepared := app.PreparedSyncState{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, CompleteScan: true, Checkpoint: "checkpoint", Counts: knowl.SyncCounts{Added: 1}, Documents: []app.PreparedDocumentState{{Action: app.SyncDocumentActive, State: state}}, PreparedAt: at}
-	digest, err := app.PreparedSyncDigest(prepared)
+	accepted, err := json.Marshal(state.AcceptedSource)
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared.CandidateDigest = digest
-	if _, err := store.PrepareSync(ctx, prepared); err != nil {
+	completedAt := at.Add(3 * time.Second)
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_sources (
+scope, source_id, source_type, config_digest, repository_identity, checkpoint,
+last_attempt_run_id, last_success_run_id, status, created_at, updated_at)
+VALUES ($1, $2, $3, $4, '', 'checkpoint', $5, $5, $6, $7, $8)`, run.Scope, run.SourceID,
+		knowl.SourceTypeFilesystem, run.ConfigDigest, run.ID, knowl.SyncStatusSucceeded, at, completedAt); err != nil {
 		t.Fatal(err)
 	}
-	transition := app.SyncGeneration{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, Generation: "generation", UpdatedAt: at.Add(time.Second)}
-	if _, err := store.MarkContentCommitted(ctx, transition); err != nil {
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_sync_runs (
+run_id, scope, source_id, config_digest, status, complete_scan, added, content_generation,
+checkpoint, started_at, updated_at, completed_at)
+VALUES ($1, $2, $3, $4, $5, TRUE, 1, 'generation', 'checkpoint', $6, $7, $7)`,
+		run.ID, run.Scope, run.SourceID, run.ConfigDigest, knowl.SyncStatusSucceeded, at, completedAt); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MarkProjected(ctx, transition); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.FinalizeSync(ctx, app.SyncFinalization{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, CandidateDigest: digest, Generation: transition.Generation, Checkpoint: prepared.Checkpoint, Counts: prepared.Counts, FinalizedAt: at.Add(2 * time.Second)}); err != nil {
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO knowl_source_documents (
+scope, source_id, document_id, revision, accepted_source, maintenance_revision,
+maintenance_operation_id, maintenance_generation, mirror_path, mirror_digest,
+last_seen_run_id, deleted, deleted_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5::jsonb, '', '', '', '', '', $6, FALSE, NULL, $7, $7)`,
+		state.Scope, state.SourceID, state.DocumentID, state.Revision, accepted, state.LastSeenRunID, completedAt); err != nil {
 		t.Fatal(err)
 	}
 }

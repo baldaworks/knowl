@@ -29,7 +29,7 @@ func (store *Store) BeginSync(ctx context.Context, request app.BeginSyncRequest)
 	defer func() { _ = tx.Rollback() }()
 	existing, readErr := syncRunTx(ctx, tx, request.Run.Scope, request.Run.ID)
 	if readErr == nil {
-		if existing.SourceID != request.Run.SourceID || existing.ConfigDigest != request.Run.ConfigDigest || !existing.StartedAt.Equal(request.Run.StartedAt.UTC()) {
+		if existing.SourceID != request.Run.SourceID || existing.ConfigDigest != request.Run.ConfigDigest || request.Run.StartedAt.UTC().After(existing.StartedAt) {
 			return knowl.SyncRun{}, false, app.ErrSyncConflict
 		}
 		return existing, true, nil
@@ -37,16 +37,25 @@ func (store *Store) BeginSync(ctx context.Context, request app.BeginSyncRequest)
 	if !errors.Is(readErr, app.ErrSyncRunNotFound) {
 		return knowl.SyncRun{}, false, readErr
 	}
+	started := request.Run.StartedAt.UTC()
 	now := request.Run.UpdatedAt.UTC()
 	if now.IsZero() {
-		now = request.Run.StartedAt.UTC()
+		now = started
 	}
-	started := request.Run.StartedAt.UTC()
-	var previousIdentity string
-	identityErr := tx.QueryRowContext(ctx, `SELECT repository_identity FROM knowl_sources WHERE scope = ? AND source_id = ?`, request.Run.Scope, request.Run.SourceID).Scan(&previousIdentity)
+	var previousIdentity, previousUpdatedRaw string
+	identityErr := tx.QueryRowContext(ctx, `SELECT repository_identity, updated_at FROM knowl_sources WHERE scope = ? AND source_id = ?`, request.Run.Scope, request.Run.SourceID).Scan(&previousIdentity, &previousUpdatedRaw)
 	if identityErr != nil && !errors.Is(identityErr, sql.ErrNoRows) {
 		return knowl.SyncRun{}, false, fmt.Errorf("read source repository identity: %w", identityErr)
 	}
+	var previousUpdated time.Time
+	if identityErr == nil {
+		previousUpdated, err = parseTime(previousUpdatedRaw)
+		if err != nil {
+			return knowl.SyncRun{}, false, fmt.Errorf("read source transition time: %w", err)
+		}
+	}
+	started = app.SourceTransitionTime(started, previousUpdated)
+	now = app.SourceTransitionTime(now, started, previousUpdated)
 	if previousIdentity != "" && previousIdentity != request.RepositoryIdentity && !request.AllowRebind {
 		return knowl.SyncRun{}, false, app.ErrSourceLineageConflict
 	}
@@ -59,7 +68,8 @@ func (store *Store) BeginSync(ctx context.Context, request app.BeginSyncRequest)
 					WHEN knowl_sources.repository_identity <> excluded.repository_identity THEN ''
 					ELSE knowl_sources.checkpoint
 				END,
-				last_attempt_run_id = excluded.last_attempt_run_id, status = excluded.status, updated_at = excluded.updated_at`,
+				last_attempt_run_id = excluded.last_attempt_run_id, status = excluded.status,
+				updated_at = CASE WHEN knowl_sources.updated_at > excluded.updated_at THEN knowl_sources.updated_at ELSE excluded.updated_at END`,
 		request.Run.Scope, request.Run.SourceID, request.Type, request.Run.ConfigDigest, request.RepositoryIdentity, request.Run.ID,
 		request.Run.Status, formatTime(started), formatTime(now))
 	if err != nil {
@@ -162,7 +172,7 @@ func (store *Store) RecordScanPage(ctx context.Context, record app.ScanPageRecor
 			ordinal++
 		}
 	}
-	updated := record.RecordedAt.UTC()
+	updated := app.SourceTransitionTime(record.RecordedAt, run.StartedAt, run.UpdatedAt, run.CompletedAt)
 	if _, err := tx.ExecContext(ctx, `UPDATE knowl_sync_runs SET next_page_token = ?, checkpoint = CASE WHEN ? = '' THEN checkpoint ELSE ? END, updated_at = ? WHERE run_id = ?`, record.NextPageToken, record.AttemptCheckpoint, record.AttemptCheckpoint, formatTime(updated), record.RunID); err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("advance scan page: %w", err)
 	}
@@ -211,7 +221,12 @@ func (store *Store) PrepareSync(ctx context.Context, prepared app.PreparedSyncSt
 		if digestErr != nil || storedDigest != prepared.CandidateDigest {
 			return knowl.SyncRun{}, app.ErrSyncConflict
 		}
-		if run.Checkpoint == prepared.Checkpoint && run.Counts == prepared.Counts && matches {
+		var maintenanceReady, digestVersion int
+		if scanErr := tx.QueryRowContext(ctx, `SELECT maintenance_ready, prepared_digest_version FROM knowl_sync_runs WHERE run_id = ?`, prepared.RunID).Scan(&maintenanceReady, &digestVersion); scanErr != nil {
+			return knowl.SyncRun{}, fmt.Errorf("read prepared maintenance readiness: %w", scanErr)
+		}
+		if run.Checkpoint == prepared.Checkpoint && run.Counts == prepared.Counts && maintenanceReady == boolInt(prepared.MaintenanceReady) &&
+			digestVersion == int(app.PreparedSyncDigestMaintenanceV1) && matches {
 			return run, nil
 		}
 		return knowl.SyncRun{}, app.ErrSyncConflict
@@ -230,9 +245,9 @@ func (store *Store) PrepareSync(ctx context.Context, prepared app.PreparedSyncSt
 			return knowl.SyncRun{}, fmt.Errorf("insert sync candidate: %w", err)
 		}
 	}
-	updated := prepared.PreparedAt.UTC()
-	_, err = tx.ExecContext(ctx, `UPDATE knowl_sync_runs SET status = ?, complete_scan = 1, added = ?, updated = ?, unchanged = ?, deleted = ?, failed = ?, candidate_digest = ?, checkpoint = ?, updated_at = ? WHERE run_id = ?`,
-		knowl.SyncStatusPrepared, prepared.Counts.Added, prepared.Counts.Updated, prepared.Counts.Unchanged, prepared.Counts.Deleted, prepared.Counts.Failed, prepared.CandidateDigest, prepared.Checkpoint, formatTime(updated), prepared.RunID)
+	updated := app.SourceTransitionTime(prepared.PreparedAt, run.StartedAt, run.UpdatedAt, run.CompletedAt)
+	_, err = tx.ExecContext(ctx, `UPDATE knowl_sync_runs SET status = ?, complete_scan = 1, added = ?, updated = ?, unchanged = ?, deleted = ?, failed = ?, candidate_digest = ?, maintenance_ready = ?, prepared_digest_version = ?, checkpoint = ?, updated_at = ? WHERE run_id = ?`,
+		knowl.SyncStatusPrepared, prepared.Counts.Added, prepared.Counts.Updated, prepared.Counts.Unchanged, prepared.Counts.Deleted, prepared.Counts.Failed, prepared.CandidateDigest, boolInt(prepared.MaintenanceReady), app.PreparedSyncDigestMaintenanceV1, prepared.Checkpoint, formatTime(updated), prepared.RunID)
 	if err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("prepare sync run: %w", err)
 	}
@@ -261,14 +276,15 @@ func (store *Store) PreparedSync(ctx context.Context, scope knowl.ScopeRef, id k
 		return app.PreparedSyncRead{}, err
 	}
 	storedDigest := ""
-	if err := store.db.QueryRowContext(ctx, `SELECT candidate_digest FROM knowl_sync_runs WHERE run_id = ?`, id).Scan(&storedDigest); err != nil {
+	maintenanceReady, digestVersion := 0, 0
+	if err := store.db.QueryRowContext(ctx, `SELECT candidate_digest, maintenance_ready, prepared_digest_version FROM knowl_sync_runs WHERE run_id = ?`, id).Scan(&storedDigest, &maintenanceReady, &digestVersion); err != nil {
 		return app.PreparedSyncRead{}, fmt.Errorf("read prepared digest: %w", err)
 	}
-	canonical, err := app.PreparedSyncDigest(app.PreparedSyncState{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, CompleteScan: true, Checkpoint: run.Checkpoint, Counts: run.Counts, Documents: documents})
+	canonical, err := app.PreparedSyncDigestVersioned(app.PreparedSyncState{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, CompleteScan: true, MaintenanceReady: maintenanceReady != 0, Checkpoint: run.Checkpoint, Counts: run.Counts, Documents: documents}, app.PreparedSyncDigestVersion(digestVersion))
 	if err != nil || canonical != storedDigest {
 		return app.PreparedSyncRead{}, app.ErrSyncConflict
 	}
-	return app.PreparedSyncRead{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, Checkpoint: run.Checkpoint, Counts: run.Counts, Documents: documents, CandidateDigest: storedDigest}, nil
+	return app.PreparedSyncRead{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, MaintenanceReady: maintenanceReady != 0, Checkpoint: run.Checkpoint, Counts: run.Counts, Documents: documents, CandidateDigest: storedDigest}, nil
 }
 
 type scanQueryer interface {
@@ -313,7 +329,11 @@ func storedPreparedDigestTx(ctx context.Context, tx *sql.Tx, run knowl.SyncRun) 
 	if err != nil {
 		return "", err
 	}
-	return app.PreparedSyncDigest(app.PreparedSyncState{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, CompleteScan: true, Checkpoint: run.Checkpoint, Counts: run.Counts, Documents: documents})
+	var maintenanceReady, digestVersion int
+	if err := tx.QueryRowContext(ctx, `SELECT maintenance_ready, prepared_digest_version FROM knowl_sync_runs WHERE run_id = ?`, run.ID).Scan(&maintenanceReady, &digestVersion); err != nil {
+		return "", fmt.Errorf("read prepared maintenance readiness: %w", err)
+	}
+	return app.PreparedSyncDigestVersioned(app.PreparedSyncState{RunID: run.ID, Scope: run.Scope, SourceID: run.SourceID, CompleteScan: true, MaintenanceReady: maintenanceReady != 0, Checkpoint: run.Checkpoint, Counts: run.Counts, Documents: documents}, app.PreparedSyncDigestVersion(digestVersion))
 }
 
 func (store *Store) MarkContentCommitted(ctx context.Context, generation app.SyncGeneration) (knowl.SyncRun, error) {
@@ -354,7 +374,7 @@ func (store *Store) markSyncGeneration(ctx context.Context, generation app.SyncG
 	if run.ContentGeneration != "" && run.ContentGeneration != generation.Generation {
 		return knowl.SyncRun{}, app.ErrSyncConflict
 	}
-	updated := generation.UpdatedAt.UTC()
+	updated := app.SourceTransitionTime(generation.UpdatedAt, run.StartedAt, run.UpdatedAt, run.CompletedAt)
 	if _, err := tx.ExecContext(ctx, `UPDATE knowl_sync_runs SET status = ?, content_generation = ?, updated_at = ? WHERE run_id = ?`, to, generation.Generation, formatTime(updated), generation.RunID); err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("mark sync generation: %w", err)
 	}
@@ -413,17 +433,17 @@ func (store *Store) FinalizeSync(ctx context.Context, finalization app.SyncFinal
 	if err := rows.Close(); err != nil {
 		return knowl.SyncRun{}, err
 	}
-	now := finalization.FinalizedAt.UTC()
+	now := app.SourceTransitionTime(finalization.FinalizedAt, run.StartedAt, run.UpdatedAt, run.CompletedAt)
 	for _, item := range candidates {
 		deleted := item.action == string(app.SyncDocumentTombstone)
 		_, err = tx.ExecContext(ctx, `INSERT INTO knowl_source_documents (scope, source_id, document_id, revision, accepted_source, maintenance_revision, maintenance_operation_id, maintenance_generation, mirror_path, mirror_digest, last_seen_run_id, deleted, deleted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(scope, source_id, document_id) DO UPDATE SET revision = excluded.revision, accepted_source = excluded.accepted_source, maintenance_revision = excluded.maintenance_revision, maintenance_operation_id = excluded.maintenance_operation_id, maintenance_generation = excluded.maintenance_generation, mirror_path = excluded.mirror_path, mirror_digest = excluded.mirror_digest, last_seen_run_id = excluded.last_seen_run_id, deleted = excluded.deleted, deleted_at = excluded.deleted_at, updated_at = excluded.updated_at`,
+			ON CONFLICT(scope, source_id, document_id) DO UPDATE SET revision = excluded.revision, accepted_source = excluded.accepted_source, maintenance_revision = excluded.maintenance_revision, maintenance_operation_id = excluded.maintenance_operation_id, maintenance_generation = excluded.maintenance_generation, mirror_path = excluded.mirror_path, mirror_digest = excluded.mirror_digest, last_seen_run_id = excluded.last_seen_run_id, deleted = excluded.deleted, deleted_at = excluded.deleted_at, updated_at = CASE WHEN knowl_source_documents.updated_at > excluded.updated_at THEN knowl_source_documents.updated_at ELSE excluded.updated_at END`,
 			finalization.Scope, finalization.SourceID, item.documentID, item.revision, item.accepted, item.maintenanceRevision, item.maintenanceOperationID, item.maintenanceGeneration, item.mirrorPath, item.mirrorDigest, item.lastSeen, boolInt(deleted), item.deletedAt, formatTime(now), formatTime(now))
 		if err != nil {
 			return knowl.SyncRun{}, fmt.Errorf("apply sync candidate: %w", err)
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE knowl_sources SET checkpoint = ?, last_success_run_id = ?, status = ?, updated_at = ? WHERE scope = ? AND source_id = ?`, finalization.Checkpoint, finalization.RunID, knowl.SyncStatusSucceeded, formatTime(now), finalization.Scope, finalization.SourceID)
+	_, err = tx.ExecContext(ctx, `UPDATE knowl_sources SET checkpoint = ?, last_success_run_id = ?, status = ?, updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END WHERE scope = ? AND source_id = ?`, finalization.Checkpoint, finalization.RunID, knowl.SyncStatusSucceeded, formatTime(now), formatTime(now), finalization.Scope, finalization.SourceID)
 	if err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("finalize sync source: %w", err)
 	}
@@ -462,11 +482,11 @@ func (store *Store) FailSync(ctx context.Context, scope knowl.ScopeRef, id knowl
 		}
 		return knowl.SyncRun{}, app.ErrSyncConflict
 	}
-	now := failedAt.UTC()
+	now := app.SourceTransitionTime(failedAt, run.StartedAt, run.UpdatedAt, run.CompletedAt)
 	if _, err := tx.ExecContext(ctx, `UPDATE knowl_sync_runs SET status = ?, failure_class = ?, completed_at = ?, updated_at = ? WHERE run_id = ?`, knowl.SyncStatusFailed, failureClass, formatTime(now), formatTime(now), id); err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("fail sync run: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE knowl_sources SET status = ?, updated_at = ? WHERE scope = ? AND source_id = ?`, knowl.SyncStatusFailed, formatTime(now), scope, run.SourceID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE knowl_sources SET status = ?, updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END WHERE scope = ? AND source_id = ?`, knowl.SyncStatusFailed, formatTime(now), formatTime(now), scope, run.SourceID); err != nil {
 		return knowl.SyncRun{}, fmt.Errorf("fail sync source: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -655,7 +675,14 @@ func (store *Store) ResumableSyncRuns(ctx context.Context, scope knowl.ScopeRef,
 	if limit <= 0 || limit > 1000 {
 		return nil, app.ErrSourceInvalid
 	}
-	rows, err := store.db.QueryContext(ctx, syncRunSelect+` WHERE scope = ? AND status IN (?, ?, ?, ?) ORDER BY updated_at, run_id LIMIT ?`, scope, knowl.SyncStatusScanning, knowl.SyncStatusPrepared, knowl.SyncStatusContentCommitted, knowl.SyncStatusProjected, limit)
+	rows, err := store.db.QueryContext(ctx, syncRunSelect+` WHERE scope = ? AND (
+status IN (?, ?, ?, ?) OR (status = ? AND maintenance_ready = 1 AND EXISTS (
+	SELECT 1 FROM knowl_source_lifecycle AS lifecycle
+	JOIN knowl_sources AS source ON source.scope = knowl_sync_runs.scope AND source.source_id = knowl_sync_runs.source_id
+	WHERE lifecycle.scope = knowl_sync_runs.scope AND lifecycle.source_id = knowl_sync_runs.source_id
+	  AND lifecycle.adapter = CASE source.source_type WHEN 'filesystem' THEN 'wiki-filesystem' WHEN 'git' THEN 'git' END
+	  AND lifecycle.state = 'active' AND lifecycle.config_digest = knowl_sync_runs.config_digest AND lifecycle.ready = 0
+))) ORDER BY updated_at, run_id LIMIT ?`, scope, knowl.SyncStatusScanning, knowl.SyncStatusPrepared, knowl.SyncStatusContentCommitted, knowl.SyncStatusProjected, knowl.SyncStatusSucceeded, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list resumable sync runs: %w", err)
 	}

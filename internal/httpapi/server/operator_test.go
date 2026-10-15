@@ -62,9 +62,12 @@ func (f *operatorFixture) ListSourceDocuments(_ context.Context, scope domain.Sc
 func (f *operatorFixture) ListOperations(_ context.Context, scope domain.ScopeRef, _ app.OperatorOperationReadOptions) (app.OperatorReadPage[domain.OperatorOperationSummary], error) {
 	return app.OperatorReadPage[domain.OperatorOperationSummary]{Items: []domain.OperatorOperationSummary{}}, f.check(scope)
 }
+func (f *operatorFixture) SourceRetirement(_ context.Context, scope domain.ScopeRef, owner domain.SourceOwner) (domain.SourceRetirementStatus, error) {
+	return domain.SourceRetirementStatus{Owner: owner, State: domain.SourceLifecycleRetiring, Readiness: domain.SourceRetirementReadinessStatus{Pending: []domain.SourceOwner{}}, Diagnostics: []domain.MaintenanceDiagnostic{}}, f.check(scope)
+}
 func operatorTestHandler(t *testing.T, f *operatorFixture, ready func() bool) http.Handler {
 	t.Helper()
-	service, err := app.NewOperatorService("trusted", app.OperatorReaders{Catalogs: f, Pages: f, Page: f, Revisions: f, Sources: f, Documents: f, Operations: f}, app.OperatorOptions{})
+	service, err := app.NewOperatorService("trusted", app.OperatorReaders{Catalogs: f, Pages: f, Page: f, Revisions: f, Sources: f, Documents: f, Operations: f, Retirements: f}, app.OperatorOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +244,7 @@ func TestOperatorLiveRoutesMatchParsedContract(t *testing.T) {
 	if err := yaml.Unmarshal(data, &contract); err != nil {
 		t.Fatal(err)
 	}
-	routes := map[string]string{"/operator/v1/catalogs": "", operatorTestPagesRoute: "", operatorTestPageRoute: "?page_id=" + operatorTestPage, "/operator/v1/source-revision": "?source_ref=git:doc@one", "/operator/v1/sources": "", "/operator/v1/sources/{source_id}": "", "/operator/v1/operations": ""}
+	routes := map[string]string{"/operator/v1/catalogs": "", operatorTestPagesRoute: "", operatorTestPageRoute: "?page_id=" + operatorTestPage, "/operator/v1/source-revision": "?source_ref=git:doc@one", "/operator/v1/sources": "", "/operator/v1/sources/{source_id}": "", "/operator/v1/operations": "", "/operator/v1/source-retirement": "?adapter=git&source_id=source"}
 	if len(contract.Paths) != len(routes) {
 		t.Fatalf("contract routes: %d", len(contract.Paths))
 	}

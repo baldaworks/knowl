@@ -40,7 +40,32 @@ func TestGeneratedRegistrationsMatchParsedSpec(t *testing.T) {
 	}
 	recorder := &routeRecorder{routes: map[string]bool{}}
 	HandlerWithOptions(nil, StdHTTPServerOptions{BaseRouter: recorder})
-	if len(want) != 7 || !reflect.DeepEqual(recorder.routes, want) {
+	if len(want) != 8 || !reflect.DeepEqual(recorder.routes, want) {
 		t.Fatalf("generated routes = %v; contract = %v", recorder.routes, want)
+	}
+}
+
+func TestSourceRetirementContractDeclaresNotFound(t *testing.T) {
+	data, err := os.ReadFile("../../../api/openapi/operator.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]struct {
+				Content map[string]struct {
+					Schema struct {
+						Ref string `yaml:"$ref"`
+					} `yaml:"schema"`
+				} `yaml:"content"`
+			} `yaml:"responses"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal(data, &spec); err != nil {
+		t.Fatal(err)
+	}
+	response, ok := spec.Paths["/operator/v1/source-retirement"]["get"].Responses["404"]
+	if !ok || response.Content["application/json"].Schema.Ref != "#/components/schemas/Error" {
+		t.Fatalf("source retirement 404 response = %#v, present=%t", response, ok)
 	}
 }

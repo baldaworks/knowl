@@ -59,7 +59,7 @@ business operations. The authoritative HTTP schema is
 
 The optional [operator web UI](web-ui.md) adds four server-rendered screens:
 Knowledge, Search, Operations, and Sources. Its separate
-[operator read API](../api/openapi/operator.yaml) exposes seven GET routes bound
+[operator read API](../api/openapi/operator.yaml) exposes eight GET routes bound
 to the configured workspace and scope. It adds no agent business operations.
 Both are disabled by default and share the existing HTTP listener. Enabled web
 access requires the operator token; that credential also authorizes the existing
@@ -474,6 +474,37 @@ Deleting an upstream document tombstones active source state but does not
 implicitly erase accumulated knowledge. The next successful sync also removes
 that source's legacy derived `wiki/sources/<source_id>/**` subtree using staged
 recovery while preserving raw revisions and curated pages.
+
+### Gradual configured-source retirement
+
+Configured-source removal is distinct from document tombstoning. Each exact
+`adapter` plus `source_id` owner has a durable `active`, `retiring`, or `deleted`
+state. Replacing a `wiki-filesystem` source with Git removes the old owner and
+adds an independent Git owner: equal IDs, paths, revisions, content, or page IDs
+do not create an alias, inherit lineage, or rewrite provenance. Additions first
+observed with removals must complete their normal accepted synchronization and
+maintenance-readiness checkpoint before retirement page work becomes eligible;
+pure removal has no replacement gate.
+
+Retirement advances as bounded page operations. An unchanged pre-transition
+page may continue to expose its existing retiring ref, but every new
+publication is validated against the current lifecycle authority and cannot
+carry that ref forward. Old-only pages are deleted with their minimum required
+catalog closure. Mixed pages are recomputed from all and only active accepted
+evidence. One failed page remains unchanged with structured diagnostics and can
+be retried while independent page operations commit. Readers can therefore see
+unreconciled and reconciled pages simultaneously until an authoritative bounded
+zero-reference round changes the owner to `deleted`.
+
+The consistency boundary is one page plus its required catalog mutations under
+the existing canonical journal, preimages, projection replay, and in-process
+publication coordinator. Knowl stores no full affected-page manifest, performs
+no global wiki cutover or rollback, and does not make the rebuildable SQL/search
+projection the deletion authority. The supported boundary remains one Host and
+coordinator for a workspace writer set; distributed filesystem writers require
+external exclusion. Restoring the exact source in configuration cancels future
+claims by lifecycle generation, but pages already reconciled remain valid and
+are rebuilt only by normal maintenance.
 
 Canonical-format migration is similarly explicit: `knowl migrate okf-v0.2`
 preflights and journals the conversion, preserves the exact legacy log in an

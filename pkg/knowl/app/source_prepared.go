@@ -15,15 +15,26 @@ import (
 // maxPreparedDocuments is the durable candidate ceiling shared by both stores.
 const maxPreparedDocuments = 1000
 
+// PreparedSyncDigestVersion identifies the canonical prepared-payload encoding.
+type PreparedSyncDigestVersion uint8
+
+const (
+	// PreparedSyncDigestLegacyV0 is the pre-maintenance-readiness encoding.
+	PreparedSyncDigestLegacyV0 PreparedSyncDigestVersion = iota
+	// PreparedSyncDigestMaintenanceV1 binds maintenance readiness into the digest.
+	PreparedSyncDigestMaintenanceV1
+)
+
 // PreparedSyncRead is the immutable prepared-scan result restored from durable state.
 type PreparedSyncRead struct {
-	RunID           knowl.SyncRunID         `json:"run_id"`
-	Scope           knowl.ScopeRef          `json:"scope"`
-	SourceID        knowl.SourceID          `json:"source_id"`
-	Checkpoint      string                  `json:"checkpoint,omitempty"`
-	Counts          knowl.SyncCounts        `json:"counts"`
-	Documents       []PreparedDocumentState `json:"documents,omitempty"`
-	CandidateDigest string                  `json:"candidate_digest"`
+	RunID            knowl.SyncRunID         `json:"run_id"`
+	Scope            knowl.ScopeRef          `json:"scope"`
+	SourceID         knowl.SourceID          `json:"source_id"`
+	MaintenanceReady bool                    `json:"maintenance_ready"`
+	Checkpoint       string                  `json:"checkpoint,omitempty"`
+	Counts           knowl.SyncCounts        `json:"counts"`
+	Documents        []PreparedDocumentState `json:"documents,omitempty"`
+	CandidateDigest  string                  `json:"candidate_digest"`
 }
 
 // ValidateScanDocumentLimit validates one bounded descriptor read limit.
@@ -67,30 +78,31 @@ func NormalizePreparedDocuments(scope knowl.ScopeRef, sourceID knowl.SourceID, r
 // durable candidates. Timing fields are excluded; deleted timestamps are
 // encoded at microsecond precision for backend parity.
 func PreparedSyncDigest(prepared PreparedSyncState) (string, error) {
+	return PreparedSyncDigestVersioned(prepared, PreparedSyncDigestMaintenanceV1)
+}
+
+// PreparedSyncDigestVersioned returns the canonical digest for one explicit
+// durable encoding version. Legacy v0 implies MaintenanceReady=false.
+func PreparedSyncDigestVersioned(prepared PreparedSyncState, version PreparedSyncDigestVersion) (string, error) {
 	if !prepared.CompleteScan || strings.TrimSpace(string(prepared.Scope)) == "" ||
 		ValidateSyncRunID(prepared.RunID) != nil || ValidateSourceID(prepared.SourceID) != nil ||
-		!validStoredText(prepared.Checkpoint, maxCursorBytes, true) || ValidateSyncCounts(prepared.Counts) != nil {
+		!validStoredText(prepared.Checkpoint, maxCursorBytes, true) || ValidateSyncCounts(prepared.Counts) != nil ||
+		(version != PreparedSyncDigestLegacyV0 && version != PreparedSyncDigestMaintenanceV1) ||
+		(version == PreparedSyncDigestLegacyV0 && prepared.MaintenanceReady) {
 		return "", ErrSourceInvalid
 	}
 	documents, err := NormalizePreparedDocuments(prepared.Scope, prepared.SourceID, prepared.RunID, prepared.Documents)
 	if err != nil {
 		return "", err
 	}
-	payload := preparedDigestPayload{
-		RunID:      prepared.RunID,
-		Scope:      prepared.Scope,
-		SourceID:   prepared.SourceID,
-		Checkpoint: prepared.Checkpoint,
-		Counts:     prepared.Counts,
-		Documents:  make([]preparedDigestDocument, len(documents)),
-	}
+	digestDocuments := make([]preparedDigestDocument, len(documents))
 	for index, document := range documents {
 		state := document.State
 		var deletedAtMicros int64
 		if !state.DeletedAt.IsZero() {
 			deletedAtMicros = state.DeletedAt.UTC().Truncate(time.Microsecond).UnixMicro()
 		}
-		payload.Documents[index] = preparedDigestDocument{
+		digestDocuments[index] = preparedDigestDocument{
 			Action:                 document.Action,
 			DocumentID:             state.DocumentID,
 			Revision:               state.Revision,
@@ -104,6 +116,19 @@ func PreparedSyncDigest(prepared PreparedSyncState) (string, error) {
 			DeletedAtMicros:        deletedAtMicros,
 		}
 	}
+	var payload any
+	if version == PreparedSyncDigestLegacyV0 {
+		payload = preparedDigestPayloadV0{
+			RunID: prepared.RunID, Scope: prepared.Scope, SourceID: prepared.SourceID,
+			Checkpoint: prepared.Checkpoint, Counts: prepared.Counts, Documents: digestDocuments,
+		}
+	} else {
+		payload = preparedDigestPayload{
+			RunID: prepared.RunID, Scope: prepared.Scope, SourceID: prepared.SourceID,
+			MaintenanceReady: prepared.MaintenanceReady,
+			Checkpoint:       prepared.Checkpoint, Counts: prepared.Counts, Documents: digestDocuments,
+		}
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("encode prepared digest payload: %w", err)
@@ -112,13 +137,23 @@ func PreparedSyncDigest(prepared PreparedSyncState) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-type preparedDigestPayload struct {
+type preparedDigestPayloadV0 struct {
 	RunID      knowl.SyncRunID          `json:"run_id"`
 	Scope      knowl.ScopeRef           `json:"scope"`
 	SourceID   knowl.SourceID           `json:"source_id"`
 	Checkpoint string                   `json:"checkpoint"`
 	Counts     knowl.SyncCounts         `json:"counts"`
 	Documents  []preparedDigestDocument `json:"documents"`
+}
+
+type preparedDigestPayload struct {
+	RunID            knowl.SyncRunID          `json:"run_id"`
+	Scope            knowl.ScopeRef           `json:"scope"`
+	SourceID         knowl.SourceID           `json:"source_id"`
+	MaintenanceReady bool                     `json:"maintenance_ready"`
+	Checkpoint       string                   `json:"checkpoint"`
+	Counts           knowl.SyncCounts         `json:"counts"`
+	Documents        []preparedDigestDocument `json:"documents"`
 }
 
 type preparedDigestDocument struct {

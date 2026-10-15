@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/internal/retirementcommit"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
@@ -36,8 +37,21 @@ type canonicalCommitRequest struct {
 	diagnostics []knowl.MaintenanceDiagnostic
 }
 
-// Commit applies a staged maintainer plan through the common canonical writer.
+// Commit applies a staged non-retirement maintainer plan through the common canonical writer.
 func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChange) (knowl.ContentCommit, error) {
+	if workspace.maintenanceAuthority {
+		return knowl.ContentCommit{}, ErrPlanConflict
+	}
+	return workspace.commitMaintainer(ctx, staged, false)
+}
+
+// CommitRetirementBound is callable only with the host-internal sealed request;
+// downstream users cannot manufacture retirement writes from public pieces.
+func (workspace *Workspace) CommitRetirementBound(ctx context.Context, request retirementcommit.Request) (knowl.ContentCommit, error) {
+	return workspace.commitMaintainer(ctx, request.Stage(), true)
+}
+
+func (workspace *Workspace) commitMaintainer(ctx context.Context, staged knowl.StagedChange, retirementAuthorized bool) (knowl.ContentCommit, error) {
 	if err := contextErr(ctx); err != nil {
 		return knowl.ContentCommit{}, err
 	}
@@ -57,6 +71,9 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	if manifestWriter(manifest) != stageWriterMaintainer || manifest.OperationID != staged.OperationID || !validMaintainerStageManifest(manifest) {
 		return knowl.ContentCommit{}, fmt.Errorf("staged operation mismatch: %w", ErrPlanConflict)
 	}
+	if retirementAuthorized != (manifest.Retirement != nil) || !sameRetirementContext(manifest.Retirement, staged.Retirement) {
+		return knowl.ContentCommit{}, ErrPlanConflict
+	}
 	generation := stageGeneration(manifest)
 	if (staged.Digest != "" && staged.Digest != generation) || (staged.Files != nil && !slices.Equal(staged.Files, entryTargets(manifest.Entries))) ||
 		(staged.Diagnostics != nil && !slices.Equal(staged.Diagnostics, manifest.Diagnostics)) {
@@ -64,6 +81,13 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	}
 	if err := workspace.validateStageForCommitLocked(stageDir, manifest, ""); err != nil {
 		return knowl.ContentCommit{}, err
+	}
+	if !retirementAuthorized {
+		if replayed, err := workspace.ordinaryCommitReplayed(manifest, generation); err != nil {
+			return knowl.ContentCommit{}, err
+		} else if replayed {
+			return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries), manifest.Diagnostics), nil
+		}
 	}
 	schema, err := os.ReadFile(filepath.Join(workspace.root, schemaFile))
 	if err != nil {
@@ -91,7 +115,12 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 	if err != nil {
 		return knowl.ContentCommit{}, err
 	}
-	derivedDiagnostics, err := workspace.validateProspectivePlanLocked(manifestScope(manifest), stagedEdits, manifest.RequiredSourceRef, manifest.SourceRefs)
+	// Already committed canonical work must finish its projection/outcome even
+	// after the owner changes lifecycle. No lifecycle check precedes this replay.
+	if logDigest == manifest.LogDigest && canonicalEntriesMatch(workspace.root, manifest.Entries) {
+		return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries), manifest.Diagnostics), nil
+	}
+	derivedDiagnostics, err := workspace.validateProspectivePlanLocked(manifestScope(manifest), stagedEdits, manifest.RequiredSourceRef, manifest.SourceRefs, manifest.Retirement)
 	if err != nil {
 		return knowl.ContentCommit{}, err
 	}
@@ -122,8 +151,14 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 		return knowl.ContentCommit{}, err
 	}
 	entries = append(entries, canonicalCommitEntry{action: knowl.SourceMutationWrite, target: canonicalLogPath, expectedDigest: manifest.LogExpectedDigest, digest: manifest.LogDigest, content: logAfter})
+	writer, scope, recoveryKey := stageWriterMaintainer, manifest.Scope, staged.OperationID
+	if retirementAuthorized {
+		writer = stageWriterRetirement
+		scope = string(staged.Retirement.Scope)
+		recoveryKey = retirementRecoveryKey(scope, staged.OperationID)
+	}
 	return workspace.commitLocked(canonicalCommitRequest{
-		writer: stageWriterMaintainer, operationID: staged.OperationID, recoveryKey: staged.OperationID,
+		writer: writer, scope: scope, operationID: staged.OperationID, recoveryKey: recoveryKey,
 		generation: generation, files: commitTargets(manifest.Entries), entries: entries, diagnostics: manifest.Diagnostics,
 	})
 }
@@ -131,6 +166,12 @@ func (workspace *Workspace) Commit(ctx context.Context, staged knowl.StagedChang
 // CommitHierarchy applies one staged catalog graph through the common
 // canonical writer and recovery journal.
 func (workspace *Workspace) CommitHierarchy(ctx context.Context, staged knowl.StagedChange) (knowl.ContentCommit, error) {
+	if workspace.maintenanceAuthority {
+		return knowl.ContentCommit{}, ErrPlanConflict
+	}
+	return workspace.commitHierarchy(ctx, staged)
+}
+func (workspace *Workspace) commitHierarchy(ctx context.Context, staged knowl.StagedChange) (knowl.ContentCommit, error) {
 	if err := contextErr(ctx); err != nil {
 		return knowl.ContentCommit{}, err
 	}
@@ -396,6 +437,10 @@ func (workspace *Workspace) commitLocked(request canonicalCommitRequest) (knowl.
 	if err := workspace.injectCommitFault("prepared", -1); err != nil {
 		return knowl.ContentCommit{}, err
 	}
+	// Commit, hierarchy, source, and migration publications all converge here.
+	if err := workspace.advancePublicationLocked(); err != nil {
+		return knowl.ContentCommit{}, fmt.Errorf("advance canonical publication: %w", err)
+	}
 	for index, entry := range request.entries {
 		target := filepath.Join(workspace.root, filepath.FromSlash(entry.target))
 		switch entry.action {
@@ -424,7 +469,7 @@ func (workspace *Workspace) commitLocked(request canonicalCommitRequest) (knowl.
 	if err := workspace.injectCommitFault("committed", -1); err != nil {
 		return knowl.ContentCommit{}, err
 	}
-	if request.writer == stageWriterSource || request.writer == stageWriterHierarchy {
+	if request.writer == stageWriterMaintainer || request.writer == stageWriterSource || request.writer == stageWriterHierarchy || request.writer == stageWriterRetirement {
 		if err := workspace.writeCommitReceipt(commitReceipt{
 			Writer: request.writer, SourceID: request.sourceID, Scope: request.scope, OperationID: request.operationID,
 			Generation: request.generation, Files: append([]string(nil), request.files...),
@@ -549,6 +594,10 @@ func hierarchyRecoveryKey(scope, operationID string) string {
 	return stageWriterHierarchy + "\x00" + scope + "\x00" + operationID
 }
 
+func retirementRecoveryKey(scope, operationID string) string {
+	return stageWriterRetirement + "\x00" + scope + "\x00" + operationID
+}
+
 func (workspace *Workspace) sourceCommitReplayed(manifest stageManifest, generation string) (bool, error) {
 	path := workspace.sourceCommitReceiptPath(manifest.Scope, manifest.OperationID)
 	if err := rejectSymlinkPath(workspace.root, path); err != nil {
@@ -597,6 +646,70 @@ func (workspace *Workspace) hierarchyCommitReplayed(manifest stageManifest, gene
 	return true, nil
 }
 
+func (workspace *Workspace) retirementCommitReplayed(manifest stageManifest, generation string) (bool, error) {
+	if manifest.Retirement == nil {
+		return false, ErrPlanConflict
+	}
+	path := workspace.retirementCommitReceiptPath(manifest.Scope, manifest.OperationID)
+	if err := rejectSymlinkPath(workspace.root, path); err != nil {
+		return false, err
+	}
+	receipt, err := readCommitReceipt(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read retirement commit receipt: %w", ErrPlanConflict)
+	}
+	wantFiles := commitTargets(manifest.Entries)
+	if receipt.Writer != stageWriterRetirement || receipt.SourceID != "" || receipt.Scope != manifest.Scope ||
+		receipt.OperationID != manifest.OperationID || receipt.Generation != generation || !slices.Equal(receipt.Files, wantFiles) ||
+		!canonicalEntriesMatch(workspace.root, manifest.Entries) {
+		return false, fmt.Errorf("committed retirement content diverged: %w", ErrPlanConflict)
+	}
+	log, err := os.ReadFile(filepath.Join(workspace.root, canonicalLogPath))
+	if err != nil || digestBytes(log) != manifest.LogDigest {
+		return false, fmt.Errorf("committed retirement log diverged: %w", ErrPlanConflict)
+	}
+	return true, nil
+}
+
+// RetirementCommitReceipt returns an authenticated canonical receipt for one
+// staged retirement unit. A missing receipt means canonical publication has
+// not durably crossed its commit boundary.
+func (workspace *Workspace) RetirementCommitReceipt(ctx context.Context, staged knowl.StagedChange) (knowl.ContentCommit, bool, error) {
+	if err := contextErr(ctx); err != nil {
+		return knowl.ContentCommit{}, false, err
+	}
+	if strings.TrimSpace(staged.OperationID) == "" || staged.Retirement == nil {
+		return knowl.ContentCommit{}, false, ErrPlanConflict
+	}
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return knowl.ContentCommit{}, false, err
+	}
+	defer unlock()
+	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(staged.OperationID))
+	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
+	if err != nil {
+		return knowl.ContentCommit{}, false, fmt.Errorf("read staged retirement receipt context: %w", err)
+	}
+	if manifestWriter(manifest) != stageWriterMaintainer || manifest.OperationID != staged.OperationID ||
+		!validMaintainerStageManifest(manifest) || manifest.Retirement == nil || !sameRetirementContext(manifest.Retirement, staged.Retirement) {
+		return knowl.ContentCommit{}, false, ErrPlanConflict
+	}
+	generation := stageGeneration(manifest)
+	if (staged.Digest != "" && staged.Digest != generation) || (staged.Files != nil && !slices.Equal(staged.Files, entryTargets(manifest.Entries))) ||
+		(staged.Diagnostics != nil && !slices.Equal(staged.Diagnostics, manifest.Diagnostics)) {
+		return knowl.ContentCommit{}, false, ErrPlanConflict
+	}
+	committed, err := workspace.retirementCommitReplayed(manifest, generation)
+	if err != nil || !committed {
+		return knowl.ContentCommit{}, committed, err
+	}
+	return contentCommit(staged.OperationID, generation, commitTargets(manifest.Entries), manifest.Diagnostics), true, nil
+}
+
 func hierarchyCommitReceipt(manifest stageManifest, generation string) commitReceipt {
 	return commitReceipt{
 		Writer: stageWriterHierarchy, Scope: manifest.Scope, OperationID: manifest.OperationID,
@@ -612,10 +725,19 @@ func (workspace *Workspace) hierarchyCommitReceiptPath(scope, operationID string
 	return workspace.commitReceiptPath(stageWriterHierarchy, scope, operationID)
 }
 
+func (workspace *Workspace) retirementCommitReceiptPath(scope, operationID string) string {
+	return workspace.commitReceiptPath(stageWriterRetirement, scope, operationID)
+}
+
 func (workspace *Workspace) commitReceiptPath(writer, scope, operationID string) string {
 	key := sourceRecoveryKey(scope, operationID)
-	if writer == stageWriterHierarchy {
+	switch writer {
+	case stageWriterMaintainer:
+		key = "maintainer\x00" + scope + "\x00" + operationID
+	case stageWriterHierarchy:
 		key = hierarchyRecoveryKey(scope, operationID)
+	case stageWriterRetirement:
+		key = retirementRecoveryKey(scope, operationID)
 	}
 	return filepath.Join(workspace.root, knowlDir, "commits", token(key)+".yaml")
 }

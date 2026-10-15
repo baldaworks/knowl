@@ -284,6 +284,39 @@ archives the exact legacy log, writes its marker only after canonical commit,
 and rebuilds the configured projection. Re-running it is a no-op. If interrupted,
 the next invocation deterministically rolls back or completes from the journal.
 
+## Source retirement and canonical history
+
+Removing a configured source does not immediately erase every page that cites
+it. Knowl records the exact adapter-qualified owner as `retiring`, discovers
+current canonical citations in stable bounded windows, and reserves one durable
+operation per affected page. A `wiki-filesystem:fastronome-wiki` owner and a
+`git:fastronome-wiki` owner are independent even when their IDs and documents
+match; the workspace never rewrites one ref into the other.
+
+An unchanged page may retain its pre-transition retiring ref while it awaits its
+turn. A newly staged page may not introduce or retain that ref. An old-only page
+is deleted together with the smallest catalog closure required to keep the OKF
+graph valid. A mixed page is replaced using only active accepted evidence; its
+catalog membership can remain unchanged. Exact page and catalog digests are
+checked again at commit. Failure preserves that complete page unit and its
+path/target diagnostics, including all reasons that led to
+`plan.empty_safe_subset`, while unrelated page units may continue.
+
+This intentionally permits gradual mixed visibility across pages. The retiring
+owner becomes `deleted` only after all page operations and projection replay are
+terminal and a fresh authoritative canonical scan finds zero refs. Immutable
+`raw/` revisions remain available as history but cannot authorize a new page.
+Conversely, a successful source scan may tombstone a missing document without
+retiring its still-configured owner or deleting curated pages.
+
+Retirement uses the same page-local recovery journal as other canonical writes;
+there is no full-wiki snapshot, global rollback, or filesystem/search joint
+transaction. Keep one Host/coordinator in charge of a workspace writer set.
+For operational rollback, restore the exact removed source in configuration and
+let normal synchronization rebuild what remains necessary. Stop writers during
+a binary downgrade after retirement has begun and roll forward with the
+operational database intact; do not hand-edit canonical files or lifecycle rows.
+
 ## Recovery and Git
 
 Content commit writes a staging manifest, records preimages in a recovery

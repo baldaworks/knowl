@@ -21,19 +21,28 @@ import (
 
 const testScope = "local"
 const (
-	testFixtureAdapter     = "fixture"
-	testMarkdownMediaType  = "text/markdown"
-	testWorkspaceSourceRef = "fixture:source-1@1"
-	testMissingSourceRef   = "fixture:missing@1"
-	testWikiSourceAdapter  = "wiki-filesystem"
-	testSourceRevision     = "revision-1"
-	testPageOnePath        = "wiki/entities/one.md"
-	testGoodPagePath       = "wiki/entities/good.md"
-	testRejectedPagePath   = "wiki/entities/rejected.md"
-	testBadPagePath        = "wiki/entities/bad.md"
-	testParentCatalogPath  = "wiki/parent/index.md"
-	testUnsafeCatalogPath  = "wiki/unsafe/index.md"
-	testIndexPath          = "wiki/index.md"
+	testFixtureAdapter           = "fixture"
+	testResolverGitAdapter       = "git"
+	testResolverDocumentID       = "resolver-page.md"
+	testOtherDocumentID          = "other.md"
+	testMarkdownMediaType        = "text/markdown"
+	testWorkspaceSourceRef       = "fixture:source-1@1"
+	testMissingSourceRef         = "fixture:missing@1"
+	testWikiSourceAdapter        = "wiki-filesystem"
+	testSourceRevision           = "revision-1"
+	testDelimiterRevision        = "v1@v2"
+	testPageOneID                = "entities/one"
+	testPageOnePath              = "wiki/entities/one.md"
+	testGoodPagePath             = "wiki/entities/good.md"
+	testRejectedPagePath         = "wiki/entities/rejected.md"
+	testBadPagePath              = "wiki/entities/bad.md"
+	testParentCatalogPath        = "wiki/parent/index.md"
+	testUnsafeCatalogPath        = "wiki/unsafe/index.md"
+	testIndexPath                = "wiki/index.md"
+	testFaultBeforeJournalName   = "before journal"
+	testFaultAfterPreimagesName  = "after preimages"
+	testFaultBeforeJournalPoint  = "before_journal"
+	testFaultAfterPreimagesPoint = "after_preimages"
 )
 
 func TestWorkspaceInitCreatesCanonicalOKFControls(t *testing.T) {
@@ -441,10 +450,589 @@ func TestWorkspacePersistsConfiguredSourceProvenance(t *testing.T) {
 	}
 
 	conflict := envelope
-	conflict.SourceDocument.DocumentID = "other.md"
+	conflict.SourceDocument.DocumentID = testOtherDocumentID
 	if _, err := workspace.AcceptSource(context.Background(), conflict); !errors.Is(err, ErrSourceConflict) {
 		t.Fatalf("provenance conflict error = %v", err)
 	}
+}
+
+func TestWorkspaceResolvesExactAcceptedSourceAcrossAdapters(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	accepted := make([]knowl.AcceptedSource, 0, 2)
+	for _, adapter := range []string{testWikiSourceAdapter, testResolverGitAdapter} {
+		content := []byte(adapter + " evidence")
+		digest := sha256.Sum256(content)
+		envelope := knowl.SourceEnvelope{
+			Scope: testScope, Source: knowl.SourceRef{Adapter: adapter, ID: "engineering/resolver-page.md"},
+			Version:   knowl.SourceVersion{Version: testSourceRevision, Digest: hex.EncodeToString(digest[:])},
+			MediaType: testMarkdownMediaType, Content: content,
+			SourceDocument: knowl.SourceDocument{
+				SourceID: testSourceID, DocumentID: testResolverDocumentID, Revision: testSourceRevision,
+				URI: "https://wiki.example.test/resolver-page.md?adapter=" + adapter,
+			},
+		}
+		source, acceptErr := workspace.AcceptSource(t.Context(), envelope)
+		if acceptErr != nil {
+			t.Fatal(acceptErr)
+		}
+		accepted = append(accepted, source)
+	}
+	for _, want := range accepted {
+		resolved, resolveErr := workspace.ResolveAcceptedSources(t.Context(), testScope, []string{app.SourceRefKey(want)})
+		got := resolved[app.SourceRefKey(want)]
+		if resolveErr != nil || got != want {
+			t.Fatalf("ResolveAcceptedSource(%q) = %#v, %v; want %#v", app.SourceRefKey(want), got, resolveErr, want)
+		}
+	}
+	resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, []string{"git:engineering/page.md@other"})
+	if !errors.Is(err, app.ErrSourceNotFound) || len(resolved) != 0 {
+		t.Fatalf("unknown exact revision = %#v, %v", resolved, err)
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionIgnoresUnrelatedRawState(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *Workspace, knowl.AcceptedSource)
+	}{
+		{name: "corpus above global manifest budget", mutate: func(t *testing.T, workspace *Workspace, _ knowl.AcceptedSource) {
+			writeCanonicalFixture(t, workspace, "raw/unrelated/oversized/manifest.yaml", make([]byte, app.DefaultCatalogLimits().MaxSnapshotBytes+1))
+		}},
+		{name: "corrupt unrelated manifest", mutate: func(t *testing.T, workspace *Workspace, _ knowl.AcceptedSource) {
+			writeCanonicalFixture(t, workspace, "raw/unrelated/corrupt/manifest.yaml", []byte("not: [yaml"))
+		}},
+		{name: "duplicate unrelated ref", mutate: func(t *testing.T, workspace *Workspace, source knowl.AcceptedSource) {
+			content, err := os.ReadFile(filepath.Join(workspace.Root(), filepath.FromSlash(source.ManifestRef)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeCanonicalFixture(t, workspace, "raw/unrelated/duplicate/manifest.yaml", content)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, source := acceptedResolverFixture(t)
+			test.mutate(t, workspace, source)
+			ref := app.SourceRefKey(source)
+			resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, []string{ref})
+			if err != nil || resolved[ref] != source || len(resolved) != 1 {
+				t.Fatalf("ResolveAcceptedSources() = %#v, %v; want requested source only", resolved, err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceResolvesSameOwnerDocumentsRevisionsAndDigestsExactly(t *testing.T) {
+	workspace, first := acceptedResolverFixture(t)
+	accepted := []knowl.AcceptedSource{first}
+	for _, candidate := range []struct {
+		document knowl.DocumentID
+		revision string
+		content  string
+	}{
+		{document: testOtherDocumentID, revision: "v1", content: "other document"},
+		{document: testResolverDocumentID, revision: "v2", content: "new page revision"},
+	} {
+		content := []byte(candidate.content)
+		digest := sha256.Sum256(content)
+		source, err := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+			Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/" + string(candidate.document)},
+			Version:   knowl.SourceVersion{Version: candidate.revision, Digest: hex.EncodeToString(digest[:])},
+			MediaType: testMarkdownMediaType, Content: content,
+			SourceDocument: knowl.SourceDocument{
+				SourceID: testSourceID, DocumentID: candidate.document, Revision: candidate.revision,
+				URI: "https://wiki.example.test/" + string(candidate.document) + "?revision=" + candidate.revision,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted = append(accepted, source)
+	}
+	refs := make([]string, len(accepted))
+	for index, source := range accepted {
+		refs[index] = app.SourceRefKey(source)
+	}
+	resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, refs)
+	if err != nil || len(resolved) != len(accepted) {
+		t.Fatalf("ResolveAcceptedSources() = %#v, %v", resolved, err)
+	}
+	for _, source := range accepted {
+		if got := resolved[app.SourceRefKey(source)]; got != source {
+			t.Fatalf("resolved %q = %#v, want %#v", app.SourceRefKey(source), got, source)
+		}
+	}
+}
+
+func TestWorkspaceResolvesCanonicalAndUniqueLegacyDelimiterRefs(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		document knowl.DocumentID
+		revision string
+		legacy   string
+	}{
+		{document: "docs/a@b.md", revision: "v1", legacy: "git:engineering/docs/a@b.md@v1"},
+		{document: "docs/page.md", revision: testDelimiterRevision, legacy: "git:engineering/docs/page.md@v1@v2"},
+	}
+	for _, test := range tests {
+		content := []byte(test.legacy)
+		digest := sha256.Sum256(content)
+		source, acceptErr := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+			Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/" + string(test.document)},
+			Version:   knowl.SourceVersion{Version: test.revision, Digest: hex.EncodeToString(digest[:])},
+			MediaType: testMarkdownMediaType, Content: content,
+			SourceDocument: knowl.SourceDocument{SourceID: testSourceID, DocumentID: test.document, Revision: test.revision,
+				URI: "https://wiki.example.test/" + string(test.document)},
+		})
+		if acceptErr != nil {
+			t.Fatal(acceptErr)
+		}
+		canonical := app.SourceRefKey(source)
+		if canonical == test.legacy {
+			t.Fatalf("SourceRefKey() = legacy ambiguous spelling %q", canonical)
+		}
+		for _, ref := range []string{canonical, test.legacy} {
+			resolved, resolveErr := workspace.ResolveAcceptedSources(t.Context(), testScope, []string{ref})
+			if resolveErr != nil || resolved[ref] != source || len(resolved) != 1 {
+				t.Fatalf("ResolveAcceptedSources(%q) = %#v, %v; want exact source", ref, resolved, resolveErr)
+			}
+		}
+		indexed, indexErr := workspace.operatorSources(t.Context(), testScope)
+		if indexErr != nil || indexed[test.legacy] != source {
+			t.Fatalf("operatorSources()[%q] = %#v, %v; want legacy-compatible source", test.legacy, indexed[test.legacy], indexErr)
+		}
+	}
+}
+
+func TestWorkspaceRejectsActuallyAmbiguousLegacySourceRef(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []struct {
+		document knowl.DocumentID
+		revision string
+	}{
+		{document: "a@b", revision: "c"},
+		{document: "a", revision: "b@c"},
+	} {
+		content := []byte(string(candidate.document) + ":" + candidate.revision)
+		digest := sha256.Sum256(content)
+		_, err := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+			Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/" + string(candidate.document)},
+			Version:   knowl.SourceVersion{Version: candidate.revision, Digest: hex.EncodeToString(digest[:])},
+			MediaType: testMarkdownMediaType, Content: content,
+			SourceDocument: knowl.SourceDocument{SourceID: testSourceID, DocumentID: candidate.document, Revision: candidate.revision,
+				URI: "https://wiki.example.test/" + string(candidate.document)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	const legacyCollision = "git:engineering/a@b@c"
+	resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, []string{legacyCollision})
+	if !errors.Is(err, app.ErrSourceRefAmbiguous) || len(resolved) != 0 {
+		t.Fatalf("ResolveAcceptedSources() = %#v, %v; want typed ambiguity", resolved, err)
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionRejectsIncompleteDescriptor(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*sourceManifest)
+	}{
+		{name: "missing media type", mutate: func(manifest *sourceManifest) { manifest.MediaType = "" }},
+		{name: "missing provenance", mutate: func(manifest *sourceManifest) { manifest.SourceDocument = knowl.SourceDocument{} }},
+		{name: "uppercase digest", mutate: func(manifest *sourceManifest) { manifest.Digest = strings.ToUpper(manifest.Digest) }},
+		{name: "wrong document path", mutate: func(manifest *sourceManifest) { manifest.SourceDocument.DocumentID = testOtherDocumentID }},
+		{name: "wrong document revision", mutate: func(manifest *sourceManifest) { manifest.SourceDocument.Revision = "v2" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, source := acceptedResolverFixture(t)
+			path := filepath.Join(workspace.Root(), filepath.FromSlash(source.ManifestRef))
+			manifest, err := readManifest(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&manifest)
+			content, err := yaml.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeCanonicalFixture(t, workspace, source.ManifestRef, content)
+			ref := app.SourceRefKey(source)
+			resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, []string{ref})
+			if !errors.Is(err, app.ErrSourceInvalid) || len(resolved) != 0 {
+				t.Fatalf("ResolveAcceptedSources() = %#v, %v; want invalid descriptor", resolved, err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionFailsClosedForRequestedRef(t *testing.T) {
+	tests := []struct {
+		name      string
+		refs      func(knowl.AcceptedSource) []string
+		mutate    func(*testing.T, *Workspace, knowl.AcceptedSource)
+		wantError error
+	}{
+		{name: "duplicate request", refs: func(source knowl.AcceptedSource) []string {
+			ref := app.SourceRefKey(source)
+			return []string{ref, ref}
+		}, wantError: app.ErrSourceInvalid},
+		{name: "corrupt requested manifest", mutate: func(t *testing.T, workspace *Workspace, source knowl.AcceptedSource) {
+			writeCanonicalFixture(t, workspace, source.ManifestRef, []byte("not: [yaml"))
+		}, wantError: app.ErrSourceInvalid},
+		{name: "missing requested manifest", mutate: func(t *testing.T, workspace *Workspace, source knowl.AcceptedSource) {
+			if err := os.Remove(filepath.Join(workspace.Root(), filepath.FromSlash(source.ManifestRef))); err != nil {
+				t.Fatal(err)
+			}
+		}, wantError: app.ErrSourceNotFound},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, source := acceptedResolverFixture(t)
+			if test.mutate != nil {
+				test.mutate(t, workspace, source)
+			}
+			refs := []string{app.SourceRefKey(source)}
+			if test.refs != nil {
+				refs = test.refs(source)
+			}
+			if resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, refs); !errors.Is(err, test.wantError) || len(resolved) != 0 {
+				t.Fatalf("ResolveAcceptedSources() = %#v, %v; want fail closed", resolved, err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionHonorsCancellation(t *testing.T) {
+	workspace, source := acceptedResolverFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	resolved, err := workspace.ResolveAcceptedSources(ctx, testScope, []string{app.SourceRefKey(source)})
+	if !errors.Is(err, context.Canceled) || len(resolved) != 0 {
+		t.Fatalf("ResolveAcceptedSources() = %#v, %v; want canceled", resolved, err)
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionBoundsAggregateCandidateProbes(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]string, 0, app.MaxAcceptedSourceResolveRefs)
+	for index := 0; index < app.MaxAcceptedSourceResolveRefs; index++ {
+		document := knowl.DocumentID(fmt.Sprintf("probe-%03d@active.md", index))
+		content := []byte(document)
+		digest := sha256.Sum256(content)
+		source, acceptErr := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+			Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/" + string(document)},
+			Version:   knowl.SourceVersion{Version: "v1", Digest: hex.EncodeToString(digest[:])},
+			MediaType: testMarkdownMediaType, Content: content,
+			SourceDocument: knowl.SourceDocument{SourceID: testSourceID, DocumentID: document, Revision: "v1",
+				URI: "https://wiki.example.test/" + string(document)},
+		})
+		if acceptErr != nil {
+			t.Fatal(acceptErr)
+		}
+		refs = append(refs, source.Source.Adapter+":"+source.Source.ID+"@"+source.Version.Version)
+	}
+	resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, refs)
+	if err != nil || len(resolved) != len(refs) {
+		t.Fatalf("exact aggregate probe cap = %d, %v; want %d", len(resolved), err, len(refs))
+	}
+
+	over := slices.Clone(refs)
+	over[0] += "@overflow"
+	resolved, err = workspace.ResolveAcceptedSources(t.Context(), testScope, over)
+	if !errors.Is(err, app.ErrSourceRefLimit) || len(resolved) != 0 {
+		t.Fatalf("aggregate probe cap +1 = %d, %v; want typed preflight limit", len(resolved), err)
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionCountsUniqueAliasPaths(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]string, 0, 32)
+	canonical := make([]string, 0, 15)
+	for index := 0; index < 15; index++ {
+		document := knowl.DocumentID(fmt.Sprintf("alias-%02d%s.md", index, strings.Repeat("@part", 15)))
+		content := []byte(document)
+		digest := sha256.Sum256(content)
+		source, acceptErr := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+			Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/" + string(document)},
+			Version:   knowl.SourceVersion{Version: "v1", Digest: hex.EncodeToString(digest[:])},
+			MediaType: testMarkdownMediaType, Content: content,
+			SourceDocument: knowl.SourceDocument{SourceID: testSourceID, DocumentID: document, Revision: "v1",
+				URI: "https://wiki.example.test/" + string(document)},
+		})
+		if acceptErr != nil {
+			t.Fatal(acceptErr)
+		}
+		aliases := app.SourceRefAliases(source)
+		if len(aliases) != 2 {
+			t.Fatalf("SourceRefAliases() = %#v; want canonical and legacy", aliases)
+		}
+		canonical = append(canonical, aliases[0])
+		refs = append(refs, aliases...)
+	}
+	for index := 0; index < 2; index++ {
+		document := knowl.DocumentID(fmt.Sprintf("simple-%02d.md", index))
+		content := []byte(document)
+		digest := sha256.Sum256(content)
+		source, acceptErr := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+			Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/" + string(document)},
+			Version:   knowl.SourceVersion{Version: "v1", Digest: hex.EncodeToString(digest[:])},
+			MediaType: testMarkdownMediaType, Content: content,
+			SourceDocument: knowl.SourceDocument{SourceID: testSourceID, DocumentID: document, Revision: "v1",
+				URI: "https://wiki.example.test/" + string(document)},
+		})
+		if acceptErr != nil {
+			t.Fatal(acceptErr)
+		}
+		refs = append(refs, app.SourceRefKey(source))
+	}
+
+	forward, forwardErr := workspace.ResolveAcceptedSources(t.Context(), testScope, refs)
+	reversedRefs := slices.Clone(refs)
+	slices.Reverse(reversedRefs)
+	reversed, reversedErr := workspace.ResolveAcceptedSources(t.Context(), testScope, reversedRefs)
+	if !errors.Is(forwardErr, app.ErrSourceRefDuplicate) || !errors.Is(reversedErr, app.ErrSourceRefDuplicate) {
+		t.Fatalf("242 unique paths = %v / %v; want stable duplicate evidence, not candidate-entry limit", forwardErr, reversedErr)
+	}
+	if len(forward) != 0 || len(reversed) != 0 {
+		t.Fatalf("duplicate aliases exposed partial evidence: forward=%#v reverse=%#v", forward, reversed)
+	}
+	slices.Sort(canonical)
+	for _, resolveErr := range []error{forwardErr, reversedErr} {
+		var duplicate *app.SourceRefDuplicateError
+		if !errors.As(resolveErr, &duplicate) || duplicate.Ref != canonical[0] {
+			t.Fatalf("duplicate target = %#v; want %q", duplicate, canonical[0])
+		}
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionRejectsLegacyAmplificationBeforeLock(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := "git:x"
+	pathological := prefix + strings.Repeat("@", (8<<10)-len(prefix)-1) + "x"
+	resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, []string{pathological})
+	if !errors.Is(err, app.ErrSourceRefLimit) || len(resolved) != 0 {
+		t.Fatalf("ResolveAcceptedSources() = %#v, %v; want limit before uninitialized workspace lock", resolved, err)
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionUsesOneAggregateManifestBudget(t *testing.T) {
+	workspace, refs, manifestPaths := acceptedManifestBudgetFixture(t)
+	resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, refs)
+	if err != nil || len(resolved) != len(refs) {
+		t.Fatalf("exact aggregate budget = %d sources, %v; want %d", len(resolved), err, len(refs))
+	}
+	lastPath := filepath.Join(workspace.Root(), filepath.FromSlash(manifestPaths[len(manifestPaths)-1]))
+	last, err := os.ReadFile(lastPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCanonicalFixture(t, workspace, manifestPaths[len(manifestPaths)-1], append(last, 'x'))
+	resolved, err = workspace.ResolveAcceptedSources(t.Context(), testScope, refs)
+	if !errors.Is(err, app.ErrOperatorReadLimitExceeded) || len(resolved) >= len(refs) {
+		t.Fatalf("aggregate budget +1 = %d sources, %v; want bounded failure", len(resolved), err)
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionChargesAliasedManifestOnce(t *testing.T) {
+	workspace, refs, _ := acceptedManifestBudgetFixture(t)
+	canonical, err := app.EncodeSourceRef(app.SourceRefIdentity{
+		Source:   knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/budget-064.md"},
+		Revision: testDelimiterRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs = append(refs, canonical)
+	forward, forwardErr := workspace.ResolveAcceptedSources(t.Context(), testScope, refs)
+	reversedRefs := slices.Clone(refs)
+	slices.Reverse(reversedRefs)
+	reversed, reversedErr := workspace.ResolveAcceptedSources(t.Context(), testScope, reversedRefs)
+	if !errors.Is(forwardErr, app.ErrSourceRefDuplicate) || !errors.Is(reversedErr, app.ErrSourceRefDuplicate) {
+		t.Fatalf("exact 4 MiB with aliased manifest = %v / %v; want duplicate evidence after one manifest charge", forwardErr, reversedErr)
+	}
+	if len(forward) != 0 || len(reversed) != 0 {
+		t.Fatalf("aliased exact-budget exposed partial evidence: %d / %d", len(forward), len(reversed))
+	}
+	for _, resolveErr := range []error{forwardErr, reversedErr} {
+		var duplicate *app.SourceRefDuplicateError
+		if !errors.As(resolveErr, &duplicate) || duplicate.Ref != canonical {
+			t.Fatalf("exact-budget duplicate target = %#v; want %q", duplicate, canonical)
+		}
+	}
+}
+
+func TestWorkspaceAcceptedSourceResolutionCancelsBeforeZeroBudgetMissingProbe(t *testing.T) {
+	workspace, refs, _ := acceptedManifestBudgetFixture(t)
+	canonical, err := app.EncodeSourceRef(app.SourceRefIdentity{
+		Source:   knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/budget-064.md"},
+		Revision: testDelimiterRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs = append(refs, canonical)
+	base, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The last legacy ref has two candidates and the canonical alias reuses its
+	// accepted candidate path. Cancel immediately before the final unique,
+	// missing candidate is probed after accepted manifests consume the exact
+	// aggregate byte budget.
+	cancelAt := 1 + len(refs) + (len(refs) + 1) + 2*(len(refs)-1) + 1
+	ctx := &cancelOnErrorCheckContext{Context: base, cancel: cancel, cancelAt: cancelAt}
+	resolved, err := workspace.ResolveAcceptedSources(ctx, testScope, refs)
+	if !errors.Is(err, context.Canceled) || len(resolved) != 0 {
+		t.Fatalf("ResolveAcceptedSources() = %d, %v; want cancellation before missing zero-budget probe", len(resolved), err)
+	}
+}
+
+type cancelOnErrorCheckContext struct {
+	context.Context
+	cancel   context.CancelFunc
+	cancelAt int
+	checks   int
+}
+
+func (ctx *cancelOnErrorCheckContext) Err() error {
+	ctx.checks++
+	if ctx.checks == ctx.cancelAt {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func acceptedManifestBudgetFixture(t *testing.T) (*Workspace, []string, []string) {
+	t.Helper()
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	refs := make([]string, 0, 65)
+	manifestPaths := make([]string, 0, 65)
+	for index := 0; index < 65; index++ {
+		document := knowl.DocumentID(fmt.Sprintf("budget-%03d.md", index))
+		revision := "v1"
+		if index == 64 {
+			revision = testDelimiterRevision
+		}
+		content := []byte(document)
+		digest := sha256.Sum256(content)
+		source, acceptErr := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+			Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: string(testSourceID) + "/" + string(document)},
+			Version:   knowl.SourceVersion{Version: revision, Digest: hex.EncodeToString(digest[:])},
+			MediaType: testMarkdownMediaType, Content: content,
+			SourceDocument: knowl.SourceDocument{SourceID: testSourceID, DocumentID: document, Revision: revision,
+				URI: "https://wiki.example.test/" + string(document)},
+		})
+		if acceptErr != nil {
+			t.Fatal(acceptErr)
+		}
+		ref := app.SourceRefKey(source)
+		if index == 64 {
+			ref = source.Source.Adapter + ":" + source.Source.ID + "@" + source.Version.Version
+		}
+		refs = append(refs, ref)
+		manifestPaths = append(manifestPaths, source.ManifestRef)
+	}
+	target := app.MaxAcceptedSourceResolveBytes
+	remaining := target
+	for _, manifestRef := range manifestPaths {
+		path := filepath.Join(workspace.Root(), filepath.FromSlash(manifestRef))
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		remaining -= len(content)
+	}
+	if remaining <= 0 {
+		t.Fatalf("fixture manifests already exceed target by %d", -remaining)
+	}
+	for _, manifestRef := range manifestPaths {
+		if remaining == 0 {
+			break
+		}
+		path := filepath.Join(workspace.Root(), filepath.FromSlash(manifestRef))
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		padding := min(remaining, maxStageManifestBytes-len(content))
+		if padding == 1 {
+			continue
+		}
+		if padding > 1 {
+			content = append(content, '\n', '#')
+			content = append(content, strings.Repeat("x", padding-2)...)
+			writeCanonicalFixture(t, workspace, manifestRef, content)
+			remaining -= padding
+		}
+	}
+	if remaining != 0 {
+		t.Fatalf("could not create exact aggregate fixture: %d bytes remain", remaining)
+	}
+	return workspace, refs, manifestPaths
+}
+
+func acceptedResolverFixture(t *testing.T) (*Workspace, knowl.AcceptedSource) {
+	t.Helper()
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("accepted evidence")
+	digest := sha256.Sum256(content)
+	source, err := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+		Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: "engineering/resolver-page.md"},
+		Version:   knowl.SourceVersion{Version: "v1", Digest: hex.EncodeToString(digest[:])},
+		MediaType: testMarkdownMediaType, Content: content,
+		SourceDocument: knowl.SourceDocument{
+			SourceID: testSourceID, DocumentID: testResolverDocumentID, Revision: "v1", URI: "https://wiki.example.test/resolver-page.md",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return workspace, source
 }
 
 func TestWorkspaceEnrichesLegacySourceProvenance(t *testing.T) {
@@ -515,6 +1103,30 @@ func TestWorkspaceRejectsInvalidConfiguredSourceProvenanceBeforeWrite(t *testing
 	}
 }
 
+func TestWorkspaceRejectsUnencodableSourceRefBeforeWrite(t *testing.T) {
+	workspace, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("bounded")
+	digest := sha256.Sum256(content)
+	_, err = workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+		Scope: testScope, Source: knowl.SourceRef{Adapter: testResolverGitAdapter, ID: strings.Repeat("a", (8<<10)-1) + "@"},
+		Version:   knowl.SourceVersion{Version: "v1", Digest: hex.EncodeToString(digest[:])},
+		MediaType: testMarkdownMediaType, Content: content,
+	})
+	if !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("AcceptSource() error = %v, want invalid source ref", err)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(workspace.Root(), workspaceRawDir))
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("invalid source wrote raw entries %#v, %v", entries, readErr)
+	}
+}
+
 func TestWorkspaceRejectsUnsafePlanPath(t *testing.T) {
 	workspace, err := New(t.TempDir())
 	if err != nil {
@@ -544,7 +1156,7 @@ func TestWorkspaceSnapshotIncludesMarkdownDigests(t *testing.T) {
 		t.Fatalf("init workspace: %v", err)
 	}
 	pagePath := filepath.Join(workspace.Root(), "wiki", "entities", "one.md")
-	if err := os.WriteFile(pagePath, validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, ""), 0o600); err != nil {
+	if err := os.WriteFile(pagePath, validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, ""), 0o600); err != nil {
 		t.Fatalf("write page: %v", err)
 	}
 	snapshot, err := workspace.Snapshot(context.Background(), testScope)
@@ -554,7 +1166,7 @@ func TestWorkspaceSnapshotIncludesMarkdownDigests(t *testing.T) {
 	if snapshot.PageDigests[testPageOnePath] == "" {
 		t.Fatalf("snapshot missing page digest: %#v", snapshot.PageDigests)
 	}
-	if len(snapshot.Pages) != 1 || snapshot.Pages[0].ID != "entities/one" {
+	if len(snapshot.Pages) != 1 || snapshot.Pages[0].ID != testPageOneID {
 		t.Fatalf("snapshot pages = %#v", snapshot.Pages)
 	}
 	if snapshot.Pages[0].OKF == nil || snapshot.Pages[0].OKF.Type != "entity" || snapshot.Pages[0].Body != "# One\n" {
@@ -696,10 +1308,10 @@ func TestWorkspaceStagePlanRejectsInvalidProspectiveContentWithoutCanonicalMutat
 		{name: "missing type", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\nid: entities/one\ntitle: One\nsource_refs:\n  - " + testWorkspaceSourceRef + "\n---\n# One\n")}}},
 		{name: "missing source refs", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: []byte("---\nid: entities/one\ntitle: One\ntype: entity\n---\n# One\n")}}},
 		{name: "id mismatch", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/two", "One", testWorkspaceSourceRef, "")}}},
-		{name: "unknown source ref", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testMissingSourceRef, "")}}},
-		{name: "malformed link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[broken")}}},
-		{name: "escaping link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[../escape]]")}}},
-		{name: "missing link target", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[[entities/missing]]")}}},
+		{name: "unknown source ref", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testMissingSourceRef, "")}}},
+		{name: "malformed link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "[[broken")}}},
+		{name: "escaping link", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "[[../escape]]")}}},
+		{name: "missing link target", edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "[[entities/missing]]")}}},
 		{name: "broken index target", edits: []knowl.FileEdit{{Path: testIndexPath, Content: []byte(rootIndexContent + "\n* [Missing](entities/missing.md)\n")}}},
 	}
 	for _, tt := range tests {
@@ -770,7 +1382,7 @@ func TestWorkspaceStagePlanPreservesUnresolvedOriginalLinks(t *testing.T) {
 	plan := knowl.ValidatedEditPlan{
 		OperationID: "original-links", Scope: testScope, SchemaDigest: schema.Digest,
 		RequiredSourceRef: sourceRef, SourceRefs: []string{sourceRef},
-		Edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", sourceRef, body)}},
+		Edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", sourceRef, body)}},
 	}
 	want := []knowl.MaintenanceDiagnostic{
 		{Code: knowl.DiagnosticOriginalLinkUnresolved, Path: testPageOnePath, Target: "entities/a-missing"},
@@ -986,7 +1598,7 @@ func TestWorkspaceStagePlanAllowsExistingAndSamePlanTargets(t *testing.T) {
 		Scope:        testScope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
-		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[Two](two.md)")}},
+		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "[Two](two.md)")}},
 	}); err != nil {
 		t.Fatalf("stage existing target: %v", err)
 	}
@@ -996,7 +1608,7 @@ func TestWorkspaceStagePlanAllowsExistingAndSamePlanTargets(t *testing.T) {
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
 		Edits: []knowl.FileEdit{
-			{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[Two](two.md)")},
+			{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "[Two](two.md)")},
 			{Path: "wiki/entities/two.md", ExpectedDigest: digestBytes(validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, "")), Content: validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, "")},
 		},
 	}); err != nil {
@@ -1111,7 +1723,7 @@ func TestWorkspaceStagePlanValidatesProspectiveCatalogGraph(t *testing.T) {
 				t.Fatal(err)
 			}
 			edits := []knowl.FileEdit{
-				{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "")},
+				{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "")},
 				{Path: testIndexPath, ExpectedDigest: digestBytes(rootBefore), Content: append(append([]byte(nil), rootBefore...), []byte("\n"+test.rootLinks)...)},
 			}
 			for relative, content := range test.nested {
@@ -1143,7 +1755,7 @@ func TestWorkspaceStagePlanRequiresExistingOrphansToBeReconciled(t *testing.T) {
 		t.Fatal(err)
 	}
 	acceptWorkspaceSource(t, workspace)
-	pageOne := validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "before")
+	pageOne := validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "before")
 	pageTwo := validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, "orphan")
 	for target, content := range map[string][]byte{
 		testPageOnePath:        pageOne,
@@ -1162,7 +1774,7 @@ func TestWorkspaceStagePlanRequiresExistingOrphansToBeReconciled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pageOneAfter := validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "after")
+	pageOneAfter := validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "after")
 	_, err = workspace.StagePlan(context.Background(), knowl.ValidatedEditPlan{
 		OperationID:  "existing-orphan",
 		Scope:        testScope,
@@ -1578,7 +2190,7 @@ func stageLoadFixture(t *testing.T) (*Workspace, knowl.StagedChange, string) {
 		SourceRefs:   []string{testWorkspaceSourceRef},
 		Edits: []knowl.FileEdit{{
 			Path:    testPageOnePath,
-			Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, ""),
+			Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, ""),
 		}},
 	})
 	if err != nil {
@@ -1610,7 +2222,7 @@ func TestWorkspaceCommitRejectsBrokenProspectiveStateBeforeJournal(t *testing.T)
 		Scope:        testScope,
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{testWorkspaceSourceRef},
-		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[Two](two.md)")}},
+		Edits:        []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "[Two](two.md)")}},
 	})
 	if err != nil {
 		t.Fatalf("stage plan: %v", err)

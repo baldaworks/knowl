@@ -56,6 +56,34 @@ type flakyFinalizeState struct {
 	finalizeCalls    int
 }
 
+type flakyReadyLifecycle struct {
+	app.SourceLifecycleStore
+	markFailures int
+	markCalls    int
+}
+
+type cancelAfterFinalizeState struct {
+	app.SourceStateStore
+	cancel context.CancelFunc
+}
+
+func (s *cancelAfterFinalizeState) FinalizeSync(ctx context.Context, finalization app.SyncFinalization) (knowl.SyncRun, error) {
+	run, err := s.SourceStateStore.FinalizeSync(ctx, finalization)
+	if err == nil {
+		s.cancel()
+	}
+	return run, err
+}
+
+func (f *flakyReadyLifecycle) MarkSourceLifecycleReady(ctx context.Context, update app.SourceLifecycleReadyUpdate) (knowl.SourceLifecycle, error) {
+	f.markCalls++
+	if f.markFailures > 0 {
+		f.markFailures--
+		return knowl.SourceLifecycle{}, errors.New("readiness fault")
+	}
+	return f.SourceLifecycleStore.MarkSourceLifecycleReady(ctx, update)
+}
+
 func (f *flakyFinalizeState) FinalizeSync(ctx context.Context, finalization app.SyncFinalization) (knowl.SyncRun, error) {
 	f.finalizeCalls++
 	if f.finalizeFailures > 0 {
@@ -149,6 +177,160 @@ func TestSagaFinalizeFailureLeavesProjectedAndRecoveryFinalizes(t *testing.T) {
 	}
 	if state.finalizeCalls != 2 {
 		t.Fatalf("finalize calls = %d, want one retry", state.finalizeCalls)
+	}
+}
+
+func TestSagaReadinessFailureAfterFinalizeRecoversWithoutNewSync(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	faults := &flakyReadyLifecycle{SourceLifecycleStore: lifecycle, markFailures: 1}
+	harness.service.sourceLifecycle = faults
+	ref := harness.descriptor("docs/ready-after-restart.md", "# Ready after restart\n")
+	harness.adapter.script(ref.ExternalID, "# Ready after restart\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+
+	parked, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+	if !strings.Contains(classOf(err), classState) || parked.Run.Status != knowl.SyncStatusSucceeded {
+		t.Fatalf("post-finalize readiness failure = %#v, %v", parked, err)
+	}
+	owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID}
+	state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, owner)
+	if err != nil || state.Ready {
+		t.Fatalf("parked lifecycle = %#v, %v", state, err)
+	}
+	fetches := harness.adapter.fetches
+	restarted, err := NewService(Dependencies{
+		Adapters: harness.service.adapters, State: harness.state, Content: harness.workspace,
+		SourceContent: harness.workspace, Search: harness.service.search, Maintenance: harness.queue,
+		Lifecycle: lifecycle,
+	}, harness.service.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := restarted.Recover(context.Background(), harness.scope, []knowl.Source{source})
+	if err != nil || len(recovered) != 1 || recovered[0].Run.ID != parked.Run.ID || recovered[0].Run.Status != knowl.SyncStatusSucceeded {
+		t.Fatalf("readiness recovery = %#v, %v", recovered, err)
+	}
+	state, err = lifecycle.SourceLifecycle(context.Background(), harness.scope, owner)
+	if err != nil || !state.Ready || harness.adapter.fetches != fetches {
+		t.Fatalf("recovered lifecycle = %#v, %v; fetches=%d want %d", state, err, harness.adapter.fetches, fetches)
+	}
+	again, err := restarted.Recover(context.Background(), harness.scope, []knowl.Source{source})
+	if err != nil || len(again) != 0 {
+		t.Fatalf("idempotent readiness recovery = %#v, %v", again, err)
+	}
+}
+
+func TestSagaRegressedClockFinalizesAndRecoversReadiness(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	started := time.Unix(1001, 0).UTC()
+	regressed := time.Unix(900, 0).UTC()
+	clockCalls := 0
+	harness.service.options.Clock = func() time.Time {
+		clockCalls++
+		if clockCalls == 1 {
+			return started
+		}
+		return regressed
+	}
+	faults := &flakyReadyLifecycle{SourceLifecycleStore: lifecycle, markFailures: 1}
+	harness.service.sourceLifecycle = faults
+	ref := harness.descriptor("docs/regressed-clock.md", "# Regressed clock\n")
+	harness.adapter.script(ref.ExternalID, "# Regressed clock\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+
+	parked, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+	if !strings.Contains(classOf(err), classState) || parked.Run.Status != knowl.SyncStatusSucceeded {
+		t.Fatalf("regressed-clock readiness fault = %#v, %v", parked, err)
+	}
+	stored, err := harness.state.SyncRun(context.Background(), harness.scope, parked.Run.ID)
+	if err != nil || stored.UpdatedAt.Before(stored.StartedAt) || stored.CompletedAt.Before(stored.StartedAt) {
+		t.Fatalf("regressed-clock stored run = %#v, %v", stored, err)
+	}
+
+	restarted, err := NewService(Dependencies{
+		Adapters: harness.service.adapters, State: harness.state, Content: harness.workspace,
+		SourceContent: harness.workspace, Search: harness.service.search, Maintenance: harness.queue,
+		Lifecycle: lifecycle,
+	}, harness.service.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := restarted.Recover(context.Background(), harness.scope, []knowl.Source{source})
+	if err != nil || len(recovered) != 1 || recovered[0].Run.ID != parked.Run.ID {
+		t.Fatalf("regressed-clock readiness recovery = %#v, %v", recovered, err)
+	}
+	owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID}
+	state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, owner)
+	if err != nil || !state.Ready || state.UpdatedAt.Before(stored.CompletedAt) {
+		t.Fatalf("regressed-clock lifecycle = %#v, %v; want ready at or after %v", state, err, stored.CompletedAt)
+	}
+}
+
+func TestSagaReadinessAcknowledgmentIgnoresCallerCancellationAfterFinalize(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	clockCalls := 0
+	harness.service.options.Clock = func() time.Time {
+		clockCalls++
+		if clockCalls == 1 {
+			return time.Unix(1001, 0).UTC()
+		}
+		return time.Unix(900, 0).UTC()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	harness.service.state = &cancelAfterFinalizeState{SourceStateStore: harness.state, cancel: cancel}
+	ref := harness.descriptor("docs/canceled-ready.md", "# Canceled ready\n")
+	harness.adapter.script(ref.ExternalID, "# Canceled ready\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+
+	result, err := harness.service.SyncSource(ctx, harness.scope, source)
+	if err != nil || result.Run.Status != knowl.SyncStatusSucceeded || ctx.Err() == nil {
+		t.Fatalf("canceled-after-finalize result = %#v, %v; context=%v", result, err, ctx.Err())
+	}
+	state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, knowl.SourceOwner{
+		Adapter: knowl.SourceAdapterFilesystem, SourceID: harness.sourceID,
+	})
+	if err != nil || !state.Ready {
+		t.Fatalf("durable canceled readiness = %#v, %v", state, err)
+	}
+}
+
+func TestSagaStaleSucceededRunCannotReadyChangedConfig(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	source, lifecycle := prepareStageLifecycle(t, harness)
+	harness.service.sourceLifecycle = &flakyReadyLifecycle{SourceLifecycleStore: lifecycle, markFailures: 1}
+	ref := harness.descriptor("docs/stale-succeeded.md", "# Stale succeeded\n")
+	harness.adapter.script(ref.ExternalID, "# Stale succeeded\n")
+	harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{ref}, ""))
+	parked, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+	if err == nil || parked.Run.Status != knowl.SyncStatusSucceeded {
+		t.Fatalf("park stale succeeded run = %#v, %v", parked, err)
+	}
+	authority, err := lifecycle.SourceLifecycleAuthority(context.Background(), harness.scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := source
+	changed.ConfigDigest = strings.Repeat("c", 64)
+	desired := []app.DesiredSourceOwner{{
+		Owner:        knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: source.ID},
+		ConfigDigest: changed.ConfigDigest,
+	}}
+	if err := lifecycle.ReconcileSourceLifecycles(context.Background(), app.SourceLifecycleReconcileRequest{
+		Scope: harness.scope, Desired: desired, AuthorityGeneration: app.SourceLifecycleGeneration(desired),
+		ExpectedAuthorityEpoch: authority.Epoch, UpdatedAt: harness.service.options.Clock(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := harness.service.Recover(context.Background(), harness.scope, []knowl.Source{changed})
+	if err != nil || len(recovered) != 0 {
+		t.Fatalf("stale succeeded recovery = %#v, %v", recovered, err)
+	}
+	state, err := lifecycle.SourceLifecycle(context.Background(), harness.scope, desired[0].Owner)
+	if err != nil || state.Ready || state.ConfigDigest != changed.ConfigDigest {
+		t.Fatalf("changed-config readiness = %#v, %v", state, err)
 	}
 }
 

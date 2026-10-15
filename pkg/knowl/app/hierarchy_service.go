@@ -281,44 +281,38 @@ func (service *HierarchyService) commitNoOp(ctx context.Context, result IngestRe
 }
 
 func (service *HierarchyService) apply(ctx context.Context, result IngestResult, scope knowl.ScopeRef, id knowl.OperationID) (IngestResult, error) {
-	release, err := acquireApply(ctx, service.applyCoordinator)
-	if err != nil {
-		return result, err
+	tail, err := runApplyTail(ctx, applyTailRequest{
+		coordinator: service.applyCoordinator, operations: service.operations, scope: scope, id: id,
+		leaseDuration: service.leaseDuration,
+		session:       boundMaintenanceSession(service.content, result.Staged, true),
+		commit: func(ctx context.Context) (knowl.ContentCommit, error) {
+			return service.content.CommitHierarchy(ctx, result.Staged)
+		},
+		snapshot: service.content.Snapshot,
+		project: func(ctx context.Context, _ knowl.Operation, commit knowl.ContentCommit) error {
+			return service.index.Project(ctx, commit)
+		},
+	})
+	result.Operation, result.Commit = tail.operation, tail.commit
+	if err == nil {
+		return result, nil
 	}
-	defer release()
-	lease, err := newLease(time.Now().UTC(), service.leaseDuration)
-	if err != nil {
-		return result, err
-	}
-	stateCtx := durableContext(ctx)
-	if err := service.operations.MarkApplying(stateCtx, id, lease); err != nil {
-		return result, err
-	}
-	commit, err := service.content.CommitHierarchy(ctx, result.Staged)
-	if err != nil {
+	switch tail.stage {
+	case applyTailCommit:
 		return service.fail(ctx, result, "commit", err)
-	}
-	snapshot, err := service.content.Snapshot(ctx, scope)
-	if err != nil {
+	case applyTailProjection:
 		return result, fmt.Errorf("%w: %w", ErrProjection, err)
-	}
-	commit.Snapshot = snapshot
-	if err := service.index.Project(ctx, commit); err != nil {
-		result.Commit = &commit
-		return result, fmt.Errorf("%w: %w", ErrProjection, err)
-	}
-	if err := service.operations.CommitOutcome(stateCtx, id, commit); err != nil {
-		result.Commit = &commit
+	default:
 		return result, err
 	}
-	result.Commit = &commit
-	result.Operation, err = service.operations.Operation(stateCtx, scope, id)
-	return result, err
 }
 
 func (service *HierarchyService) fail(ctx context.Context, result IngestResult, class string, cause error) (IngestResult, error) {
 	if retryableExecutionError(cause) {
 		return result, cause
+	}
+	if err := saveApplyFailureDiagnostics(durableContext(ctx), service.operations, result.Operation, cause, result.Staged.Diagnostics); err != nil {
+		return result, errors.Join(cause, err)
 	}
 	failure := executionFailure(class, result.Operation.ID, cause)
 	if err := service.operations.Fail(durableContext(ctx), result.Operation.ID, failure); err != nil {

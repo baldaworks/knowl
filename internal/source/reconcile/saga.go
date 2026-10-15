@@ -26,7 +26,8 @@ const (
 // commit, projection, and atomic finalization. Post-prepare failures stay
 // nonterminal so a later invocation converges from durable state. Committed or
 // projected runs resume at their persisted stage without rewriting content.
-func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, sourceID knowl.SourceID, input sagaInput) (Result, error) {
+func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, source knowl.Source, input sagaInput) (Result, error) {
+	sourceID := source.ID
 	if service.applyCoordinator != nil {
 		release, err := service.applyCoordinator.Acquire(ctx)
 		if err != nil {
@@ -51,6 +52,14 @@ func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, 
 		if strings.TrimSpace(generation) == "" {
 			return sagaResult(sourceID, run, input), failStage(classState, errors.New("committed run lost its generation"))
 		}
+	case knowl.SyncStatusSucceeded:
+		if !input.prepared.MaintenanceReady {
+			return sagaResult(sourceID, run, input), nil
+		}
+		if err := service.markSourceReadyDurable(ctx, source, run); err != nil {
+			return sagaResult(sourceID, run, input), failStage(classState, err)
+		}
+		return sagaResult(sourceID, run, input), nil
 	default:
 		return sagaResult(sourceID, run, input), failStage(classState, app.ErrSyncStateTransition)
 	}
@@ -67,7 +76,7 @@ func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, 
 	}
 	if err := service.markProjected(ctx, app.SyncGeneration{
 		RunID: run.ID, Scope: scope, SourceID: sourceID,
-		Generation: generation, UpdatedAt: service.options.Clock(),
+		Generation: generation, UpdatedAt: service.sourceTransitionTime(run),
 	}); err != nil {
 		return sagaResult(sourceID, service.refreshRun(ctx, scope, run), input), err
 	}
@@ -77,12 +86,50 @@ func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, 
 		RunID: run.ID, Scope: scope, SourceID: sourceID,
 		CandidateDigest: input.prepared.CandidateDigest, Generation: generation,
 		Checkpoint: input.prepared.Checkpoint, Counts: input.prepared.Counts,
-		FinalizedAt: service.options.Clock(),
+		FinalizedAt: service.sourceTransitionTime(run),
 	})
 	if err != nil {
 		return sagaResult(sourceID, service.refreshRun(ctx, scope, run), input), failStage(classState, err)
 	}
+	if input.prepared.MaintenanceReady {
+		if err := service.markSourceReadyDurable(ctx, source, finalized); err != nil {
+			return sagaResult(sourceID, finalized, input), failStage(classState, err)
+		}
+	}
 	return sagaResult(sourceID, finalized, input), nil
+}
+
+func (service *Service) markSourceReadyDurable(ctx context.Context, source knowl.Source, run knowl.SyncRun) error {
+	stateCtx, cancel := service.durableContext(ctx)
+	defer cancel()
+	return service.markSourceReady(stateCtx, source, run)
+}
+
+func (service *Service) markSourceReady(ctx context.Context, source knowl.Source, run knowl.SyncRun) error {
+	if service.sourceLifecycle == nil {
+		return nil
+	}
+	owner, err := app.SourceOwnerFromType(source.Type, source.ID)
+	if err != nil {
+		return err
+	}
+	current, err := service.sourceLifecycle.SourceLifecycle(ctx, run.Scope, owner)
+	if err != nil {
+		return err
+	}
+	if current.State != knowl.SourceLifecycleActive || current.ConfigDigest != run.ConfigDigest {
+		return app.ErrSourceLifecycleConflict
+	}
+	if current.Ready {
+		return nil
+	}
+	_, err = service.sourceLifecycle.MarkSourceLifecycleReady(ctx, app.SourceLifecycleReadyUpdate{
+		Scope: run.Scope, Owner: owner, AuthorityGeneration: current.AuthorityGeneration,
+		AuthorityEpoch: current.AuthorityEpoch, ActivatedEpoch: current.ActivatedEpoch,
+		ConfigDigest: run.ConfigDigest,
+		ReadyAt:      app.SourceTransitionTime(service.options.Clock(), current.UpdatedAt, run.StartedAt, run.UpdatedAt, run.CompletedAt),
+	})
+	return err
 }
 
 func sagaResult(sourceID knowl.SourceID, run knowl.SyncRun, input sagaInput) Result {
@@ -116,7 +163,7 @@ func (service *Service) commitPrepared(ctx context.Context, scope knowl.ScopeRef
 		}
 		if err := service.markContentCommitted(ctx, app.SyncGeneration{
 			RunID: input.run.ID, Scope: scope, SourceID: sourceID,
-			Generation: existing.Generation, UpdatedAt: service.options.Clock(),
+			Generation: existing.Generation, UpdatedAt: service.sourceTransitionTime(input.run),
 		}); err != nil {
 			return "", nil, err
 		}
@@ -133,7 +180,7 @@ func (service *Service) commitPrepared(ctx context.Context, scope knowl.ScopeRef
 		generation := noOpGeneration(input.run.ID, input.prepared.CandidateDigest, inventory)
 		if err := service.markContentCommitted(ctx, app.SyncGeneration{
 			RunID: input.run.ID, Scope: scope, SourceID: sourceID,
-			Generation: generation, UpdatedAt: service.options.Clock(),
+			Generation: generation, UpdatedAt: service.sourceTransitionTime(input.run),
 		}); err != nil {
 			return "", nil, err
 		}
@@ -151,7 +198,7 @@ func (service *Service) commitPrepared(ctx context.Context, scope knowl.ScopeRef
 	}
 	if err := service.markContentCommitted(ctx, app.SyncGeneration{
 		RunID: input.run.ID, Scope: scope, SourceID: sourceID,
-		Generation: staged.Generation, UpdatedAt: service.options.Clock(),
+		Generation: staged.Generation, UpdatedAt: service.sourceTransitionTime(input.run),
 	}); err != nil {
 		return "", nil, err
 	}

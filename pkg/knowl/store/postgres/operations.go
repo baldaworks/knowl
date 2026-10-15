@@ -107,28 +107,35 @@ func (store *Store) Reserve(ctx context.Context, key knowl.OperationKey, meta kn
 	return app.OperationReservation{Operation: operation, Descriptor: descriptor, New: created == 1}, nil
 }
 
-// ReserveOperation creates or replays one generic hierarchy operation.
+// ReserveOperation creates or replays one generic operation.
 func (store *Store) ReserveOperation(ctx context.Context, identity knowl.OperationIdentity, descriptor knowl.ExecutionDescriptor) (app.OperationReservation, error) {
 	id, err := app.OperationIDForIdentity(identity)
 	if err != nil || descriptor.OperationID != id || app.ValidateOperationDescriptor(identity, descriptor) != nil {
 		return app.OperationReservation{}, app.ErrExecutionDescriptorUnavailable
 	}
-	payload, err := operationpayload.EncodeHierarchy(descriptor)
+	payload, err := operationpayload.Encode(descriptor)
 	if err != nil {
 		return app.OperationReservation{}, err
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	now := time.Now().UTC()
+	sourceAdapter, sourceID, sourceVersion, sourceDigest := "", "", string(id), ""
+	if descriptor.Kind == knowl.WorkSourceRetirementPage {
+		sourceAdapter = string(descriptor.RetirementPage.Owner.Adapter)
+		sourceID = string(descriptor.RetirementPage.Owner.SourceID)
+		sourceVersion = string(descriptor.RetirementPage.PageID)
+		sourceDigest = descriptor.RetirementPage.RetirementGeneration
+	}
 	result, err := store.db.ExecContext(ctx, `
 		INSERT INTO knowl_operations (
 			operation_id, scope, source_adapter, source_id, source_version, source_digest,
 			schema_digest, status, created_at, updated_at, accepted_media_type,
 			source_manifest_ref, accepted_source_document, schema_version, schema_snapshot, work_ready_at,
 			work_kind, execution_payload
-		) VALUES ($1, $2, '', '', $1, '', $3, $4, $5, $5, '', '', '', $6, $7, $5, $8, $9)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, '', '', '', $10, $11, $9, $12, $13)
 		ON CONFLICT (operation_id) DO NOTHING`,
-		id, identity.Scope, descriptor.Schema.Digest, knowl.StatusReceived, now,
+		id, identity.Scope, sourceAdapter, sourceID, sourceVersion, sourceDigest, descriptor.Schema.Digest, knowl.StatusReceived, now,
 		descriptor.Schema.Version, descriptor.Schema.Content, identity.Kind, payload)
 	if err != nil {
 		return app.OperationReservation{}, fmt.Errorf("reserve generic operation: %w", err)
@@ -144,6 +151,18 @@ func (store *Store) ReserveOperation(ctx context.Context, identity knowl.Operati
 	}
 	if existingScope != string(identity.Scope) || existingKind != string(identity.Kind) || existingPayload != payload {
 		return app.OperationReservation{}, ErrConflict
+	}
+	if descriptor.Kind == knowl.WorkSourceRetirementPage {
+		_, err = store.db.ExecContext(ctx, `
+			INSERT INTO knowl_retirement_operation_owners (
+				operation_id, scope, source_adapter, source_id, retirement_generation, page_id
+			) VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT(operation_id, source_adapter, source_id) DO NOTHING`,
+			id, identity.Scope, descriptor.RetirementPage.Owner.Adapter, descriptor.RetirementPage.Owner.SourceID,
+			descriptor.RetirementPage.RetirementGeneration, descriptor.RetirementPage.PageID)
+		if err != nil {
+			return app.OperationReservation{}, fmt.Errorf("associate reserved retirement operation: %w", err)
+		}
 	}
 	operation, readErr := store.Operation(ctx, identity.Scope, id)
 	if readErr != nil {
@@ -338,10 +357,13 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 		ReadyAt:          readyAt,
 		UpdatedAt:        updatedAt,
 	}
-	if operation.Kind == knowl.WorkHierarchy {
+	switch operation.Kind {
+	case knowl.WorkHierarchy, knowl.WorkSourceRetirementPage:
 		operation.Key = knowl.OperationKey{}
-	} else {
+	case "", knowl.WorkSourceMaintenance:
 		operation.Kind = knowl.WorkSourceMaintenance
+	default:
+		return knowl.Operation{}, app.ErrExecutionDescriptorUnavailable
 	}
 	if failureClass != "" {
 		operation.Failure = &knowl.Failure{Class: failureClass, Reason: failureReason, OperationID: operationIDValue}
@@ -349,6 +371,14 @@ func (store *Store) Operation(ctx context.Context, scope knowl.ScopeRef, id know
 	operation.Diagnostics, err = app.DecodeMaintenanceDiagnostics(maintenanceDiagnostics)
 	if err != nil {
 		return knowl.Operation{}, fmt.Errorf("decode maintenance diagnostics: %w", err)
+	}
+	failureItems, err := store.operationFailureDiagnostics(ctx, scope, id)
+	if err != nil {
+		return knowl.Operation{}, err
+	}
+	operation.Diagnostics, err = app.NormalizeMaintenanceDiagnostics(append(operation.Diagnostics, failureItems...))
+	if err != nil {
+		return knowl.Operation{}, err
 	}
 	operation.Retrieval, operation.RetrievalAttempt, err = app.DecodeOperationRetrieval(retrievalReport.String, retrievalAttempt, workAttempt)
 	if err != nil {

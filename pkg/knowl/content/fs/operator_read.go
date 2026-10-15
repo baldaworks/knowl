@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"slices"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -195,10 +196,188 @@ func (workspace *Workspace) operatorSources(ctx context.Context, scope knowl.Sco
 	return operatorSourceManifests(ctx, raw, scope)
 }
 
+// ResolveAcceptedSources authenticates exact source refs against the
+// workspace's immutable accepted manifests. Each validated citation identity
+// is hashed into its deterministic manifest address; its components are never
+// used directly as filesystem path segments.
+func (workspace *Workspace) ResolveAcceptedSources(ctx context.Context, scope knowl.ScopeRef, refs []string) (map[string]knowl.AcceptedSource, error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	plan, err := prepareAcceptedSourceResolveRequests(ctx, scope, refs)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := workspace.lock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if err := workspace.checkPublishedLocked(); err != nil {
+		return nil, err
+	}
+	raw, err := openReadRoot(workspace.root, workspaceRawDir)
+	if err != nil {
+		return nil, err
+	}
+	defer raw.close()
+	outcomes := make(map[string]acceptedSourceResolveOutcome, len(plan.probes))
+	remaining := app.MaxAcceptedSourceResolveBytes
+	for _, relative := range plan.probes {
+		if err := contextErr(ctx); err != nil {
+			return nil, err
+		}
+		if remaining <= 0 {
+			file, openErr := raw.open(relative, false)
+			if err := contextErr(ctx); err != nil {
+				if file != nil {
+					_ = file.Close()
+				}
+				return nil, err
+			}
+			if errors.Is(openErr, os.ErrNotExist) {
+				outcomes[relative] = acceptedSourceResolveOutcome{}
+				continue
+			}
+			if openErr != nil {
+				return nil, operatorReadError(openErr, app.ErrOperatorWorkspaceUnavailable)
+			}
+			_ = file.Close()
+			if err := contextErr(ctx); err != nil {
+				return nil, err
+			}
+			return nil, app.ErrOperatorReadLimitExceeded
+		}
+		content, _, readErr := raw.read(relative, knowl.ReadLimits{Bytes: remaining}, maxStageManifestBytes)
+		if err := contextErr(ctx); err != nil {
+			return nil, err
+		}
+		if errors.Is(readErr, os.ErrNotExist) {
+			outcomes[relative] = acceptedSourceResolveOutcome{}
+			continue
+		}
+		if readErr != nil {
+			return nil, operatorReadError(readErr, app.ErrOperatorWorkspaceUnavailable)
+		}
+		remaining -= len(content)
+		var manifest sourceManifest
+		if yaml.Unmarshal(content, &manifest) != nil {
+			return nil, app.ErrSourceInvalid
+		}
+		source, acceptedErr := manifest.accepted()
+		if acceptedErr != nil || !validSourceManifest(manifest) || app.ValidateAcceptedSourceDescriptor(source) != nil ||
+			source.Scope != scope || source.ManifestRef != workspaceRawDir+"/"+relative {
+			return nil, app.ErrSourceInvalid
+		}
+		outcomes[relative] = acceptedSourceResolveOutcome{source: source, found: true}
+	}
+
+	result := make(map[string]knowl.AcceptedSource, len(refs))
+	resolvedManifests := make(map[string]string, len(refs))
+	for _, request := range plan.requests {
+		if err := contextErr(ctx); err != nil {
+			return nil, err
+		}
+		matches := make([]knowl.AcceptedSource, 0, 1)
+		for _, candidate := range request.candidates {
+			outcome := outcomes[candidate.relative]
+			if !outcome.found {
+				continue
+			}
+			source := outcome.source
+			if source.Source != candidate.identity.Source || source.Version.Version != candidate.identity.Revision ||
+				!app.SourceRefMatches(request.ref, source) {
+				return nil, app.ErrSourceInvalid
+			}
+			matches = append(matches, source)
+		}
+		switch len(matches) {
+		case 0:
+			return nil, &app.SourceRefNotFoundError{Ref: request.ref}
+		case 1:
+			source := matches[0]
+			if _, duplicate := resolvedManifests[source.ManifestRef]; duplicate {
+				return nil, &app.SourceRefDuplicateError{Ref: request.ref}
+			}
+			resolvedManifests[source.ManifestRef] = request.ref
+			result[request.ref] = source
+		default:
+			return nil, app.ErrSourceRefAmbiguous
+		}
+	}
+	return result, nil
+}
+
+type acceptedSourceResolveCandidate struct {
+	identity app.SourceRefIdentity
+	relative string
+}
+
+type acceptedSourceResolveRequest struct {
+	ref        string
+	candidates []acceptedSourceResolveCandidate
+}
+
+type acceptedSourceResolvePlan struct {
+	requests []acceptedSourceResolveRequest
+	probes   []string
+}
+
+type acceptedSourceResolveOutcome struct {
+	source knowl.AcceptedSource
+	found  bool
+}
+
+// prepareAcceptedSourceResolveRequests performs all pure parsing and address
+// derivation before the publication lock is acquired.
+func prepareAcceptedSourceResolveRequests(ctx context.Context, scope knowl.ScopeRef, refs []string) (acceptedSourceResolvePlan, error) {
+	if strings.TrimSpace(string(scope)) == "" || len(refs) == 0 || len(refs) > app.MaxAcceptedSourceResolveRefs {
+		return acceptedSourceResolvePlan{}, app.ErrSourceInvalid
+	}
+	ordered := slices.Clone(refs)
+	sort.Strings(ordered)
+	plan := acceptedSourceResolvePlan{requests: make([]acceptedSourceResolveRequest, 0, len(ordered))}
+	probePaths := make(map[string]struct{}, app.MaxAcceptedSourceResolveProbes)
+	for index, ref := range ordered {
+		if err := contextErr(ctx); err != nil {
+			return acceptedSourceResolvePlan{}, err
+		}
+		if index > 0 && ordered[index-1] == ref {
+			return acceptedSourceResolvePlan{}, app.ErrSourceInvalid
+		}
+		identities, err := app.ParseSourceRefCandidates(ref)
+		if err != nil {
+			return acceptedSourceResolvePlan{}, err
+		}
+		request := acceptedSourceResolveRequest{ref: ref, candidates: make([]acceptedSourceResolveCandidate, 0, len(identities))}
+		for _, identity := range identities {
+			if err := contextErr(ctx); err != nil {
+				return acceptedSourceResolvePlan{}, err
+			}
+			relative, err := acceptedSourceManifestRelative(scope, identity)
+			if err != nil {
+				return acceptedSourceResolvePlan{}, app.ErrSourceInvalid
+			}
+			request.candidates = append(request.candidates, acceptedSourceResolveCandidate{identity: identity, relative: relative})
+			if _, exists := probePaths[relative]; exists {
+				continue
+			}
+			if len(plan.probes) >= app.MaxAcceptedSourceResolveProbes {
+				return acceptedSourceResolvePlan{}, app.ErrSourceRefLimit
+			}
+			probePaths[relative] = struct{}{}
+			plan.probes = append(plan.probes, relative)
+		}
+		plan.requests = append(plan.requests, request)
+	}
+	return plan, nil
+}
+
 // operatorSourceManifests reads bounded manifests only. A source ref is compared
 // to accepted identities, never interpreted as an address or a file path.
 func operatorSourceManifests(ctx context.Context, raw *readRoot, scope knowl.ScopeRef) (map[string]knowl.AcceptedSource, error) {
 	sources := make(map[string]knowl.AcceptedSource)
+	ambiguous := make(map[string]struct{})
 	remaining := app.DefaultCatalogLimits().MaxSnapshotBytes
 	err := raw.walk(func(relative string, entry os.DirEntry) error {
 		if err := contextErr(ctx); err != nil {
@@ -222,35 +401,22 @@ func operatorSourceManifests(ctx context.Context, raw *readRoot, scope knowl.Sco
 		if manifest.Scope != string(scope) {
 			return nil
 		}
-		source := manifest.accepted()
-		if !validSourceManifest(manifest) || source.ManifestRef != workspaceRawDir+"/"+relative {
+		source, acceptedErr := manifest.accepted()
+		if acceptedErr != nil || !validSourceManifest(manifest) || source.ManifestRef != workspaceRawDir+"/"+relative {
 			return app.ErrOperatorWorkspaceUnavailable
 		}
-		ref := sourceRefKey(source)
-		if !operatorSourceRefValid(ref) {
+		if len(app.SourceRefAliases(source)) == 0 {
 			return app.ErrOperatorWorkspaceUnavailable
 		}
-		if _, duplicate := sources[ref]; duplicate {
-			return app.ErrOperatorWorkspaceUnavailable
-		}
-		sources[ref] = source
+		addSourceRefAliases(sources, ambiguous, source)
 		return nil
 	})
 	return sources, operatorReadError(err, app.ErrOperatorWorkspaceUnavailable)
 }
 
 func operatorSourceRefValid(ref string) bool {
-	if len(ref) > 8<<10 || !utf8.ValidString(ref) || strings.TrimSpace(ref) != ref {
-		return false
-	}
-	for _, character := range ref {
-		if character < ' ' || character == 0x7f {
-			return false
-		}
-	}
-	adapter, rest, ok := strings.Cut(ref, ":")
-	identity, revision, hasRevision := strings.Cut(rest, "@")
-	return ok && hasRevision && adapter != "" && identity != "" && revision != ""
+	_, err := app.ParseSourceRefCandidates(ref)
+	return err == nil
 }
 
 func operatorSafeURI(value string) string {

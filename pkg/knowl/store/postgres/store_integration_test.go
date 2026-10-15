@@ -5,11 +5,13 @@ package postgres
 import (
 	"context"
 	"errors"
-	"github.com/baldaworks/knowl/pkg/knowl/app"
-	"github.com/baldaworks/knowl/pkg/knowl/store/internal/searchtest"
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/searchtest"
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/storetest"
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -44,6 +46,22 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 	t.Run("correction-reports", func(t *testing.T) { runCorrectionReportPostgres(t, dsn) })
 	t.Run("correction-report-migration", func(t *testing.T) { runCorrectionReportMigrationPostgres(t, dsn) })
 	t.Run("operation-details-migration", func(t *testing.T) { runOperationDetailsMigrationPostgres(t, dsn) })
+	t.Run("source-lifecycle", func(t *testing.T) { runSourceLifecyclePostgres(t, dsn) })
+	t.Run("source-lifecycle-migration", func(t *testing.T) { runSourceLifecycleMigrationPostgres(t, dsn) })
+	t.Run("source-readiness-migration", func(t *testing.T) { runSourceReadinessMigrationPostgres(t, dsn) })
+	t.Run("retirement-work", func(t *testing.T) {
+		store, openErr := Open(t.Context(), dsn)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		storetest.RunRetirementWorkContract(t, store, "postgres_retirement", func(err error) bool { return errors.Is(err, ErrConflict) }, func(t *testing.T, id knowl.OperationID) {
+			t.Helper()
+			if _, err := store.db.ExecContext(t.Context(), `DELETE FROM knowl_retirement_operation_owners WHERE operation_id = $1`, id); err != nil {
+				t.Fatalf("drop retirement owner association: %v", err)
+			}
+		})
+	})
 	t.Run("hybrid", func(t *testing.T) {
 		searchtest.RunHybrid(t, func(t *testing.T, options ...app.EmbeddingOptions) searchtest.HybridIndex {
 			t.Helper()

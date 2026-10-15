@@ -91,7 +91,15 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 	if err := contextErr(ctx); err != nil {
 		return knowl.AcceptedSource{}, err
 	}
-	if strings.TrimSpace(string(envelope.Scope)) == "" || strings.TrimSpace(envelope.Source.Adapter) == "" || strings.TrimSpace(envelope.Source.ID) == "" || strings.TrimSpace(envelope.Version.Version) == "" || len(envelope.Content) > workspace.maxSourceBytes {
+	identity := app.SourceRefIdentity{Source: envelope.Source, Revision: envelope.Version.Version}
+	if strings.TrimSpace(string(envelope.Scope)) == "" || len(envelope.Content) > workspace.maxSourceBytes {
+		return knowl.AcceptedSource{}, ErrInvalidSource
+	}
+	if _, encodeErr := app.EncodeSourceRef(identity); encodeErr != nil {
+		return knowl.AcceptedSource{}, ErrInvalidSource
+	}
+	keyRelative, err := acceptedSourceDirectoryRelative(envelope.Scope, identity)
+	if err != nil {
 		return knowl.AcceptedSource{}, ErrInvalidSource
 	}
 	if envelope.SourceDocument != (knowl.SourceDocument{}) &&
@@ -108,7 +116,7 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 	}
 	defer unlock()
 
-	keyDir := filepath.Join(workspace.root, workspaceRawDir, token(string(envelope.Scope)+"\x00"+envelope.Source.Adapter+"\x00"+envelope.Source.ID), token(envelope.Version.Version))
+	keyDir := filepath.Join(workspace.root, workspaceRawDir, filepath.FromSlash(keyRelative))
 	sourcePath := filepath.Join(keyDir, "source")
 	manifestPath := filepath.Join(keyDir, "manifest.yaml")
 	if existing, err := readManifest(manifestPath); err == nil {
@@ -122,11 +130,18 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 			if marshalErr != nil {
 				return knowl.AcceptedSource{}, fmt.Errorf("marshal enriched source manifest: %w", marshalErr)
 			}
+			if advanceErr := workspace.advancePublicationLocked(); advanceErr != nil {
+				return knowl.AcceptedSource{}, fmt.Errorf("advance accepted provenance publication: %w", advanceErr)
+			}
 			if writeErr := writeAtomic(manifestPath, manifestBytes, 0o600); writeErr != nil {
 				return knowl.AcceptedSource{}, fmt.Errorf("enrich source manifest: %w", writeErr)
 			}
 		}
-		return existing.accepted(), nil
+		accepted, acceptErr := existing.accepted()
+		if acceptErr != nil {
+			return knowl.AcceptedSource{}, ErrInvalidSource
+		}
+		return accepted, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return knowl.AcceptedSource{}, fmt.Errorf("read source manifest: %w", err)
 	}
@@ -150,6 +165,9 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 	if err != nil {
 		return knowl.AcceptedSource{}, fmt.Errorf("marshal source manifest: %w", err)
 	}
+	if err := workspace.advancePublicationLocked(); err != nil {
+		return knowl.AcceptedSource{}, fmt.Errorf("advance accepted provenance publication: %w", err)
+	}
 	if err := writeAtomic(sourcePath, envelope.Content, 0o600); err != nil {
 		return knowl.AcceptedSource{}, fmt.Errorf("write source content: %w", err)
 	}
@@ -157,7 +175,11 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 		_ = os.Remove(sourcePath)
 		return knowl.AcceptedSource{}, fmt.Errorf("write source manifest: %w", err)
 	}
-	return manifest.accepted(), nil
+	accepted, err := manifest.accepted()
+	if err != nil {
+		return knowl.AcceptedSource{}, ErrInvalidSource
+	}
+	return accepted, nil
 }
 
 // ReadSource returns the immutable source bytes previously accepted by the workspace.
@@ -165,7 +187,8 @@ func (workspace *Workspace) ReadSource(ctx context.Context, source knowl.Accepte
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(string(source.Scope)) == "" || strings.TrimSpace(source.Source.Adapter) == "" || strings.TrimSpace(source.Source.ID) == "" || strings.TrimSpace(source.Version.Version) == "" {
+	identity := app.SourceRefIdentity{Source: source.Source, Revision: source.Version.Version}
+	if strings.TrimSpace(string(source.Scope)) == "" || app.ValidateSourceRefIdentity(identity) != nil {
 		return nil, fmt.Errorf("source identity is incomplete: %w", ErrInvalidSource)
 	}
 	unlock, err := workspace.lock(ctx)
@@ -188,7 +211,11 @@ func (workspace *Workspace) readSourceLocked(source knowl.AcceptedSource, limits
 		return nil, err
 	}
 	defer raw.close()
-	relative := token(string(source.Scope)+"\x00"+source.Source.Adapter+"\x00"+source.Source.ID) + "/" + token(source.Version.Version) + "/source"
+	directory, pathErr := acceptedSourceDirectoryRelative(source.Scope, app.SourceRefIdentity{Source: source.Source, Revision: source.Version.Version})
+	if pathErr != nil {
+		return nil, fmt.Errorf("source identity is incomplete: %w", ErrInvalidSource)
+	}
+	relative := directory + "/source"
 	content, _, err := raw.read(relative, limits, workspace.maxSourceBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

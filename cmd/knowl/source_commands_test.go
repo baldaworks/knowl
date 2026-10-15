@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,54 @@ const (
 	failureClassFlag           = "--failure-class"
 	providerFailureClass       = "provider"
 	dryRunFlag                 = "--dry-run"
+	retirementAdapterFlag      = "--retirement-adapter"
+	pageIDFlag                 = "--page-id"
 )
+
+func TestSourceRetirementStatusAndTargetedRetryCommands(t *testing.T) {
+	original := newLocalSourceSession
+	t.Cleanup(func() { newLocalSourceSession = original })
+	host := &stubLocalSourceHost{
+		retirementStatus:      domain.SourceRetirementStatus{Owner: domain.SourceOwner{Adapter: domain.SourceAdapterFilesystem, SourceID: commandEngineeringSourceID}, State: domain.SourceLifecycleRetiring},
+		retirementRetryResult: app.SourceRetirementRetryResult{OperationIDs: []domain.OperationID{"retirement-page"}, Matched: 1, Requeued: 1},
+	}
+	newLocalSourceSession = func(context.Context) (localSourceSession, error) {
+		return localSourceSession{Host: host, ShutdownTimeout: time.Second}, nil
+	}
+
+	var statusOutput bytes.Buffer
+	status := newSourceStatusCommand()
+	status.SetOut(&statusOutput)
+	status.SetArgs([]string{commandEngineeringSourceID, retirementAdapterFlag, string(domain.SourceAdapterFilesystem)})
+	if err := status.Execute(); err != nil {
+		t.Fatalf("retirement status: %v", err)
+	}
+	var gotStatus domain.SourceRetirementStatus
+	if err := json.Unmarshal(statusOutput.Bytes(), &gotStatus); err != nil {
+		t.Fatalf("decode retirement status: %v", err)
+	}
+	if host.retirementOwner != host.retirementStatus.Owner || gotStatus.Owner != host.retirementStatus.Owner || gotStatus.State != domain.SourceLifecycleRetiring {
+		t.Fatalf("retirement status owner=%+v result=%+v", host.retirementOwner, gotStatus)
+	}
+
+	var retryOutput bytes.Buffer
+	retry := newSourceRetryCommand()
+	retry.SetOut(&retryOutput)
+	retry.SetArgs([]string{commandEngineeringSourceID, retirementAdapterFlag, string(domain.SourceAdapterFilesystem), pageIDFlag, "concepts/page", dryRunFlag})
+	if err := retry.Execute(); err != nil {
+		t.Fatalf("retirement retry: %v", err)
+	}
+	if host.retirementRetry.Owner != host.retirementStatus.Owner || host.retirementRetry.PageID != "concepts/page" || !host.retirementRetry.DryRun {
+		t.Fatalf("retirement retry request = %+v", host.retirementRetry)
+	}
+	var gotRetry app.SourceRetirementRetryResult
+	if err := json.Unmarshal(retryOutput.Bytes(), &gotRetry); err != nil {
+		t.Fatalf("decode retirement retry: %v", err)
+	}
+	if gotRetry.Matched != 1 || gotRetry.Requeued != 1 || !slices.Equal(gotRetry.OperationIDs, []domain.OperationID{"retirement-page"}) {
+		t.Fatalf("retirement retry result = %+v", gotRetry)
+	}
+}
 
 func TestSourceCommandsValidateBeforeSessionAndEmitRedactedJSON(t *testing.T) {
 	original := newLocalSourceSession
@@ -407,19 +455,23 @@ func TestSourceCommandsWithGitSource(t *testing.T) {
 }
 
 type stubLocalSourceHost struct {
-	sources      []domain.Source
-	sourceStatus domain.SourceStatus
-	syncID       domain.SourceID
-	statusID     domain.SourceID
-	syncAllCalls int
-	stopCalls    int
-	syncErr      error
-	stopErr      error
-	retryID      domain.SourceID
-	retryClasses []string
-	retryDryRun  bool
-	retryResult  app.SourceMaintenanceRetryResult
-	retryErr     error
+	sources               []domain.Source
+	sourceStatus          domain.SourceStatus
+	syncID                domain.SourceID
+	statusID              domain.SourceID
+	syncAllCalls          int
+	stopCalls             int
+	syncErr               error
+	stopErr               error
+	retryID               domain.SourceID
+	retryClasses          []string
+	retryDryRun           bool
+	retryResult           app.SourceMaintenanceRetryResult
+	retryErr              error
+	retirementOwner       domain.SourceOwner
+	retirementStatus      domain.SourceRetirementStatus
+	retirementRetry       app.SourceRetirementRetryRequest
+	retirementRetryResult app.SourceRetirementRetryResult
 }
 
 func (host *stubLocalSourceHost) Sources() []domain.Source { return host.sources }
@@ -460,6 +512,16 @@ func (host *stubLocalSourceHost) RetrySourceMaintenance(_ context.Context, id do
 		result.OperationIDs = make([]domain.OperationID, 0)
 	}
 	return result, host.retryErr
+}
+
+func (host *stubLocalSourceHost) SourceRetirementStatus(_ context.Context, owner domain.SourceOwner) (domain.SourceRetirementStatus, error) {
+	host.retirementOwner = owner
+	return host.retirementStatus, nil
+}
+
+func (host *stubLocalSourceHost) RetrySourceRetirement(_ context.Context, request app.SourceRetirementRetryRequest) (app.SourceRetirementRetryResult, error) {
+	host.retirementRetry = request
+	return host.retirementRetryResult, nil
 }
 
 func (host *stubLocalSourceHost) Stop(context.Context) error {

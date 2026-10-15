@@ -4,7 +4,7 @@ title: Public Contract
 knowl:
   id: concepts/public-contract
   source_refs:
-    - wiki-filesystem:knowl-docs/design.md@0f73c5118fde6973472cf8aed129de3ffedabf43caac1f46fdfebeccaa6a7167
+    - wiki-filesystem:knowl-docs/design.md@02504747c395d38811d2a7ea07b7663e1f4ea43e754557d60c64a406c5d2f6ec
 ---
 # Public Contract
 
@@ -23,7 +23,7 @@ Knowl defines a minimal public business contract consisting of exactly three ope
 ## Operator Web UI and Read API
 
 - **Operator Web UI**: An optional server-rendered web UI adding four screens: Knowledge, Search, Operations, and Sources. Disabled by default, sharing the existing HTTP listener. Enabled access requires the operator token, which also authorizes existing agent write endpoints.
-- **Operator Read API**: A separate API exposing seven GET routes bound to the configured workspace and scope (`api/openapi/operator.yaml`). It adds no agent business operations.
+- **Operator Read API**: A separate API exposing eight GET routes bound to the configured workspace and scope (`api/openapi/operator.yaml`). It adds no agent business operations.
 - **Read-Only Operation**: The UI reads current canonical pages and immutable accepted raw revisions with page-level reference support without claim-level attribution. Search executes the existing retrieval path once per query (optional embeddings may query the provider). Browsing does not invoke a maintainer or fetch upstream sources; maintenance and source schedules continue independently. Browser mutations, chat, edit controls, and changeset review are excluded.
 
 ## Boundary Constraints

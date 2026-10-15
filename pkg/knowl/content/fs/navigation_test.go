@@ -22,7 +22,7 @@ func TestGeneratedNavigationValidation(t *testing.T) {
 	} {
 		t.Run(tc.body, func(t *testing.T) {
 			t.Parallel()
-			_, err := validateOrdinaryPageEdit(testPageOnePath, "entities/one", string(validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, tc.body)), map[string]struct{}{testWorkspaceSourceRef: {}}, map[knowl.PageID]struct{}{portableCrossPageID: {}}, nil)
+			_, err := validateOrdinaryPageEdit(testPageOnePath, testPageOneID, string(validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, tc.body)), map[string]struct{}{testWorkspaceSourceRef: {}}, map[knowl.PageID]struct{}{portableCrossPageID: {}}, nil)
 			if tc.rule == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -51,7 +51,7 @@ func TestGeneratedMissingNavigationWarningStageCommitReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := knowl.ValidatedEditPlan{OperationID: "missing-portable", Scope: testScope, SchemaDigest: schema.Digest, SourceRefs: []string{testWorkspaceSourceRef}, Edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "[Missing](missing.md)")}}}
+	plan := knowl.ValidatedEditPlan{OperationID: "missing-portable", Scope: testScope, SchemaDigest: schema.Digest, SourceRefs: []string{testWorkspaceSourceRef}, Edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "[Missing](missing.md)")}}}
 	want := []knowl.MaintenanceDiagnostic{{Code: knowl.DiagnosticLinkUnresolved, Path: testPageOnePath, Target: "entities/missing"}}
 	staged, err := workspace.StagePlan(t.Context(), plan)
 	if err != nil {

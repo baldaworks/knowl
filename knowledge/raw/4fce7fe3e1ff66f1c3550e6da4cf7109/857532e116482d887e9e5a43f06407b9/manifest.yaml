@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/releases/v0.6.1.md
+version: d53662be06fe5ef4a9ce2f9380451d91851ae1537f12455b6445dc64e13e0c68
+digest: d53662be06fe5ef4a9ce2f9380451d91851ae1537f12455b6445dc64e13e0c68
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: releases/v0.6.1.md
+    revision: d53662be06fe5ef4a9ce2f9380451d91851ae1537f12455b6445dc64e13e0c68
+    uri: file:///home/bigboss/Projects/knowl/docs/releases/v0.6.1.md
+received_at: 2026-10-15T15:25:43.223323Z

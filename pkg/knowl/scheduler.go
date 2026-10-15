@@ -21,15 +21,16 @@ import (
 const (
 	// Scheduler work is deliberately bounded per cycle. Production scans every
 	// five seconds and renews a 30-second work lease at one-third of its term.
-	defaultSchedulerBatch       = 16
-	defaultSchedulerScan        = 5 * time.Second
-	defaultSchedulerWorkLease   = 30 * time.Second
-	defaultRetryAttempts        = 3
-	defaultRetryInitialDelay    = 30 * time.Second
-	defaultRetryMaximumDelay    = 5 * time.Minute
-	descriptorUnavailableClass  = "descriptor_unavailable"
-	schedulerScanFailureClass   = "scheduler_scan"
-	schedulerRunnerFailureClass = "runner_interrupted"
+	defaultSchedulerBatch           = 16
+	defaultSchedulerScan            = 5 * time.Second
+	defaultSchedulerWorkLease       = 30 * time.Second
+	defaultRetryAttempts            = 3
+	defaultRetryInitialDelay        = 30 * time.Second
+	defaultRetryMaximumDelay        = 5 * time.Minute
+	defaultMaxConsecutiveRetirement = 4
+	descriptorUnavailableClass      = "descriptor_unavailable"
+	schedulerScanFailureClass       = "scheduler_scan"
+	schedulerRunnerFailureClass     = "runner_interrupted"
 )
 
 type terminalRunner interface {
@@ -45,8 +46,9 @@ type DrainResult struct {
 }
 
 type terminalRouter struct {
-	source    terminalRunner
-	hierarchy terminalRunner
+	source     terminalRunner
+	hierarchy  terminalRunner
+	retirement terminalRunner
 }
 
 func (router terminalRouter) RunToTerminal(ctx context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
@@ -56,6 +58,11 @@ func (router terminalRouter) RunToTerminal(ctx context.Context, claim domain.Wor
 			return app.IngestResult{}, app.ErrMaintainerUnavailable
 		}
 		return router.hierarchy.RunToTerminal(ctx, claim)
+	case domain.WorkSourceRetirementPage:
+		if router.retirement == nil {
+			return app.IngestResult{}, app.ErrMaintainerUnavailable
+		}
+		return router.retirement.RunToTerminal(ctx, claim)
 	case "", domain.WorkSourceMaintenance:
 		return router.source.RunToTerminal(ctx, claim)
 	default:
@@ -64,20 +71,22 @@ func (router terminalRouter) RunToTerminal(ctx context.Context, claim domain.Wor
 }
 
 type schedulerOptions struct {
-	slots                  *executionSlots
-	logger                 *zerolog.Logger
-	wakeSize               int
-	claimBatch             int
-	descriptorFailureBatch int
-	scanInterval           time.Duration
-	workLeaseDuration      time.Duration
-	retryAttempts          int
-	retryInitialDelay      time.Duration
-	retryMaximumDelay      time.Duration
-	now                    func() time.Time
-	newToken               func() (string, error)
-	scanTicks              <-chan time.Time
-	renewTicks             <-chan time.Time
+	slots                    *executionSlots
+	discover                 func(context.Context) error
+	logger                   *zerolog.Logger
+	wakeSize                 int
+	claimBatch               int
+	descriptorFailureBatch   int
+	scanInterval             time.Duration
+	workLeaseDuration        time.Duration
+	retryAttempts            int
+	retryInitialDelay        time.Duration
+	retryMaximumDelay        time.Duration
+	maxConsecutiveRetirement int
+	now                      func() time.Time
+	newToken                 func() (string, error)
+	scanTicks                <-chan time.Time
+	renewTicks               <-chan time.Time
 }
 
 type operationScheduler struct {
@@ -91,14 +100,16 @@ type operationScheduler struct {
 	wake       chan struct{}
 	stopClaims chan struct{}
 
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	started     bool
-	stopped     bool
-	startErr    error
-	initialDone chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
+	mu                    sync.Mutex
+	cancel                context.CancelFunc
+	started               bool
+	stopped               bool
+	startErr              error
+	initialDone           chan struct{}
+	stopOnce              sync.Once
+	wg                    sync.WaitGroup
+	claimMu               sync.Mutex
+	consecutiveRetirement int
 }
 
 func newOperationScheduler(operations app.OperationStore, runner terminalRunner, scope domain.ScopeRef, options schedulerOptions) (*operationScheduler, error) {
@@ -149,6 +160,9 @@ func normalizeSchedulerOptions(options schedulerOptions) schedulerOptions {
 	}
 	if options.retryMaximumDelay < options.retryInitialDelay {
 		options.retryMaximumDelay = options.retryInitialDelay
+	}
+	if options.maxConsecutiveRetirement <= 0 {
+		options.maxConsecutiveRetirement = defaultMaxConsecutiveRetirement
 	}
 	if options.now == nil {
 		options.now = func() time.Time { return time.Now().UTC() }
@@ -475,10 +489,15 @@ func (scheduler *operationScheduler) slotRunner(slot *executionSlot) terminalRun
 	if slot.source == nil {
 		return scheduler.runner
 	}
-	return terminalRouter{source: slot.source, hierarchy: slot.hierarchy}
+	return terminalRouter{source: slot.source, hierarchy: slot.hierarchy, retirement: slot.retirement}
 }
 
 func (scheduler *operationScheduler) inspect(ctx context.Context) (bool, error) {
+	if scheduler.options.discover != nil {
+		if err := scheduler.options.discover(ctx); err != nil {
+			return false, err
+		}
+	}
 	failures, err := scheduler.operations.DescriptorFailures(ctx, scheduler.scope, scheduler.options.descriptorFailureBatch)
 	if err != nil {
 		return false, err
@@ -619,14 +638,53 @@ func (scheduler *operationScheduler) isStopping() bool {
 }
 
 func (scheduler *operationScheduler) claim(ctx context.Context) (domain.WorkClaim, error) {
+	scheduler.claimMu.Lock()
+	defer scheduler.claimMu.Unlock()
 	token, err := scheduler.options.newToken()
 	if err != nil {
 		return domain.WorkClaim{}, fmt.Errorf("create work lease: %w", err)
 	}
 	now := scheduler.options.now().UTC()
-	return scheduler.operations.ClaimReady(ctx, scheduler.scope, domain.WorkLease{
+	lease := domain.WorkLease{
 		Token: token, ExpiresAt: now.Add(scheduler.options.workLeaseDuration),
-	})
+	}
+	if scheduler.consecutiveRetirement >= scheduler.options.maxConsecutiveRetirement {
+		ready, readyErr := scheduler.operations.ResumeReady(ctx, scheduler.scope, scheduler.options.claimBatch)
+		if readyErr != nil {
+			return domain.WorkClaim{}, readyErr
+		}
+		for _, id := range ready {
+			descriptor, descriptorErr := scheduler.operations.Execution(ctx, scheduler.scope, id)
+			if descriptorErr != nil {
+				if errors.Is(descriptorErr, app.ErrExecutionDescriptorUnavailable) {
+					continue
+				}
+				return domain.WorkClaim{}, descriptorErr
+			}
+			if descriptor.Kind == domain.WorkSourceRetirementPage {
+				continue
+			}
+			claim, claimErr := scheduler.operations.ClaimOperation(ctx, scheduler.scope, id, lease)
+			if errors.Is(claimErr, app.ErrNoReadyOperation) || errors.Is(claimErr, app.ErrWorkLeaseConflict) {
+				continue
+			}
+			if claimErr != nil {
+				return domain.WorkClaim{}, claimErr
+			}
+			scheduler.consecutiveRetirement = 0
+			return claim, nil
+		}
+	}
+	claim, err := scheduler.operations.ClaimReady(ctx, scheduler.scope, lease)
+	if err != nil {
+		return domain.WorkClaim{}, err
+	}
+	if claim.Descriptor.Kind == domain.WorkSourceRetirementPage {
+		scheduler.consecutiveRetirement++
+	} else {
+		scheduler.consecutiveRetirement = 0
+	}
+	return claim, nil
 }
 
 func (scheduler *operationScheduler) runClaimUsing(ctx context.Context, claim domain.WorkClaim, runner terminalRunner) (app.IngestResult, string, error) {

@@ -31,6 +31,18 @@ type operatorPageFixture struct {
 	calls   int
 }
 
+type operatorRetirementFixture struct {
+	status knowl.SourceRetirementStatus
+	err    error
+	scope  knowl.ScopeRef
+	owner  knowl.SourceOwner
+}
+
+func (reader *operatorRetirementFixture) SourceRetirement(_ context.Context, scope knowl.ScopeRef, owner knowl.SourceOwner) (knowl.SourceRetirementStatus, error) {
+	reader.scope, reader.owner = scope, owner
+	return reader.status, reader.err
+}
+
 func (reader *operatorPageFixture) PageSummaries(_ context.Context, scope knowl.ScopeRef, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorPageSummary], error) {
 	reader.scope, reader.options = scope, options
 	reader.calls++
@@ -43,6 +55,33 @@ func operatorService(t *testing.T, readers OperatorReaders) *OperatorService {
 		t.Fatal(err)
 	}
 	return service
+}
+
+func TestOperatorSourceRetirementUsesExactOwnerAndDetachesSlices(t *testing.T) {
+	owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterGit, SourceID: operatorTestSourceID}
+	reader := &operatorRetirementFixture{status: knowl.SourceRetirementStatus{
+		Owner: owner, State: knowl.SourceLifecycleRetiring,
+		Readiness:   knowl.SourceRetirementReadinessStatus{Pending: []knowl.SourceOwner{{Adapter: knowl.SourceAdapterFilesystem, SourceID: "pending"}}},
+		Diagnostics: []knowl.MaintenanceDiagnostic{{Code: RetirementPageStaleCode, Path: "wiki/concept.md"}},
+	}}
+	result, err := operatorService(t, OperatorReaders{Retirements: reader}).SourceRetirement(t.Context(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.scope != operatorTestScope || reader.owner != owner || result.Owner != owner {
+		t.Fatalf("retirement result=%+v scope=%q owner=%+v", result, reader.scope, reader.owner)
+	}
+	reader.status.Readiness.Pending[0].SourceID = "mutated"
+	reader.status.Diagnostics[0].Path = "mutated"
+	if result.Readiness.Pending[0].SourceID != "pending" || result.Diagnostics[0].Path != "wiki/concept.md" {
+		t.Fatalf("retirement result aliases reader storage: %+v", result)
+	}
+	invalid := []knowl.SourceOwner{{SourceID: owner.SourceID}, {Adapter: owner.Adapter}}
+	for _, candidate := range invalid {
+		if _, err := operatorService(t, OperatorReaders{Retirements: reader}).SourceRetirement(t.Context(), candidate); !errors.Is(err, ErrOperatorInvalidRequest) {
+			t.Fatalf("SourceRetirement(%+v) error = %v", candidate, err)
+		}
+	}
 }
 
 // Catches loss of bounded defaults, host scope binding, and empty-list identity.

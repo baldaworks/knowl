@@ -13,12 +13,57 @@ import (
 	"google.golang.org/adk/v2/session"
 )
 
+const (
+	providerOutputFieldCatalogAdditions = "catalog_additions"
+	providerOutputFieldCatalogs         = "catalogs"
+	providerOutputFieldDelete           = "delete"
+	providerOutputFieldEdits            = "edits"
+	providerOutputFieldPages            = "pages"
+	providerOutputFieldRationale        = "rationale"
+	providerOutputFieldSnapshotDigest   = "snapshot_digest"
+	providerOutputFieldSourceRefs       = "source_refs"
+)
+
 // Plan preserves the base API's single-generation behavior.
 func (maintainer *RuntimeMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
 	limits, _ := app.NormalizeOutputSettings(knowl.OutputSettings{})
 	limits.MaxCorrections = 0
 	plan, _, err := maintainer.planSource(ctx, input, limits, nil)
 	return plan, legacyCorrectionError(err)
+}
+
+// PlanRetirement produces one complete page replacement or an explicit delete
+// from the application's active-only, page-scoped evidence envelope.
+func (maintainer *RuntimeMaintainer) PlanRetirement(ctx context.Context, input knowl.RetirementInput) (knowl.RetirementModelPlan, error) {
+	if ctx == nil {
+		return knowl.RetirementModelPlan{}, permanentProviderFailure(reasonProviderInput)
+	}
+	envelope, err := app.EncodeRetirementMaintenanceRequest(ctx, input)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return knowl.RetirementModelPlan{}, ctxErr
+		}
+		return knowl.RetirementModelPlan{}, permanentProviderFailure(reasonProviderInput)
+	}
+	if sourceWrappedBytes(len(envelope)) > maintainer.RetirementRequestBudget().MaxBytes {
+		return knowl.RetirementModelPlan{}, permanentProviderFailure(reasonProviderInputLimit)
+	}
+	var plan knowl.RetirementModelPlan
+	decode := func(candidate string) error {
+		if err := validateOutputBranch(candidate, []string{providerOutputFieldDelete, providerOutputFieldSourceRefs, providerOutputFieldPages}, []string{providerOutputFieldEdits, providerOutputFieldCatalogAdditions, providerOutputFieldSnapshotDigest, providerOutputFieldCatalogs}); err != nil {
+			return err
+		}
+		var wire maintainerRetirementOutput
+		if err := json.Unmarshal([]byte(candidate), &wire); err != nil {
+			return err
+		}
+		plan = wire.modelPlan()
+		return nil
+	}
+	if err := maintainer.runStructuredPlan(ctx, envelope, "retirement", decode); err != nil {
+		return knowl.RetirementModelPlan{}, err
+	}
+	return plan, nil
 }
 
 // PlanHierarchy preserves single-generation and generic hierarchy validation.
@@ -125,6 +170,25 @@ type maintainerFileEditOutput struct {
 	Path           string `json:"path"`
 	ExpectedDigest string `json:"expected_digest,omitempty"`
 	Content        string `json:"content"`
+}
+
+type maintainerRetirementOutput struct {
+	SchemaDigest string                     `json:"schema_digest"`
+	Delete       bool                       `json:"delete"`
+	SourceRefs   []string                   `json:"source_refs"`
+	Pages        []maintainerFileEditOutput `json:"pages"`
+	Rationale    string                     `json:"rationale,omitempty"`
+}
+
+func (output maintainerRetirementOutput) modelPlan() knowl.RetirementModelPlan {
+	pages := make([]knowl.FileEdit, len(output.Pages))
+	for index, page := range output.Pages {
+		pages[index] = knowl.FileEdit{Path: page.Path, ExpectedDigest: page.ExpectedDigest, Content: []byte(page.Content)}
+	}
+	return knowl.RetirementModelPlan{
+		SchemaDigest: output.SchemaDigest, Delete: output.Delete, SourceRefs: append([]string(nil), output.SourceRefs...),
+		Pages: pages, Rationale: output.Rationale,
+	}
 }
 
 func (output maintainerPlanOutput) modelPlan() knowl.ModelEditPlan {

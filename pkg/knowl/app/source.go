@@ -44,6 +44,9 @@ const (
 
 var (
 	ErrSourceInvalid         = errors.New("invalid Knowl source")
+	ErrSourceRefAmbiguous    = errors.New("ambiguous Knowl source reference")
+	ErrSourceRefDuplicate    = errors.New("duplicate Knowl source reference")
+	ErrSourceRefLimit        = errors.New("knowl source reference exceeds compatibility limit")
 	ErrSourceNotFound        = errors.New("knowl source not found")
 	ErrSyncRunNotFound       = errors.New("knowl sync run not found")
 	ErrSyncConflict          = errors.New("knowl sync state conflict")
@@ -56,6 +59,16 @@ var (
 	sourceIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	failurePattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,127}$`)
 )
+
+// SourceRefDuplicateError identifies the deterministic second spelling of an
+// already requested accepted-source identity. Ref is safe to use as a typed
+// diagnostic target; Error deliberately does not render it into logs.
+type SourceRefDuplicateError struct {
+	Ref string
+}
+
+func (*SourceRefDuplicateError) Error() string { return ErrSourceRefDuplicate.Error() }
+func (*SourceRefDuplicateError) Unwrap() error { return ErrSourceRefDuplicate }
 
 // SourceAdapter lists cheap descriptors and fetches only selected documents.
 type SourceAdapter interface {
@@ -150,15 +163,16 @@ type PreparedDocumentState struct {
 
 // PreparedSyncState is the immutable complete-scan result prepared for commit.
 type PreparedSyncState struct {
-	RunID           knowl.SyncRunID
-	Scope           knowl.ScopeRef
-	SourceID        knowl.SourceID
-	CompleteScan    bool
-	Checkpoint      string
-	Counts          knowl.SyncCounts
-	Documents       []PreparedDocumentState
-	CandidateDigest string
-	PreparedAt      time.Time
+	RunID            knowl.SyncRunID
+	Scope            knowl.ScopeRef
+	SourceID         knowl.SourceID
+	CompleteScan     bool
+	MaintenanceReady bool
+	Checkpoint       string
+	Counts           knowl.SyncCounts
+	Documents        []PreparedDocumentState
+	CandidateDigest  string
+	PreparedAt       time.Time
 }
 
 // SyncGeneration records a canonical or projection generation transition.
@@ -180,6 +194,20 @@ type SyncFinalization struct {
 	Checkpoint      string
 	Counts          knowl.SyncCounts
 	FinalizedAt     time.Time
+}
+
+// SourceTransitionTime returns a UTC timestamp that cannot precede any
+// supplied durable predecessor. Callers still validate required non-zero
+// candidate timestamps before normalization.
+func SourceTransitionTime(candidate time.Time, predecessors ...time.Time) time.Time {
+	result := candidate.UTC()
+	for _, predecessor := range predecessors {
+		predecessor = predecessor.UTC()
+		if result.Before(predecessor) {
+			result = predecessor
+		}
+	}
+	return result
 }
 
 // DocumentListOptions bounds source document-state reads.

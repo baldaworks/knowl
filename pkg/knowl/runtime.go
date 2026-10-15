@@ -35,21 +35,25 @@ type Host struct {
 	maintainerCloser io.Closer
 	slots            *executionSlots
 
-	operations  app.OperationStore
-	index       app.SearchIndex
-	sourceState app.SourceStateStore
-	sourceSync  *reconcile.Service
-	sources     []domain.Source
-	sourceByID  map[domain.SourceID]domain.Source
-	sourceJobs  *sourceScheduler
-	scheduler   *operationScheduler
-	service     *app.IngestService
-	hierarchy   *app.HierarchyService
-	query       *app.QueryService
-	operator    *app.OperatorService
-	lint        *app.LintService
-	mcp         *mcp.Server
-	handler     http.Handler
+	operations          app.OperationStore
+	index               app.SearchIndex
+	sourceState         app.SourceStateStore
+	sourceLifecycle     app.SourceLifecycleStore
+	retirementCommitter app.RetirementCommitter
+	retirementControl   *app.SourceRetirementCoordinator
+	sourceSync          *reconcile.Service
+	sources             []domain.Source
+	sourceByID          map[domain.SourceID]domain.Source
+	sourceJobs          *sourceScheduler
+	scheduler           *operationScheduler
+	service             *app.IngestService
+	hierarchy           *app.HierarchyService
+	retirement          *app.RetirementPageService
+	query               *app.QueryService
+	operator            *app.OperatorService
+	lint                *app.LintService
+	mcp                 *mcp.Server
+	handler             http.Handler
 
 	ready           atomic.Bool
 	startGate       chan struct{}

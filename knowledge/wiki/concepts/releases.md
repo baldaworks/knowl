@@ -11,6 +11,7 @@ knowl:
     - wiki-filesystem:knowl-docs/releases/v0.4.0.md@d4c8e0eb36bbb174da0c8d166fadc1719e46376f3fc059bfd6d9dc651148f45c
     - wiki-filesystem:knowl-docs/releases/v0.5.0.md@a5c47b8777193be18a796d6a230a8af26040ea368d6b9ef1447610bf023f08a7
     - wiki-filesystem:knowl-docs/releases/v0.6.0.md@8d47fd9686a95f88837e18b9632061faa2fa3d6372ae3645b70ff5fda3985487
+    - wiki-filesystem:knowl-docs/releases/v0.6.1.md@d53662be06fe5ef4a9ce2f9380451d91851ae1537f12455b6445dc64e13e0c68
 ---
 # Release History
 
@@ -159,5 +160,27 @@ Knowl v0.6.0 introduces the repository-supplied local Codex plugin and stages th
 - **Marketplace & Offline Prewarming**: Setup supports npm artifacts and a pinned sparse Git marketplace. Offline usage requires prewarming exact artifacts while network access is available.
 - **Verified Scope & Concurrency**: Supported exclusively for local Codex projects with local filesystem storage. Concurrent processes for a single project coordinate durable storage and workspace while separate working directories remain isolated.
 - **Publication Requirements**: Publication requires an authorized release workflow with a v0.6.0 tag on `main`, green verification checks (repository, integration, container, npm), and publish authority credentials for `@baldaworks/knowl` and native packages.
+
+## Knowl v0.6.1 — npm Trusted Publishing and Plugin Release
+
+Knowl v0.6.1 prepares the local Codex plugin and five native CLI packages for publication through npm trusted publishing. It accumulates changes since v0.5.0 after the v0.6.0 publication stopped before uploading artifacts.
+
+### Changes and Publication
+
+- **npm Trusted Publishing**: Uses GitHub Actions OIDC via Omnidist without a stored publication token. Each npm package registers a trusted publisher for `baldaworks/knowl` on workflow `release.yml`.
+- **Plugin and Native Packages**: The local Codex plugin supplies `setup` and `run` skills and host-owned MCP stdio integration, with plugin, launcher, and native packages using version `0.6.1`.
+- **Operator Web UI**: Provides knowledge browsing, search, processing history, source status, and saved-source inspection.
+- **Hybrid Search**: Covers complete pages, preserves structured Markdown and OKF section context, and reuses authenticated embeddings when rebuilding SQLite or PostgreSQL projections.
+- **Navigation and Maintained Wiki**: Wiki navigation uses portable relative Markdown links, validates navigation, exports preflight OKF documents, and excludes literal code and image descriptions from graph extraction. The repository wiki was regenerated and reviewed while preserving raw revisions and log history.
+
+### Installation and Operations
+
+- **Bootstrap**: Run `npx --yes @baldaworks/knowl@0.6.1 setup codex` from a local project root after publication.
+- **Platform Coverage**: Native packages cover macOS (x64/arm64), Linux (x64/arm64), and Windows (x64).
+- **Environment Scope**: Supports local Codex projects on local filesystems with a configured maintainer provider; existing explicit HTTP sidecar and embedded Go deployments remain supported.
+
+### Verification Gate
+
+Publication is gated on module and OpenAPI checks, full race test suite, vulnerability scanning, both linters, PostgreSQL integration, persistent volume container smoke tests, and verified native npm artifacts. The release workflow publishes the multi-platform container and records its immutable digest.
 
 See [concepts/architecture](architecture.md) for architectural details, [concepts/public-contract](public-contract.md) for service APIs, [concepts/service-operations](service-operations.md) for operational procedures, and [concepts/content-and-trust-boundaries](content-and-trust-boundaries.md) for trust models.

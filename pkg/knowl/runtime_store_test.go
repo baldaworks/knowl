@@ -16,7 +16,7 @@ func TestOpenStoreExposesSourceStateWithoutConfiguredSources(t *testing.T) {
 		t.Fatalf("openStore() error: %v", err)
 	}
 	t.Cleanup(func() { _ = store.closer.Close() })
-	if store.operations == nil || store.index == nil || store.sources == nil {
-		t.Fatalf("openStore() ports = operations:%v index:%v sources:%v", store.operations != nil, store.index != nil, store.sources != nil)
+	if store.operations == nil || store.index == nil || store.sources == nil || store.lifecycle == nil {
+		t.Fatalf("openStore() ports = operations:%v index:%v sources:%v lifecycle:%v", store.operations != nil, store.index != nil, store.sources != nil, store.lifecycle != nil)
 	}
 }

@@ -46,7 +46,7 @@ func (m *RuntimeMaintainer) planSource(ctx context.Context, input knowl.Maintena
 	bounded = context.WithValue(bounded, sourceRequestBudgetKey{}, capBytes)
 	var plan knowl.ModelEditPlan
 	decode := func(candidate string) error {
-		if err := validateOutputBranch(candidate, []string{"source_refs", "edits"}, []string{"snapshot_digest", "catalogs"}); err != nil {
+		if err := validateOutputBranch(candidate, []string{providerOutputFieldSourceRefs, providerOutputFieldEdits}, []string{providerOutputFieldDelete, providerOutputFieldPages, providerOutputFieldSnapshotDigest, providerOutputFieldCatalogs}); err != nil {
 			return err
 		}
 		var wire maintainerPlanOutput
@@ -87,7 +87,7 @@ func (m *RuntimeMaintainer) planHierarchy(ctx context.Context, input knowl.Hiera
 	bounded = context.WithValue(bounded, sourceRequestBudgetKey{}, m.RequestBudget().MaxBytes)
 	var plan knowl.HierarchyModelPlan
 	decode := func(candidate string) error {
-		if err := validateOutputBranch(candidate, []string{"snapshot_digest", "catalogs"}, []string{"source_refs", "edits", "rationale", "catalog_additions"}); err != nil {
+		if err := validateOutputBranch(candidate, []string{providerOutputFieldSnapshotDigest, providerOutputFieldCatalogs}, []string{providerOutputFieldDelete, providerOutputFieldPages, providerOutputFieldSourceRefs, providerOutputFieldEdits, providerOutputFieldRationale, providerOutputFieldCatalogAdditions}); err != nil {
 			return err
 		}
 		return json.Unmarshal([]byte(candidate), &plan)

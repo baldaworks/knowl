@@ -66,6 +66,8 @@ func newRootCommand() *cobra.Command {
    - knowl source sync <source-id>
    - knowl source status <source-id>
    - knowl source retry <source-id> --failure-class provider --dry-run
+	   - knowl source status <source-id> --retirement-adapter wiki-filesystem
+	   - knowl source retry <source-id> --retirement-adapter wiki-filesystem --page-id concepts/example --dry-run
 5. Explicitly reconcile a flat semantic wiki into nested OKF catalogs:
    - knowl hierarchy reconcile
 6. Run one complete knowledge processing cycle (sync + drain + hierarchy) and exit:

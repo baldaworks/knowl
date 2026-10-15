@@ -54,13 +54,14 @@ func (store *Store) ResumeReady(ctx context.Context, scope knowl.ScopeRef, limit
 		  AND status NOT IN (?, ?)
 		  AND schema_digest <> '' AND schema_snapshot IS NOT NULL
 		  AND ((work_kind = ? AND accepted_media_type <> '' AND source_manifest_ref <> '')
-		       OR (work_kind = ? AND execution_payload <> ''))
+		       OR (work_kind IN (?, ?) AND execution_payload <> ''))
 		  AND ((work_lease_token = '' AND julianday(work_ready_at) <= julianday(?))
 		       OR (work_lease_token <> '' AND julianday(work_lease_expires_at) <= julianday(?)))
-		ORDER BY CASE WHEN work_lease_token = '' THEN julianday(work_ready_at)
+		ORDER BY CASE WHEN work_kind = ? THEN 1 ELSE 0 END ASC,
+		         CASE WHEN work_lease_token = '' THEN julianday(work_ready_at)
 		              ELSE julianday(work_lease_expires_at) END ASC,
 		         operation_id ASC
-		LIMIT ?`, scope, knowl.StatusCommitted, knowl.StatusFailed, knowl.WorkSourceMaintenance, knowl.WorkHierarchy, nowString(), nowString(), maxWorkScanLimit)
+		LIMIT ?`, scope, knowl.StatusCommitted, knowl.StatusFailed, knowl.WorkSourceMaintenance, knowl.WorkHierarchy, knowl.WorkSourceRetirementPage, nowString(), nowString(), knowl.WorkSourceRetirementPage, maxWorkScanLimit)
 	if err != nil {
 		return nil, fmt.Errorf("inspect ready operations: %w", err)
 	}
@@ -122,14 +123,14 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 		WHERE scope = ?
 		  AND status NOT IN (?, ?)
 		  AND schema_digest <> '' AND schema_snapshot IS NOT NULL
-		  AND ((work_kind = ? AND accepted_media_type <> '' AND source_manifest_ref <> '')
-		       OR (work_kind = ? AND execution_payload <> ''))
+			  AND ((work_kind = ? AND accepted_media_type <> '' AND source_manifest_ref <> '')
+			       OR (work_kind IN (?, ?) AND execution_payload <> ''))
 		  AND ((work_lease_token = '' AND julianday(work_ready_at) <= julianday(?))
 		       OR (work_lease_token <> '' AND julianday(work_lease_expires_at) <= julianday(?)))
 		ORDER BY CASE WHEN work_lease_token = '' THEN julianday(work_ready_at)
 		              ELSE julianday(work_lease_expires_at) END ASC,
 		         operation_id ASC
-		LIMIT ?`, scope, knowl.StatusCommitted, knowl.StatusFailed, knowl.WorkSourceMaintenance, knowl.WorkHierarchy, now, now, maxWorkScanLimit)
+			LIMIT ?`, scope, knowl.StatusCommitted, knowl.StatusFailed, knowl.WorkSourceMaintenance, knowl.WorkHierarchy, knowl.WorkSourceRetirementPage, now, now, maxWorkScanLimit)
 	if err != nil {
 		return knowl.WorkClaim{}, fmt.Errorf("select ready operation: %w", err)
 	}
@@ -181,7 +182,7 @@ func (store *Store) ClaimReady(ctx context.Context, scope knowl.ScopeRef, lease 
 		return knowl.WorkClaim{}, app.ErrWorkLeaseConflict
 	}
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
-		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation, maintenance_diagnostics,
+		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation, maintenance_diagnostics, failure_diagnostics,
 		       status, attempt, work_attempt, retry_attempt, manual_retry_count,
 		       failure_class, failure_reason, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt, `+operationContextColumn+`, `+operationCorrectionColumn+`, `+operationPlanDigestColumn+`, plan_file_count
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id), scope)
@@ -255,7 +256,7 @@ func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id
 		return knowl.WorkClaim{}, app.ErrWorkLeaseConflict
 	}
 	operation, err := operationFromScanner(tx.QueryRowContext(ctx, `
-		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation, maintenance_diagnostics,
+		SELECT operation_id, work_kind, source_adapter, source_id, source_version, source_digest, maintenance_generation, maintenance_diagnostics, failure_diagnostics,
 		       status, attempt, work_attempt, retry_attempt, manual_retry_count,
 		       failure_class, failure_reason, work_ready_at, updated_at, retrieval_report, retrieval_report_attempt, `+operationContextColumn+`, `+operationCorrectionColumn+`, `+operationPlanDigestColumn+`, plan_file_count
 		FROM knowl_operations WHERE scope = ? AND operation_id = ?`, scope, id), scope)
@@ -269,7 +270,7 @@ func (store *Store) ClaimOperation(ctx context.Context, scope knowl.ScopeRef, id
 }
 
 func validateStoredExecution(scope knowl.ScopeRef, key knowl.OperationKey, descriptor knowl.ExecutionDescriptor) error {
-	if descriptor.Kind == knowl.WorkHierarchy {
+	if descriptor.Kind == knowl.WorkHierarchy || descriptor.Kind == knowl.WorkSourceRetirementPage {
 		return app.ValidateGenericExecutionDescriptor(scope, descriptor)
 	}
 	return app.ValidateExecutionDescriptor(key, descriptor)
@@ -443,9 +444,9 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 		Scope: key.Scope, Digest: schemaDigest, Version: schemaVersion,
 		Content: append([]byte(nil), schemaSnapshot...),
 	}
-	if kind == knowl.WorkHierarchy {
+	if kind == knowl.WorkHierarchy || kind == knowl.WorkSourceRetirementPage {
 		descriptor.Source = knowl.AcceptedSource{}
-		if err := operationpayload.DecodeHierarchy(payload, &descriptor); err != nil {
+		if err := operationpayload.Decode(kind, payload, &descriptor); err != nil {
 			return knowl.ExecutionDescriptor{}, knowl.OperationKey{}, err
 		}
 	}
@@ -454,14 +455,14 @@ func scanExecution(scanner rowScanner) (knowl.ExecutionDescriptor, knowl.Operati
 
 func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Operation, error) {
 	var operation knowl.Operation
-	var kind, status, failureClass, failureReason, maintenanceDiagnostics, readyAt, updatedAt string
+	var kind, status, failureClass, failureReason, maintenanceDiagnostics, failureDiagnostics, readyAt, updatedAt string
 	var retrievalReport, contextReport, correctionReport sql.NullString
 	var planDigest string
 	var planFileCount sql.NullInt64
 	if err := scanner.Scan(
 		&operation.ID, &kind, &operation.Key.Source.Adapter, &operation.Key.Source.ID,
 		&operation.Key.Version.Version, &operation.Key.Version.Digest, &operation.Key.MaintenanceGeneration,
-		&maintenanceDiagnostics,
+		&maintenanceDiagnostics, &failureDiagnostics,
 		&status, &operation.Attempt, &operation.WorkAttempt, &operation.RetryAttempt,
 		&operation.ManualRetryCount, &failureClass, &failureReason, &readyAt, &updatedAt, &retrievalReport, &operation.RetrievalAttempt, &contextReport, &correctionReport, &planDigest, &planFileCount,
 	); err != nil {
@@ -469,7 +470,7 @@ func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Opera
 	}
 	operation.Key.Scope = scope
 	operation.Kind = knowl.WorkKind(kind)
-	if operation.Kind == knowl.WorkHierarchy {
+	if operation.Kind == knowl.WorkHierarchy || operation.Kind == knowl.WorkSourceRetirementPage {
 		operation.Key = knowl.OperationKey{}
 	} else {
 		operation.Kind = knowl.WorkSourceMaintenance
@@ -490,6 +491,14 @@ func operationFromScanner(scanner rowScanner, scope knowl.ScopeRef) (knowl.Opera
 	operation.Diagnostics, err = app.DecodeMaintenanceDiagnostics(maintenanceDiagnostics)
 	if err != nil {
 		return knowl.Operation{}, fmt.Errorf("decode maintenance diagnostics: %w", err)
+	}
+	failureItems, err := app.DecodeMaintenanceDiagnostics(failureDiagnostics)
+	if err != nil {
+		return knowl.Operation{}, fmt.Errorf("decode failure diagnostics: %w", err)
+	}
+	operation.Diagnostics, err = app.NormalizeMaintenanceDiagnostics(append(operation.Diagnostics, failureItems...))
+	if err != nil {
+		return knowl.Operation{}, err
 	}
 	// The claim increment must not legitimize evidence from a future attempt.
 	operation.Retrieval, operation.RetrievalAttempt, err = app.DecodeOperationRetrieval(retrievalReport.String, operation.RetrievalAttempt, operation.WorkAttempt-1)

@@ -110,11 +110,6 @@ func ValidatePlan(ctx context.Context, input knowl.MaintenanceInput, plan knowl.
 	}, nil
 }
 
-// SourceRefKey is the stable citation key required in a plan.
-func SourceRefKey(source knowl.AcceptedSource) string {
-	return source.Source.Adapter + ":" + source.Source.ID + "@" + source.Version.Version
-}
-
 // PlanDigest returns a deterministic digest of a validated plan.
 func PlanDigest(plan knowl.ValidatedEditPlan) (string, error) {
 	encoded, err := json.Marshal(plan)

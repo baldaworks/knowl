@@ -656,6 +656,10 @@ func TestPreparedSyncDigestIsCanonicalAndDeterministic(t *testing.T) {
 	for name, mutate := range map[string]func(app.PreparedSyncState) app.PreparedSyncState{
 		"checkpoint": func(in app.PreparedSyncState) app.PreparedSyncState { in.Checkpoint = "checkpoint-8"; return in },
 		"counts":     func(in app.PreparedSyncState) app.PreparedSyncState { in.Counts.Updated++; return in },
+		"maintenance readiness": func(in app.PreparedSyncState) app.PreparedSyncState {
+			in.MaintenanceReady = !in.MaintenanceReady
+			return in
+		},
 		"revision": func(in app.PreparedSyncState) app.PreparedSyncState {
 			in.Documents[0].State.Revision = "revision-2"
 			return in
@@ -684,6 +688,26 @@ func TestPreparedSyncDigestIsCanonicalAndDeterministic(t *testing.T) {
 		if digest == first {
 			t.Fatalf("%s mutation kept digest %q", name, first)
 		}
+	}
+}
+
+func TestPreparedSyncDigestVersionPreservesLegacyFalseReadiness(t *testing.T) {
+	prepared := preparedDigestFixture()
+	prepared.MaintenanceReady = false
+
+	legacy, err := app.PreparedSyncDigestVersioned(prepared, app.PreparedSyncDigestLegacyV0)
+	if err != nil {
+		t.Fatalf("legacy PreparedSyncDigestVersioned() error = %v", err)
+	}
+	current, err := app.PreparedSyncDigestVersioned(prepared, app.PreparedSyncDigestMaintenanceV1)
+	if err != nil {
+		t.Fatalf("current PreparedSyncDigestVersioned() error = %v", err)
+	}
+	if legacy == current {
+		t.Fatalf("legacy digest = current digest = %q", legacy)
+	}
+	if _, err := app.PreparedSyncDigestVersioned(prepared, 2); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("unknown digest version error = %v, want ErrSourceInvalid", err)
 	}
 }
 

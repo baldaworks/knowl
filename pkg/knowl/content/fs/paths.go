@@ -73,7 +73,7 @@ func validateRecoveryTarget(target string) error {
 
 func validateJournalTarget(journal recoveryJournal, target string) error {
 	switch manifestWriter(stageManifest{Writer: journal.Writer}) {
-	case stageWriterMaintainer:
+	case stageWriterMaintainer, stageWriterRetirement:
 		return validateRecoveryTarget(target)
 	case stageWriterSource:
 		if err := validateSourceTarget(journal.SourceID, target); err != nil {
