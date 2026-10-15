@@ -20,6 +20,7 @@ type operationalStore struct {
 	operations app.OperationStore
 	index      app.SearchIndex
 	sources    app.SourceStateStore
+	lifecycle  app.SourceLifecycleStore
 	closer     io.Closer
 	checker    projectionChecker
 }
@@ -39,6 +40,7 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 			operations: store,
 			index:      store,
 			sources:    store,
+			lifecycle:  store,
 			closer:     store,
 			checker:    store,
 		}, nil
@@ -51,6 +53,7 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 			operations: store,
 			index:      store,
 			sources:    store,
+			lifecycle:  store,
 			closer:     store,
 			checker:    store,
 		}, nil

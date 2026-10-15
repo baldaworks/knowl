@@ -15,7 +15,7 @@ import (
 // when instruction/input/output schemas are all nonempty. Actual-wrapper
 // behavioral tests and the inner-agent guard protect against formatter drift.
 const sourceWrapperFrameBytes = 703
-const sourceRequestFormatVersion = "source-json-v1/structuredagent-v2.0.10-correction-v1"
+const sourceRequestFormatVersion = "source-json-v1/structuredagent-v2.0.10-correction-v1-retirement-v1"
 
 type sourceRequestBudgetKey struct{}
 
@@ -34,6 +34,27 @@ func (m *RuntimeMaintainer) RequestBytes(ctx context.Context, input knowl.Mainte
 		return 0, app.ErrMaintenanceInputInvalid
 	}
 	encoded, err := app.EncodeSourceMaintenanceRequest(ctx, input)
+	if err != nil {
+		return 0, err
+	}
+	return sourceWrappedBytes(len(encoded)), nil
+}
+
+// RetirementRequestBudget returns the finite capacity of the retirement wrapper.
+func (m *RuntimeMaintainer) RetirementRequestBudget() knowl.MaintenanceRequestBudget {
+	if m == nil {
+		return knowl.MaintenanceRequestBudget{}
+	}
+	return knowl.MaintenanceRequestBudget{MaxBytes: min(m.maxInput, app.MaxMaintenanceRequestBytes), FormatVersion: "retirement-json-v1/structuredagent-v2.0.10"}
+}
+
+// RetirementRequestBytes measures the exact retirement envelope plus wrapper
+// without initializing the provider runtime.
+func (m *RuntimeMaintainer) RetirementRequestBytes(ctx context.Context, input knowl.RetirementInput) (int, error) {
+	if ctx == nil {
+		return 0, app.ErrRetirementPlanInvalid
+	}
+	encoded, err := app.EncodeRetirementMaintenanceRequest(ctx, input)
 	if err != nil {
 		return 0, err
 	}
@@ -113,3 +134,4 @@ func (a *sourceRequestGuard) Run(ctx adkagent.InvocationContext) iter.Seq2[*sess
 }
 
 var _ app.MaintenanceRequestSizer = (*RuntimeMaintainer)(nil)
+var _ app.RetirementRequestSizer = (*RuntimeMaintainer)(nil)

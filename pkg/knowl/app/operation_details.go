@@ -68,7 +68,7 @@ func ValidOperationPlanDigest(digest string) bool {
 
 func publicWarningCode(code string) bool {
 	switch code {
-	case knowl.DiagnosticCitationUnknownSource, knowl.DiagnosticOriginalLinkUnresolved, knowl.DiagnosticLinkUnresolved, knowl.DiagnosticCatalogDependencyReject:
+	case knowl.DiagnosticCitationUnknownSource, knowl.DiagnosticOriginalLinkUnresolved, knowl.DiagnosticLinkUnresolved, knowl.DiagnosticCatalogDependencyReject, CitationSourceRetiringCode, SourceLifecycleUnownedCode, CitationSourceAuthorityChangedCode:
 		return true
 	default:
 		return false

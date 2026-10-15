@@ -48,3 +48,4 @@ func NewRuntimeMaintainer(factory RuntimeFactory, providerID, workspace string) 
 
 var _ app.Maintainer = (*RuntimeMaintainer)(nil)
 var _ app.HierarchyMaintainer = (*RuntimeMaintainer)(nil)
+var _ app.RetirementMaintainer = (*RuntimeMaintainer)(nil)

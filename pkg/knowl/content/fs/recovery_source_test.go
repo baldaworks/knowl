@@ -24,8 +24,8 @@ func TestWorkspaceRecoversSourceCommitAtEveryFaultPoint(t *testing.T) {
 		wantAfter  bool
 		wantAction string
 	}{
-		{name: "before journal", point: "before_journal", index: -1},
-		{name: "after preimages", point: "after_preimages", index: -1},
+		{name: testFaultBeforeJournalName, point: testFaultBeforeJournalPoint, index: -1},
+		{name: testFaultAfterPreimagesName, point: testFaultAfterPreimagesPoint, index: -1},
 		{name: recoveryPrepared, point: recoveryPrepared, index: -1, wantAction: recoveryRolledBack},
 		{name: "after create", point: commitFaultApplied, index: 0, wantAction: recoveryRolledBack},
 		{name: "after delete", point: commitFaultApplied, index: 1, wantAction: recoveryRolledBack},
@@ -217,7 +217,7 @@ func TestWorkspaceRecoveryPreservesLegacyUnboundedMaintainerOperationID(t *testi
 	operationID := strings.Repeat("legacy-operation-", 20)
 	staged, err := workspace.StagePlan(context.Background(), knowl.ValidatedEditPlan{
 		OperationID: operationID, Scope: testScope, SchemaDigest: schema.Digest, SourceRefs: []string{testWorkspaceSourceRef},
-		Edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "")}},
+		Edits: []knowl.FileEdit{{Path: testPageOnePath, Content: validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "")}},
 	})
 	if err != nil {
 		t.Fatal(err)

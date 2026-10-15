@@ -120,6 +120,20 @@ func TestResumableWorkContract(t *testing.T) {
 	})
 }
 
+func TestRetirementWorkContract(t *testing.T) {
+	store, err := Open(t.Context(), t.TempDir()+"/retirement-work.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	storetest.RunRetirementWorkContract(t, store, "sqlite_retirement", func(err error) bool { return errors.Is(err, ErrConflict) }, func(t *testing.T, id knowl.OperationID) {
+		t.Helper()
+		if _, err := store.db.ExecContext(t.Context(), `DELETE FROM knowl_retirement_operation_owners WHERE operation_id = ?`, id); err != nil {
+			t.Fatalf("drop retirement owner association: %v", err)
+		}
+	})
+}
+
 func TestSourceMaintenanceRetryContract(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, t.TempDir()+"/source-retry.sqlite")

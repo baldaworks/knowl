@@ -45,6 +45,10 @@ type Workspace struct {
 	now            func() time.Time
 	mu             sync.Mutex
 	processLock    *flock.Flock
+
+	publicationEpoch      string
+	publicationGeneration uint64
+	maintenanceAuthority  bool
 }
 
 // Option configures a Workspace.
@@ -80,11 +84,16 @@ func New(root string, options ...Option) (*Workspace, error) {
 		return nil, fmt.Errorf("resolve workspace root: %w", err)
 	}
 	cleanRoot := filepath.Clean(abs)
+	publicationEpoch, err := newWorkspacePublicationEpoch()
+	if err != nil {
+		return nil, fmt.Errorf("initialize workspace publication epoch: %w", err)
+	}
 	workspace := &Workspace{
-		root:           cleanRoot,
-		maxSourceBytes: defaultMaxBytes,
-		now:            time.Now,
-		processLock:    flock.New(filepath.Join(cleanRoot, knowlDir, workspaceLockFile)),
+		root:             cleanRoot,
+		maxSourceBytes:   defaultMaxBytes,
+		now:              time.Now,
+		processLock:      flock.New(filepath.Join(cleanRoot, knowlDir, workspaceLockFile)),
+		publicationEpoch: publicationEpoch,
 	}
 	for _, option := range options {
 		if option != nil {

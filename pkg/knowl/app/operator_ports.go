@@ -85,6 +85,11 @@ type OperationLister interface {
 	ListOperations(ctx context.Context, scope knowl.ScopeRef, options OperatorOperationReadOptions) (OperatorReadPage[knowl.OperatorOperationSummary], error)
 }
 
+// SourceRetirementReader is the exact-owner typed retirement status capability.
+type SourceRetirementReader interface {
+	SourceRetirement(ctx context.Context, scope knowl.ScopeRef, owner knowl.SourceOwner) (knowl.SourceRetirementStatus, error)
+}
+
 // SourceDocumentLister is an optional scoped durable document read capability.
 type SourceDocumentLister interface {
 	ListSourceDocuments(ctx context.Context, scope knowl.ScopeRef, id knowl.SourceID, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorDocumentSummary], error)
@@ -107,4 +112,5 @@ type OperatorReaders struct {
 	Sources     OperatorSourceReader
 	Documents   SourceDocumentLister
 	Operations  OperationLister
+	Retirements SourceRetirementReader
 }

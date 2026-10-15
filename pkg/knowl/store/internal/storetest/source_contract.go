@@ -39,6 +39,7 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 		changed    = "changed"
 	)
 	base := time.Unix(100, 0).UTC()
+	runMonotonicSourceTransitionContract(t, ctx, harness.Store, scope, base.Add(-90*time.Second))
 	runGitLineageContract(t, ctx, harness.Store, scope, base.Add(-40*time.Second))
 	if harness.OpenPeer != nil {
 		runConcurrentBeginContract(t, ctx, harness, scope, base.Add(-20*time.Second))
@@ -217,6 +218,90 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 	resumable, err := harness.Store.ResumableSyncRuns(ctx, scope, 100)
 	if err != nil || len(resumable) != 0 {
 		t.Fatalf("ResumableSyncRuns() = %#v, %v", resumable, err)
+	}
+}
+
+func runMonotonicSourceTransitionContract(t *testing.T, ctx context.Context, store app.SourceStateStore, scope knowl.ScopeRef, base time.Time) {
+	t.Helper()
+	const (
+		sourceID   = knowl.SourceID("clock-regression")
+		documentID = knowl.DocumentID("docs/clock.md")
+		generation = "clock-generation"
+		checkpoint = "clock-checkpoint"
+	)
+	started := base.Add(100 * time.Second)
+	regressed := base.Add(90 * time.Second)
+	run := newContractRun(scope, sourceID, "run-clock-regression", started)
+	run.UpdatedAt = regressed
+	created, replay, err := store.BeginSync(ctx, app.BeginSyncRequest{Run: run, Type: knowl.SourceTypeFilesystem})
+	if err != nil || replay || !created.UpdatedAt.Equal(started) {
+		t.Fatalf("BeginSync() regressed clock = %#v, %v, replay=%v; want updated %v", created, err, replay, started)
+	}
+
+	progressed, err := store.RecordScanPage(ctx, app.ScanPageRecord{
+		RunID: run.ID, Scope: scope, SourceID: sourceID,
+		Documents:  []knowl.DocumentRef{{ExternalID: documentID, Revision: testSourceRevision, Path: string(documentID)}},
+		RecordedAt: regressed.Add(-time.Second),
+	})
+	if err != nil || !progressed.UpdatedAt.Equal(started) {
+		t.Fatalf("RecordScanPage() regressed clock = %#v, %v; want updated %v", progressed, err, started)
+	}
+	state := contractDocumentState(scope, sourceID, documentID, run.ID, testSourceRevision, started)
+	prepared := contractPreparedState(t, run.ID, scope, sourceID, checkpoint, knowl.SyncCounts{Added: 1},
+		[]app.PreparedDocumentState{{Action: app.SyncDocumentActive, State: state}}, regressed.Add(-2*time.Second))
+	preparedRun, err := store.PrepareSync(ctx, prepared)
+	if err != nil || !preparedRun.UpdatedAt.Equal(started) {
+		t.Fatalf("PrepareSync() regressed clock = %#v, %v; want updated %v", preparedRun, err, started)
+	}
+	committed, err := store.MarkContentCommitted(ctx, app.SyncGeneration{
+		RunID: run.ID, Scope: scope, SourceID: sourceID, Generation: generation, UpdatedAt: regressed.Add(-3 * time.Second),
+	})
+	if err != nil || !committed.UpdatedAt.Equal(started) {
+		t.Fatalf("MarkContentCommitted() regressed clock = %#v, %v; want updated %v", committed, err, started)
+	}
+	projected, err := store.MarkProjected(ctx, app.SyncGeneration{
+		RunID: run.ID, Scope: scope, SourceID: sourceID, Generation: generation, UpdatedAt: regressed.Add(-4 * time.Second),
+	})
+	if err != nil || !projected.UpdatedAt.Equal(started) {
+		t.Fatalf("MarkProjected() regressed clock = %#v, %v; want updated %v", projected, err, started)
+	}
+	finalized, err := store.FinalizeSync(ctx, app.SyncFinalization{
+		RunID: run.ID, Scope: scope, SourceID: sourceID, CandidateDigest: prepared.CandidateDigest,
+		Generation: generation, Checkpoint: checkpoint, Counts: knowl.SyncCounts{Added: 1}, FinalizedAt: regressed.Add(-5 * time.Second),
+	})
+	if err != nil || !finalized.UpdatedAt.Equal(started) || !finalized.CompletedAt.Equal(started) {
+		t.Fatalf("FinalizeSync() regressed clock = %#v, %v; want completed/updated %v", finalized, err, started)
+	}
+	document, err := store.DocumentState(ctx, scope, sourceID, documentID)
+	if err != nil || document.CreatedAt.Before(started) || document.UpdatedAt.Before(started) {
+		t.Fatalf("DocumentState() regressed finalization = %#v, %v; want timestamps >= %v", document, err, started)
+	}
+	status, err := store.SourceStatus(ctx, scope, sourceID)
+	if err != nil || status.UpdatedAt.Before(started) || status.LastAttemptAt.Before(started) || status.LastSuccessfulAt.Before(started) {
+		t.Fatalf("SourceStatus() regressed finalization = %#v, %v; want timestamps >= %v", status, err, started)
+	}
+
+	olderRun := newContractRun(scope, sourceID, "run-clock-regression-failure", regressed)
+	olderCreated, _, err := store.BeginSync(ctx, app.BeginSyncRequest{Run: olderRun, Type: knowl.SourceTypeFilesystem})
+	if err != nil || !olderCreated.StartedAt.Equal(started) || !olderCreated.UpdatedAt.Equal(started) {
+		t.Fatalf("BeginSync() older attempt = %#v, %v; want timestamps %v", olderCreated, err, started)
+	}
+	olderReplay, replay, err := store.BeginSync(ctx, app.BeginSyncRequest{Run: olderRun, Type: knowl.SourceTypeFilesystem})
+	if err != nil || !replay || olderReplay != olderCreated {
+		t.Fatalf("BeginSync() normalized replay = %#v, %v, replay=%v; want %#v", olderReplay, err, replay, olderCreated)
+	}
+	futureReplay := olderRun
+	futureReplay.StartedAt = started.Add(time.Second)
+	if _, _, err := store.BeginSync(ctx, app.BeginSyncRequest{Run: futureReplay, Type: knowl.SourceTypeFilesystem}); !errors.Is(err, app.ErrSyncConflict) {
+		t.Fatalf("BeginSync() later mismatched timestamp = %v, want conflict", err)
+	}
+	failed, err := store.FailSync(ctx, scope, olderRun.ID, "clock_regression", regressed.Add(-time.Second))
+	if err != nil || !failed.CompletedAt.Equal(started) || !failed.UpdatedAt.Equal(started) {
+		t.Fatalf("FailSync() regressed clock = %#v, %v; want completed/updated %v", failed, err, started)
+	}
+	status, err = store.SourceStatus(ctx, scope, sourceID)
+	if err != nil || status.UpdatedAt.Before(started) || status.LastAttemptAt.Before(started) {
+		t.Fatalf("SourceStatus() regressed failure = %#v, %v; want attempt/updated >= %v", status, err, started)
 	}
 }
 
@@ -464,7 +549,7 @@ func finishContractRun(t *testing.T, ctx context.Context, store app.SourceStateS
 func contractPreparedState(t *testing.T, runID knowl.SyncRunID, scope knowl.ScopeRef, sourceID knowl.SourceID, checkpoint string, counts knowl.SyncCounts, documents []app.PreparedDocumentState, preparedAt time.Time) app.PreparedSyncState {
 	t.Helper()
 	prepared := app.PreparedSyncState{
-		RunID: runID, Scope: scope, SourceID: sourceID, CompleteScan: true, Checkpoint: checkpoint,
+		RunID: runID, Scope: scope, SourceID: sourceID, CompleteScan: true, MaintenanceReady: true, Checkpoint: checkpoint,
 		Counts: counts, Documents: documents, PreparedAt: preparedAt,
 	}
 	digest, err := app.PreparedSyncDigest(prepared)
@@ -571,7 +656,8 @@ func assertPreparedRead(t *testing.T, store app.SourceStateStore, prepared app.P
 		t.Fatalf("PreparedSync() error = %v", err)
 	}
 	if read.RunID != prepared.RunID || read.Scope != prepared.Scope || read.SourceID != prepared.SourceID ||
-		read.Checkpoint != prepared.Checkpoint || read.Counts != prepared.Counts || read.CandidateDigest != prepared.CandidateDigest {
+		read.MaintenanceReady != prepared.MaintenanceReady || read.Checkpoint != prepared.Checkpoint ||
+		read.Counts != prepared.Counts || read.CandidateDigest != prepared.CandidateDigest {
 		t.Fatalf("PreparedSync() header = %#v, want digest %q", read, prepared.CandidateDigest)
 	}
 	expected, err := app.NormalizePreparedDocuments(prepared.Scope, prepared.SourceID, prepared.RunID, prepared.Documents)

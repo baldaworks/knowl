@@ -3,6 +3,7 @@ package app_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,12 +141,6 @@ func TestConcurrentPreparedSourcePlansFailSafely(t *testing.T) {
 func TestCanceledApplyCoordinatorWaitCannotCommit(t *testing.T) {
 	workspace, store, _, _ := newWorkflow(t, false, nil)
 	gate := newTestApplyCoordinator()
-	release, err := gate.Acquire(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	<-gate.requests
 	service, err := app.NewIngestService(workspace, store, store, applyFactMaintainer{}, app.IngestOptions{ApplyCoordinator: gate})
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +148,14 @@ func TestCanceledApplyCoordinatorWaitCannotCommit(t *testing.T) {
 	preview, err := service.Preview(t.Context(), applyEnvelope("source-1"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	release, err := gate.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	for len(gate.requests) > 0 {
+		<-gate.requests
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -172,9 +175,152 @@ func TestCanceledApplyCoordinatorWaitCannotCommit(t *testing.T) {
 	}
 }
 
+func TestSubmitAcceptSourceWaitsForFinalProvenanceFence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	gate := newTestApplyCoordinator()
+	workspace, _, service, _ := newWorkflowWithOptions(t, app.IngestOptions{ApplyCoordinator: gate}, nil)
+	owner, cursor, limits := prepareZeroProvenanceContinuation(t, workspace)
+	release, err := gate.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-gate.requests
+	done := make(chan error, 1)
+	go func() {
+		_, submitErr := service.Submit(ctx, sourceEnvelope([]byte("coordinated source publication")))
+		done <- submitErr
+	}()
+	select {
+	case <-gate.requests:
+	case err := <-done:
+		release()
+		t.Fatalf("source acceptance bypassed finalization fence: %v", err)
+	case <-ctx.Done():
+		release()
+		t.Fatal(ctx.Err())
+	}
+
+	final, err := workspace.PageProvenance(ctx, testSourceScope, owner, cursor, limits)
+	if err != nil || !final.EOF || !final.Authoritative || final.Returned != 0 {
+		release()
+		t.Fatalf("final provenance = %#v, %v", final, err)
+	}
+	select {
+	case err := <-done:
+		release()
+		t.Fatalf("source acceptance crossed finalization fence: %v", err)
+	default:
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	_, err = workspace.PageProvenance(ctx, testSourceScope, owner, cursor, limits)
+	assertCanonicalProvenanceRestart(t, err)
+}
+
+func TestCanceledSubmitWaitDoesNotPublishAcceptedSource(t *testing.T) {
+	gate := newTestApplyCoordinator()
+	workspace, _, service, _ := newWorkflowWithOptions(t, app.IngestOptions{ApplyCoordinator: gate}, nil)
+	owner, cursor, limits := prepareZeroProvenanceContinuation(t, workspace)
+	release, err := gate.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	<-gate.requests
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, submitErr := service.Submit(ctx, sourceEnvelope([]byte("canceled source publication")))
+		done <- submitErr
+	}()
+	select {
+	case <-gate.requests:
+	case <-time.After(5 * time.Second):
+		t.Fatal("submit did not request publication coordinator")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled submit error = %v", err)
+	}
+	final, err := workspace.PageProvenance(t.Context(), testSourceScope, owner, cursor, limits)
+	if err != nil || !final.EOF || !final.Authoritative {
+		t.Fatalf("canceled submit changed publication = %#v, %v", final, err)
+	}
+}
+
+func TestSubmitReleasesCoordinatorWhenAcceptSourceFails(t *testing.T) {
+	gate := newTestApplyCoordinator()
+	workspace, store, _, maintainer := newWorkflow(t, false, nil)
+	content := &rejectingAcceptStore{Workspace: workspace}
+	service, err := app.NewIngestService(content, store, store, maintainer, app.IngestOptions{ApplyCoordinator: gate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Submit(t.Context(), sourceEnvelope([]byte("rejected publication"))); err == nil || content.acceptCalls != 1 {
+		t.Fatalf("failed source acceptance = %v, calls = %d", err, content.acceptCalls)
+	}
+	select {
+	case <-gate.requests:
+	default:
+		t.Fatal("failed source acceptance bypassed coordinator")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	release, err := gate.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("failed source acceptance retained coordinator: %v", err)
+	}
+	release()
+}
+
 type testApplyCoordinator struct {
 	gate     chan struct{}
 	requests chan struct{}
+}
+
+func prepareZeroProvenanceContinuation(t *testing.T, workspace *contentfs.Workspace) (knowl.SourceOwner, app.CanonicalProvenanceCursor, app.CanonicalProvenanceLimits) {
+	t.Helper()
+	content := []byte("accepted provenance")
+	digest := sha256.Sum256(content)
+	accepted, err := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+		Scope:   testSourceScope,
+		Source:  knowl.SourceRef{Adapter: string(knowl.SourceAdapterGit), ID: "active/document"},
+		Version: knowl.SourceVersion{Version: "v1", Digest: fmt.Sprintf("%x", digest)}, MediaType: "text/markdown",
+		SourceDocument: knowl.SourceDocument{SourceID: "active", DocumentID: "document", Revision: "v1", URI: "https://example.test/active/document"},
+		Content:        content,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := app.SourceRefKey(accepted)
+	for _, id := range []string{retirementCoordinatorPageA, retirementCoordinatorPageB} {
+		path := filepath.Join(workspace.Root(), "wiki", filepath.FromSlash(id)+".md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		page := fmt.Sprintf("---\ntype: concept\ntitle: %s\nknowl:\n  id: %s\n  source_refs:\n    - %q\n---\n# %s\n", id, id, ref, id)
+		if err := os.WriteFile(path, []byte(page), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: "retiring"}
+	limits := app.CanonicalProvenanceLimits{Returned: 1, Examined: 1, PathBytes: 2_048, PageBytes: 1 << 20, TotalBytes: 4 << 20, SourceRefs: 8, RoundPages: 100}
+	first, err := workspace.PageProvenance(t.Context(), testSourceScope, owner, "", limits)
+	if err != nil || first.EOF || first.Authoritative || first.NextCursor == "" {
+		t.Fatalf("initial provenance = %#v, %v", first, err)
+	}
+	return owner, first.NextCursor, limits
+}
+
+func assertCanonicalProvenanceRestart(t *testing.T, err error) {
+	t.Helper()
+	var failure *app.CanonicalProvenanceFailure
+	if !errors.As(err, &failure) || failure.Code != app.CanonicalProvenanceCodeRestart || !errors.Is(err, app.ErrCanonicalProvenanceRestart) {
+		t.Fatalf("provenance restart = %#v, %v", failure, err)
+	}
 }
 
 func newTestApplyCoordinator() *testApplyCoordinator {

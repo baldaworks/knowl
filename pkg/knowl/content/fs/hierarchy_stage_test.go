@@ -30,7 +30,7 @@ func TestWorkspaceHierarchySnapshotDigestBindsCanonicalAndRawFiles(t *testing.T)
 	if err != nil || second != first {
 		t.Fatalf("stable snapshot = %q, %v; want %q", second, err, first)
 	}
-	writeCanonicalFixture(t, workspace, testPageOnePath, validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "changed"))
+	writeCanonicalFixture(t, workspace, testPageOnePath, validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "changed"))
 	changed, err := workspace.HierarchySnapshotDigest(context.Background(), testScope)
 	if err != nil || changed == first {
 		t.Fatalf("changed snapshot = %q, %v; want digest change", changed, err)
@@ -159,7 +159,7 @@ func TestWorkspaceHierarchyCommitRejectsCanonicalPreservationDrift(t *testing.T)
 		mutate func(*testing.T, *Workspace)
 	}{
 		{name: "ordinary page", mutate: func(t *testing.T, workspace *Workspace) {
-			writeCanonicalFixture(t, workspace, testPageOnePath, validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, "drift"))
+			writeCanonicalFixture(t, workspace, testPageOnePath, validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, "drift"))
 		}},
 		{name: "raw source", mutate: func(t *testing.T, workspace *Workspace) {
 			records, err := workspace.inspectRawSources(context.Background(), testScope)
@@ -198,8 +198,8 @@ func TestWorkspaceRecoversHierarchyCommitAtEveryFaultPoint(t *testing.T) {
 		wantAfter  bool
 		wantAction string
 	}{
-		{name: "before journal", point: "before_journal", index: -1},
-		{name: "after preimages", point: "after_preimages", index: -1},
+		{name: testFaultBeforeJournalName, point: testFaultBeforeJournalPoint, index: -1},
+		{name: testFaultAfterPreimagesName, point: testFaultAfterPreimagesPoint, index: -1},
 		{name: recoveryPrepared, point: recoveryPrepared, index: -1, wantAction: recoveryRolledBack},
 		{name: "after root", point: commitFaultApplied, index: 0, wantAction: recoveryRolledBack},
 		{name: "after create", point: commitFaultApplied, index: 1, wantAction: recoveryRolledBack},
@@ -261,7 +261,7 @@ func TestWorkspaceRecoversHierarchyCommitAtEveryFaultPoint(t *testing.T) {
 func newHierarchyWorkspace(t *testing.T) *Workspace {
 	t.Helper()
 	workspace := newSourceStageWorkspace(t)
-	writeCanonicalFixture(t, workspace, testPageOnePath, validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, ""))
+	writeCanonicalFixture(t, workspace, testPageOnePath, validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, ""))
 	writeCanonicalFixture(t, workspace, testHierarchyPageTwo, validWorkspacePage("entities/two", "Two", testWorkspaceSourceRef, ""))
 	writeRootCatalogTargets(t, workspace, "entities/one.md", "entities/two.md")
 	writeCanonicalFixture(t, workspace, testHierarchyOldPath, []byte("# Old\n\n* [One](../../entities/one.md)\n"))

@@ -50,9 +50,11 @@ type Store struct {
 }
 
 var (
-	_ app.OperationStore   = (*Store)(nil)
-	_ app.SearchIndex      = (*Store)(nil)
-	_ app.SourceStateStore = (*Store)(nil)
+	_ app.OperationStore           = (*Store)(nil)
+	_ app.OperationDiagnosticStore = (*Store)(nil)
+	_ app.SearchIndex              = (*Store)(nil)
+	_ app.SourceStateStore         = (*Store)(nil)
+	_ app.SourceLifecycleStore     = (*Store)(nil)
 )
 
 // Open opens or creates a Knowl SQLite operational store and runs migrations.

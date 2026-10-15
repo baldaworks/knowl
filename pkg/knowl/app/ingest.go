@@ -227,11 +227,22 @@ func (service *IngestService) Submit(ctx context.Context, envelope knowl.SourceE
 	if err := service.requireMaintainer(); err != nil {
 		return IngestSubmission{}, err
 	}
-	accepted, err := service.content.AcceptSource(ctx, envelope)
+	accepted, err := service.acceptSource(ctx, envelope)
 	if err != nil {
 		return IngestSubmission{}, fmt.Errorf("accept source: %w", err)
 	}
 	return service.submitAccepted(ctx, accepted)
+}
+
+// acceptSource owns the coordinator boundary for standalone raw-source
+// publication. Callers must invoke it before entering any later apply section.
+func (service *IngestService) acceptSource(ctx context.Context, envelope knowl.SourceEnvelope) (knowl.AcceptedSource, error) {
+	release, err := acquireApply(ctx, service.applyCoordinator)
+	if err != nil {
+		return knowl.AcceptedSource{}, err
+	}
+	defer release()
+	return service.content.AcceptSource(ctx, envelope)
 }
 
 // ReserveAccepted reserves maintenance for one structured textual revision
@@ -625,9 +636,9 @@ type preparedStage struct {
 func (result *IngestResult) withPreparation(prepared preparedStage, attempt int) {
 	result.Correction = prepared.Correction
 	result.Staged = prepared.Staged
-	if len(prepared.Staged.Diagnostics) > 0 {
-		result.Operation.Diagnostics = append([]knowl.MaintenanceDiagnostic(nil), prepared.Staged.Diagnostics...)
-	}
+	// A fresh preparation replaces prior-attempt failure evidence, including
+	// when this attempt produces no diagnostics.
+	result.Operation.Diagnostics = append([]knowl.MaintenanceDiagnostic(nil), prepared.Staged.Diagnostics...)
 	if prepared.CorrectionPersisted {
 		result.Operation.Correction = prepared.Correction
 	}
@@ -807,6 +818,13 @@ func (service *IngestService) saveContextReport(ctx context.Context, submission 
 }
 
 func (service *IngestService) saveStagedPlan(ctx context.Context, operation knowl.Operation, staged knowl.StagedChange) error {
+	// Failure evidence is separate from commit-bound plan warnings. Clear the
+	// previous attempt before SavePlan records the current staged warnings.
+	if len(operation.Diagnostics) > 0 {
+		if err := saveFailureDiagnostics(durableContext(ctx), service.operations, operation, nil, nil, nil); err != nil {
+			return err
+		}
+	}
 	return service.operations.SavePlan(ctx, operation.ID, knowl.PlanSummary{
 		OperationID: string(operation.ID), Digest: staged.Digest,
 		FileCount: len(staged.Files), CreatedAt: time.Now().UTC(), Diagnostics: staged.Diagnostics,
@@ -846,56 +864,31 @@ func (service *IngestService) Recover(ctx context.Context) ([]knowl.RecoveryResu
 }
 
 func (service *IngestService) apply(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, staged knowl.StagedChange) (ApplyResult, error) {
-	release, err := acquireApply(ctx, service.applyCoordinator)
-	if err != nil {
-		return ApplyResult{}, err
-	}
-	defer release()
 	if err := service.requireMaintainer(); err != nil {
 		return ApplyResult{}, err
 	}
-	operation, err := service.operations.Operation(ctx, scope, id)
-	if err != nil {
-		return ApplyResult{}, fmt.Errorf("read operation before apply: %w", err)
+	tail, err := runApplyTail(ctx, applyTailRequest{
+		coordinator: service.applyCoordinator, operations: service.operations, scope: scope, id: id,
+		leaseDuration: service.leaseDuration,
+		commit:        func(ctx context.Context) (knowl.ContentCommit, error) { return service.content.Commit(ctx, staged) },
+		session:       boundMaintenanceSession(service.content, staged, false),
+		snapshot:      service.content.Snapshot,
+		project:       service.projectCommit,
+	})
+	result := ApplyResult{Operation: tail.operation, Commit: tail.commit}
+	if err == nil {
+		return result, nil
 	}
-	if operation.Status == knowl.StatusCommitted {
-		return ApplyResult{Operation: operation}, nil
+	switch tail.stage {
+	case applyTailCommit:
+		return service.failApply(durableContext(ctx), scope, id, tail.operation, "commit", err, staged.Diagnostics)
+	case applyTailProjection:
+		return service.failAfterCommit(durableContext(ctx), scope, id, tail.operation, *tail.commit, err)
+	case applyTailOutcome:
+		return result, fmt.Errorf("record commit outcome: %w", err)
+	default:
+		return result, err
 	}
-	if operation.Status == knowl.StatusFailed {
-		return ApplyResult{Operation: operation}, fmt.Errorf("operation %q failed: %w", id, ErrOperationNotApplyable)
-	}
-	lease, err := newLease(time.Now().UTC(), service.leaseDuration)
-	if err != nil {
-		return ApplyResult{Operation: operation}, err
-	}
-	stateCtx := durableContext(ctx)
-	if err := service.operations.MarkApplying(stateCtx, id, lease); err != nil {
-		return ApplyResult{Operation: operation}, fmt.Errorf("claim operation: %w", err)
-	}
-	commit, err := service.content.Commit(ctx, staged)
-	if err != nil {
-		return service.failApply(stateCtx, scope, id, operation, "commit", err)
-	}
-	snapshot, err := service.content.Snapshot(ctx, scope)
-	if err != nil {
-		return service.failAfterCommit(stateCtx, scope, id, operation, commit, err)
-	}
-	commit.Snapshot = snapshot
-	if err := service.projectCommit(ctx, operation, commit); err != nil {
-		return service.failAfterCommit(stateCtx, scope, id, operation, commit, err)
-	}
-	if err := service.operations.CommitOutcome(stateCtx, id, commit); err != nil {
-		current, readErr := service.operations.Operation(stateCtx, scope, id)
-		if readErr == nil {
-			operation = current
-		}
-		return ApplyResult{Operation: operation, Commit: &commit}, fmt.Errorf("record commit outcome: %w", err)
-	}
-	operation, err = service.operations.Operation(stateCtx, scope, id)
-	if err != nil {
-		return ApplyResult{Commit: &commit}, fmt.Errorf("read committed operation: %w", err)
-	}
-	return ApplyResult{Operation: operation, Commit: &commit}, nil
 }
 
 func (service *IngestService) projectCommit(ctx context.Context, operation knowl.Operation, commit knowl.ContentCommit) error {
@@ -930,20 +923,30 @@ func (service *IngestService) failIngest(ctx context.Context, result IngestResul
 	if retryableExecutionError(cause) {
 		return result, cause
 	}
+	stateCtx := durableContext(ctx)
+	if err := saveFailureDiagnostics(stateCtx, service.operations, result.Operation, nil, result.Staged.Diagnostics, cause); err != nil {
+		return result, errors.Join(cause, err)
+	}
 	failure := executionFailure(class, result.Operation.ID, cause)
-	if err := service.operations.Fail(durableContext(ctx), result.Operation.ID, failure); err != nil {
+	if err := service.operations.Fail(stateCtx, result.Operation.ID, failure); err != nil {
 		return result, errors.Join(cause, fmt.Errorf("record %s failure: %w", class, err))
 	}
-	result.Operation.Status = knowl.StatusFailed
-	result.Operation.Failure = &failure
+	operation, err := service.operations.Operation(stateCtx, result.Operation.Key.Scope, result.Operation.ID)
+	if err != nil {
+		return result, errors.Join(cause, fmt.Errorf("read failed operation: %w", err))
+	}
+	result.Operation = operation
 	return result, fmt.Errorf("%s: %w", class, cause)
 }
 
-func (service *IngestService) failApply(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, operation knowl.Operation, class string, cause error) (ApplyResult, error) {
+func (service *IngestService) failApply(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, operation knowl.Operation, class string, cause error, planDiagnostics []knowl.MaintenanceDiagnostic) (ApplyResult, error) {
 	if retryableExecutionError(cause) {
 		return ApplyResult{Operation: operation}, cause
 	}
 	stateCtx := durableContext(ctx)
+	if err := saveApplyFailureDiagnostics(stateCtx, service.operations, operation, cause, planDiagnostics); err != nil {
+		return ApplyResult{Operation: operation}, errors.Join(cause, err)
+	}
 	failure := executionFailure(class, id, cause)
 	if err := service.operations.Fail(stateCtx, id, failure); err != nil {
 		return ApplyResult{Operation: operation}, errors.Join(cause, fmt.Errorf("record %s failure: %w", class, err))

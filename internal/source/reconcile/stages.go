@@ -94,7 +94,7 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 		if reconstructErr != nil {
 			return Result{Run: resumed.run}, reconstructErr
 		}
-		return service.finalizeSaga(ctx, scope, source.ID, input)
+		return service.finalizeSaga(ctx, scope, source, input)
 	}
 	initialToken := resumed.run.NextPageToken
 	checkpoint := resumed.run.Checkpoint
@@ -104,7 +104,7 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 			recorded, recordErr := service.state.RecordScanPage(ctx, app.ScanPageRecord{
 				RunID: resumed.run.ID, Scope: scope, SourceID: source.ID,
 				ExpectedPageToken: initialToken, NextPageToken: prepared.PageToken,
-				AttemptCheckpoint: prepared.Checkpoint, RecordedAt: service.options.Clock(),
+				AttemptCheckpoint: prepared.Checkpoint, RecordedAt: service.sourceTransitionTime(resumed.run),
 			})
 			if recordErr != nil {
 				failure := service.failScanSafe(ctx, resumed.run, failStage(classState, recordErr))
@@ -124,12 +124,13 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 		failure := service.failScanSafe(ctx, resumed.run, err)
 		return Result{Run: service.refreshRun(ctx, scope, resumed.run)}, failure
 	}
+	resumed.run = catalog.run
 	input, err := service.classifyAndPrepare(ctx, scope, adapter, source, resumed.run, catalog.refs, catalog.checkpoint)
 	if err != nil {
 		failure := service.failScanSafe(ctx, resumed.run, err)
 		return Result{Run: service.refreshRun(ctx, scope, resumed.run)}, failure
 	}
-	return service.finalizeSaga(ctx, scope, source.ID, input)
+	return service.finalizeSaga(ctx, scope, source, input)
 }
 
 // effectiveConfigDigest resolves the validated configuration identity.
@@ -174,7 +175,7 @@ func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.Scope
 				refs = make([]knowl.DocumentRef, 0)
 			}
 			return scanResume{run: run, refs: refs}, nil
-		case knowl.SyncStatusPrepared, knowl.SyncStatusContentCommitted, knowl.SyncStatusProjected:
+		case knowl.SyncStatusPrepared, knowl.SyncStatusContentCommitted, knowl.SyncStatusProjected, knowl.SyncStatusSucceeded:
 			prepared, err := service.state.PreparedSync(ctx, scope, run.ID)
 			if err != nil {
 				return scanResume{}, failStage(classState, err)
@@ -190,7 +191,7 @@ func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.Scope
 			service.failRunDetached(run.ID, scope, "config_changed")
 		}
 	}
-	now := service.options.Clock()
+	now := service.sourceTransitionTime(knowl.SyncRun{})
 	created, replay, err := service.state.BeginSync(ctx, app.BeginSyncRequest{
 		Run: knowl.SyncRun{
 			ID: service.options.NewRunID(), Scope: scope, SourceID: source.ID, ConfigDigest: configDigest,
@@ -253,13 +254,15 @@ func (service *Service) listCatalog(ctx context.Context, scope knowl.ScopeRef, a
 		recorded, err := service.state.RecordScanPage(ctx, app.ScanPageRecord{
 			RunID: run.ID, Scope: scope, SourceID: source.ID,
 			ExpectedPageToken: expectedToken, NextPageToken: page.NextPageToken,
-			Documents: page.Documents, RecordedAt: service.options.Clock(),
+			Documents: page.Documents, RecordedAt: service.sourceTransitionTime(run),
 		})
 		if err != nil {
 			return catalogState{}, failStage(classScan, err)
 		}
 		state.pages = append(state.pages, pageRecord{next: recorded.NextPageToken, documents: page.Documents})
 		state.refs = append(state.refs, page.Documents...)
+		run = recorded
+		state.run = recorded
 		token = recorded.NextPageToken
 		expectedToken = recorded.NextPageToken
 		if token == "" {
@@ -275,6 +278,7 @@ type pageRecord struct {
 }
 
 type catalogState struct {
+	run        knowl.SyncRun
 	refs       []knowl.DocumentRef
 	pages      []pageRecord
 	complete   bool
@@ -298,7 +302,8 @@ func sourceAllowsRebind(source knowl.Source) bool {
 func (service *Service) failRunDetached(runID knowl.SyncRunID, scope knowl.ScopeRef, class string) {
 	detached, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 5*time.Second)
 	defer cancel()
-	_, _ = service.state.FailSync(detached, scope, runID, class, service.options.Clock())
+	run, _ := service.state.SyncRun(detached, scope, runID)
+	_, _ = service.state.FailSync(detached, scope, runID, class, service.sourceTransitionTime(run))
 }
 
 // failScanSafe maps a failed scan attempt onto its stable terminal outcome.
@@ -307,7 +312,7 @@ func (service *Service) failScanSafe(ctx context.Context, run knowl.SyncRun, err
 	if run.Status == knowl.SyncStatusScanning {
 		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if _, failErr := service.state.FailSync(detached, run.Scope, run.ID, class, service.options.Clock()); failErr != nil && !errors.Is(err, context.Canceled) {
+		if _, failErr := service.state.FailSync(detached, run.Scope, run.ID, class, service.sourceTransitionTime(run)); failErr != nil && !errors.Is(err, context.Canceled) {
 			return errors.Join(err, fmt.Errorf("record scan failure: %w", ErrRecoveryFailed))
 		}
 	}

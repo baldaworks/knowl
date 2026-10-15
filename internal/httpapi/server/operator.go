@@ -125,6 +125,9 @@ func validOperatorQuery(w http.ResponseWriter, r *http.Request) bool {
 		allowed["source_id"] = true
 		allowed["limit"] = true
 		allowed["cursor"] = true
+	case "/operator/v1/source-retirement":
+		allowed["adapter"] = true
+		allowed["source_id"] = true
 	default:
 		if strings.HasPrefix(r.URL.Path, "/operator/v1/sources/") {
 			allowed["limit"] = true
@@ -201,6 +204,10 @@ func (h *operatorHandler) GetOperations(w http.ResponseWriter, r *http.Request, 
 	result, err := h.service.Operations(r.Context(), app.OperatorOperationListOptions{OperatorListOptions: operatorOptions(p.Limit, p.Cursor), Status: domain.OperationStatus(operatorValue(p.Status)), SourceID: domain.SourceID(operatorValue(p.SourceId))})
 	operatorResult(w, result, err)
 }
+func (h *operatorHandler) GetSourceRetirement(w http.ResponseWriter, r *http.Request, p operatorapi.GetSourceRetirementParams) {
+	result, err := h.service.SourceRetirement(r.Context(), domain.SourceOwner{Adapter: domain.SourceAdapterID(p.Adapter), SourceID: domain.SourceID(p.SourceId)})
+	operatorResult(w, result, err)
+}
 
 func writeOperatorError(w http.ResponseWriter, err error) {
 	status, code := http.StatusInternalServerError, "internal_error"
@@ -210,7 +217,7 @@ func writeOperatorError(w http.ResponseWriter, err error) {
 		code   string
 	}{
 		{app.ErrOperatorInvalidRequest, 400, invalidRequestCode}, {app.ErrOperatorLimitInvalid, 400, "limit_invalid"}, {app.ErrOperatorCursorInvalid, 400, "cursor_invalid"},
-		{app.ErrOperatorCatalogNotFound, 404, "catalog_not_found"}, {app.ErrPageNotFound, 404, "page_not_found"}, {app.ErrOperatorSourceRevisionNotFound, 404, "source_revision_not_found"}, {app.ErrSourceNotFound, 404, "source_not_found"}, {app.ErrOperationNotFound, 404, "operation_not_found"},
+		{app.ErrOperatorCatalogNotFound, 404, "catalog_not_found"}, {app.ErrPageNotFound, 404, "page_not_found"}, {app.ErrOperatorSourceRevisionNotFound, 404, "source_revision_not_found"}, {app.ErrSourceNotFound, 404, "source_not_found"}, {app.ErrSourceLifecycleUnowned, 404, "source_retirement_not_found"}, {app.ErrOperationNotFound, 404, "operation_not_found"},
 		{app.ErrOperatorSnapshotChanged, 409, "snapshot_changed"}, {app.ErrOperatorReadLimitExceeded, 413, "read_limit_exceeded"}, {app.ErrOperatorUnsupportedFormat, 415, "unsupported_format"},
 		{app.ErrOperatorCapabilityUnavailable, 503, "capability_unavailable"}, {app.ErrOperatorNotReady, 503, "not_ready"}, {app.ErrOperatorWorkspaceUnavailable, 503, operatorWorkspaceUnavailableCode},
 		{context.Canceled, 503, operatorWorkspaceUnavailableCode}, {context.DeadlineExceeded, 503, operatorWorkspaceUnavailableCode},

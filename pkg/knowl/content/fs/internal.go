@@ -8,16 +8,32 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 func sourceRefKey(source knowl.AcceptedSource) string {
-	return source.Source.Adapter + ":" + source.Source.ID + "@" + source.Version.Version
+	return app.SourceRefKey(source)
+}
+
+func addSourceRefAliases(sources map[string]knowl.AcceptedSource, ambiguous map[string]struct{}, source knowl.AcceptedSource) {
+	for _, ref := range app.SourceRefAliases(source) {
+		if _, collision := ambiguous[ref]; collision {
+			continue
+		}
+		if existing, duplicate := sources[ref]; duplicate && existing != source {
+			delete(sources, ref)
+			ambiguous[ref] = struct{}{}
+			continue
+		}
+		sources[ref] = source
+	}
 }
 
 type contentValidationError struct {
-	target string
-	rule   string
+	target     string
+	rule       string
+	dependency string
 }
 
 func (err *contentValidationError) Error() string {
@@ -36,6 +52,10 @@ func (err *contentValidationError) SafeDetail() string {
 
 func contentInvalidError(target, rule string) error {
 	return &contentValidationError{target: target, rule: rule}
+}
+
+func contentDependencyInvalidError(target, rule, dependency string) error {
+	return &contentValidationError{target: target, rule: rule, dependency: dependency}
 }
 
 func digestBytes(content []byte) string {

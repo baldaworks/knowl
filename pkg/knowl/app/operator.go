@@ -317,6 +317,31 @@ func (service *OperatorService) Operations(ctx context.Context, options Operator
 	})
 }
 
+// SourceRetirement returns one detached adapter-qualified lifecycle view.
+func (service *OperatorService) SourceRetirement(ctx context.Context, owner knowl.SourceOwner) (knowl.SourceRetirementStatus, error) {
+	if ValidateSourceOwner(owner) != nil {
+		return knowl.SourceRetirementStatus{}, ErrOperatorInvalidRequest
+	}
+	if err := contextErr(ctx); err != nil {
+		return knowl.SourceRetirementStatus{}, err
+	}
+	if service.readers.Retirements == nil {
+		return knowl.SourceRetirementStatus{}, ErrOperatorCapabilityUnavailable
+	}
+	readCtx, cancel := boundedReadContext(nonNilContext(ctx), service.limits)
+	defer cancel()
+	status, err := service.readers.Retirements.SourceRetirement(readCtx, service.scope, owner)
+	if err != nil {
+		return knowl.SourceRetirementStatus{}, err
+	}
+	if status.Owner != owner {
+		return knowl.SourceRetirementStatus{}, ErrOperatorWorkspaceUnavailable
+	}
+	status.Readiness.Pending = slices.Clone(status.Readiness.Pending)
+	status.Diagnostics = slices.Clone(status.Diagnostics)
+	return status, nil
+}
+
 func operatorListRead[T any](service *OperatorService, ctx context.Context, endpoint, filter string, options OperatorListOptions, available, canonical bool, read func(context.Context, OperatorReadOptions) (OperatorReadPage[T], error)) (knowl.OperatorList[T], error) {
 	readOptions, err := service.listOptions(ctx, endpoint, filter, options)
 	if err != nil {
@@ -378,12 +403,8 @@ func validOperatorPageID(id knowl.PageID) bool {
 	return validOpaque(value, maxEditPathBytes, false) && ValidOperatorReadPath(value)
 }
 func validOperatorSourceRef(value string) bool {
-	if !validOpaque(value, maxOperatorSourceRefBytes, false) || strings.TrimSpace(value) != value {
-		return false
-	}
-	adapter, rest, ok := strings.Cut(value, ":")
-	identity, revision, hasRevision := strings.Cut(rest, "@")
-	return ok && hasRevision && adapter != "" && identity != "" && revision != ""
+	_, err := ParseSourceRefCandidates(value)
+	return err == nil
 }
 func validOperatorStatus(status knowl.OperationStatus) bool {
 	switch status {

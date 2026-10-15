@@ -19,6 +19,7 @@ type executionSlot struct {
 	closer     io.Closer
 	source     *app.IngestService
 	hierarchy  *app.HierarchyService
+	retirement *app.RetirementPageService
 	closed     bool
 }
 

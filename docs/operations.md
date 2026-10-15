@@ -303,7 +303,7 @@ HTTP/HTTPS URL without forwarding the operator token.
 
 The [web UI guide](web-ui.md) covers all four screens and a source-to-wiki
 walkthrough. The [operator OpenAPI contract](../api/openapi/operator.yaml)
-defines seven read routes:
+defines eight read routes:
 
 | Path (all `GET`) | Purpose |
 | --- | --- |
@@ -314,6 +314,7 @@ defines seven read routes:
 | `/operator/v1/sources` | List configured sources and saved status |
 | `/operator/v1/sources/{source_id}` | Read source status and document inventory |
 | `/operator/v1/operations` | List stored operations; optional `status` and `source_id` |
+| `/operator/v1/source-retirement?adapter=...&source_id=...` | Read typed retirement progress for one exact owner |
 
 Lists default to 50 items, accept `limit` from 1 through 100, and return an
 optional `next_cursor`. The UI starts Operations at 10 rows. Continue with the
@@ -398,7 +399,68 @@ an in-process Host without starting HTTP or scheduled runners:
 ./knowl source sync --all
 ./knowl source status engineering
 ./knowl source retry engineering --failure-class provider --dry-run
+./knowl source status fastronome-wiki --retirement-adapter wiki-filesystem
+./knowl source retry fastronome-wiki --retirement-adapter wiki-filesystem --page-id concepts/example --dry-run
 ```
+
+### Gradual source retirement status and recovery
+
+Configuration reconciliation keys owners by exact adapter and source ID. When
+an owner disappears it moves from `active` to `retiring` before page work can
+run. If the same configuration change adds another owner, every addition in
+that change must finish its own accepted sync and durable maintenance-readiness
+checkpoint before cleanup starts. This is readiness ordering, not a replacement
+mapping: no config field aliases owners or declares provenance equivalence.
+Removing an owner without an addition is a pure deletion and needs no such gate.
+
+Retirement is deliberately gradual. Status may show unchanged canonical pages
+that still cite the retiring owner at the same time as committed pages that no
+longer cite it. `operations.pending`, `planned`, `applying`,
+`projection_pending`, `committed`, and `failed` count bounded page units for the
+current retirement generation. Discovery reports an opaque cursor, EOF state,
+round matches, and the currently verified remaining-reference count. The owner
+becomes `deleted` only after no pending/applying/projection work can publish and
+a complete authoritative canonical verification round finds zero refs.
+
+Use the adapter-qualified status command or `GET
+/operator/v1/source-retirement?adapter=...&source_id=...`; ordinary source
+status remains the sync/document view. A blocker distinguishes replacement
+readiness, remaining refs, pending work, and failed work. Diagnostic samples are
+bounded and retain stable page paths and dependency targets. In particular,
+`plan.empty_safe_subset` remains the summary failure while its accumulated
+`citation.plan_missing`, `citation.unknown_source`,
+`citation.lineage_removed`, `citation.source_retiring`, and
+`catalog.dependency_rejected` reasons remain attached to the page operation.
+
+Ordinary maintenance and provenance-bearing catalog writes use the same source
+authority fence. A queued stage is rejected if its exact source retires before
+publication; changing that owner's configuration or restoring it as a new
+activation rejects the old stage with `citation.source_authority_changed`.
+Unrelated source configuration changes do not invalidate an otherwise current
+stage. Once canonical publication has committed, journal and projection replay
+complete even if source authority subsequently changes.
+
+Preview a page-specific retry first, then requeue it through the same command
+without `--dry-run`. Omitting `--page-id` targets all failed page operations for
+that exact retiring owner; completed operations are not reopened. Restart also
+resumes durable pending work, canonical journal recovery, and projection replay
+without manual SQL or workspace edits. Per discovery call the implementation
+returns at most 32 affected pages, examines at most 1,024 canonical entries,
+and enforces a 100,000-page round ceiling. One page keeps the normal 32-file,
+256 KiB-per-file and 64-ref plan limits; active retirement evidence is limited
+to 64 refs and 4 MiB.
+
+Rollback restores the exact removed source to configuration. New claims are
+fenced by the changed lifecycle generation; already reconciled pages are not
+globally rolled back and normal maintenance may rebuild them. After retirement
+has begun, stop all writers before running an older binary and prefer roll
+forward: older code does not enforce retiring-ref publication authority. The
+supported deployment has one Host/coordinator for each workspace writer set;
+multi-process writers sharing the filesystem need external serialization.
+
+Document deletion inside a successful scan remains a document tombstone only.
+It retains immutable raw history and does not retire a source that is still in
+configuration.
 
 To run a complete one-shot knowledge processing cycle (synchronize sources, drain
 queued maintenance operations to completion, and optionally reconcile semantic OKF

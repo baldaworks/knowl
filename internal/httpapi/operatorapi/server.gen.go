@@ -31,6 +31,9 @@ type Error struct {
 // MaintenanceCounts defines model for MaintenanceCounts.
 type MaintenanceCounts = domain.MaintenanceCounts
 
+// MaintenanceDiagnostic defines model for MaintenanceDiagnostic.
+type MaintenanceDiagnostic = domain.MaintenanceDiagnostic
+
 // OperationList defines model for OperationList.
 type OperationList = domain.OperatorList[domain.OperatorOperationSummary]
 
@@ -79,8 +82,23 @@ type PageList = domain.OperatorList[domain.OperatorPageSummary]
 // SourceList defines model for SourceList.
 type SourceList = domain.OperatorList[domain.OperatorSourceSummary]
 
+// SourceOwner Exact adapter-qualified configured-source owner; equal source IDs under different adapters are independent.
+type SourceOwner = domain.SourceOwner
+
 // SourceRef defines model for SourceRef.
 type SourceRef = domain.SourceRef
+
+// SourceRetirementDiscovery Bounded canonical discovery state; cursor is opaque and never exposes a page path.
+type SourceRetirementDiscovery = domain.SourceRetirementDiscovery
+
+// SourceRetirementOperationCounts Page-unit counts for the current retirement generation; projection_pending is canonical-committed work awaiting rebuildable projection or outcome replay.
+type SourceRetirementOperationCounts = domain.SourceRetirementOperationCounts
+
+// SourceRetirementReadinessStatus Independent-source readiness gate. Pending owners are not aliases or provenance replacements.
+type SourceRetirementReadinessStatus = domain.SourceRetirementReadinessStatus
+
+// SourceRetirementStatus Typed gradual retirement status for one exact owner. Different pages may be reconciled at different times while state is retiring.
+type SourceRetirementStatus = domain.SourceRetirementStatus
 
 // SourceVersion defines model for SourceVersion.
 type SourceVersion = domain.SourceVersion
@@ -126,6 +144,12 @@ type GetPagesParams struct {
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
+// GetSourceRetirementParams defines parameters for GetSourceRetirement.
+type GetSourceRetirementParams struct {
+	Adapter  string `form:"adapter" json:"adapter"`
+	SourceId string `form:"source_id" json:"source_id"`
+}
+
 // GetSourceRevisionParams defines parameters for GetSourceRevision.
 type GetSourceRevisionParams struct {
 	SourceRef string `form:"source_ref" json:"source_ref"`
@@ -161,6 +185,9 @@ type ServerInterface interface {
 
 	// (GET /operator/v1/pages)
 	GetPages(w http.ResponseWriter, r *http.Request, params GetPagesParams)
+
+	// (GET /operator/v1/source-retirement)
+	GetSourceRetirement(w http.ResponseWriter, r *http.Request, params GetSourceRetirementParams)
 
 	// (GET /operator/v1/source-revision)
 	GetSourceRevision(w http.ResponseWriter, r *http.Request, params GetSourceRevisionParams)
@@ -359,6 +386,61 @@ func (siw *ServerInterfaceWrapper) GetPages(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetPages(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSourceRetirement operation middleware
+func (siw *ServerInterfaceWrapper) GetSourceRetirement(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, OperatorBearerScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSourceRetirementParams
+
+	// ------------- Required query parameter "adapter" -------------
+
+	if paramValue := r.URL.Query().Get("adapter"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "adapter"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "adapter", r.URL.Query(), &params.Adapter)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "adapter", Err: err})
+		return
+	}
+
+	// ------------- Required query parameter "source_id" -------------
+
+	if paramValue := r.URL.Query().Get("source_id"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "source_id"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "source_id", r.URL.Query(), &params.SourceId)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSourceRetirement(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -623,6 +705,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("GET "+options.BaseURL+"/operator/v1/operations", wrapper.GetOperations)
 	m.HandleFunc("GET "+options.BaseURL+"/operator/v1/page", wrapper.GetPage)
 	m.HandleFunc("GET "+options.BaseURL+"/operator/v1/pages", wrapper.GetPages)
+	m.HandleFunc("GET "+options.BaseURL+"/operator/v1/source-retirement", wrapper.GetSourceRetirement)
 	m.HandleFunc("GET "+options.BaseURL+"/operator/v1/source-revision", wrapper.GetSourceRevision)
 	m.HandleFunc("GET "+options.BaseURL+"/operator/v1/sources", wrapper.GetSources)
 	m.HandleFunc("GET "+options.BaseURL+"/operator/v1/sources/{source_id}", wrapper.GetSource)
@@ -1022,6 +1105,77 @@ func (response GetPages503JSONResponse) VisitGetPagesResponse(w http.ResponseWri
 	return json.NewEncoder(w).Encode(response)
 }
 
+type GetSourceRetirementRequestObject struct {
+	Params GetSourceRetirementParams
+}
+
+type GetSourceRetirementResponseObject interface {
+	VisitGetSourceRetirementResponse(w http.ResponseWriter) error
+}
+
+type GetSourceRetirement200JSONResponse SourceRetirementStatus
+
+func (response GetSourceRetirement200JSONResponse) VisitGetSourceRetirementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSourceRetirement400JSONResponse Error
+
+func (response GetSourceRetirement400JSONResponse) VisitGetSourceRetirementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSourceRetirement401JSONResponse Error
+
+func (response GetSourceRetirement401JSONResponse) VisitGetSourceRetirementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSourceRetirement403JSONResponse Error
+
+func (response GetSourceRetirement403JSONResponse) VisitGetSourceRetirementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSourceRetirement404JSONResponse Error
+
+func (response GetSourceRetirement404JSONResponse) VisitGetSourceRetirementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSourceRetirement500JSONResponse Error
+
+func (response GetSourceRetirement500JSONResponse) VisitGetSourceRetirementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSourceRetirement503JSONResponse Error
+
+func (response GetSourceRetirement503JSONResponse) VisitGetSourceRetirementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type GetSourceRevisionRequestObject struct {
 	Params GetSourceRevisionParams
 }
@@ -1332,6 +1486,9 @@ type StrictServerInterface interface {
 	// (GET /operator/v1/pages)
 	GetPages(ctx context.Context, request GetPagesRequestObject) (GetPagesResponseObject, error)
 
+	// (GET /operator/v1/source-retirement)
+	GetSourceRetirement(ctx context.Context, request GetSourceRetirementRequestObject) (GetSourceRetirementResponseObject, error)
+
 	// (GET /operator/v1/source-revision)
 	GetSourceRevision(ctx context.Context, request GetSourceRevisionRequestObject) (GetSourceRevisionResponseObject, error)
 
@@ -1468,6 +1625,32 @@ func (sh *strictHandler) GetPages(w http.ResponseWriter, r *http.Request, params
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetPagesResponseObject); ok {
 		if err := validResponse.VisitGetPagesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSourceRetirement operation middleware
+func (sh *strictHandler) GetSourceRetirement(w http.ResponseWriter, r *http.Request, params GetSourceRetirementParams) {
+	var request GetSourceRetirementRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSourceRetirement(ctx, request.(GetSourceRetirementRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSourceRetirement")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSourceRetirementResponseObject); ok {
+		if err := validResponse.VisitGetSourceRetirementResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

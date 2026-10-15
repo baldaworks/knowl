@@ -26,7 +26,7 @@ func TestSourceAwareContextUpdatesExistingPageWithoutDuplicate(t *testing.T) {
 	_ = unusedMaintainer
 	legacyContent := []byte("legacy decision evidence")
 	if _, err := workspace.AcceptSource(ctx, knowl.SourceEnvelope{
-		Scope: testSourceScope, Source: knowl.SourceRef{Adapter: testSourceAdapter, ID: "legacy"},
+		Scope: testSourceScope, Source: knowl.SourceRef{Adapter: testSourceAdapter, ID: retirementTestLegacySourceID},
 		Version: knowl.SourceVersion{Version: "1", Digest: digest(legacyContent)}, MediaType: testPlainMediaType, Content: legacyContent,
 	}); err != nil {
 		t.Fatalf("accept legacy source: %v", err)

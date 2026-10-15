@@ -231,7 +231,7 @@ func (maintainer *scaleHierarchyMaintainer) PlanHierarchy(_ context.Context, inp
 		}
 	}
 	catalogs := []knowl.HierarchyCatalogSpec{
-		{Path: "wiki/index.md", Title: "Knowl", Children: []string{scaleBusinessCatalog, scalePlatformCatalog}},
+		{Path: testRootCatalogPath, Title: "Knowl", Children: []string{scaleBusinessCatalog, scalePlatformCatalog}},
 		{Path: scaleBusinessCatalog, Title: "Business " + hierarchyControlBeacon, Children: []string{scaleIdentityCatalog, scaleCommerceCatalog}},
 		{Path: scalePlatformCatalog, Title: "Platform " + hierarchyControlBeacon, Children: []string{scaleDevicesCatalog, scaleReliabilityCatalog}},
 		{Path: scaleIdentityCatalog, Title: "Identity " + hierarchyControlBeacon, Children: groups[scaleSubjectIdentity]},

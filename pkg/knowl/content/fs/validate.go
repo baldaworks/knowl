@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -15,8 +16,8 @@ import (
 	knowlwiki "github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
-func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, edits []prospectiveEdit, requiredSourceRef string, planSourceRefs []string) ([]knowl.MaintenanceDiagnostic, error) {
-	accepted, diagnostics, err := workspace.filterProspectivePlanLocked(scope, edits, requiredSourceRef, planSourceRefs)
+func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, edits []prospectiveEdit, requiredSourceRef string, planSourceRefs []string, retirement *knowl.RetirementPlanContext) ([]knowl.MaintenanceDiagnostic, error) {
+	accepted, diagnostics, err := workspace.filterProspectivePlanLocked(scope, edits, requiredSourceRef, planSourceRefs, retirement)
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +27,7 @@ func (workspace *Workspace) validateProspectivePlanLocked(scope knowl.ScopeRef, 
 	return diagnostics, nil
 }
 
-func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, edits []prospectiveEdit, requiredSourceRef string, planSourceRefs []string) ([]prospectiveEdit, []knowl.MaintenanceDiagnostic, error) {
+func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, edits []prospectiveEdit, requiredSourceRef string, planSourceRefs []string, retirement *knowl.RetirementPlanContext) ([]prospectiveEdit, []knowl.MaintenanceDiagnostic, error) {
 	existingDocuments, err := workspace.currentWikiDocumentsLocked()
 	if err != nil {
 		return nil, nil, err
@@ -43,7 +44,7 @@ func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, ed
 	for _, sourceRef := range planSourceRefs {
 		planRefs[sourceRef] = struct{}{}
 	}
-	if requiredSourceRef == "" && len(planSourceRefs) == 1 {
+	if retirement == nil && requiredSourceRef == "" && len(planSourceRefs) == 1 {
 		requiredSourceRef = planSourceRefs[0]
 	}
 	if requiredSourceRef != "" {
@@ -77,6 +78,9 @@ func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, ed
 				return nil, nil, contentInvalidError(edit.Target, string(okf.RulePathInvalid))
 			}
 			if kind == okf.DocumentIndex {
+				if edit.Action != knowl.SourceMutationWrite {
+					return nil, nil, contentInvalidError(edit.Target, "retirement.plan_invalid")
+				}
 				index, validateErr := okf.ValidateIndex(bundleRelative, []byte(edit.Content), okfLimits(len(edit.Content)))
 				if validateErr != nil {
 					return nil, nil, okfContentInvalidError(edit.Target, validateErr)
@@ -95,16 +99,26 @@ func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, ed
 				filtered = append(filtered, edit)
 				continue
 			}
-			pageDiagnostics, validateErr := validateOrdinaryPageEdit(edit.Target, pageID, edit.Content, rawRefs, pageTargets, originalTargets)
-			if validateErr == nil {
-				validateErr = validatePageProvenance(edit.Target, edit.Content, existingDocuments[edit.Target], requiredSourceRef, planRefs, rawSources)
+			var pageDiagnostics []knowl.MaintenanceDiagnostic
+			var validateErr error
+			if retirement != nil {
+				pageDiagnostics, validateErr = validateRetirementPageEdit(edit, pageID, existingDocuments[edit.Target], rawRefs, pageTargets, originalTargets, planRefs, rawSources, retirement)
+			} else {
+				if edit.Action != knowl.SourceMutationWrite {
+					validateErr = contentInvalidError(edit.Target, "retirement.plan_invalid")
+				} else {
+					pageDiagnostics, validateErr = validateOrdinaryPageEdit(edit.Target, pageID, edit.Content, rawRefs, pageTargets, originalTargets)
+					if validateErr == nil {
+						validateErr = validatePageProvenance(edit.Target, edit.Content, existingDocuments[edit.Target], requiredSourceRef, planRefs, rawSources)
+					}
+				}
 			}
 			if validateErr != nil {
 				var invalid *contentValidationError
 				if !errors.As(validateErr, &invalid) {
 					return nil, nil, validateErr
 				}
-				diagnostics = append(diagnostics, knowl.MaintenanceDiagnostic{Code: invalid.rule, Path: edit.Target})
+				diagnostics = append(diagnostics, knowl.MaintenanceDiagnostic{Code: invalid.rule, Path: edit.Target, Target: invalid.dependency})
 				changed = true
 				continue
 			}
@@ -115,6 +129,20 @@ func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, ed
 		if !changed {
 			diagnostics = append(diagnostics, roundDiagnostics...)
 			break
+		}
+		if retirement != nil && changed {
+			for _, candidate := range edits {
+				bundleRelative := strings.TrimPrefix(candidate.Target, workspaceWikiDir+"/")
+				kind, _ := okf.ClassifyPath(bundleRelative)
+				if kind == okf.DocumentIndex {
+					diagnostics = append(diagnostics, knowl.MaintenanceDiagnostic{Code: knowl.DiagnosticCatalogDependencyReject, Path: candidate.Target, Target: strings.TrimPrefix(retirement.PagePath, workspaceWikiDir+"/")})
+				}
+			}
+			diagnostics, err = app.NormalizeMaintenanceDiagnostics(diagnostics)
+			if err != nil {
+				return nil, nil, contentInvalidError("<plan>", "diagnostic.limit")
+			}
+			return nil, diagnostics, contentInvalidError("<plan>", "plan.empty_safe_subset")
 		}
 	}
 
@@ -170,9 +198,26 @@ func (workspace *Workspace) filterProspectivePlanLocked(scope knowl.ScopeRef, ed
 	}
 	editedPages := make(map[string]struct{})
 	for _, edit := range accepted {
-		documents[edit.Target] = edit.Content
-		if pageID, ok := knowlwiki.PageIDFromPath(edit.Target); ok && pageID != "" {
+		if edit.Action == knowl.SourceMutationDelete {
+			delete(documents, edit.Target)
+		} else {
+			documents[edit.Target] = edit.Content
+		}
+		if pageID, ok := knowlwiki.PageIDFromPath(edit.Target); ok && pageID != "" && edit.Action != knowl.SourceMutationDelete {
 			editedPages[strings.TrimPrefix(edit.Target, workspaceWikiDir+"/")] = struct{}{}
+		}
+	}
+	if retirement != nil && slices.ContainsFunc(accepted, func(edit prospectiveEdit) bool {
+		return edit.Target == retirement.PagePath && edit.Action == knowl.SourceMutationDelete
+	}) {
+		dependencyDiagnostics := deletedPageDependencies(documents, retirement.PagePath)
+		if len(dependencyDiagnostics) > 0 {
+			diagnostics = append(diagnostics, dependencyDiagnostics...)
+			diagnostics, err = app.NormalizeMaintenanceDiagnostics(diagnostics)
+			if err != nil {
+				return nil, nil, contentInvalidError("<plan>", "diagnostic.limit")
+			}
+			return nil, diagnostics, contentInvalidError("<plan>", "plan.empty_safe_subset")
 		}
 	}
 	if err := validateCatalogGraph(documents, editedPages, workspace.maxSourceBytes); err != nil {
@@ -194,10 +239,103 @@ func prospectivePageTargets(existing map[string]string, edits []prospectiveEdit)
 	}
 	for _, edit := range edits {
 		if pageID, ok := knowlwiki.PageIDFromPath(edit.Target); ok {
-			targets[pageID] = struct{}{}
+			if edit.Action == knowl.SourceMutationDelete {
+				delete(targets, pageID)
+			} else {
+				targets[pageID] = struct{}{}
+			}
 		}
 	}
 	return targets
+}
+
+func validateRetirementPageEdit(edit prospectiveEdit, pageID knowl.PageID, existing string, rawRefs map[string]struct{}, pageTargets map[knowl.PageID]struct{}, originalTargets map[string]struct{}, planRefs map[string]struct{}, rawSources map[string]knowl.AcceptedSource, retirement *knowl.RetirementPlanContext) ([]knowl.MaintenanceDiagnostic, error) {
+	if edit.Target != retirement.PagePath || pageID != retirement.PageID || existing == "" {
+		return nil, contentInvalidError(edit.Target, "retirement.page_stale")
+	}
+	previous, err := knowlwiki.ParseFrontmatter(existing)
+	if err != nil {
+		return nil, contentInvalidError(edit.Target, "frontmatter.existing_malformed")
+	}
+	currentRefs := make(map[string]struct{})
+	var diagnostics []knowl.MaintenanceDiagnostic
+	switch edit.Action {
+	case knowl.SourceMutationWrite:
+		diagnostics, err = validateOrdinaryPageEdit(edit.Target, pageID, edit.Content, rawRefs, pageTargets, originalTargets)
+		if err != nil {
+			return nil, err
+		}
+		metadata, parseErr := knowlwiki.ParseFrontmatter(edit.Content)
+		if parseErr != nil {
+			return nil, contentInvalidError(edit.Target, "frontmatter.malformed")
+		}
+		for _, ref := range metadata.SourceRefs {
+			if ref == "" {
+				continue
+			}
+			currentRefs[ref] = struct{}{}
+			if _, declared := planRefs[ref]; !declared {
+				return nil, contentInvalidError(edit.Target, "citation.plan_missing")
+			}
+			if owner, ok := acceptedSourceOwner(rawSources[ref]); !ok {
+				return nil, contentInvalidError(edit.Target, "citation.unknown_source")
+			} else if retirementOwns(retirement, owner) {
+				return nil, contentDependencyInvalidError(edit.Target, app.CitationSourceRetiringCode, string(owner.Adapter)+":"+string(owner.SourceID))
+			}
+		}
+	case knowl.SourceMutationDelete:
+		if edit.Content != "" {
+			return nil, contentInvalidError(edit.Target, "retirement.plan_invalid")
+		}
+	default:
+		return nil, contentInvalidError(edit.Target, "retirement.plan_invalid")
+	}
+	for _, ref := range previous.SourceRefs {
+		if _, retained := currentRefs[ref]; retained {
+			continue
+		}
+		owner, ok := acceptedSourceOwner(rawSources[ref])
+		if !ok {
+			return nil, contentInvalidError(edit.Target, "citation.unknown_source")
+		}
+		if !retirementOwns(retirement, owner) {
+			return nil, contentInvalidError(edit.Target, "citation.lineage_removed")
+		}
+	}
+	return diagnostics, nil
+}
+
+func acceptedSourceOwner(source knowl.AcceptedSource) (knowl.SourceOwner, bool) {
+	owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterID(source.Source.Adapter), SourceID: source.SourceDocument.SourceID}
+	return owner, app.ValidateSourceOwner(owner) == nil
+}
+
+func retirementOwns(retirement *knowl.RetirementPlanContext, owner knowl.SourceOwner) bool {
+	return slices.ContainsFunc(retirement.Owners, func(authorized knowl.RetirementOwnerAuthority) bool { return authorized.Owner == owner })
+}
+
+func deletedPageDependencies(documents map[string]string, pagePath string) []knowl.MaintenanceDiagnostic {
+	target := strings.TrimPrefix(pagePath, workspaceWikiDir+"/")
+	result := make([]knowl.MaintenanceDiagnostic, 0)
+	for documentPath, content := range documents {
+		bundleRelative := strings.TrimPrefix(documentPath, workspaceWikiDir+"/")
+		kind, err := okf.ClassifyPath(bundleRelative)
+		if err != nil || kind != okf.DocumentIndex {
+			continue
+		}
+		destinations, malformed := knowlwiki.IndexDestinations(content, maxCatalogLinks)
+		if malformed {
+			continue
+		}
+		for _, destination := range destinations {
+			resolved, external, valid := knowlwiki.ResolveIndexDestination(bundleRelative, destination)
+			if valid && !external && resolved == target {
+				result = append(result, knowl.MaintenanceDiagnostic{Code: knowl.DiagnosticCatalogDependencyReject, Path: documentPath, Target: target})
+				break
+			}
+		}
+	}
+	return result
 }
 
 func rejectedCatalogDependency(catalogPath, content string, rejectedNew map[string]struct{}) string {
@@ -454,9 +592,10 @@ func (workspace *Workspace) acceptedRawSourcesLocked(scope knowl.ScopeRef) (map[
 		return nil, err
 	}
 	sources := make(map[string]knowl.AcceptedSource, len(records))
+	ambiguous := make(map[string]struct{})
 	for _, record := range records {
 		if record.Valid {
-			sources[sourceRefKey(record.Source)] = record.Source
+			addSourceRefAliases(sources, ambiguous, record.Source)
 		}
 	}
 	return sources, nil

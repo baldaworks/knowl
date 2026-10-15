@@ -131,6 +131,7 @@ type Dependencies struct {
 	SourceContent    app.SourceContentStore
 	Search           app.SearchIndex
 	Maintenance      app.SourceMaintenanceQueue
+	Lifecycle        app.SourceLifecycleStore
 }
 
 // Result is the redacted observable outcome of one source synchronization attempt.
@@ -156,6 +157,7 @@ type Service struct {
 	sourceContent    app.SourceContentStore
 	search           app.SearchIndex
 	maintenance      app.SourceMaintenanceQueue
+	sourceLifecycle  app.SourceLifecycleStore
 
 	options Options
 
@@ -168,6 +170,11 @@ type Service struct {
 type leaseKey struct {
 	scope  knowl.ScopeRef
 	source knowl.SourceID
+}
+
+func (service *Service) sourceTransitionTime(run knowl.SyncRun, predecessors ...time.Time) time.Time {
+	predecessors = append(predecessors, run.StartedAt, run.UpdatedAt, run.CompletedAt)
+	return app.SourceTransitionTime(service.options.Clock(), predecessors...)
 }
 
 // NewService validates dependencies and options and returns a composed service.
@@ -210,6 +217,7 @@ func NewService(dependencies Dependencies, options Options) (*Service, error) {
 		sourceContent:    dependencies.SourceContent,
 		search:           dependencies.Search,
 		maintenance:      dependencies.Maintenance,
+		sourceLifecycle:  dependencies.Lifecycle,
 		options:          normalized,
 		leases:           make(map[leaseKey]struct{}),
 	}
@@ -365,7 +373,7 @@ func (service *Service) recoverRun(ctx context.Context, scope knowl.ScopeRef, so
 		if inputErr != nil {
 			return Result{Run: run}, inputErr
 		}
-		return service.finalizeSaga(ctx, scope, source.ID, input)
+		return service.finalizeSaga(ctx, scope, source, input)
 	case knowl.SyncStatusContentCommitted, knowl.SyncStatusProjected:
 		// Canonical content and receipts are already committed; only
 		// projection replay and finalization remain.
@@ -373,7 +381,13 @@ func (service *Service) recoverRun(ctx context.Context, scope knowl.ScopeRef, so
 		if readErr != nil {
 			return Result{Run: run}, failStage(classState, readErr)
 		}
-		return service.finalizeSaga(ctx, scope, source.ID, sagaInput{run: run, prepared: read})
+		return service.finalizeSaga(ctx, scope, source, sagaInput{run: run, prepared: read})
+	case knowl.SyncStatusSucceeded:
+		read, readErr := service.state.PreparedSync(ctx, scope, run.ID)
+		if readErr != nil {
+			return Result{Run: run}, failStage(classState, readErr)
+		}
+		return service.finalizeSaga(ctx, scope, source, sagaInput{run: run, prepared: read})
 	default:
 		return Result{Run: run}, failStage(classState, app.ErrSyncStateTransition)
 	}

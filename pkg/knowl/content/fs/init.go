@@ -69,12 +69,19 @@ func (workspace *Workspace) Init() error {
 		filepath.Join(workspaceWikiDir, "index.md"): rootIndexContent,
 		filepath.Join(workspaceWikiDir, "log.md"):   rootLogContent,
 	}
+	publicationAdvanced := false
 	for relative, contents := range files {
 		path := filepath.Join(workspace.root, relative)
 		if _, err := os.Stat(path); err == nil {
 			continue
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("stat workspace file %q: %w", relative, err)
+		}
+		if !publicationAdvanced {
+			if err := workspace.advancePublicationLocked(); err != nil {
+				return fmt.Errorf("advance workspace publication: %w", err)
+			}
+			publicationAdvanced = true
 		}
 		if err := writeAtomic(path, []byte(contents), 0o600); err != nil {
 			return fmt.Errorf("write workspace file %q: %w", relative, err)

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 const (
@@ -72,6 +73,12 @@ type OperationStore interface {
 	Fail(ctx context.Context, id knowl.OperationID, failure knowl.Failure) error
 	FailClaim(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, token string, failure knowl.Failure) error
 	Operation(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID) (knowl.Operation, error)
+}
+
+// OperationDiagnosticStore persists bounded page-local failure evidence
+// separately from commit-bound plan diagnostics.
+type OperationDiagnosticStore interface {
+	SaveOperationDiagnostics(ctx context.Context, scope knowl.ScopeRef, id knowl.OperationID, workAttempt int, diagnostics []knowl.MaintenanceDiagnostic) error
 }
 
 // OperationReservation is the durable result of reserving one immutable source revision.
@@ -169,6 +176,17 @@ func OperationIDForIdentity(identity knowl.OperationIdentity) (knowl.OperationID
 	return knowl.OperationID(fmt.Sprintf("%s:%s#%s", identity.Scope, identity.Kind, hex.EncodeToString(digest[:16]))), nil
 }
 
+// RetirementPageOperationIdentity returns the deterministic identity for one
+// page in one retirement generation. The triggering owner is deliberately not
+// part of the identity: a page is reconciled once even when it cites multiple
+// retiring owners.
+func RetirementPageOperationIdentity(scope knowl.ScopeRef, generation string, pageID knowl.PageID) knowl.OperationIdentity {
+	return knowl.OperationIdentity{
+		Scope: scope, Kind: knowl.WorkSourceRetirementPage,
+		Subject: string(pageID), Revision: generation, Digest: generation,
+	}
+}
+
 // ValidateOperationDescriptor verifies one generic identity and descriptor.
 func ValidateOperationDescriptor(identity knowl.OperationIdentity, descriptor knowl.ExecutionDescriptor) error {
 	if err := validateOperationIdentity(identity); err != nil {
@@ -181,9 +199,16 @@ func ValidateOperationDescriptor(identity knowl.OperationIdentity, descriptor kn
 	}
 	switch identity.Kind {
 	case knowl.WorkHierarchy:
-		if descriptor.Source != (knowl.AcceptedSource{}) || descriptor.Hierarchy == nil ||
+		if descriptor.Source != (knowl.AcceptedSource{}) || descriptor.Hierarchy == nil || descriptor.RetirementPage != nil ||
 			descriptor.Hierarchy.SnapshotDigest != identity.Digest || descriptor.Schema.Digest != identity.Revision ||
 			descriptor.Hierarchy.PlannerVersion != identity.Subject {
+			return ErrExecutionDescriptorUnavailable
+		}
+	case knowl.WorkSourceRetirementPage:
+		if descriptor.Source != (knowl.AcceptedSource{}) || descriptor.Hierarchy != nil || descriptor.RetirementPage == nil ||
+			descriptor.RetirementPage.PageID != knowl.PageID(identity.Subject) ||
+			descriptor.RetirementPage.RetirementGeneration != identity.Revision || identity.Digest != identity.Revision ||
+			ValidateSourceOwner(descriptor.RetirementPage.Owner) != nil {
 			return ErrExecutionDescriptorUnavailable
 		}
 	case knowl.WorkSourceMaintenance:
@@ -197,14 +222,29 @@ func ValidateOperationDescriptor(identity knowl.OperationIdentity, descriptor kn
 // ValidateGenericExecutionDescriptor validates a descriptor read from durable
 // storage when its original identity fields are no longer needed by callers.
 func ValidateGenericExecutionDescriptor(scope knowl.ScopeRef, descriptor knowl.ExecutionDescriptor) error {
-	if descriptor.Kind != knowl.WorkHierarchy || descriptor.Hierarchy == nil || descriptor.Source != (knowl.AcceptedSource{}) ||
-		descriptor.MaintenanceGeneration != "" || strings.TrimSpace(string(descriptor.OperationID)) == "" || !validExecutionSchema(scope, descriptor.Schema) ||
-		!validExecutionDigest(descriptor.Hierarchy.SnapshotDigest) || !validStoredText(descriptor.Hierarchy.PlannerVersion, maxPlannerVersionBytes, false) {
+	if descriptor.Source != (knowl.AcceptedSource{}) || descriptor.MaintenanceGeneration != "" ||
+		strings.TrimSpace(string(descriptor.OperationID)) == "" || !validExecutionSchema(scope, descriptor.Schema) {
 		return ErrExecutionDescriptorUnavailable
 	}
-	identity := knowl.OperationIdentity{
-		Scope: scope, Kind: knowl.WorkHierarchy, Subject: descriptor.Hierarchy.PlannerVersion,
-		Revision: descriptor.Schema.Digest, Digest: descriptor.Hierarchy.SnapshotDigest,
+	var identity knowl.OperationIdentity
+	switch descriptor.Kind {
+	case knowl.WorkHierarchy:
+		if descriptor.Hierarchy == nil || descriptor.RetirementPage != nil || !validExecutionDigest(descriptor.Hierarchy.SnapshotDigest) ||
+			!validStoredText(descriptor.Hierarchy.PlannerVersion, maxPlannerVersionBytes, false) {
+			return ErrExecutionDescriptorUnavailable
+		}
+		identity = knowl.OperationIdentity{
+			Scope: scope, Kind: knowl.WorkHierarchy, Subject: descriptor.Hierarchy.PlannerVersion,
+			Revision: descriptor.Schema.Digest, Digest: descriptor.Hierarchy.SnapshotDigest,
+		}
+	case knowl.WorkSourceRetirementPage:
+		if descriptor.Hierarchy != nil || descriptor.RetirementPage == nil ||
+			!validRetirementPageDescriptor(*descriptor.RetirementPage) {
+			return ErrExecutionDescriptorUnavailable
+		}
+		identity = RetirementPageOperationIdentity(scope, descriptor.RetirementPage.RetirementGeneration, descriptor.RetirementPage.PageID)
+	default:
+		return ErrExecutionDescriptorUnavailable
 	}
 	wantID, err := OperationIDForIdentity(identity)
 	if err != nil || descriptor.OperationID != wantID {
@@ -215,11 +255,35 @@ func ValidateGenericExecutionDescriptor(scope knowl.ScopeRef, descriptor knowl.E
 
 func validateOperationIdentity(identity knowl.OperationIdentity) error {
 	if strings.TrimSpace(string(identity.Scope)) == "" || len(identity.Scope) > maxOperationScopeBytes || !utf8.ValidString(string(identity.Scope)) ||
-		identity.Kind != knowl.WorkHierarchy || !utf8.ValidString(identity.Subject) ||
-		!validStoredText(identity.Subject, maxPlannerVersionBytes, false) || !validExecutionDigest(identity.Revision) || !validExecutionDigest(identity.Digest) {
+		!utf8.ValidString(identity.Subject) || !validExecutionDigest(identity.Revision) || !validExecutionDigest(identity.Digest) {
+		return ErrExecutionDescriptorUnavailable
+	}
+	switch identity.Kind {
+	case knowl.WorkHierarchy:
+		if !validStoredText(identity.Subject, maxPlannerVersionBytes, false) {
+			return ErrExecutionDescriptorUnavailable
+		}
+	case knowl.WorkSourceRetirementPage:
+		if identity.Revision != identity.Digest || !validRetirementPageID(knowl.PageID(identity.Subject)) {
+			return ErrExecutionDescriptorUnavailable
+		}
+	default:
 		return ErrExecutionDescriptorUnavailable
 	}
 	return nil
+}
+
+func validRetirementPageDescriptor(descriptor knowl.RetirementPageExecutionDescriptor) bool {
+	return validRetirementPageID(descriptor.PageID) && validExecutionDigest(descriptor.RetirementGeneration) &&
+		ValidateSourceOwner(descriptor.Owner) == nil
+}
+
+func validRetirementPageID(pageID knowl.PageID) bool {
+	if pageID == "" || len(pageID) > maxEditPathBytes || !utf8.ValidString(string(pageID)) {
+		return false
+	}
+	parsed, ordinary := wiki.PageIDFromPath("wiki/" + string(pageID) + ".md")
+	return ordinary && parsed == pageID
 }
 
 func validExecutionSchema(scope knowl.ScopeRef, schema knowl.SchemaDocument) bool {
@@ -305,8 +369,9 @@ type MaintenanceRequestSizer interface {
 	RequestBytes(ctx context.Context, input knowl.MaintenanceInput) (int, error)
 }
 
-// ApplyCoordinator orders canonical commit and full projection publication.
-// Standalone services may omit it; hosts share one coordinator between writers.
+// ApplyCoordinator orders accepted-source ownership, canonical commits, and
+// full projection publication. Standalone services may omit it; a Host shares
+// one coordinator between every supported publisher and finalization fence.
 type ApplyCoordinator interface {
 	Acquire(ctx context.Context) (release func(), err error)
 }

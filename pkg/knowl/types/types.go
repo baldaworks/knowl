@@ -82,9 +82,10 @@ type ReadLimits struct {
 
 // FileEdit is one validated canonical workspace file replacement.
 type FileEdit struct {
-	Path           string `json:"path"`
-	ExpectedDigest string `json:"expected_digest,omitempty"`
-	Content        []byte `json:"content"`
+	Action         SourceMutationAction `json:"action,omitempty"`
+	Path           string               `json:"path"`
+	ExpectedDigest string               `json:"expected_digest,omitempty"`
+	Content        []byte               `json:"content"`
 }
 
 // MaintenanceDiagnostic is bounded redacted metadata for a preserved warning
@@ -111,6 +112,7 @@ type ValidatedEditPlan struct {
 	SourceRefs        []string                `json:"source_refs"`
 	Edits             []FileEdit              `json:"edits"`
 	Diagnostics       []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
+	Retirement        *RetirementPlanContext  `json:"retirement,omitempty"`
 }
 
 // StagedChange identifies a plan staged for review or apply.
@@ -120,6 +122,7 @@ type StagedChange struct {
 	Files       []string                `json:"files"`
 	CreatedAt   time.Time               `json:"created_at"`
 	Diagnostics []MaintenanceDiagnostic `json:"diagnostics,omitempty"`
+	Retirement  *RetirementPlanContext  `json:"retirement,omitempty"`
 }
 
 // ContentCommit describes a canonical workspace commit.
@@ -142,12 +145,13 @@ type RecoveryResult struct {
 // OperationID identifies an ingest or filing operation.
 type OperationID string
 
-// WorkKind distinguishes durable source maintenance from hierarchy work.
+// WorkKind distinguishes durable operation execution paths.
 type WorkKind string
 
 const (
-	WorkSourceMaintenance WorkKind = "source"
-	WorkHierarchy         WorkKind = "hierarchy"
+	WorkSourceMaintenance    WorkKind = "source"
+	WorkHierarchy            WorkKind = "hierarchy"
+	WorkSourceRetirementPage WorkKind = "source_retirement_page"
 )
 
 // OperationIdentity is the generic deterministic identity of durable work.
@@ -181,12 +185,13 @@ type OperationMeta struct {
 // accepted operation. It is internal operational state, not a public operation
 // read model.
 type ExecutionDescriptor struct {
-	OperationID           OperationID                   `json:"operation_id"`
-	Kind                  WorkKind                      `json:"kind,omitempty"`
-	Source                AcceptedSource                `json:"source,omitzero"`
-	Hierarchy             *HierarchyExecutionDescriptor `json:"hierarchy,omitempty"`
-	Schema                SchemaDocument                `json:"schema"`
-	MaintenanceGeneration string                        `json:"maintenance_generation,omitempty"`
+	OperationID           OperationID                        `json:"operation_id"`
+	Kind                  WorkKind                           `json:"kind,omitempty"`
+	Source                AcceptedSource                     `json:"source,omitzero"`
+	Hierarchy             *HierarchyExecutionDescriptor      `json:"hierarchy,omitempty"`
+	RetirementPage        *RetirementPageExecutionDescriptor `json:"retirement_page,omitempty"`
+	Schema                SchemaDocument                     `json:"schema"`
+	MaintenanceGeneration string                             `json:"maintenance_generation,omitempty"`
 }
 
 // HierarchyExecutionDescriptor is the bounded versioned payload needed to
@@ -194,6 +199,15 @@ type ExecutionDescriptor struct {
 type HierarchyExecutionDescriptor struct {
 	SnapshotDigest string `json:"snapshot_digest"`
 	PlannerVersion string `json:"planner_version"`
+}
+
+// RetirementPageExecutionDescriptor is the bounded durable input for one
+// page-scoped source-retirement operation. It never carries page content or a
+// collection of pages.
+type RetirementPageExecutionDescriptor struct {
+	PageID               PageID      `json:"page_id"`
+	RetirementGeneration string      `json:"retirement_generation"`
+	Owner                SourceOwner `json:"owner"`
 }
 
 // WorkLease grants temporary ownership of application-level operation work.

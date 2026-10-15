@@ -21,6 +21,8 @@ const okfLinkRelation = "okf"
 
 const maxCatalogSnapshots = 1024
 
+const rawManifestInvalidClass = "manifest_invalid"
+
 // Snapshot captures canonical Markdown digests for projection rebuilds.
 func (workspace *Workspace) Snapshot(ctx context.Context, scope knowl.ScopeRef) (knowl.WorkspaceSnapshot, error) {
 	return workspace.snapshot(ctx, scope, true)
@@ -316,17 +318,22 @@ func (workspace *Workspace) inspectRawSourcesLocked(scope knowl.ScopeRef) ([]kno
 			}
 			var manifest sourceManifest
 			if unmarshalErr := yaml.Unmarshal(manifestBytes, &manifest); unmarshalErr != nil {
-				record.ErrorClass = "manifest_invalid"
+				record.ErrorClass = rawManifestInvalidClass
 				return nil
 			}
-			record.Source = manifest.accepted()
+			accepted, acceptedErr := manifest.accepted()
+			if acceptedErr != nil {
+				record.ErrorClass = rawManifestInvalidClass
+				return nil
+			}
+			record.Source = accepted
 			if strings.TrimSpace(manifest.Scope) != "" && knowl.ScopeRef(manifest.Scope) != scope {
 				state.record = nil
 				return nil
 			}
 			record.Valid = validSourceManifest(manifest) && relative == record.Source.ManifestRef
 			if !record.Valid {
-				record.ErrorClass = "manifest_invalid"
+				record.ErrorClass = rawManifestInvalidClass
 				return nil
 			}
 			content, _, contentErr := raw.read(filepath.ToSlash(filepath.Join(filepath.Dir(rawRelative), "source")), knowl.ReadLimits{}, workspace.maxSourceBytes)

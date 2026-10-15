@@ -112,7 +112,7 @@ func TestWorkspaceReadWaitsForCanonicalTransition(t *testing.T) {
 	}
 	onePath := filepath.Join(root, "wiki", "entities", "one.md")
 	twoPath := filepath.Join(root, "wiki", "entities", "two.md")
-	if err := writeAtomic(onePath, validWorkspacePage("entities/one", "One", testWorkspaceSourceRef, ""), 0o600); err != nil {
+	if err := writeAtomic(onePath, validWorkspacePage(testPageOneID, "One", testWorkspaceSourceRef, ""), 0o600); err != nil {
 		unlock()
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestWorkspaceReadWaitsForCanonicalTransition(t *testing.T) {
 	}
 	result := make(chan readResult, 1)
 	go func() {
-		pages, readErr := reader.ReadPages(context.Background(), testScope, []knowl.PageID{"entities/one", "entities/two"}, knowl.ReadLimits{})
+		pages, readErr := reader.ReadPages(context.Background(), testScope, []knowl.PageID{testPageOneID, "entities/two"}, knowl.ReadLimits{})
 		result <- readResult{pages: pages, err: readErr}
 	}()
 	select {

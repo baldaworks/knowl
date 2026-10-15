@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/internal/maintenanceauthority"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	"gopkg.in/yaml.v3"
 )
 
 func validSourceManifest(manifest sourceManifest) bool {
-	if strings.TrimSpace(manifest.Scope) == "" || strings.TrimSpace(manifest.Adapter) == "" || strings.TrimSpace(manifest.ID) == "" || strings.TrimSpace(manifest.Version) == "" || len(manifest.Digest) != sha256.Size*2 {
+	identity := app.SourceRefIdentity{Source: knowl.SourceRef{Adapter: manifest.Adapter, ID: manifest.ID}, Revision: manifest.Version}
+	if strings.TrimSpace(manifest.Scope) == "" || app.ValidateSourceRefIdentity(identity) != nil || len(manifest.Digest) != sha256.Size*2 {
 		return false
 	}
 	if manifest.SourceDocument != (knowl.SourceDocument{}) &&
@@ -38,8 +40,31 @@ type sourceManifest struct {
 	ReceivedAt     time.Time            `yaml:"received_at"`
 }
 
-func (manifest sourceManifest) accepted() knowl.AcceptedSource {
-	return knowl.AcceptedSource{Scope: knowl.ScopeRef(manifest.Scope), Source: knowl.SourceRef{Adapter: manifest.Adapter, ID: manifest.ID}, Version: knowl.SourceVersion{Version: manifest.Version, Digest: manifest.Digest}, MediaType: manifest.MediaType, SourceDocument: manifest.SourceDocument, ManifestRef: filepath.ToSlash(filepath.Join(workspaceRawDir, token(manifest.Scope+"\x00"+manifest.Adapter+"\x00"+manifest.ID), token(manifest.Version), "manifest.yaml"))}
+func (manifest sourceManifest) accepted() (knowl.AcceptedSource, error) {
+	identity := app.SourceRefIdentity{Source: knowl.SourceRef{Adapter: manifest.Adapter, ID: manifest.ID}, Revision: manifest.Version}
+	relative, err := acceptedSourceManifestRelative(knowl.ScopeRef(manifest.Scope), identity)
+	if err != nil {
+		return knowl.AcceptedSource{}, err
+	}
+	return knowl.AcceptedSource{Scope: knowl.ScopeRef(manifest.Scope), Source: identity.Source, Version: knowl.SourceVersion{Version: identity.Revision, Digest: manifest.Digest}, MediaType: manifest.MediaType, SourceDocument: manifest.SourceDocument, ManifestRef: workspaceRawDir + "/" + relative}, nil
+}
+
+func acceptedSourceDirectoryRelative(scope knowl.ScopeRef, identity app.SourceRefIdentity) (string, error) {
+	if strings.TrimSpace(string(scope)) == "" {
+		return "", app.ErrSourceInvalid
+	}
+	if app.ValidateSourceRefIdentity(identity) != nil {
+		return "", app.ErrSourceInvalid
+	}
+	return filepath.ToSlash(filepath.Join(token(string(scope)+"\x00"+identity.Source.Adapter+"\x00"+identity.Source.ID), token(identity.Revision))), nil
+}
+
+func acceptedSourceManifestRelative(scope knowl.ScopeRef, identity app.SourceRefIdentity) (string, error) {
+	directory, err := acceptedSourceDirectoryRelative(scope, identity)
+	if err != nil {
+		return "", err
+	}
+	return directory + "/manifest.yaml", nil
 }
 
 type stageEntry struct {
@@ -50,19 +75,21 @@ type stageEntry struct {
 }
 
 type stageManifest struct {
-	OperationID       string                        `yaml:"operation_id"`
-	Writer            string                        `yaml:"writer,omitempty"`
-	SourceID          string                        `yaml:"source_id,omitempty"`
-	Scope             string                        `yaml:"scope,omitempty"`
-	SchemaDigest      string                        `yaml:"schema_digest"`
-	SnapshotDigest    string                        `yaml:"snapshot_digest,omitempty"`
-	RequiredSourceRef string                        `yaml:"required_source_ref,omitempty"`
-	SourceRefs        []string                      `yaml:"source_refs,omitempty"`
-	Diagnostics       []knowl.MaintenanceDiagnostic `yaml:"diagnostics,omitempty"`
-	Entries           []stageEntry                  `yaml:"entries"`
-	LogExpectedDigest string                        `yaml:"log_expected_digest,omitempty"`
-	LogDigest         string                        `yaml:"log_digest,omitempty"`
-	LogDate           string                        `yaml:"log_date,omitempty"`
+	OperationID          string                        `yaml:"operation_id"`
+	Writer               string                        `yaml:"writer,omitempty"`
+	SourceID             string                        `yaml:"source_id,omitempty"`
+	Scope                string                        `yaml:"scope,omitempty"`
+	SchemaDigest         string                        `yaml:"schema_digest"`
+	SnapshotDigest       string                        `yaml:"snapshot_digest,omitempty"`
+	RequiredSourceRef    string                        `yaml:"required_source_ref,omitempty"`
+	SourceRefs           []string                      `yaml:"source_refs,omitempty"`
+	Diagnostics          []knowl.MaintenanceDiagnostic `yaml:"diagnostics,omitempty"`
+	Retirement           *knowl.RetirementPlanContext  `yaml:"retirement,omitempty"`
+	MaintenanceAuthority *maintenanceauthority.Stamp   `yaml:"maintenance_authority,omitempty"`
+	Entries              []stageEntry                  `yaml:"entries"`
+	LogExpectedDigest    string                        `yaml:"log_expected_digest,omitempty"`
+	LogDigest            string                        `yaml:"log_digest,omitempty"`
+	LogDate              string                        `yaml:"log_date,omitempty"`
 }
 
 const (
@@ -70,6 +97,7 @@ const (
 	stageWriterSource     = "source"
 	stageWriterMigration  = "migration"
 	stageWriterHierarchy  = "hierarchy"
+	stageWriterRetirement = "retirement"
 )
 
 func manifestWriter(manifest stageManifest) string {

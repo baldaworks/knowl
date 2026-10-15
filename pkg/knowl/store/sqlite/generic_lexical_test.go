@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -142,7 +143,7 @@ func TestSQLiteGenericMigrationPreservesHistoryAndRebuild(t *testing.T) {
 	operationBefore := knowl.Operation{ID: operationID, Kind: knowl.WorkSourceMaintenance, Key: key, Status: knowl.StatusReceived, ReadyAt: meta.CreatedAt, UpdatedAt: meta.CreatedAt, Diagnostics: []knowl.MaintenanceDiagnostic{}}
 	run := sqliteSourceRun("generic-upgrade", time.Unix(50, 0).UTC())
 	state := sqliteDocumentState(run, false, time.Time{})
-	finalizeSQLiteSourceRun(t, ctx, legacy, run, state, app.SyncDocumentActive, "checkpoint", "generation", run.StartedAt.Add(time.Second))
+	seedLegacySQLiteSource(t, ctx, db, run, state)
 	sourceBefore, err := legacy.SourceStatus(ctx, run.Scope, run.SourceID)
 	if err != nil {
 		t.Fatal(err)
@@ -229,5 +230,39 @@ func TestSQLiteGenericMigrationPreservesHistoryAndRebuild(t *testing.T) {
 	var count int
 	if err := reopened.db.QueryRowContext(ctx, `SELECT count(*) FROM knowl_pages`).Scan(&count); err != nil || count != len(snapshot.Pages) {
 		t.Fatal(fmt.Errorf("down migration pages=%d: %w", count, err))
+	}
+}
+
+func seedLegacySQLiteSource(t *testing.T, ctx context.Context, db *sql.DB, run knowl.SyncRun, state knowl.DocumentState) {
+	t.Helper()
+	accepted, err := json.Marshal(state.AcceptedSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedAt := run.StartedAt.Add(3 * time.Second)
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_sources (
+scope, source_id, source_type, config_digest, repository_identity, checkpoint,
+last_attempt_run_id, last_success_run_id, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, '', 'checkpoint', ?, ?, ?, ?, ?)`, run.Scope, run.SourceID,
+		knowl.SourceTypeFilesystem, run.ConfigDigest, run.ID, run.ID, knowl.SyncStatusSucceeded,
+		formatTime(run.StartedAt), formatTime(completedAt)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_sync_runs (
+run_id, scope, source_id, config_digest, status, complete_scan, added, content_generation,
+checkpoint, started_at, updated_at, completed_at)
+VALUES (?, ?, ?, ?, ?, 1, 1, 'generation', 'checkpoint', ?, ?, ?)`, run.ID, run.Scope,
+		run.SourceID, run.ConfigDigest, knowl.SyncStatusSucceeded, formatTime(run.StartedAt),
+		formatTime(completedAt), formatTime(completedAt)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO knowl_source_documents (
+scope, source_id, document_id, revision, accepted_source, maintenance_revision,
+maintenance_operation_id, maintenance_generation, mirror_path, mirror_digest,
+last_seen_run_id, deleted, deleted_at, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, '', '', '', ?, ?, ?, 0, '', ?, ?)`, state.Scope, state.SourceID,
+		state.DocumentID, state.Revision, accepted, state.MirrorPath, state.MirrorDigest,
+		state.LastSeenRunID, formatTime(completedAt), formatTime(completedAt)); err != nil {
+		t.Fatal(err)
 	}
 }
