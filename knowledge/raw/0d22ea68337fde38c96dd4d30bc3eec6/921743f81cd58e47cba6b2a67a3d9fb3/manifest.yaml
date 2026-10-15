@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/design.md
+version: 02504747c395d38811d2a7ea07b7663e1f4ea43e754557d60c64a406c5d2f6ec
+digest: 02504747c395d38811d2a7ea07b7663e1f4ea43e754557d60c64a406c5d2f6ec
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: design.md
+    revision: 02504747c395d38811d2a7ea07b7663e1f4ea43e754557d60c64a406c5d2f6ec
+    uri: file:///home/bigboss/Projects/knowl/docs/design.md
+received_at: 2026-10-15T15:25:43.068575Z

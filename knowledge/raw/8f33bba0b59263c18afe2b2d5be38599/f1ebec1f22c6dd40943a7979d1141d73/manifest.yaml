@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/testing.md
+version: 1197a7e29398dd1f786ed1f08c40eb577ca464d73ab0c03e0e95f055e488836f
+digest: 1197a7e29398dd1f786ed1f08c40eb577ca464d73ab0c03e0e95f055e488836f
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: testing.md
+    revision: 1197a7e29398dd1f786ed1f08c40eb577ca464d73ab0c03e0e95f055e488836f
+    uri: file:///home/bigboss/Projects/knowl/docs/testing.md
+received_at: 2026-10-15T15:25:43.269525Z

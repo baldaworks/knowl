@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/publishing.md
+version: a37755a2d562c9f596a41e474422161f29278ba9d9e527e3375224a8ce4265b4
+digest: a37755a2d562c9f596a41e474422161f29278ba9d9e527e3375224a8ce4265b4
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: publishing.md
+    revision: a37755a2d562c9f596a41e474422161f29278ba9d9e527e3375224a8ce4265b4
+    uri: file:///home/bigboss/Projects/knowl/docs/publishing.md
+received_at: 2026-10-15T15:25:43.147846Z

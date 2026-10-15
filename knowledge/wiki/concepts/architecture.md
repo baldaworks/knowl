@@ -10,6 +10,7 @@ knowl:
     - wiki-filesystem:knowl-docs/examples/own-docs-wiki.md@4b076ff94b528e7e337477c9190b8aa2b59649bb07e78bd65db880b1b28c8fa2
     - wiki-filesystem:knowl-docs/local-codex.md@50fcfaf27cd8c671650b42f050c7b90bfcef1355619133c9d9da92ffa3ccc0f9
     - wiki-filesystem:knowl-docs/operations.md@c4dc7e57ca23dc8864f014dc283faf6fee92c4de46685fea364e4bade6fd6e14
+    - wiki-filesystem:knowl-docs/publishing.md@a37755a2d562c9f596a41e474422161f29278ba9d9e527e3375224a8ce4265b4
     - wiki-filesystem:knowl-docs/releases/v0.1.0.md@183d6c7f742a0555fa5f792ea5d84435ede6851d29fb5007301c8e8144bfb561
     - wiki-filesystem:knowl-docs/releases/v0.2.0.md@4d7a07f5afbdfc49ae07e300c851d7f8ab6a03bbb25b93c42203f8102c18bfe0
     - wiki-filesystem:knowl-docs/releases/v0.3.0.md@68b799fdc477f93914692c3f66603905eee292e9bb64a1362063b090f319bee1
@@ -138,3 +139,15 @@ Current documentation describes the checked-in source. Recipes for published rel
   - **v0.4.0**: Added remote Git sources with HTTPS/SSH authentication, one-shot `knowl run` execution, explicit semantic hierarchy planning (`knowl hierarchy reconcile`), export commands (`knowl export okf`, `knowl export llms-txt`), semantic OKF tag indexing with relaxed fallback, and expanded default document limits to 262,144 characters.
   - **v0.5.0**: Introduced policy-aware maintenance tracking via deterministic policy generation (reconsidering unchanged revisions when rules like character ceilings change), preserved open-world links from accepted Markdown with bounded diagnostics, isolated invalid provenance rejections to affected documents, and hardened Git cache lineage and repository identity checks.
   - **v0.6.0**: Added repository-supplied local Codex plugin and staged `@baldaworks/knowl@0.6.0` npm package with five native platform binaries, enabling project bootstrapping via `npx`, scoped MCP stdio registration, and exact version enforcement in the run skill.
+
+### Release Publication and npm Trusted Publishing
+- **Workflow and Triggers**: The release workflow is `.github/workflows/release.yml`, executing for annotated `vX.Y.Z` tags whose commits belong to `main`. The Go version is sourced from `go.mod`, while `.omnidist/omnidist.yaml` defines the native npm target matrix and package identity.
+- **npm Trusted Publishing**: Omnidist uses `publish-auth: trusted` with repository URL `git+https://github.com/baldaworks/knowl.git`. The publishing job operates with `id-token: write` and installs npm 12.2.0 without requiring an npm token secret.
+- **Trusted Publisher Configuration**: An npm package owner must configure GitHub Actions as a trusted publisher for `@baldaworks/knowl` and the five native packages (`@baldaworks/knowl-darwin-x64`, `@baldaworks/knowl-darwin-arm64`, `@baldaworks/knowl-linux-x64`, `@baldaworks/knowl-linux-arm64`, `@baldaworks/knowl-win32-x64`), using organization `baldaworks`, repository `knowl`, workflow filename `release.yml`, and direct `npm publish` authorization.
+- **Trust Registration Commands**: Commands derived from Omnidist configuration can be inspected and registered:
+  ```bash
+  npx -y @omnidist/omnidist@latest --profile default npm trust \
+    --repo baldaworks/knowl --workflow-file release.yml
+  ```
+  Adding `--apply` registers bindings, requiring existing packages, owner write access, and account 2FA (unpublished packages require an initial authenticated publication before trust registration).
+- **Release Verification & Cutting**: Releases require version alignment across plugins, skill contracts, metadata, and installation guides. Verification runs `go run ./internal/cmd/releasecheck --version X.Y.Z`, repository tests, and linters before merging into `main` and tagging. The workflow stages native npm packages and the launcher, publishing them alongside the multi-platform GHCR image and GitHub Release with immutable digest only after all verification passes. Public tags are never moved; fixes require a new patch version.
