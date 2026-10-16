@@ -82,10 +82,20 @@ func (p *measuredProvider) score(t *testing.T, query string, page knowl.PageSnap
 			if len(p.vectors[left]) == 0 || len(p.vectors[right]) == 0 {
 				t.Fatal("missing actual inference measurement")
 			}
-			value, err := hybrid.Cosine(p.vectors[left], p.vectors[right])
-			if err != nil {
+			// Preserve this historical quality measurement's validated near-unit
+			// float64 dot baseline in test code only, not production retrieval.
+			queryVector, pageVector := p.vectors[left], p.vectors[right]
+			if _, err := hybrid.EncodeVector(queryVector, len(queryVector)); err != nil {
 				t.Fatal(err)
 			}
+			if _, err := hybrid.EncodeVector(pageVector, len(queryVector)); err != nil {
+				t.Fatal(err)
+			}
+			var dot float64
+			for i, value := range queryVector {
+				dot += float64(value) * float64(pageVector[i])
+			}
+			value := max(-1, min(1, dot))
 			score = max(score, value)
 		}
 	}
@@ -106,6 +116,35 @@ type caseMeasurement struct {
 	QueryMS                             float64               `json:"query_ms"`
 	Report                              knowl.RetrievalReport `json:"report"`
 }
+
+func TestLegacyMeasuredScoreBaseline(t *testing.T) {
+	space := app.EmbeddingSpace{Dimensions: 2, QueryPrefix: "legacy-query ", PassagePrefix: "legacy-passage "}
+	query := "fixed"
+	prepared, err := hybrid.PrepareQuery(t.Context(), query, space)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &measuredProvider{vectors: make(map[string][]float32)}
+	for _, input := range prepared.Inputs {
+		p.vectors[input] = []float32{1, 0}
+	}
+	pages := []knowl.PageSnapshot{{ID: "A", Body: "baseline A"}, {ID: "B", Body: "baseline B"}}
+	vectors := [][]float32{{1, .01}, {.9998, 0}}
+	for i, page := range pages {
+		passages, err := hybrid.PreparePage(t.Context(), page, space)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, input := range passages.Inputs {
+			p.vectors[input] = vectors[i]
+		}
+	}
+	a, b := p.score(t, query, pages[0], space), p.score(t, query, pages[1], space)
+	if a != 1 || b != float64(float32(.9998)) || a <= b {
+		t.Fatalf("legacy quality baseline changed:A=%.17g B=%.17g", a, b)
+	}
+}
+
 type runMeasurement struct {
 	Backend   string                `json:"backend"`
 	Pass      int                   `json:"pass"`
