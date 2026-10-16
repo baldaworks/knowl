@@ -104,28 +104,44 @@ func TestSQLiteProjectReusesUnchangedInputs(t *testing.T) {
 }
 
 func TestSQLiteProjectRepairsCorruptPriorInput(t *testing.T) {
-	provider := &recordingProjectionProvider{}
-	store, err := Open(t.Context(), t.TempDir()+"/corrupt.sqlite", app.EmbeddingOptions{Provider: provider, Space: app.EmbeddingSpace{Model: testFixture, Revision: "1", Dimensions: 2}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	snapshot := knowl.WorkspaceSnapshot{Scope: "corrupt", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha}}}
-	if err := store.Rebuild(t.Context(), snapshot); err != nil {
-		t.Fatal(err)
-	}
-	initial := len(provider.inputs)
-	if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_embedding_chunks SET content_hash=? WHERE scope=?`, strings.Repeat("f", 64), snapshot.Scope); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Project(t.Context(), knowl.ContentCommit{Snapshot: snapshot}); err != nil {
-		t.Fatal(err)
-	}
-	if got := len(provider.inputs) - initial; got != initial {
-		t.Fatalf("repair embedded %d inputs, want %d", got, initial)
-	}
-	if err := store.CheckProjection(t.Context(), snapshot); err != nil {
-		t.Fatal(err)
+	for _, corruption := range []struct {
+		name  string
+		query string
+		value any
+	}{
+		{"unauthenticated hash", `UPDATE knowl_embedding_chunks SET content_hash=? WHERE scope=?`, strings.Repeat("f", 64)},
+		{"invalid vector", `UPDATE knowl_embedding_chunks SET vector=? WHERE scope=?`, make([]byte, 8)},
+		{"legacy format", `UPDATE knowl_embedding_state SET native_format=? WHERE scope=?`, 0},
+	} {
+		t.Run(corruption.name, func(t *testing.T) {
+			provider := &recordingProjectionProvider{}
+			store, err := Open(t.Context(), t.TempDir()+"/corrupt.sqlite", app.EmbeddingOptions{Provider: provider, Space: app.EmbeddingSpace{Model: testFixture, Revision: "1", Dimensions: 2}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			snapshot := knowl.WorkspaceSnapshot{Scope: "corrupt", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha}}}
+			if err := store.Rebuild(t.Context(), snapshot); err != nil {
+				t.Fatal(err)
+			}
+			initial := len(provider.inputs)
+			if _, err := store.db.ExecContext(t.Context(), corruption.query, corruption.value, snapshot.Scope); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Project(t.Context(), knowl.ContentCommit{Snapshot: snapshot}); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(provider.inputs) - initial; got != initial {
+				t.Fatalf("repair embedded %d inputs, want %d", got, initial)
+			}
+			if err := store.CheckProjection(t.Context(), snapshot); err != nil {
+				t.Fatal(err)
+			}
+			var format int
+			if err := store.db.QueryRowContext(t.Context(), `SELECT native_format FROM knowl_embedding_state WHERE scope=?`, snapshot.Scope).Scan(&format); err != nil || format != 1 {
+				t.Fatalf("rebuilt format=%d err=%v", format, err)
+			}
+		})
 	}
 }
 
@@ -293,6 +309,64 @@ func TestSQLiteProjectRejectsPeerSameDigestReplacement(t *testing.T) {
 	state, chunks, err := readEmbeddingFixture(t.Context(), peer, snapshot.Scope, hybrid.ProjectionState{Space: peer.embedding.Fingerprint, Dimensions: space.Dimensions})
 	if err != nil || state.Mode != knowl.RetrievalHybrid || len(chunks) != 1 || chunks[0].Vector[0] != 0 || chunks[0].Vector[1] != 1 {
 		t.Fatalf("peer vectors changed: state=%+v chunks=%v err=%v", state, chunks, err)
+	}
+}
+
+func TestSQLiteRebuildRejectsPeerReplacementDuringInference(t *testing.T) {
+	for _, replacement := range []string{"same digest", "delete and recreate", "changed coverage"} {
+		t.Run(replacement, func(t *testing.T) {
+			path := t.TempDir() + "/rebuild.sqlite"
+			provider := &gatedProjectionProvider{entered: make(chan struct{}), release: make(chan struct{}), block: true, vector: []float32{1, 0}}
+			space := app.EmbeddingSpace{Model: testFixture, Revision: "1", Dimensions: 2}
+			store, err := Open(t.Context(), path, app.EmbeddingOptions{Provider: provider, Space: space})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			peer, err := Open(t.Context(), path, app.EmbeddingOptions{Provider: &gatedProjectionProvider{vector: []float32{0, 1}}, Space: space})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = peer.Close() })
+			snapshot := knowl.WorkspaceSnapshot{Scope: "rebuild", SchemaDigest: testSchemaDigest, Pages: []knowl.PageSnapshot{{ID: "a", Path: projectPathA, Digest: projectDigestA1, Title: "A", Body: projectBodyAlpha}}}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- store.Rebuild(ctx, snapshot) }()
+			select {
+			case <-provider.entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if replacement == "delete and recreate" {
+				if _, err := peer.db.ExecContext(ctx, `DELETE FROM knowl_projection_state WHERE scope=?`, snapshot.Scope); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if replacement == "changed coverage" {
+				snapshot.Pages = append(snapshot.Pages, knowl.PageSnapshot{ID: "b", Path: "wiki/b.md", Digest: "b-1", Title: "B", Body: "# Beta\nSecond section"})
+			}
+			if err := peer.Rebuild(ctx, snapshot); err != nil {
+				t.Fatal(err)
+			}
+			close(provider.release)
+			assertEmbeddingFailure(t, <-done, knowl.RetrievalProjectionDrift)
+			if err := peer.CheckProjection(ctx, snapshot); err != nil {
+				t.Fatal(err)
+			}
+			_, chunks, err := readEmbeddingFixture(ctx, peer, snapshot.Scope, hybrid.ProjectionState{Space: peer.embedding.Fingerprint, Dimensions: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(chunks) != len(snapshot.Pages) {
+				t.Fatalf("peer chunks=%d, want %d", len(chunks), len(snapshot.Pages))
+			}
+			for _, chunk := range chunks {
+				if len(chunk.Vector) != 2 || chunk.Vector[0] != 0 || chunk.Vector[1] != 1 {
+					t.Fatalf("stale rebuild overwrote peer vector: %v", chunk.Vector)
+				}
+			}
+		})
 	}
 }
 
