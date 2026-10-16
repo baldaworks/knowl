@@ -13,7 +13,7 @@ import (
 
 const (
 	pluginName     = "knowl"
-	releaseVersion = "0.6.1"
+	releaseVersion = "0.7.0"
 	npxCommand     = "npx"
 	yesArgument    = "--yes"
 	setupSkillName = "setup"

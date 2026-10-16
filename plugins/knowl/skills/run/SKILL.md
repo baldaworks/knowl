@@ -8,8 +8,8 @@ description: Run one bounded project-local Knowl maintenance cycle and report it
 Operate from the active project's root directory. Use exactly one compatible CLI form for the entire workflow:
 
 1. Execute `knowl version --json` if `knowl` is available.
-2. Use local `knowl` only when the JSON says `{"version":"0.6.1","tag":"v0.6.1","release":true}`.
-3. Otherwise use the argv prefix `npx`, `--yes`, `@baldaworks/knowl@0.6.1`.
+2. Use local `knowl` only when the JSON says `{"version":"0.7.0","tag":"v0.7.0","release":true}`.
+3. Otherwise use the argv prefix `npx`, `--yes`, `@baldaworks/knowl@0.7.0`.
 
 Do not mix the two forms during one run and do not use `latest`.
 

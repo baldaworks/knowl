@@ -5,7 +5,7 @@ knowl:
   id: concepts/service-operations
   source_refs:
     - wiki-filesystem:knowl-docs/agents.md@d87e9854e3ae341cefe5b533604ec9d35aac50c8d89f91598cad158e58f09bb9
-    - wiki-filesystem:knowl-docs/local-codex.md@50fcfaf27cd8c671650b42f050c7b90bfcef1355619133c9d9da92ffa3ccc0f9
+    - wiki-filesystem:knowl-docs/local-codex.md@2975c1633b786c021b7f21f091925a84997d31452f51dee376c09fb36b542b42
     - wiki-filesystem:knowl-docs/local.md@b72ed8a3f8d255df1843e32445e50fa7be99e752b764711b7494cd76f325c5e0
     - wiki-filesystem:knowl-docs/operations.md@ae3c7b6ee1583fd88681e5a3ee4bb1cdf2a9b007235663169cf7e59a41b60baa
     - wiki-filesystem:knowl-docs/search.md@0c24dcc0dd1409c464a9bb667634d9b439b3bcbf2a6e29537981b0c753b00d74
@@ -22,7 +22,7 @@ Knowl operates as a standalone knowledge service providing canonical workspace m
 
 - **Service Deployment**: A persistent MCP/HTTP service mounting `/var/lib/knowl` with canonical workspace at `/var/lib/knowl/knowledge`. The repository keeps deployment assets under `deploy/sidecar/` for compatibility, describing a deployment arrangement rather than a separate operational mode.
 - **Go Application Integration**: Go applications can embed the runtime directly via root `pkg/knowl` or with Uber Fx lifecycle integration via `pkg/knowlfx.NewApp`.
-- **Local Codex Integration**: Connects a project's Knowl wiki to Codex through MCP stdio without a background daemon or separate service. Codex launches `npx --yes @baldaworks/knowl@0.6.0 mcp stdio` directly with the active project as its working directory.
+- **Local Codex Integration**: Connects a project's Knowl wiki to Codex through MCP stdio without a background daemon or separate service. The v0.6.1 recipe requires that npm release to be published. Codex launches `npx --yes @baldaworks/knowl@0.6.1 mcp stdio` directly with the active project as its working directory.
 - **Client Connectivity & MCP**: Consumer agents connect over MCP (`http://127.0.0.1:8080/mcp`) or HTTP (`/v1/*`). MCP streamable HTTP clients configure `transport: "streamable_http"`, `url: "http://127.0.0.1:8080/mcp"`, and `headers: {"Authorization": "Bearer <operator-token>"}` to access `knowl_retrieve`, `knowl_ingest`, and `knowl_operation`.
 - **Liveness and Readiness**:
   - `GET /healthz`: Indicates the process is serving HTTP.
@@ -30,7 +30,7 @@ Knowl operates as a standalone knowledge service providing canonical workspace m
 
 ## Project-Local Maintenance and Codex Quickstart
 
-- **Local Setup and Prerequisites**: Project-local wiki maintenance uses Codex as the ACP agent. Running maintenance requires Git, the Go version in `go.mod`, Node.js/npm, and an authenticated Codex CLI. The ACP bridge runs locally; initial bridge startup may download its pinned npm package.
+- **Local Setup and Prerequisites**: The project-local quickstart configures Codex as the ACP maintainer. That recipe requires Git, the Go version in `go.mod`, Node.js/npm, and an authenticated Codex CLI. The ACP bridge runs locally; initial bridge startup may download its pinned npm package. The Codex consumer plugin is configured separately and its default project configuration expects an installed and authenticated `opencode acp` maintainer runtime.
 - **Local Configuration Contract**: Configured via `.config/knowl/config.yaml`, specifying `runtime.providers.codex` (`type: codex_acp`, `codex_acp.bridge_version: "1.7.3"`), `knowl.provider: codex`, `knowl.workspace.path: knowledge`, `knowl.storage.type: sqlite` (`sqlite.path: .knowl/knowl.sqlite`), `knowl.scope: local`, and `knowl.server.listen_addr: 127.0.0.1:0`. Specific models can be configured via `model` under `codex_acp`.
 - **One-Shot Execution Lifecycle**: One-shot CLI operations do not run persistent HTTP/MCP servers and require no operator token:
   - `knowl init`: Prepares local workspace structure.
@@ -119,14 +119,17 @@ Knowl connects to maintainer agents through ACP over stdio, distinguishing maint
 
 ## Local Codex Plugin and Workflow
 
-- **Setup and Installation**: Initialized from project root using `npx --yes @baldaworks/knowl@0.6.0 setup codex`. Setup creates missing project state (`.config/knowl`, `schema.md`, `raw/`, `wiki/`, and `.knowl/`), validates workspace structure, and installs the release-matched Knowl marketplace and plugin. Conflicting installations require explicit approval and rerun with `--replace`.
-- **Prerequisites**: Node.js with npm/npx, Codex CLI, and an installed and authenticated `opencode acp` runtime for maintenance.
-- **Workflow Skills**: Codex provides two dedicated workflow skills:
-  - `$knowl:setup`: Repeats or repairs the pinned setup workflow.
-  - `$knowl:run`: Validates, executes one bounded `knowl run`, validates again, and reports structured results under Knowl-owned paths. Uses local `knowl` binary only when `knowl version --json` identifies exact `0.6.0`; otherwise falls back to `npx --yes @baldaworks/knowl@0.6.0`.
-- **MCP Connection**: Plugin registration binds the project-scoped MCP server. Codex starts and owns `npx --yes @baldaworks/knowl@0.6.0 mcp stdio` with the active project as working directory without daemon or port allocation, token requirement, or `codex mcp add` configuration.
-- **Platforms and Offline Prewarming**: Supports macOS (x64/arm64), Linux (x64/arm64), and Windows (x64). Offline environments require prewarming the npm package and sparse Git marketplace checkout (which limits working tree paths to plugin assets without eliminating repository metadata fetches).
-- **Scope and Thread Concurrency**: Supported exclusively for local Codex projects on a local filesystem; excludes hosted Codex, remote MCP hosting, shared/network filesystems, and secondary workspace folders. Multiple local Codex threads in one project share the durable store and coordinated workspace, while unrelated user changes remain outside Knowl's write scope.
+The plugin configures Codex as a Knowl client through local MCP stdio and provides setup and bounded maintenance skills without a separate service. Choosing the wiki maintainer is a separate configuration decision; installing the consumer plugin does not select Codex as the maintainer.
+
+- **Release Prerequisite**: This installation recipe requires the v0.6.1 npm release to be published; see [Release History](releases.md) for release context. The `@baldaworks/knowl` package selects the native binary for the platform at the exact release version.
+- **Setup and Installation**: Run `npx --yes @baldaworks/knowl@0.6.1 setup codex` from the project root. Setup creates only missing project state (`.config/knowl`, `schema.md`, `raw/`, `wiki/`, and `.knowl/`), validates it, and installs the release-matched Knowl marketplace and plugin. Existing project files are preserved. A conflicting Knowl-managed marketplace or plugin is replaced only after explicit approval and a rerun with `--replace`.
+- **Prerequisites**: Node.js with npm/npx and the Codex CLI. Maintenance also requires the configured provider; the default project configuration expects an installed and authenticated `opencode acp` runtime.
+- **Workflow Skills**: Start a new Codex thread in the project after setup. The plugin provides exactly two workflow skills:
+  - `$knowl:setup`: Repeats or repairs the same pinned setup workflow.
+  - `$knowl:run`: Validates, executes one bounded `knowl run`, validates again, and reports structured results and changes under Knowl-owned paths. It uses a local `knowl` only when `knowl version --json` identifies exact `0.6.1`; otherwise it uses `npx --yes @baldaworks/knowl@0.6.1` for the whole workflow.
+- **MCP Connection**: Plugin installation registers the project-scoped MCP server. Codex starts and owns `npx --yes @baldaworks/knowl@0.6.1 mcp stdio` with the active project as its working directory. This path requires no daemon, port allocation, operator token, or `codex mcp add` configuration.
+- **Platforms and Offline Prewarming**: Native npm packages cover macOS x64/arm64, Linux x64/arm64, and Windows x64. Setup and the first MCP launch can download the exact npm package; setup also fetches the pinned Git marketplace. Prewarm both while online before offline use. The sparse marketplace checkout limits materialized working-tree paths to plugin assets, but does not promise a metadata-only Git transfer or eliminate all repository metadata fetches.
+- **Scope and Thread Concurrency**: Supported for local Codex projects on a local filesystem. Hosted Codex, remote MCP hosting, shared/network filesystems, and secondary workspace folders are outside the verified contract. Separate local projects resolve separate state. Multiple local Codex threads in one project share the durable store and coordinated workspace, while unrelated user changes remain outside Knowl's write scope.
 
 ## Maintenance Scheduling and Failure Recovery
 
