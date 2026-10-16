@@ -192,6 +192,9 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 	if store.embedding == nil {
 		return store.checkLexicalProjection(ctx, snapshot)
 	}
+	if store.nativeErr != nil {
+		return nativeUnavailable(ctx)
+	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return err
@@ -215,6 +218,9 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 func (store *Store) ProjectionDegraded(ctx context.Context, scope knowl.ScopeRef) (bool, error) {
 	if store.embedding == nil {
 		return false, nil
+	}
+	if store.nativeErr != nil {
+		return false, nativeUnavailable(ctx)
 	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {

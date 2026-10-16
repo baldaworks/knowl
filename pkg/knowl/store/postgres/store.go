@@ -17,6 +17,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/writelock"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 )
 
 //go:embed migrations/*.sql
@@ -41,6 +42,8 @@ const (
 // Store implements app.OperationStore and app.SearchIndex.
 type Store struct {
 	embedding *hybrid.Engine
+	native    nativeVectorCapability
+	nativeErr error
 	db        *sql.DB
 	dsn       string
 	mu        writelock.Mutex
@@ -97,12 +100,22 @@ func (store *Store) configure(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open embedded postgres migrations: %w", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return err
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, directory, goose.WithGoMigrations(operatorOperationsMigration()), goose.WithSessionLocker(locker))
 	if err != nil {
 		return fmt.Errorf("create postgres migration provider: %w", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
 		return fmt.Errorf("apply postgres migrations: %w", err)
+	}
+	if store.embedding != nil {
+		store.native, store.nativeErr = configureNativeVectors(ctx, store.db, locker)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
 	return nil
 }

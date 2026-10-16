@@ -104,7 +104,11 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	engine := store.embedding
 	report := engine.Report()
 	report.QueryOmittedRunes = prepared.OmittedRunes
-	vectors, err := engine.EmbedQuery(ctx, prepared)
+	var vectors [][]float32
+	err := store.nativeErr
+	if err == nil {
+		vectors, err = engine.EmbedQuery(ctx, prepared)
+	}
 	if err != nil {
 		report, err = engine.Failure(ctx, report, err)
 		if err != nil {

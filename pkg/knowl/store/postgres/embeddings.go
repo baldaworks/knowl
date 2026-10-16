@@ -15,6 +15,9 @@ import (
 // publishEmbeddings atomically publishes staged vectors if the lexical snapshot
 // is still current. Preparation and inference take place before this method.
 func (store *Store) publishEmbeddings(ctx context.Context, scope knowl.ScopeRef, state hybrid.ProjectionState, chunks []hybrid.Chunk) error {
+	if store.nativeErr != nil {
+		return nativeUnavailable(ctx)
+	}
 	if err := validateScope(scope); err != nil {
 		return err
 	}
@@ -93,7 +96,7 @@ func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef
 	if err := ctx.Err(); err != nil {
 		return state, nil, err
 	}
-	var bounded bool
+	var bounded, currentFormat bool
 	err := tx.QueryRowContext(ctx, `SELECT
         octet_length(e.space) = 64
         AND octet_length(e.snapshot_digest) = 64
@@ -101,14 +104,17 @@ func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef
         AND octet_length(e.mode) <= 16
         AND octet_length(e.reason) <= 64
 		AND octet_length(e.coverage) <= 1048576
-        AND isfinite(e.ready_at)
+        AND isfinite(e.ready_at), e.native_format=1
         FROM knowl_embedding_state e JOIN knowl_projection_state p ON p.scope=e.scope
-        WHERE e.scope=$1`, scope).Scan(&bounded)
+        WHERE e.scope=$1`, scope).Scan(&bounded, &currentFormat)
 	if errors.Is(err, sql.ErrNoRows) {
 		return state, nil, embeddingFailure(knowl.RetrievalProjectionNotReady)
 	}
 	if err != nil {
 		return state, nil, err
+	}
+	if !currentFormat {
+		return state, nil, embeddingFailure(knowl.RetrievalProjectionNotReady)
 	}
 	if !bounded {
 		return state, nil, embeddingFailure(knowl.RetrievalProjectionDrift)
