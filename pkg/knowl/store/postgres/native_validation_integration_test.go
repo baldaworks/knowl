@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,9 @@ const (
 	nativeValidationDropDimensions = `ALTER TABLE knowl_embedding_chunks DROP CONSTRAINT knowl_embedding_chunks_vector_check`
 	nativeValidationExtraPage      = "extra-page"
 	nativeStoredVectorColumn       = "vector"
+	nativeEvidenceDigestColumn     = "digest"
+	nativeEvidenceTagsColumn       = "tags"
+	nativeCoverageColumn           = "coverage"
 )
 
 func TestPostgresNativeValidation(t *testing.T) {
@@ -247,7 +251,7 @@ func runNativeValidationSnapshot(t *testing.T, store *Store) {
 	}
 }
 
-type nativeTransferCounts struct{ rows, vectorBytes, denseRows int }
+type nativeTransferCounts struct{ rows, vectorBytes, denseRows, coverageBytes, metadataRows, evidenceRows int }
 type nativeObservedConnector struct {
 	driver.Connector
 	counts *nativeTransferCounts
@@ -289,7 +293,16 @@ func (r nativeObservedRows) Next(values []driver.Value) error {
 	err := r.Rows.Next(values)
 	if err == nil {
 		r.counts.rows++
+		if slices.Equal(r.Columns(), []string{nativeEvidenceDigestColumn, "title", nativeEvidenceTagsColumn, "description", "body", "format", "okf_metadata"}) {
+			r.counts.evidenceRows++
+		}
 		for i, column := range r.Columns() {
+			if column == nativeCoverageColumn {
+				r.counts.metadataRows++
+				if text, ok := values[i].(string); ok {
+					r.counts.coverageBytes += len(text)
+				}
+			}
 			if column == "score" && values[i] != nil {
 				r.counts.denseRows++
 			}

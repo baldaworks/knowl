@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	setNativeFormat   = `UPDATE knowl_embedding_state SET native_format=? WHERE scope=?`
-	setNativeCoverage = `UPDATE knowl_embedding_state SET coverage=? WHERE scope=?`
-	setQuestionVector = `UPDATE knowl_embedding_chunks SET vector=? WHERE scope=? AND page_id='question'`
+	setNativeFormat            = `UPDATE knowl_embedding_state SET native_format=? WHERE scope=?`
+	setNativeCoverage          = `UPDATE knowl_embedding_state SET coverage=? WHERE scope=?`
+	setQuestionVector          = `UPDATE knowl_embedding_chunks SET vector=? WHERE scope=? AND page_id='question'`
+	nativeEvidenceDigestColumn = "digest"
+	nativeEvidenceTagsColumn   = "tags"
 )
 
 func readNativeFixture(ctx context.Context, store *Store, scope knowl.ScopeRef, state hybrid.ProjectionState) (validatedDenseProjection, error) {
@@ -346,10 +348,13 @@ func TestNativeProjectionExactLogicalByteCapacity(t *testing.T) {
 // These wrappers observe values returned by the real SQLite driver. They do
 // not inspect SQL text or replace query execution with a fake result set.
 type validationTransfers struct {
-	rows        int
-	blobBytes   int
-	vectorBytes int
-	denseRows   int
+	rows          int
+	blobBytes     int
+	vectorBytes   int
+	denseRows     int
+	coverageBytes int
+	metadataRows  int
+	evidenceRows  int
 }
 
 type validationConnector struct {
@@ -393,7 +398,17 @@ func (r validationRows) Next(values []driver.Value) error {
 	err := r.Rows.Next(values)
 	if err == nil {
 		r.transfer.rows++
+		columns := r.Columns()
+		if slices.Equal(columns, []string{nativeEvidenceDigestColumn, "title", nativeEvidenceTagsColumn, "description", "body", "format", "okf_metadata"}) {
+			r.transfer.evidenceRows++
+		}
 		for i, value := range values {
+			if columns[i] == "coverage" {
+				r.transfer.metadataRows++
+				if text, ok := value.(string); ok {
+					r.transfer.coverageBytes += len(text)
+				}
+			}
 			if bytes, ok := value.([]byte); ok {
 				r.transfer.blobBytes += len(bytes)
 				if r.Columns()[i] == "vector" {
