@@ -119,9 +119,11 @@ func TestPostgresNativePublication(t *testing.T) {
 				if replacement == "coverage" {
 					peerSnapshot.Pages = append(peerSnapshot.Pages, knowl.PageSnapshot{ID: "b", Path: "wiki/b.md", Digest: "b-1", Title: "B", Body: "# Beta\nSecond section"})
 				}
+				assertPostgresNativeLifecycleFailure(t, peer, snapshot.Scope, nativeQuery, knowl.RetrievalProjectionNotReady)
 				if err := peer.Rebuild(workerCtx, peerSnapshot); err != nil {
 					t.Fatal(err)
 				}
+				assertPostgresNativeLifecycle(t, peer, peerSnapshot.Scope, nativeQuery, knowl.RetrievalHybrid, "")
 				close(release)
 				assertEmbeddingFailure(t, <-done, knowl.RetrievalProjectionDrift)
 				prior, err := peer.previousProjection(ctx, snapshot.Scope)
@@ -136,6 +138,7 @@ func TestPostgresNativePublication(t *testing.T) {
 						t.Fatalf("stale vector published: %v", chunk.Vector)
 					}
 				}
+				assertPostgresNativeLifecycle(t, peer, peerSnapshot.Scope, nativeQuery, knowl.RetrievalHybrid, "")
 			})
 		}
 	}
@@ -301,6 +304,7 @@ func runNativePublicationAtomicity(t *testing.T, dsn string) {
 		if err != nil || len(visible.chunks) != 1 || !reflect.DeepEqual(visible.chunks[0].Vector, []float32{1, 0}) {
 			t.Fatalf("partial publication visible=%+v error=%v", visible, err)
 		}
+		assertPostgresNativeLifecycle(t, peer, snapshot.Scope, nativeQuery, knowl.RetrievalHybrid, "")
 		if interrupt {
 			cancel()
 			if err := <-done; !errors.Is(err, context.Canceled) {
@@ -324,6 +328,7 @@ func runNativePublicationAtomicity(t *testing.T, dsn string) {
 		if err != nil || len(visible.chunks) != 1 || !reflect.DeepEqual(visible.chunks[0].Vector, want) {
 			t.Fatalf("committed projection=%+v error=%v", visible, err)
 		}
+		assertPostgresNativeLifecycle(t, peer, snapshot.Scope, nativeQuery, knowl.RetrievalHybrid, "")
 	}
 }
 
@@ -348,6 +353,8 @@ func runNativePublicationSchemaChecks(t *testing.T, dsn string) {
 			_, err = store.previousProjection(t.Context(), snapshot.Scope)
 			assertEmbeddingFailure(t, err, knowl.RetrievalUnavailable)
 			nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_embedding_chunks`, 1)
+			reopened := nativeOpen(t, databaseDSN, nativeOptions())
+			assertPostgresNativeLifecycleFailure(t, reopened, snapshot.Scope, nativeQuery, knowl.RetrievalUnavailable)
 			if corruption.name == "history" {
 				nativeAssertCount(t, store.db, `SELECT count(*) FROM goose_pgvector_db_version`, 0)
 			} else {

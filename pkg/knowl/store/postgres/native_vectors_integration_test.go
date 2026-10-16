@@ -57,6 +57,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		if report.Reason != knowl.RetrievalUnavailable {
 			t.Fatalf("absent extension reason=%v", report.Reason)
 		}
+		assertPostgresNativeLifecycleFailure(t, dense, "native", "query", knowl.RetrievalUnavailable)
 		nativeExec(t, store.db, `CREATE SCHEMA "vector extension"`)
 		nativeExec(t, store.db, `CREATE EXTENSION vector SCHEMA "vector extension"`)
 		lexical := nativeOpen(t, dsn)
@@ -83,6 +84,8 @@ func TestPostgresNativeSchema(t *testing.T) {
 			t.Fatal(err)
 		}
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_projection_state WHERE scope='native'`, 1)
+		reopened := nativeOpen(t, dsn, nativeOptions())
+		assertPostgresNativeLifecycleRebuild(t, reopened)
 	})
 	t.Run("transactional-history-and-retry", func(t *testing.T) {
 		databaseDSN := nativeDatabase(t, dsn, "atomicity")
@@ -115,6 +118,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		if after := nativeAuthoritative(t, store.db); before != after {
 			t.Fatal("optional Up changed authoritative rows")
 		}
+		assertPostgresNativeLifecycleFailure(t, dense, "native", "lexical", knowl.RetrievalProjectionNotReady)
 		nativeSeedDense(t, store.db, 1, "[1]", true)
 		// Down DDL and deletion of its applied history must also be atomic.
 		nativeExec(t, store.db, `CREATE FUNCTION reject_native_down() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture interruption' USING ERRCODE='P0001'; END $$`)
@@ -137,6 +141,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		if _, err := optional.Up(ctx); err != nil {
 			t.Fatal(err)
 		}
+		assertPostgresNativeLifecycleRebuild(t, dense)
 	})
 	for _, corruption := range []struct{ name, damage string }{
 		{"missing_zero", `DELETE FROM goose_pgvector_db_version WHERE version_id=0`},
@@ -151,9 +156,11 @@ func TestPostgresNativeSchema(t *testing.T) {
 			if dense.nativeErr != nil {
 				t.Fatal(dense.nativeErr)
 			}
+			nativeSeedAuthoritative(t, store.db)
 			nativeExec(t, store.db, corruption.damage)
 			bad := nativeOpen(t, databaseDSN, nativeOptions())
 			nativeAssertUnavailable(t, bad.nativeErr)
+			assertPostgresNativeLifecycleFailure(t, bad, "native", "lexical", knowl.RetrievalUnavailable)
 		})
 	}
 	t.Run("empty-history-preserved-until-operator-recovery", func(t *testing.T) {
@@ -184,6 +191,11 @@ func TestPostgresNativeSchema(t *testing.T) {
 		if report.Reason != knowl.RetrievalUnavailable {
 			t.Fatalf("empty history reason=%v", report.Reason)
 		}
+		assertPostgresNativeLifecycleFailure(t, damaged, "native", "lexical", knowl.RetrievalUnavailable)
+		nativeAssertCount(t, store.db, `SELECT count(*) FROM goose_pgvector_db_version`, 0)
+		if after := nativeAuthoritative(t, store.db); before != after {
+			t.Fatal("public corrupt-history queries changed authoritative rows")
+		}
 		// Only the fixture operator restores the trustworthy pre-damage history.
 		nativeExec(t, store.db, `INSERT INTO goose_pgvector_db_version(id,version_id,is_applied,tstamp) SELECT id,version_id,is_applied,tstamp FROM native_history_backup`)
 		recovered := nativeOpen(t, databaseDSN, nativeOptions())
@@ -191,6 +203,8 @@ func TestPostgresNativeSchema(t *testing.T) {
 			t.Fatal(recovered.nativeErr)
 		}
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM goose_pgvector_db_version WHERE version_id=1 AND is_applied`, 1)
+		assertPostgresNativeLifecycleFailure(t, recovered, "native", "lexical", knowl.RetrievalProjectionNotReady)
+		assertPostgresNativeLifecycleRebuild(t, recovered)
 	})
 	t.Run("unknown-pending-history-preserves-schema", func(t *testing.T) {
 		databaseDSN := nativeDatabase(t, dsn, "unknown_pending")
@@ -256,6 +270,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		if report.Reason != knowl.RetrievalUnavailable {
 			t.Fatalf("schema drift reason=%v", report.Reason)
 		}
+		assertPostgresNativeLifecycleFailure(t, bad, "native", "lexical", knowl.RetrievalUnavailable)
 	})
 	t.Run("unknown-history", func(t *testing.T) {
 		databaseDSN := nativeDatabase(t, dsn, "history")
@@ -265,9 +280,11 @@ func TestPostgresNativeSchema(t *testing.T) {
 		if dense.nativeErr != nil {
 			t.Fatal(dense.nativeErr)
 		}
+		nativeSeedAuthoritative(t, store.db)
 		nativeExec(t, store.db, `INSERT INTO goose_pgvector_db_version(version_id,is_applied) VALUES(99,true)`)
 		bad := nativeOpen(t, databaseDSN, nativeOptions())
 		nativeAssertUnavailable(t, bad.nativeErr)
+		assertPostgresNativeLifecycleFailure(t, bad, "native", "lexical", knowl.RetrievalUnavailable)
 	})
 	t.Run("runtime-role-and-pending-authority", func(t *testing.T) {
 		databaseDSN := nativeDatabase(t, dsn, "privileges")
@@ -276,6 +293,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		nativeExec(t, store.db, `CREATE ROLE native_runtime LOGIN PASSWORD 'fixture-runtime'`)
 		nativeExec(t, store.db, `GRANT USAGE ON SCHEMA public TO native_runtime`)
 		nativeExec(t, store.db, `GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO native_runtime`)
+		nativeSeedAuthoritative(t, store.db)
 		runtimeURL, err := url.Parse(databaseDSN)
 		if err != nil {
 			t.Fatal(err)
@@ -283,6 +301,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		runtimeURL.User = url.UserPassword("native_runtime", "fixture-runtime")
 		pending := nativeOpen(t, runtimeURL.String(), nativeOptions())
 		nativeAssertUnavailable(t, pending.nativeErr)
+		assertPostgresNativeLifecycleFailure(t, pending, "native", "lexical", knowl.RetrievalUnavailable)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM pg_class WHERE relname='goose_pgvector_db_version'`, 0)
 		dense := nativeOpen(t, databaseDSN, nativeOptions())
 		if dense.nativeErr != nil {
@@ -294,6 +313,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 			t.Fatal(runtimeStore.nativeErr)
 		}
 		nativeAssertCount(t, runtimeStore.db, `SELECT count(*) FROM pg_class WHERE oid='knowl_embedding_chunks'::regclass AND relowner=(SELECT oid FROM pg_roles WHERE rolname=current_user)`, 0)
+		assertPostgresNativeLifecycleRebuild(t, runtimeStore)
 	})
 	t.Run("concurrent-first-open-and-lock-deadline", func(t *testing.T) {
 		databaseDSN := nativeDatabase(t, dsn, "concurrent")
@@ -320,6 +340,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 			}
 		}
 		nativeAssertCount(t, db, `SELECT count(*) FROM goose_pgvector_db_version WHERE version_id=1 AND is_applied`, 1)
+		assertPostgresNativeLifecycleRebuild(t, nativeOpen(t, databaseDSN, nativeOptions()))
 		conn, err := db.Conn(ctx)
 		if err != nil {
 			t.Fatal(err)
