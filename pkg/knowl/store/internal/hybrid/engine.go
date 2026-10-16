@@ -367,5 +367,5 @@ func (engine *Engine) MaintenancePolicy() *app.MaintenanceRetrievalPolicy {
 	if engine == nil {
 		return nil
 	}
-	return &app.MaintenanceRetrievalPolicy{Mode: knowl.RetrievalHybrid, ModelSpace: engine.Fingerprint, Preprocessing: PreprocessingVersion, VectorNormalization: "unit-float32-v1", Fusion: "page-max-cosine-rrf-v1", RankConstant: FusionRankConstant, MinimumCandidates: 20, MaximumCandidates: 100, CandidateMultiplier: 4, MaxChunks: MaxChunks, MaxProjectionBytes: MaxProjectionBytes, FailurePolicy: engine.FailurePolicy}
+	return &app.MaintenanceRetrievalPolicy{Mode: knowl.RetrievalHybrid, ModelSpace: engine.Fingerprint, Preprocessing: PreprocessingVersion, VectorNormalization: "unit-float32-v1", Fusion: "page-max-native-cosine-rrf-v2", RankConstant: FusionRankConstant, MinimumCandidates: 20, MaximumCandidates: 100, CandidateMultiplier: 4, MaxChunks: MaxChunks, MaxProjectionBytes: MaxProjectionBytes, FailurePolicy: engine.FailurePolicy}
 }

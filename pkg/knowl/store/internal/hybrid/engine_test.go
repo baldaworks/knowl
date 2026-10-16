@@ -77,9 +77,20 @@ func TestMaintenanceGenerationIncludesEffectiveHybridChoices(t *testing.T) {
 		return policy
 	}
 	base := makePolicy(baseSpace, app.EmbeddingFallbackLexical)
+	legacy := base
+	legacyRetrieval := *base.Retrieval
+	legacy.Retrieval = &legacyRetrieval
+	legacy.Retrieval.Fusion = "page-max-cosine-rrf-v1"
+	legacyGeneration, err := app.MaintenancePolicyGeneration(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
 	original, err := app.MaintenancePolicyGeneration(base)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if original == legacyGeneration {
+		t.Fatal("native retrieval reuses the legacy maintenance generation")
 	}
 	for _, change := range []func(*app.EmbeddingSpace){func(s *app.EmbeddingSpace) { s.Model = "generation-other" }, func(s *app.EmbeddingSpace) { s.Revision = "immutable-2" }, func(s *app.EmbeddingSpace) { s.Dimensions = 3 }, func(s *app.EmbeddingSpace) { s.QueryPrefix = "question: " }, func(s *app.EmbeddingSpace) { s.PassagePrefix = "document: " }} {
 		changed := baseSpace

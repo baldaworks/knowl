@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -12,7 +14,81 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-const testPageDigest = "digest"
+const (
+	testPageDigest     = "digest"
+	testMetadataPageID = "metadata-page"
+)
+
+func TestProjectionMetadataWithoutVectors(t *testing.T) {
+	pages := []PageCoverage{{PageID: "empty", PageDigest: "empty-digest", Chunks: 0}, {PageID: testMetadataPageID, PageDigest: testPageDigest, Chunks: 1}}
+	coverage, err := EncodeCoverage(pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := ProjectionState{Space: strings.Repeat("a", 64), SnapshotDigest: strings.Repeat("b", 64), Dimensions: 1, Mode: knowl.RetrievalHybrid, ChunkCount: 1, Coverage: coverage}
+	got, err := ValidateProjectionMetadata(t.Context(), state)
+	if err != nil || !reflect.DeepEqual(got, pages) {
+		t.Fatalf("coverage=%+v error=%v", got, err)
+	}
+	degraded := state
+	degraded.Mode, degraded.Reason = knowl.RetrievalDegraded, knowl.RetrievalUnavailable
+	degraded.ChunkCount, degraded.Coverage = 0, ""
+	degraded.OmittedChunks, degraded.OmittedRunes = 2, 10
+	got, err = ValidateProjectionMetadata(t.Context(), degraded)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("degraded coverage=%+v error=%v", got, err)
+	}
+	cases := []struct {
+		name   string
+		base   ProjectionState
+		change func(*ProjectionState)
+		want   knowl.RetrievalFailure
+	}{
+		{"capacity", state, func(s *ProjectionState) { s.ChunkCount = MaxChunks + 1 }, knowl.RetrievalProjectionCapacity},
+		{"negative count", state, func(s *ProjectionState) { s.ChunkCount = -1 }, knowl.RetrievalProjectionDrift},
+		{"space", state, func(s *ProjectionState) { s.Space = strings.Repeat("A", 64) }, knowl.RetrievalProjectionDrift},
+		{"snapshot", state, func(s *ProjectionState) { s.SnapshotDigest = "bad" }, knowl.RetrievalProjectionDrift},
+		{"dimensions", state, func(s *ProjectionState) { s.Dimensions = 4097 }, knowl.RetrievalProjectionDrift},
+		{"mode", state, func(s *ProjectionState) { s.Mode = knowl.RetrievalLexical }, knowl.RetrievalProjectionDrift},
+		{"ready reason", state, func(s *ProjectionState) { s.Reason = knowl.RetrievalUnavailable }, knowl.RetrievalProjectionDrift},
+		{"ready omission", state, func(s *ProjectionState) { s.OmittedChunks = 1 }, knowl.RetrievalProjectionDrift},
+		{"degraded reason", degraded, func(s *ProjectionState) { s.Reason = "" }, knowl.RetrievalProjectionDrift},
+		{"degraded coverage", degraded, func(s *ProjectionState) { s.Coverage = "[]" }, knowl.RetrievalProjectionDrift},
+		{"degraded count", degraded, func(s *ProjectionState) { s.ChunkCount = 1 }, knowl.RetrievalProjectionDrift},
+		{"negative omission", degraded, func(s *ProjectionState) { s.OmittedRunes = -1 }, knowl.RetrievalProjectionDrift},
+		{"null coverage", state, func(s *ProjectionState) { s.Coverage = "null" }, knowl.RetrievalProjectionDrift},
+		{"oversized coverage", state, func(s *ProjectionState) { s.Coverage = strings.Repeat(" ", MaxCoverageBytes+1) }, knowl.RetrievalProjectionDrift},
+		{"count mismatch", state, func(s *ProjectionState) { s.ChunkCount = 0 }, knowl.RetrievalProjectionDrift},
+		{"duplicate page", state, func(s *ProjectionState) { s.Coverage, _ = EncodeCoverage([]PageCoverage{pages[1], pages[1]}) }, knowl.RetrievalProjectionDrift},
+		{"negative coverage count", state, func(s *ProjectionState) {
+			s.Coverage, _ = EncodeCoverage([]PageCoverage{{PageID: testMetadataPageID, PageDigest: testPageDigest, Chunks: -1}})
+		}, knowl.RetrievalProjectionDrift},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := tc.base
+			tc.change(&s)
+			_, err := ValidateProjectionMetadata(t.Context(), s)
+			var classified *app.EmbeddingError
+			if !errors.As(err, &classified) || classified.Code != tc.want {
+				t.Fatalf("validation=%v want=%s", err, tc.want)
+			}
+		})
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := ValidateProjectionMetadata(canceled, state); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation=%v", err)
+	}
+	// Metadata validity must never authorize publication with missing or corrupt vectors.
+	for _, vector := range [][]float32{nil, {0}, {float32(math.NaN())}, {float32(math.Inf(1))}, {1, 0}} {
+		chunk := Chunk{PageID: testMetadataPageID, PageDigest: testPageDigest, ContentHash: strings.Repeat("c", 64), Vector: vector}
+		var classified *app.EmbeddingError
+		if err := ValidateProjection(t.Context(), state, []Chunk{chunk}); !errors.As(err, &classified) {
+			t.Fatalf("invalid publication vector accepted: %v", err)
+		}
+	}
+}
 
 func TestProjectionBoundsAndCompleteness(t *testing.T) {
 	state := ProjectionState{Space: strings.Repeat("a", 64), SnapshotDigest: strings.Repeat("b", 64), Dimensions: 1, Mode: knowl.RetrievalHybrid, ChunkCount: MaxChunks}
