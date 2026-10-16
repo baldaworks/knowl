@@ -196,8 +196,8 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 	if store.embedding == nil {
 		return store.checkLexicalProjection(ctx, snapshot)
 	}
-	if store.nativeErr != nil {
-		return nativeUnavailable(ctx)
+	if err := store.verifyNativeVectors(ctx); err != nil {
+		return err
 	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
@@ -207,12 +207,12 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 	if err := checkLexicalProjectionUsing(ctx, tx, snapshot); err != nil {
 		return err
 	}
-	state, _, err := embeddingProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	validated, err := store.validateDenseProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
 	if err != nil {
 		return err
 	}
-	if state.Mode == knowl.RetrievalDegraded {
-		_, err = store.embedding.Failure(ctx, store.embedding.Report(), embeddingFailure(state.Reason))
+	if validated.State.Mode == knowl.RetrievalDegraded {
+		_, err = store.embedding.Failure(ctx, store.embedding.Report(), embeddingFailure(validated.State.Reason))
 	}
 	return err
 }
@@ -223,16 +223,16 @@ func (store *Store) ProjectionDegraded(ctx context.Context, scope knowl.ScopeRef
 	if store.embedding == nil {
 		return false, nil
 	}
-	if store.nativeErr != nil {
-		return false, nativeUnavailable(ctx)
+	if err := store.verifyNativeVectors(ctx); err != nil {
+		return false, err
 	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	state, _, err := embeddingProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
-	return state.Mode == knowl.RetrievalDegraded, err
+	validated, err := store.validateDenseProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	return validated.State.Mode == knowl.RetrievalDegraded, err
 }
 
 func (store *Store) MaintenanceRetrievalPolicy() *app.MaintenanceRetrievalPolicy {
