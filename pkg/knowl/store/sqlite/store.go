@@ -20,6 +20,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/writelock"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite/vec"
 )
 
 //go:embed migrations/*.sql

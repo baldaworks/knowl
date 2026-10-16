@@ -65,7 +65,7 @@ func (store *Store) publishEmbeddingsChecked(ctx context.Context, scope knowl.Sc
 	if state.ReadyAt.IsZero() {
 		state.ReadyAt = time.Now().UTC()
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO knowl_embedding_state(scope,space,snapshot_digest,dimensions,mode,reason,chunk_count,omitted_chunks,omitted_runes,ready_at,coverage) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, scope, state.Space, state.SnapshotDigest, state.Dimensions, state.Mode, state.Reason, state.ChunkCount, state.OmittedChunks, state.OmittedRunes, state.ReadyAt.UTC().Format(time.RFC3339Nano), state.Coverage)
+	_, err = tx.ExecContext(ctx, `INSERT INTO knowl_embedding_state(scope,space,snapshot_digest,dimensions,mode,reason,chunk_count,omitted_chunks,omitted_runes,ready_at,coverage,native_format) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)`, scope, state.Space, state.SnapshotDigest, state.Dimensions, state.Mode, state.Reason, state.ChunkCount, state.OmittedChunks, state.OmittedRunes, state.ReadyAt.UTC().Format(time.RFC3339Nano), state.Coverage)
 	if err != nil {
 		return fmt.Errorf("write embeddings readiness: %w", err)
 	}
@@ -96,7 +96,7 @@ func (store *Store) publishEmbeddingsChecked(ctx context.Context, scope knowl.Sc
 // transaction that the caller uses for lexical candidates and original evidence.
 func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, space string, dimensions int) (hybrid.ProjectionState, []hybrid.Chunk, error) {
 	var state hybrid.ProjectionState
-	var bounded bool
+	var bounded, currentFormat bool
 	err := tx.QueryRowContext(ctx, `SELECT
         length(CAST(e.space AS BLOB)) = 64
         AND length(CAST(e.snapshot_digest AS BLOB)) = 64
@@ -108,14 +108,18 @@ func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef
         AND typeof(e.dimensions) = 'integer'
         AND typeof(e.chunk_count) = 'integer'
         AND typeof(e.omitted_chunks) = 'integer'
-        AND typeof(e.omitted_runes) = 'integer'
+		AND typeof(e.omitted_runes) = 'integer',
+		typeof(e.native_format) = 'integer' AND e.native_format = 1
         FROM knowl_embedding_state e JOIN knowl_projection_state p ON p.scope=e.scope
-        WHERE e.scope=?`, scope).Scan(&bounded)
+        WHERE e.scope=?`, scope).Scan(&bounded, &currentFormat)
 	if errors.Is(err, sql.ErrNoRows) {
 		return state, nil, embeddingFailure(knowl.RetrievalProjectionNotReady)
 	}
 	if err != nil {
 		return state, nil, err
+	}
+	if !currentFormat {
+		return state, nil, embeddingFailure(knowl.RetrievalProjectionNotReady)
 	}
 	if !bounded {
 		return state, nil, embeddingFailure(knowl.RetrievalProjectionDrift)
