@@ -8,7 +8,7 @@ knowl:
     - wiki-filesystem:knowl-docs/agents.md@e0b710a8a9c32653f3580c09abb08dbbe32b2322de428c63a60bae39370b377b
     - wiki-filesystem:knowl-docs/design.md@a3099f6ef8a7094ced149ddd0e73f9b95c5a9a44c8d8007c6ec3f4b764aa4f41
     - wiki-filesystem:knowl-docs/examples/own-docs-wiki.md@4b076ff94b528e7e337477c9190b8aa2b59649bb07e78bd65db880b1b28c8fa2
-    - wiki-filesystem:knowl-docs/local-codex.md@50fcfaf27cd8c671650b42f050c7b90bfcef1355619133c9d9da92ffa3ccc0f9
+    - wiki-filesystem:knowl-docs/local-codex.md@2975c1633b786c021b7f21f091925a84997d31452f51dee376c09fb36b542b42
     - wiki-filesystem:knowl-docs/operations.md@c4dc7e57ca23dc8864f014dc283faf6fee92c4de46685fea364e4bade6fd6e14
     - wiki-filesystem:knowl-docs/publishing.md@a37755a2d562c9f596a41e474422161f29278ba9d9e527e3375224a8ce4265b4
     - wiki-filesystem:knowl-docs/releases/v0.1.0.md@183d6c7f742a0555fa5f792ea5d84435ede6851d29fb5007301c8e8144bfb561
@@ -59,13 +59,15 @@ The active wiki maintainer is selected using the `knowl.provider` setting from t
 - **Hosted Providers & Adapters**: Supports hosted model APIs (e.g., OpenAI provider in service mode) and named ACP adapters like `antigravity_acp` (e.g., paired with model `gemini-3.8-flash-medium` in reference repository configurations).
 
 ## Codex Client Integration and Skills
-Codex integrates as a consumer client via the `@baldaworks/knowl` npm package (e.g. `0.6.0`):
-- **Setup**: `npx --yes @baldaworks/knowl@0.6.0 setup codex` creates missing project state (`.config/knowl`, `schema.md`, `raw/`, `wiki/`, `.knowl/`), validates workspace structure, and registers the release-matched marketplace plugin (replacing existing only with `--replace`).
-- **Workflow Skills**:
-  - `$knowl:setup`: Repeats or repairs the pinned setup workflow.
-  - `$knowl:run`: Validates workspace state, executes one bounded `knowl run` (using local binary if `knowl version --json` reports `0.6.0`, otherwise the pinned `npx` launcher), re-validates, and reports structured changes. Maintenance requires an installed and authenticated ACP runtime (e.g., `opencode acp`).
-- **Consumer MCP**: Registers a project-scoped MCP server running `npx --yes @baldaworks/knowl@0.6.0 mcp stdio` owned directly by Codex without background daemons, ports, or operator tokens.
-- **Scope**: Verified for local Codex instances on local filesystems with shared store and workspace coordination across threads.
+Codex integrates as a consumer client via the `@baldaworks/knowl` npm package, which selects the native binary for the platform at the exact release version. The current local-client recipe uses `0.6.1` and requires that npm release to be published. Configuring Codex as a client is separate from choosing the wiki maintainer.
+- **Setup**: `npx --yes @baldaworks/knowl@0.6.1 setup codex`, run from the project root, creates only missing project state (`.config/knowl`, `schema.md`, `raw/`, `wiki/`, `.knowl/`), validates it, and installs the release-matched marketplace and plugin. Existing project files are preserved. Conflicting Knowl-managed marketplace or plugin installations require explicit approval and a rerun with `--replace`.
+- **Workflow Skills**: Start a new Codex thread in the project after setup. The plugin provides exactly two workflow skills:
+  - `$knowl:setup`: Repeats or repairs the same pinned setup workflow.
+  - `$knowl:run`: Validates workspace state, executes one bounded `knowl run`, re-validates, and reports structured results and changes under Knowl-owned paths. It uses a local binary only if `knowl version --json` identifies exact `0.6.1`; otherwise it uses the pinned `npx --yes @baldaworks/knowl@0.6.1` launcher for the whole workflow.
+- **Prerequisites and Maintainer**: Requires Node.js with npm/npx and the Codex CLI. Maintenance also requires the configured provider; the default project configuration expects an installed and authenticated `opencode acp` runtime. Installing the consumer plugin does not select the wiki maintainer.
+- **Consumer MCP**: Plugin installation registers a project-scoped MCP server running `npx --yes @baldaworks/knowl@0.6.1 mcp stdio`, owned directly by Codex with the active project as its working directory. No background daemon, port allocation, operator token, or `codex mcp add` configuration is required.
+- **Platforms and Offline Use**: Native packages cover macOS x64/arm64, Linux x64/arm64, and Windows x64. Setup and the first MCP launch can download the exact npm package, and setup fetches the pinned Git marketplace. Prewarm both online for later offline work. Sparse checkout limits materialized working-tree paths to plugin assets without promising a metadata-only Git transfer or eliminating all repository metadata fetches.
+- **Scope**: Verified for local Codex projects on local filesystems. Hosted Codex, remote MCP hosting, shared/network filesystems, and secondary workspace folders are outside the verified contract. Separate local projects resolve separate state; multiple threads in one project share the durable store and coordinated workspace. Unrelated user changes remain outside Knowl's write scope.
 
 ## Search and Hybrid Retrieval
 Knowl uses lexical search by default, matching indexed page titles, tags, descriptions, and body content. When embeddings are configured, hybrid search combines lexical and semantic candidates from the same published wiki.
