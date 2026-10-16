@@ -96,12 +96,6 @@ func (store *Store) publishEmbeddingsChecked(ctx context.Context, scope knowl.Sc
 	return nil
 }
 
-// Dense query validation/ranking is supplied by TASK009. Keep the legacy query
-// entry closed while native publication and maintenance are available.
-func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, space string, dimensions int) (hybrid.ProjectionState, []hybrid.Chunk, error) {
-	return hybrid.ProjectionState{}, nil, nativeUnavailable(ctx)
-}
-
 // maintenanceEmbeddingProjectionTx is the only full-vector reader, used to
 // authenticate reuse before rebuilding, never by query-time retrieval.
 func maintenanceEmbeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, space string, dimensions int) (hybrid.ProjectionState, []hybrid.Chunk, error) {
@@ -221,7 +215,7 @@ func embeddingPageSetTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef) (
 	if maxIDBytes > 4096 || maxDigestBytes > 256 {
 		return nil, embeddingFailure(knowl.RetrievalProjectionDrift)
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT page_id,digest FROM knowl_pages WHERE scope=$1 ORDER BY page_id LIMIT $2`, scope, hybrid.MaxChunks+1)
+	rows, err := tx.QueryContext(ctx, `SELECT page_id,digest FROM knowl_pages WHERE scope=$1 ORDER BY page_id COLLATE "C" LIMIT $2`, scope, hybrid.MaxChunks+1)
 	if err != nil {
 		return nil, err
 	}

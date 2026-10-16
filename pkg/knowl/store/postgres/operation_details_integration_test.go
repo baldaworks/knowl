@@ -77,6 +77,10 @@ func runOperationDetailsMigrationPostgres(t *testing.T, dsn string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	optional := nativeOptionalProvider(t, store.db)
+	if _, err := optional.DownTo(t.Context(), 0); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := provider.DownTo(t.Context(), 16); err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +93,9 @@ func runOperationDetailsMigrationPostgres(t *testing.T, dsn string) {
 		t.Fatalf("canonical projection changed: %v", err)
 	}
 	if _, err := provider.Up(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := optional.Up(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

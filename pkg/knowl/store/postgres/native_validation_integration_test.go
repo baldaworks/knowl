@@ -247,7 +247,7 @@ func runNativeValidationSnapshot(t *testing.T, store *Store) {
 	}
 }
 
-type nativeTransferCounts struct{ rows, vectorBytes int }
+type nativeTransferCounts struct{ rows, vectorBytes, denseRows int }
 type nativeObservedConnector struct {
 	driver.Connector
 	counts *nativeTransferCounts
@@ -269,6 +269,9 @@ type nativeObservedConnection struct {
 func (c nativeObservedConnection) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
 }
+func (c nativeObservedConnection) CheckNamedValue(value *driver.NamedValue) error {
+	return c.Conn.(driver.NamedValueChecker).CheckNamedValue(value)
+}
 func (c nativeObservedConnection) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	rows, err := c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
 	if err != nil {
@@ -287,6 +290,9 @@ func (r nativeObservedRows) Next(values []driver.Value) error {
 	if err == nil {
 		r.counts.rows++
 		for i, column := range r.Columns() {
+			if column == "score" && values[i] != nil {
+				r.counts.denseRows++
+			}
 			if column == nativeStoredVectorColumn {
 				switch value := values[i].(type) {
 				case string:

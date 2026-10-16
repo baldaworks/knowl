@@ -143,7 +143,7 @@ func TestPostgresNativePublication(t *testing.T) {
 	t.Run("atomic-publication-and-interruption", func(t *testing.T) { runNativePublicationAtomicity(t, dsn) })
 	t.Run("read-only-schema-checks", func(t *testing.T) { runNativePublicationSchemaChecks(t, dsn) })
 	t.Run("runtime-capability-revocation", func(t *testing.T) { runNativePublicationRuntimeRole(t, dsn) })
-	t.Run("query-fails-closed-until-sql-retrieval", func(t *testing.T) { runNativePublicationQueryGate(t, dsn) })
+	t.Run("published-projection-native-retrieval", func(t *testing.T) { runNativePublicationQueryGate(t, dsn) })
 	t.Run("provider-and-deadline-safety", func(t *testing.T) {
 		databaseDSN := nativePublicationDatabase(t, dsn, "failure")
 		runPostgresProjectProviderFailure(t, databaseDSN)
@@ -163,16 +163,11 @@ func runNativePublicationQueryGate(t *testing.T, dsn string) {
 		store.embedding.FailurePolicy = policy
 		refs, report, err := store.SearchWithReport(t.Context(), snapshot.Scope, nativeQuery, knowl.ReadLimits{Pages: 1}, nil)
 		ids, contextReport, _, contextErr := store.SelectContextWithDiagnostics(t.Context(), snapshot.Scope, knowl.SourceSummary{Title: nativeQuery}, knowl.ReadLimits{Pages: 1})
-		if policy == app.EmbeddingStrict {
-			assertEmbeddingFailure(t, err, knowl.RetrievalUnavailable)
-			assertEmbeddingFailure(t, contextErr, knowl.RetrievalUnavailable)
-		} else {
-			if err != nil || len(refs) != 1 || refs[0].ID != "a" || report.Effective != knowl.RetrievalDegraded || report.Reason != knowl.RetrievalUnavailable {
-				t.Fatalf("fallback search=%v report=%+v error=%v", refs, report, err)
-			}
-			if contextErr != nil || len(ids) != 1 || ids[0] != "a" || contextReport.Effective != knowl.RetrievalDegraded || contextReport.Reason != knowl.RetrievalUnavailable {
-				t.Fatalf("fallback context=%v report=%+v error=%v", ids, contextReport, contextErr)
-			}
+		if err != nil || len(refs) != 1 || refs[0].ID != "a" || report.Effective != knowl.RetrievalHybrid || report.VectorCandidates != 1 {
+			t.Fatalf("native search=%v report=%+v error=%v", refs, report, err)
+		}
+		if contextErr != nil || len(ids) != 1 || ids[0] != "a" || contextReport.Effective != knowl.RetrievalHybrid || contextReport.VectorCandidates != 1 {
+			t.Fatalf("native context=%v report=%+v error=%v", ids, contextReport, contextErr)
 		}
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()

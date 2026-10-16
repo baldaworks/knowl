@@ -3,9 +3,9 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -96,10 +96,14 @@ func runPostgresStructuredOKFEvidence(t *testing.T, dsn string) {
 
 func embeddingFixture(t *testing.T, dsn string) (*Store, knowl.WorkspaceSnapshot, hybrid.ProjectionState, []hybrid.Chunk) {
 	t.Helper()
-	store, err := Open(t.Context(), dsn)
+	store, err := Open(t.Context(), dsn, nativeOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
+	// These persistence fixtures publish staged vectors manually and exercise
+	// lexical behavior independently. Open above verifies/migrates the native
+	// storage capability; inference remains disabled as in the original fixture.
+	store.embedding = nil
 	t.Cleanup(func() { _ = store.Close() })
 	snapshot := genericPostgresSnapshot()
 	snapshot.Scope = knowl.ScopeRef("embedding_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
@@ -132,7 +136,7 @@ func readEmbeddingFixture(ctx context.Context, store *Store, scope knowl.ScopeRe
 		return hybrid.ProjectionState{}, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	return embeddingProjectionTx(ctx, tx, scope, state.Space, state.Dimensions)
+	return maintenanceEmbeddingProjectionTx(ctx, tx, scope, state.Space, state.Dimensions)
 }
 
 func assertEmbeddingFailure(t *testing.T, err error, code knowl.RetrievalFailure) {
@@ -171,12 +175,16 @@ func runPostgresEmbeddingPersistenceAndScope(t *testing.T, dsn string) {
 	if err != nil || foreignRows[0].Vector[1] != 1 {
 		t.Fatalf("foreign scope publication=%v %v", foreignRows, err)
 	}
-	var blob []byte
-	if err := store.db.QueryRowContext(t.Context(), `SELECT vector FROM knowl_embedding_chunks WHERE scope=$1 LIMIT 1`, snapshot.Scope).Scan(&blob); err != nil {
+	var components string
+	if err := store.db.QueryRowContext(t.Context(), `SELECT vector::text FROM knowl_embedding_chunks WHERE scope=$1 LIMIT 1`, snapshot.Scope).Scan(&components); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(blob, []byte{0, 0, 128, 63, 0, 0, 0, 0}) {
-		t.Fatalf("portable blob=%v", blob)
+	var decoded []float32
+	if err := json.Unmarshal([]byte(components), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(decoded, []float32{1, 0}) {
+		t.Fatalf("native float32 components=%v", components)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -253,7 +261,7 @@ func runPostgresEmbeddingCorruptionFailsClosed(t *testing.T, dsn string) {
 		{"missing", `DELETE FROM knowl_embedding_chunks WHERE scope=$1 AND page_id=$2`, []any{genericAccentID}},
 		{"page digest", `UPDATE knowl_embedding_chunks SET page_digest=$1 WHERE scope=$2`, []any{"wrong"}},
 		{"space", `UPDATE knowl_embedding_chunks SET space=$1 WHERE scope=$2`, []any{strings.Repeat("c", 64)}},
-		{"zero vector", `UPDATE knowl_embedding_chunks SET vector=$1 WHERE scope=$2`, []any{make([]byte, 8)}},
+		{"zero vector", `UPDATE knowl_embedding_chunks SET vector=$1 WHERE scope=$2`, []any{"[0,0]"}},
 		{"ordinal gap", `UPDATE knowl_embedding_chunks SET ordinal=2 WHERE scope=$1`, nil},
 		{"count", `UPDATE knowl_embedding_state SET chunk_count=1 WHERE scope=$1`, nil},
 	}
@@ -302,7 +310,7 @@ func runPostgresEmbeddingDegradedAndCapacity(t *testing.T, dsn string) {
 		t.Fatal(err)
 	}
 	for i := 1; i <= hybrid.MaxChunks; i++ {
-		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowl_embedding_chunks(scope,space,page_id,page_digest,ordinal,content_hash,dimensions,vector) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, snapshot.Scope, fmt.Sprintf("%064x", i), chunks[0].PageID, chunks[0].PageDigest, 0, chunks[0].ContentHash, 2, []byte{0, 0, 128, 63, 0, 0, 0, 0}); err != nil {
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowl_embedding_chunks(scope,space,page_id,page_digest,ordinal,content_hash,dimensions,vector) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, snapshot.Scope, fmt.Sprintf("%064x", i), chunks[0].PageID, chunks[0].PageDigest, 0, chunks[0].ContentHash, 2, "[1,0]"); err != nil {
 			_ = tx.Rollback()
 			t.Fatal(err)
 		}
@@ -408,6 +416,7 @@ func runPostgresRetrievalReportGuardsAndRestart(t *testing.T, dsn string) {
 
 func runPostgresEmbeddingMigrationDownPreservesLexicalAndOperations(t *testing.T, dsn string) {
 	store, snapshot, _, _ := embeddingFixture(t, dsn)
+	lexical := nativeOpen(t, dsn)
 	reserved, err := store.Reserve(t.Context(), knowl.OperationKey{Scope: snapshot.Scope, Source: knowl.SourceRef{Adapter: embeddingTestAdapter, ID: "down"}, Version: knowl.SourceVersion{Version: "1", Digest: embeddingTestDigest}}, knowl.OperationMeta{SchemaDigest: testSchemaDigest})
 	if err != nil {
 		t.Fatal(err)
@@ -420,13 +429,17 @@ func runPostgresEmbeddingMigrationDownPreservesLexicalAndOperations(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	optional := nativeOptionalProvider(t, store.db)
+	if _, err := optional.DownTo(t.Context(), 0); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := provider.DownTo(t.Context(), 15); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CheckProjection(t.Context(), snapshot); err != nil {
+	if err := lexical.CheckProjection(t.Context(), snapshot); err != nil {
 		t.Fatalf("down invalidated lexical snapshot: %v", err)
 	}
-	refs, err := store.Search(t.Context(), snapshot.Scope, "café", knowl.ReadLimits{}, nil)
+	refs, err := lexical.Search(t.Context(), snapshot.Scope, "café", knowl.ReadLimits{}, nil)
 	if err != nil || len(refs) != 1 {
 		t.Fatalf("down lost lexical search: %v %v", refs, err)
 	}
@@ -435,6 +448,9 @@ func runPostgresEmbeddingMigrationDownPreservesLexicalAndOperations(t *testing.T
 		t.Fatalf("down lost operation: %s %v", id, err)
 	}
 	if _, err := provider.Up(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := optional.Up(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	operation, err := store.Operation(t.Context(), snapshot.Scope, id)
@@ -455,7 +471,7 @@ func runPostgresEmbeddingReadUsesOneSnapshot(t *testing.T, dsn string) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, chunks, err := embeddingProjectionTx(t.Context(), tx, snapshot.Scope, state.Space, state.Dimensions)
+	_, chunks, err := maintenanceEmbeddingProjectionTx(t.Context(), tx, snapshot.Scope, state.Space, state.Dimensions)
 	if err != nil || len(chunks) != state.ChunkCount {
 		t.Fatalf("snapshot chunks=%v err=%v", chunks, err)
 	}
