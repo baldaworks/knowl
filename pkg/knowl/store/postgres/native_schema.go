@@ -25,7 +25,7 @@ type nativeVectorCapability struct {
 	dimsOID int64
 }
 
-func configureNativeVectors(ctx context.Context, db *sql.DB, locker lock.SessionLocker) (nativeVectorCapability, error) {
+func readNativeVectorCapability(ctx context.Context, db *sql.DB) (nativeVectorCapability, error) {
 	var capability nativeVectorCapability
 	err := db.QueryRowContext(ctx, `SELECT n.nspname,t.oid::bigint,f.oid::bigint
         FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace
@@ -38,6 +38,14 @@ func configureNativeVectors(ctx context.Context, db *sql.DB, locker lock.Session
         AND EXISTS (SELECT 1 FROM pg_proc nf JOIN pg_depend nd ON nd.classid='pg_proc'::regclass AND nd.objid=nf.oid AND nd.refclassid='pg_extension'::regclass AND nd.refobjid=e.oid AND nd.deptype='e' WHERE nf.pronamespace=n.oid AND nf.proname='vector_norm' AND nf.proargtypes=ARRAY[t.oid]::oidvector AND has_function_privilege(nf.oid,'EXECUTE'))`).Scan(&capability.schema, &capability.typeOID, &capability.dimsOID)
 	if err != nil {
 		return nativeVectorCapability{}, nativeUnavailable(ctx)
+	}
+	return capability, nil
+}
+
+func configureNativeVectors(ctx context.Context, db *sql.DB, locker lock.SessionLocker) (nativeVectorCapability, error) {
+	capability, err := readNativeVectorCapability(ctx, db)
+	if err != nil {
+		return nativeVectorCapability{}, err
 	}
 	directory, err := fs.Sub(pgvectorMigrationFiles, "pgvector_migrations")
 	if err != nil {
@@ -61,6 +69,30 @@ func nativeUnavailable(ctx context.Context) error {
 		return err
 	}
 	return embeddingFailure(knowl.RetrievalUnavailable)
+}
+
+// Publication and maintenance can only verify an already migrated schema.
+// Constructing the fixed Goose provider does not initialize or apply history.
+func (store *Store) verifyNativeVectors(ctx context.Context) error {
+	if store.nativeErr != nil || store.native.typeOID == 0 {
+		return nativeUnavailable(ctx)
+	}
+	capability, err := readNativeVectorCapability(ctx, store.db)
+	if err != nil || capability != store.native {
+		return nativeUnavailable(ctx)
+	}
+	directory, err := fs.Sub(pgvectorMigrationFiles, "pgvector_migrations")
+	if err != nil {
+		return nativeUnavailable(ctx)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, directory, goose.WithTableName(pgvectorHistory), goose.WithDisableGlobalRegistry(true))
+	if err != nil {
+		return nativeUnavailable(ctx)
+	}
+	if err := validateNativeSchema(ctx, store.db, provider, store.native); err != nil {
+		return nativeUnavailable(ctx)
+	}
+	return nil
 }
 
 func validateNativeSchema(ctx context.Context, db *sql.DB, provider *goose.Provider, capability nativeVectorCapability) error {
