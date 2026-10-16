@@ -472,3 +472,61 @@ go test -tags integration ./pkg/knowl/store/postgres \
 
 These controlled fixtures establish execution and integrity contracts. They do
 not promise production throughput or two successful commits from overlapping plans.
+
+## Native vector comparison harness
+
+`BenchmarkVectorRuntime` executes the real `SearchWithReport` interface,
+including all readiness/integrity, source filtering, fusion and evidence work.
+`BenchmarkVectorKernel` instead compares native scalar/page SQL with an isolated
+full-vector-transfer/Go-dot baseline on separate disposable tables. Both kernel
+paths omit production validation, caps, inference, fusion and evidence; their
+results are not supported-runtime throughput. Legacy near-unit dot and native
+cosine may legitimately produce different winners.
+
+The default fixtures are only 128 chunks, 8 dimensions and 1/4 query windows.
+For an actual before/after runtime comparison, create a detached temporary
+worktree at `dec6249b68a27435217e29bef9a5669fee068cb0` and copy the **identical**
+`internal/searchtest/{vector_benchmark,native_oracle}.go` and backend
+`vector_runtime_benchmark*_test.go` files into it. Do not change its production
+code or substitute a synthetic baseline. Run the same commands in each checkout,
+labeling `KNOWL_VECTOR_BENCH_REVISION` with the actual revision:
+
+```sh
+go test -v -json ./pkg/knowl/store/sqlite -run '^$' \
+  -bench '^BenchmarkVectorRuntime' -benchtime=5x -benchmem -count=1
+go test -v -json -tags integration ./pkg/knowl/store/postgres -run '^$' \
+  -bench '^BenchmarkVectorRuntime' -benchtime=5x -benchmem -count=1
+go test -v -json ./pkg/knowl/store/sqlite -run '^$' \
+  -bench '^BenchmarkVectorKernel' -benchtime=5x -benchmem -count=1
+```
+
+PostgreSQL uses an operator-provisioned extension in the pinned disposable
+pgvector 0.8.2/PostgreSQL 16 container; add `-tags integration` for its kernel.
+No live workspace or external model service is used. Vectors are deterministic
+normalized float32 from seed 73 and actual prepared input hashes, precomputed
+outside retrieval timing. Local provider lookup/copy remains in runtime timing;
+external inference calls are zero. Fixture checksums include inputs/vector bits,
+source membership, dimensions and window configuration. Native samples carry
+an exhaustive native scalar/page oracle and separate original-float32 float64
+cosine error check with the unchanged dimension-dependent bound.
+
+Opt-in `KNOWL_VECTOR_BENCH_LAB=1` enumerates 8192/25000/100000 chunks with
+2/768/4096 dimensions, 1/4 windows, 50% source eligibility, plus 8192×768 at 100%.
+Production limits remain unchanged: oversized publication records typed
+`projection_capacity`, not supported query timing. Kernel cases estimate six
+float32 representations plus 512 bytes/chunk before vector/DB allocation and
+report `resource_limited` above 512 MiB. Each case has a 180-second context budget
+starting before fixture preparation/migrations/container startup and shared by
+setup, correctness/plans and measured repetitions. CPU fixture loops check the
+context; driver work receives it. Unsupported cases have no timing claim.
+
+JSON observations contain actual wall samples, sample count/median/p95/max,
+ns/op, B/op, allocs/op, typed retrieval reports and real scanned transfer counts.
+Bytes are decoded logical result-cell bytes, not wire framing or server storage.
+`LogicalScoredPairs` is explicitly an estimate, not executor work. Runtime
+scalar/ranking/vector SQL intervals include client row consumption and cannot
+be called server CPU or the complete Go integrity phase. PostgreSQL plans parse
+`EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)` numerical executor work; SQLite records
+structured `EXPLAIN QUERY PLAN`, not invented executor counters. Bound vectors
+and raw SQL are never serialized. Record hardware, versions/settings and exact
+commands with any comparative result; single smoke samples imply no speed claim.

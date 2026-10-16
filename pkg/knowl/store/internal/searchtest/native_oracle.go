@@ -46,7 +46,7 @@ func NativeWinners(scores []NativeScore, limit int) []NativeScore {
 
 // CheckNativeCosine compares native arithmetic with true cosine calculated
 // independently over the original float32 fixture values in float64.
-func CheckNativeCosine(t *testing.T, vector, query []float32, score float64) float64 {
+func CheckNativeCosine(t testing.TB, vector, query []float32, score float64) float64 {
 	t.Helper()
 	var dot, vectorNorm, queryNorm float64
 	for i, v := range vector {
