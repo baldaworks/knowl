@@ -475,6 +475,10 @@ not promise production throughput or two successful commits from overlapping pla
 
 ## Native vector comparison harness
 
+[Actual local results](testing/native-vectors.md) record a material full-query
+latency regression on both backends despite zero stored-vector transfer and
+lower Go allocation volume. Isolated kernel timings are not production latency.
+
 `BenchmarkVectorRuntime` executes the real `SearchWithReport` interface,
 including all readiness/integrity, source filtering, fusion and evidence work.
 `BenchmarkVectorKernel` instead compares native scalar/page SQL with an isolated
