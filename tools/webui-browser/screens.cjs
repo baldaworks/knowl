@@ -74,6 +74,9 @@ async function savedSourceOutcomes(page) {
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  try {
   const page=await browser.newPage({viewport:{width:1366,height:900}});
+  // Keep interception enabled when one-shot fault routes expire: disabling it
+  // can race the UI's immediate recovery request in Chromium. Later routes win.
+  await page.route('**/*',route=>route.continue());
   const artifact=async name=>{if(process.env.KNOWL_BROWSER_ARTIFACT_DIR)await page.screenshot({path:require('node:path').join(process.env.KNOWL_BROWSER_ARTIFACT_DIR,'task-019-'+name+'.png'),fullPage:false});};
   const requests=[],violations=[];
   page.on('request',r=>requests.push(r.url()));
