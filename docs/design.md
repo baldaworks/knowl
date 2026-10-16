@@ -233,14 +233,16 @@ identity fallback only when semantic text is empty.
 
 `knowl.embeddings` selects a separate OpenAI-compatible embedding API or the
 inert default. The maintainer provider remains independent. Both SQLite and
-PostgreSQL use the same semantic preparation, max-cosine page scoring and
-reciprocal rank fusion with their existing lexical candidate order. There is no
-language-specific route, in-process model or ANN extension.
+PostgreSQL use the same semantic preparation and bounded reciprocal rank fusion
+with their existing lexical candidate order. Exhaustive page maxima use true
+native database cosine: bundled CGO-free sqlite-vec or optional operator-owned
+pgvector. There is no language-specific route, in-process model or ANN index.
 
 Semantic inputs preserve original case and use NFC with normalized line endings.
-Fixed 384-rune chunks overlap by 64 runes. Every eligible page is chunked to its
-end; embedding API calls contain at most 16 chunks each. Queries and source
-signals retain at most four chunks, and their omitted coverage is reported. Model
+Page inputs follow heading sections and block boundaries, with at most 384 runes
+including semantic context/prefix. Every eligible page is chunked to its end;
+embedding API calls contain at most 16 inputs. Queries/source signals use at most
+four 384-rune windows with 64-rune overlap and report omitted coverage. Model
 prefixes are applied once. Private lexical tokens, paths and provenance do not
 enter the model. Complete source and factual-page authority in maintenance stays
 unchanged; semantic chunks are only a retrieval projection.
@@ -248,15 +250,23 @@ unchanged; semantic chunks are only a retrieval projection.
 Network inference runs outside SQL locks and transactions. A rebuild commits
 lexical state first, invalidates dense readiness, then publishes the complete
 bounded vector projection only if its canonical snapshot still matches. SQLite
-stores little-endian float32 vectors in BLOBs; PostgreSQL uses BYTEA and the same
-scoped advisory lock for lexical replacement and dense publication. Migration
-16 adds the original disposable projections and durable retrieval reports;
-migration 21 expands chunk ordinals and records a bounded per-page coverage
-manifest. Neither changes canonical Markdown or raw evidence.
+keeps portable little-endian float32 BLOBs; PostgreSQL's optional SQL stream uses
+the extension-owned unbounded vector type, retaining the scoped advisory lock
+for lexical replacement/publication. Base SQL migration 26 invalidates legacy derived dense
+state and adds native format; optional PG SQL migration 1 follows extension-free base Up
+under a separate standard Goose history. All new schema transitions are SQL;
+normal Goose-on-Open and historical Go migration 19 stay supported. Optional Down precedes
+base Down. See [operator recovery](postgres.md), especially existing empty-history
+corruption, which is never automatically bootstrapped or repaired.
 
-Enabled reads verify the complete projection, lexical candidates, filters and
-original references in one consistent read transaction. Each page contributes
-its maximum cosine across query windows and page chunks. Each channel keeps
+Enabled reads validate the complete bounded scope in native scalar SQL without
+stored-vector transfer, including unselected/nonwinning rows, and check coverage,
+lexical candidates, filters and original references in one consistent read
+transaction. SQL aggregates all eligible native scores to page winners before
+limiting candidates. Equal native scores choose lowest chunk ordinal and then
+bytewise page identity; close unequal scores retain native order, not a production
+epsilon. Old Go near-unit dot/backends may return different ordering/evidence.
+Each channel keeps
 `min(100, max(20, 4*k))` candidates; equal-weight RRF uses ranks starting at one
 and constant 60, deduplicating pages per channel and breaking ties by page ID.
 The fused relevance seeds feed the existing neighbor/root/recent context policy.
@@ -265,6 +275,12 @@ channels retains its lexical snippet; a dense-only result uses original text
 from its winning chunk, verified against the indexed page digest and chunk hash.
 Results retain original evidence and citations; semantic similarity does not
 establish factual agreement.
+
+Zero stored-vector transfer is not a speed promise: the
+[actual comparison](testing/native-vectors.md) found material supported-query
+latency regressions while reducing Go allocation volume. Full-scope validation
+remains mandatory. Separately labeled isolated 100000-chunk kernels omit both
+sides' production integrity/caps and cannot establish supported capacity.
 
 Projection capacity is 8,192 chunks, 1 MiB of coverage metadata and 64 MiB in
 total per scope. Ready state covers every eligible page and all its chunks;

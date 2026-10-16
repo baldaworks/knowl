@@ -129,6 +129,11 @@ capacity; a dense-only match shows the matching passage as its excerpt.
 
 Use your own compatible embedding API or the
 [local CPU embedding server](docs/search.md#local-embedding-server).
+Dense scoring runs natively inside SQLite or optional operator-provisioned
+pgvector; see [deployment/rebuild guidance](docs/postgres.md) and the
+[actual performance comparison](docs/testing/native-vectors.md). Zero stored-vector
+transfer does not promise faster queries: full-query latency regressed in the
+measured bounded laboratory. Lexical-only remains the default.
 Embeddings are off by default. Choose explicit keyword fallback or strict
 semantic availability in the [search guide](docs/search.md).
 
