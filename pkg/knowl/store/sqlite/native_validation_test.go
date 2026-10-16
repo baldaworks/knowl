@@ -346,8 +346,10 @@ func TestNativeProjectionExactLogicalByteCapacity(t *testing.T) {
 // These wrappers observe values returned by the real SQLite driver. They do
 // not inspect SQL text or replace query execution with a fake result set.
 type validationTransfers struct {
-	rows      int
-	blobBytes int
+	rows        int
+	blobBytes   int
+	vectorBytes int
+	denseRows   int
 }
 
 type validationConnector struct {
@@ -391,9 +393,15 @@ func (r validationRows) Next(values []driver.Value) error {
 	err := r.Rows.Next(values)
 	if err == nil {
 		r.transfer.rows++
-		for _, value := range values {
+		for i, value := range values {
 			if bytes, ok := value.([]byte); ok {
 				r.transfer.blobBytes += len(bytes)
+				if r.Columns()[i] == "vector" {
+					r.transfer.vectorBytes += len(bytes)
+				}
+			}
+			if r.Columns()[i] == "score" && value != nil {
+				r.transfer.denseRows++
 			}
 		}
 	}
