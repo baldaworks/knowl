@@ -5,7 +5,7 @@ description: Set up or repair project-local Knowl and its Codex plugin from the 
 
 # Knowl setup
 
-Run setup from the active project's root directory. The supported release is exactly `0.7.0`.
+Run setup from the active project's root directory. The supported release is exactly `0.7.1`.
 
 Before running it, tell the user that setup may:
 
@@ -20,14 +20,14 @@ Existing project configuration and knowledge files must remain unchanged. Do not
 1. Run this exact command directly, without a shell-composed variant:
 
    ```text
-   npx --yes @baldaworks/knowl@0.7.0 setup codex
+   npx --yes @baldaworks/knowl@0.7.1 setup codex
    ```
 
-2. Parse its JSON result. Require `version` to be `0.7.0`; report the `project`, `marketplace`, `plugin`, and `restart_required` fields. Stop on a nonzero exit or malformed/mismatched result.
+2. Parse its JSON result. Require `version` to be `0.7.1`; report the `project`, `marketplace`, `plugin`, and `restart_required` fields. Stop on a nonzero exit or malformed/mismatched result.
 3. Validate the resulting project with the same pinned executable:
 
    ```text
-   npx --yes @baldaworks/knowl@0.7.0 validate
+   npx --yes @baldaworks/knowl@0.7.1 validate
    ```
 
 4. If either integration field changed or `restart_required` is true, tell the user to start a new Codex thread in this project so Codex loads the installed plugin and MCP server.
