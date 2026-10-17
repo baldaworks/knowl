@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -102,6 +103,77 @@ func TestLintLogReadsOKFAuditComments(t *testing.T) {
 	inspection.Log.Content += "* missing audit\n"
 	if findings := lintLog(inspection); !hasFinding(findings, "log.malformed") {
 		t.Fatalf("lintLog(malformed) = %#v", findings)
+	}
+}
+
+func TestLintLogPreservesHistoricalCommits(t *testing.T) {
+	t.Parallel()
+	const (
+		firstGeneration = "first"
+		duplicateCode   = "log.duplicate_operation"
+	)
+
+	tests := []struct {
+		name         string
+		records      []logRecord
+		wantCode     string
+		wantSeverity string
+	}{
+		{name: "different generations", records: []logRecord{
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema},
+			{OperationID: "op", Generation: "second", SchemaDigest: fixtureSchema},
+		}},
+		{name: "different operations", records: []logRecord{
+			{OperationID: "first", Generation: "generation", SchemaDigest: fixtureSchema},
+			{OperationID: "second", Generation: "generation", SchemaDigest: fixtureSchema},
+		}},
+		{name: "deleted historical catalog", records: []logRecord{
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema, Files: []string{"wiki/catalogs/old/index.md"}},
+		}},
+		{name: "identical replay", records: []logRecord{
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema},
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema},
+		}, wantCode: duplicateCode, wantSeverity: lintWarning},
+		{name: "conflicting commit identity", records: []logRecord{
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema},
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema, Files: []string{lintPageOnePath}},
+		}, wantCode: duplicateCode, wantSeverity: lintError},
+		{name: "conflicting source references", records: []logRecord{
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema, SourceRefs: []string{"raw:source@v1"}},
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema, SourceRefs: []string{"raw:source@v2"}},
+		}, wantCode: duplicateCode, wantSeverity: lintError},
+		{name: "schema mismatch", records: []logRecord{
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: "different"},
+		}, wantCode: "log.schema_mismatch", wantSeverity: lintError},
+		{name: "unsorted historical targets", records: []logRecord{
+			{OperationID: "op", Generation: firstGeneration, SchemaDigest: fixtureSchema, Files: []string{"wiki/z.md", "wiki/a.md"}},
+		}, wantCode: "log.order", wantSeverity: lintError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var content strings.Builder
+			content.WriteString("# Knowl Update Log\n\n## 2026-08-25\n")
+			for _, record := range test.records {
+				audit, err := json.Marshal(record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				content.WriteString("* **Update**: committed. <!-- knowl:" + string(audit) + " -->\n")
+			}
+			findings := lintLog(knowl.WorkspaceInspection{
+				Snapshot: knowl.WorkspaceSnapshot{SchemaDigest: fixtureSchema},
+				Log:      knowl.PageSnapshot{Content: content.String()},
+			})
+			if test.wantCode == "" {
+				if len(findings) != 0 {
+					t.Fatalf("lintLog() = %#v, want no findings", findings)
+				}
+				return
+			}
+			if len(findings) != 1 || findings[0].Code != test.wantCode || findings[0].Severity != test.wantSeverity {
+				t.Fatalf("lintLog() = %#v, want %s (%s)", findings, test.wantCode, test.wantSeverity)
+			}
+		})
 	}
 }
 

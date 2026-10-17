@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -262,7 +263,8 @@ type logRecord struct {
 
 func lintLog(inspection knowl.WorkspaceInspection) []knowl.LintFinding {
 	findings := make([]knowl.LintFinding, 0)
-	seenOperations := make(map[string]struct{})
+	type commitIdentity struct{ operationID, generation string }
+	seenCommits := make(map[commitIdentity]logRecord)
 	limits := okf.DefaultLimits()
 	if len(inspection.Log.Content) > limits.MaxBytes && len(inspection.Log.Content) <= 64<<20 {
 		limits.MaxBytes = len(inspection.Log.Content)
@@ -278,21 +280,25 @@ func lintLog(inspection knowl.WorkspaceInspection) []knowl.LintFinding {
 				findings = append(findings, knowl.LintFinding{Code: "log.malformed", Severity: lintError, Path: inspection.Log.Path, Message: "log entry is not a complete structured commit record"})
 				continue
 			}
-			if _, exists := seenOperations[record.OperationID]; exists {
-				findings = append(findings, knowl.LintFinding{Code: "log.duplicate_operation", Severity: lintError, Path: inspection.Log.Path, Message: "log contains duplicate operation IDs"})
+			// An operation can be planned again against a different snapshot.
+			identity := commitIdentity{record.OperationID, record.Generation}
+			if previous, exists := seenCommits[identity]; exists {
+				severity := lintError
+				if previous.SchemaDigest == record.SchemaDigest && slices.Equal(previous.SourceRefs, record.SourceRefs) && slices.Equal(previous.Files, record.Files) {
+					severity = lintWarning
+				}
+				findings = append(findings, knowl.LintFinding{Code: "log.duplicate_operation", Severity: severity, Path: inspection.Log.Path, Message: "log repeats an operation and generation"})
+			} else {
+				seenCommits[identity] = record
 			}
-			seenOperations[record.OperationID] = struct{}{}
 			if record.SchemaDigest != inspection.Snapshot.SchemaDigest {
 				findings = append(findings, knowl.LintFinding{Code: "log.schema_mismatch", Severity: lintError, Path: inspection.Log.Path, Message: "log entry schema digest differs from the current schema"})
 			}
 			if !sort.StringsAreSorted(record.Files) {
 				findings = append(findings, knowl.LintFinding{Code: "log.order", Severity: lintError, Path: inspection.Log.Path, Message: "log entry file list is not deterministic"})
 			}
-			for _, path := range record.Files {
-				if _, exists := inspection.Snapshot.PageDigests[path]; !exists {
-					findings = append(findings, knowl.LintFinding{Code: "log.missing_file", Severity: lintError, Path: path, Message: "log entry cites a file absent from canonical Markdown"})
-				}
-			}
+			// Files are historical commit targets, including deletions; they
+			// need not exist in the current canonical snapshot.
 		}
 	}
 	return findings
