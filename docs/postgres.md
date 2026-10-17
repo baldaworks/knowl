@@ -138,8 +138,14 @@ not vector reuse: pair the schema with a compatible binary and rebuild before
 resuming. Do not reopen the new dense-enabled binary midway through rollback,
 because ordinary optional Up can apply the pending transition again.
 
-Native SQL still scans/validates the complete bounded scope. Read
-[the actual comparison](testing/native-vectors.md): zero stored-vector transfer
-and lower Go allocation volume came with material full-query latency regressions
-on both backends in the measured 8192-chunk laboratory. Isolated 100000-chunk
+Publication, reuse and recovery fully validate the bounded projection before
+atomic readiness; page changes invalidate incompatible state. Ordinary reads
+admit scalar ready/snapshot/model state and retain consumed-evidence validation,
+with exhaustive eligible native cosine scoring and no separate full-population
+integrity audit. Per-read detection of arbitrary out-of-band corruption in
+nonselected rows is outside the application-owned SQL trust boundary.
+Read [the actual comparison](testing/native-vectors.md): current latency results
+remain mixed, including PostgreSQL regressions with source filtering, while
+original v1.3 regressions remain visible. Zero stored-vector transfer and lower
+Go allocation volume do not guarantee faster queries. Isolated 100000-chunk
 kernels do not promise production capacity or faster complete queries.

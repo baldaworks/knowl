@@ -1,6 +1,112 @@
 # Native vector retrieval: local comparative results
 
-## Outcome: material supported-query latency regression
+## Trusted publication comparison — 2026-10-17
+
+Results are mixed. At 8192 chunks, 768 dimensions, one window and 50% source
+eligibility, trusted native SQLite measured **68.132ms versus 426.163ms** for
+the refreshed actual Go baseline. PostgreSQL measured **186.948ms versus
+157.079ms**, a remaining regression. With all sources eligible, PostgreSQL
+measured 59.517ms versus 146.657ms. SQLite's low-dimension four-window case also
+remains slower than Go. These observations support no general latency claim or
+new SLO. The original much slower v1.3 SQL measurements remain visible below.
+
+All current pairs ran strictly sequentially on the same host, with **n=3 warm
+queries per case**. Table cells show median (observed min–max), in milliseconds.
+The historical SQL column is dated evidence, not a contemporaneous third run;
+do not infer a causal speedup factor from it. OS/cache/background effects are
+not eliminated, and three samples do not establish reliable tails. The raw
+compatibility `P95NS` field is only nearest-rank=max of three.
+
+| Backend | dims/windows/source % | Refreshed Go ms (min–max) | Trusted native ms (min–max) | Historical v1.3 native median ms |
+|---|---|---:|---:|---:|
+| sqlite | 2/1/50 | 67.593 (66.382–69.721) | 38.830 (38.455–39.545) | 1174.389 |
+| sqlite | 2/4/50 | 69.634 (69.594–70.957) | 73.098 (69.270–73.840) | 1183.050 |
+| sqlite | 768/1/50 | 426.163 (425.573–436.138) | 68.132 (64.332–69.368) | 2929.833 |
+| sqlite | 768/4/50 | 452.554 (438.680–465.684) | 138.758 (137.375–156.208) | 3102.299 |
+| sqlite | 768/1/100 | 462.949 (461.335–467.712) | 103.451 (101.413–112.053) | 3077.691 |
+| postgres | 2/1/50 | 62.210 (60.539–62.291) | 168.249 (167.172–171.770) | 198.676 |
+| postgres | 2/4/50 | 66.439 (63.545–67.300) | 176.600 (173.507–177.024) | 210.722 |
+| postgres | 768/1/50 | 157.079 (155.512–158.211) | 186.948 (178.318–188.651) | 807.677 |
+| postgres | 768/4/50 | 187.183 (184.219–194.752) | 214.689 (213.777–217.588) | 825.127 |
+| postgres | 768/1/100 | 146.657 (142.780–147.521) | 59.517 (57.207–61.740) | 739.054 |
+
+The production revision is `643933d61e82ff5d396ae5f3db3a13d57ba1c840`;
+actual legacy production remains `dec6249b68a27435217e29bef9a5669fee068cb0`.
+The four runtime/fixture/oracle harness files were byte-identical in both
+checkouts; their SHA256s, exact commands, toolchain/backend/settings/hardware,
+raw-log checksums, all 20 observations and 20 actual structured plans are
+appended under `TrustRefinement` in [native-vectors.json](native-vectors.json).
+Top-level observations/plans retain their original historical payloads.
+The listed harness adds measurement attribution only; fixture seed 73, original
+prepared vectors, 128 pages, page limit 5 and channel limit 20 are unchanged.
+Every current pair matches the historical fixture checksum.
+
+Knowl-controlled publication/reuse/recovery still fully validates the complete
+projection before existing atomic ready publication; page changes invalidate
+incompatible state. Ordinary search/context/health/startup/lint use bounded
+scalar readiness/snapshot/model admission, with original-evidence validation
+where consumed. Per-read auditing of arbitrary nonselected SQL corruption is
+outside the approved application-owned trust boundary. No schema, cache,
+generation, setting, provider, scoring rewrite or capacity increase was added.
+
+In these search fixtures, every native query transferred two scalar admission
+rows: 276 logical result-cell bytes on SQLite, 259 on PostgreSQL. It transferred
+zero coverage-manifest bytes and zero stored vectors, with 20 dense candidates,
+5 evidence rows and 32 total driver rows including page fetches. Full-scope
+`ScannedChunks=8192` comes from admitted published state; it is not a fresh
+integrity audit or the candidate count. The instrumented bytecode/catalog-root
+and typed PostgreSQL-plan tests also cover increasing populations and
+search/context/health caller paths; actual startup/lint composition tests retain
+repair/failure behavior. Exhaustive eligible native cosine remains necessary.
+
+For 768/one-window/source 50, current Go allocation volume is
+79.904→1.684 MiB/query on SQLite and
+79.974→1.764 MiB/query on PostgreSQL.
+These are B/op, **not RSS**. The old pipeline transfers 8192 stored vectors,
+24 MiB/query at 768 dimensions. Native queries still transfer current page and
+evidence bodies; zero stored vectors does not mean zero result bytes.
+
+For that same fixture, mean scalar SQL row-consumption intervals were
+0.132ms/1.101ms
+(SQLite/PostgreSQL), and ranking intervals
+61.867ms/173.686ms.
+They include client consumption, are not pure server CPU, and cannot be added
+as independent median phases. The refined scalar counter now includes the fixed
+metadata row; historical counters keep their original definition. Legacy scalar
+classification also includes page-coverage rows. The observed source-filter
+contrast alone does not establish a causal hotspot.
+
+Publication and maintenance are outside query timers. Each case records one
+full `Rebuild` call as `PublicationNS` and one same-snapshot `Project` call as
+`ReuseNS`; these include lexical work, full validation and writes, not isolated
+validator microbenchmarks. For 768/one-window/source 50, native Rebuild/Project
+observed 1.439/2.305s on SQLite and
+6.926/8.507s on PostgreSQL.
+These are single setup observations, not latency distributions.
+
+All ten native cases passed exhaustive native/page aggregation and independent
+float64 true-cosine checks with the unchanged Design bound. Observed maximum
+errors were 2.10326643e-7
+(SQLite) and 9.97581830e-8
+(PostgreSQL); accepted native/legacy and backend near-match ordering differences
+remain. A separate earlier frozen-harness SQLite 8192×2/one-window/source 50
+sample measured median 38.310ms, range
+36.936–38.727ms, n=3;
+it is recorded as `TrustRefinement.Reproduction`, not pooled with the matrix.
+
+Original 25000/100000 capacity rejections, isolated kernels and high-dimensional
+resource outcomes are **retained, not rerun**, at the original `6d4ee134...`
+revision. Review confirmed the kernel/scoring/fixture/oracle and production
+limits unchanged; TASK-018 reran supported bounds, oracles, publication/reuse,
+CAS/invalidation, failure/cancellation, CGO-free, PostgreSQL and race coverage.
+These old larger-case results do not become new production-capacity claims.
+The host remains Go 1.26.9, Linux/WSL2, 4vCPU Ryzen 7 PRO 7840U, 33,657,823,232B
+RAM, no swap; SQLite 3.53.3/sqlite-vec 0.1.9 and PG 16.14/pgvector 0.8.2 use the
+recorded local/disposable settings. External inference calls were zero.
+
+The following sections preserve the original v1.3 analysis and measurements.
+
+## Historical v1.3: Outcome: material supported-query latency regression
 
 The native implementation transfers no stored vectors into Go, but **full query
 latency regressed on both backends** in this bounded laboratory. At 8192 chunks,
@@ -8,15 +114,15 @@ latency regressed on both backends** in this bounded laboratory. At 8192 chunks,
 was 2.930s versus 0.365s previously on SQLite (8.02×), and 0.808s versus 0.141s on
 PostgreSQL (5.75×). This is a material performance regression at a supported
 size, not a data-integrity failure. It must remain visible before any publishing
-or merge decision. Do not advertise a latency improvement. Optimizing validation
-is separate, unimplemented work; these measurements do not authorize weakening
-integrity checks.
+or merge decision. Do not advertise a latency improvement. At that revision, optimizing validation was separate,
+unimplemented work; those measurements did not authorize weakening integrity
+checks. The later approved application-owned trust refinement is reported above.
 
 The complete typed observations, actual wall samples, allocation metrics,
 transfer counts, ordered result IDs and parsed DB plans are in
 [native-vectors.json](native-vectors.json). No production bound was raised.
 
-## Paired full-query measurements
+## Historical v1.3: Paired full-query measurements
 
 All rows use 8192 chunks distributed over 128 pages, page limit 5 and dense
 candidate limit 20. Each entry has **n=3** measured warm queries. Tables report
@@ -74,7 +180,7 @@ at the root and 274.739ms root executor time during the separate EXPLAIN sample.
 Do not sum cumulative buffer counts across parent/child nodes or substitute this
 instrumented plan timing for the n=3 query wall distribution.
 
-## Isolated kernels and unsupported capacity
+## Historical v1.3: Isolated kernels and unsupported capacity
 
 Isolated results are recorded separately in JSON. Both native SQL/page maxima
 and legacy full-vector-transfer/Go-dot kernels omit production readiness,
@@ -115,7 +221,7 @@ The 1024×4096 isolated fixture supplied a bounded actual high-dimensional run.
 These explicit resource outcomes are not timing extrapolations or successful
 production-capacity claims. No required case failed silently.
 
-## Correctness and accepted arithmetic differences
+## Historical v1.3: Correctness and accepted arithmetic differences
 
 Every native sample fixture passed exhaustive native scalar enumeration with
 independent Go source/page/ordinal aggregation, separately from true float64
@@ -137,7 +243,7 @@ cross-backend identical near-match ordering is required. True native cosine,
 float32 backend arithmetic and the old clamped near-unit float64 dot differ.
 Random fixed vectors test arithmetic/selection, not semantic model relevance.
 
-## Reproduction and laboratory limits
+## Historical v1.3: Reproduction and laboratory limits
 
 Run the commands in the JSON artifact and the
 [harness instructions](../testing.md#native-vector-comparison-harness).

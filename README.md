@@ -132,8 +132,10 @@ Use your own compatible embedding API or the
 Dense scoring runs natively inside SQLite or optional operator-provisioned
 pgvector; see [deployment/rebuild guidance](docs/postgres.md) and the
 [actual performance comparison](docs/testing/native-vectors.md). Zero stored-vector
-transfer does not promise faster queries: full-query latency regressed in the
-measured bounded laboratory. Lexical-only remains the default.
+transfer does not promise faster queries: current paired measurements remain
+mixed, and the original full-query regressions are retained. Full integrity is
+established before atomic publication; ordinary reads check scalar readiness,
+snapshot/model compatibility and consumed evidence. Lexical-only remains the default.
 Embeddings are off by default. Choose explicit keyword fallback or strict
 semantic availability in the [search guide](docs/search.md).
 

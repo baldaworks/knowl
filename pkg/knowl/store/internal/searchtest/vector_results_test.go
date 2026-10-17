@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+const (
+	vectorEvaluationSupportedOutcome = "supported"
+	vectorEvaluationRuntimeMode      = "production-interface"
+)
+
 // Validate the persisted measurements as typed data, never prose substrings.
 func TestVectorEvaluationResults(t *testing.T) {
 	file, err := os.Open("../../../../../docs/testing/native-vectors.json")
@@ -22,6 +27,7 @@ func TestVectorEvaluationResults(t *testing.T) {
 		Observations                                        []VectorBenchmarkObservation
 		Reproduction                                        []VectorBenchmarkObservation
 		Plans                                               []json.RawMessage
+		TrustRefinement                                     *vectorTrustEvaluation
 	}
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
@@ -99,7 +105,7 @@ func TestVectorEvaluationResults(t *testing.T) {
 	resources := make(map[string]bool)
 	for _, o := range artifact.Observations {
 		switch o.Outcome {
-		case "supported":
+		case vectorEvaluationSupportedOutcome:
 			if o.Samples != 3 || len(o.WallNS) != 3 {
 				t.Fatalf("case%+v samples=%d", o.Case, o.Samples)
 			}
@@ -108,7 +114,7 @@ func TestVectorEvaluationResults(t *testing.T) {
 			if ordered[0] <= 0 || o.MedianNS != float64(ordered[1]) || o.P95NS != float64(ordered[2]) || o.MaxNS != float64(ordered[2]) || o.BPerOp <= 0 || o.AllocsPerOp <= 0 {
 				t.Fatalf("invalid measured distribution:%+v", o)
 			}
-			if o.Mode == "production-interface" {
+			if o.Mode == vectorEvaluationRuntimeMode {
 				if o.Case.Chunks != 8192 || o.Retrieval == nil || o.Retrieval.ScannedChunks != 8192 || len(o.ResultIDs) != 5 {
 					t.Fatalf("invalid production result:%+v", o)
 				}
@@ -186,6 +192,88 @@ func TestVectorEvaluationResults(t *testing.T) {
 		c := VectorBenchmarkCase{100000, 2, 4, 50}
 		if len(kernels[backend+"/"+c.Name()]) != 2 {
 			t.Fatalf("missing actual large isolated comparison:%s", backend)
+		}
+	}
+}
+
+type vectorTrustEvaluation struct {
+	NativeRevision, LegacyRevision, HistoricalNativeRevision, Toolchain, Hardware, Protocol, RetainedEvidence string
+	HarnessSHA256, RawLogSHA256                                                                               map[string]string
+	Commands                                                                                                  []string
+	Observations, Reproduction                                                                                []VectorBenchmarkObservation
+	Plans                                                                                                     []json.RawMessage
+}
+
+func TestVectorTrustEvaluationResults(t *testing.T) {
+	encoded, err := os.ReadFile("../../../../../docs/testing/native-vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact struct {
+		TrustRefinement *vectorTrustEvaluation
+		Observations    []VectorBenchmarkObservation
+	}
+	if err := json.Unmarshal(encoded, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	run := artifact.TrustRefinement
+	if run == nil {
+		t.Fatal("missing measured trust-refinement evaluation")
+	}
+	if run.NativeRevision == "" || run.LegacyRevision == "" || run.HistoricalNativeRevision == "" || run.Toolchain == "" || run.Hardware == "" || run.Protocol == "" || run.RetainedEvidence == "" || len(run.Commands) < 4 || len(run.HarnessSHA256) != 4 || len(run.RawLogSHA256) < 4 {
+		t.Fatal("missing refinement provenance")
+	}
+	if len(run.Observations) != 20 || len(run.Plans) != 20 || len(run.Reproduction) != 1 {
+		t.Fatalf("observations=%d plans=%d reproduction=%d", len(run.Observations), len(run.Plans), len(run.Reproduction))
+	}
+	pairs := map[string][]VectorBenchmarkObservation{}
+	historicalChecksums := map[string]string{}
+	for _, o := range artifact.Observations {
+		if o.Mode == vectorEvaluationRuntimeMode && o.Outcome == vectorEvaluationSupportedOutcome {
+			historicalChecksums[o.Backend+"/"+o.Case.Name()] = o.Checksum
+		}
+	}
+	for _, o := range run.Observations {
+		if o.Samples != 3 || len(o.WallNS) != 3 || o.Outcome != vectorEvaluationSupportedOutcome || o.Mode != vectorEvaluationRuntimeMode || o.Case.Chunks != 8192 || o.Retrieval == nil || o.Retrieval.ScannedChunks != 8192 || len(o.ResultIDs) != 5 {
+			t.Fatalf("invalid runtime observation %+v", o)
+		}
+		ordered := slices.Clone(o.WallNS)
+		slices.Sort(ordered)
+		if ordered[0] <= 0 || o.MedianNS != float64(ordered[1]) || o.MaxNS != float64(ordered[2]) || o.BPerOp <= 0 || o.Transfer.ScalarSQLNS <= 0 || o.PublicationNS <= 0 || o.ReuseNS <= 0 {
+			t.Fatal("invalid measured distribution/work")
+		}
+		if o.NativeOracleChecked && (o.Transfer.VectorRows != 0 || o.Transfer.MetadataBytes != 0 || o.Transfer.CandidateRows != 60 || o.Transfer.EvidenceRows != 15 || o.Transfer.ScalarRows != 6 || o.Transfer.ScalarBytes <= 0 || o.Transfer.ScalarBytes > 2048) {
+			t.Fatalf("invalid refined transfer %+v", o.Transfer)
+		}
+		key := o.Backend + "/" + o.Case.Name()
+		if o.Checksum != historicalChecksums[key] {
+			t.Fatalf("historical fixture changed: %s", key)
+		}
+		pairs[key] = append(pairs[key], o)
+	}
+	if len(pairs) != 10 {
+		t.Fatalf("paired cases=%d", len(pairs))
+	}
+	for key, pair := range pairs {
+		if len(pair) != 2 || pair[0].Checksum != pair[1].Checksum || pair[0].NativeOracleChecked == pair[1].NativeOracleChecked {
+			t.Fatalf("unmatched pair %s", key)
+		}
+	}
+	repro := run.Reproduction[0]
+	if repro.Samples != 3 || len(repro.WallNS) != 3 || !repro.NativeOracleChecked || repro.Checksum != historicalChecksums[repro.Backend+"/"+repro.Case.Name()] {
+		t.Fatal("invalid separate reproducibility sample")
+	}
+	for _, raw := range run.Plans {
+		var plan struct {
+			Backend, Revision, SourceLog string
+			Case                         VectorBenchmarkCase
+			Plans                        []json.RawMessage
+		}
+		if err := json.Unmarshal(raw, &plan); err != nil {
+			t.Fatal(err)
+		}
+		if run.RawLogSHA256[plan.SourceLog] == "" || plan.Revision == "" || len(plan.Plans) == 0 || len(pairs[plan.Backend+"/"+plan.Case.Name()]) != 2 {
+			t.Fatal("unmatched plan/provenance")
 		}
 	}
 }

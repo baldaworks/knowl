@@ -2,11 +2,13 @@ package searchtest
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
+	_ "modernc.org/sqlite"
 )
 
 func TestVectorBenchmarkFixtureReproducibleAndExactlyCounted(t *testing.T) {
@@ -47,6 +49,27 @@ func TestVectorBenchmarkFixtureReproducibleAndExactlyCounted(t *testing.T) {
 	cancel()
 	if _, _, _, _, _, err := VectorRuntimeFixture(ctx, VectorBenchmarkCase{128, 8, 1, 50}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel err=%v", err)
+	}
+}
+
+// Admission includes the scalar metadata row, not only boolean guard results.
+// Dropping that row from timing would underreport admission after audit removal.
+func TestVectorBenchmarkAdmissionTiming(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	probe := &VectorTransferProbe{}
+	observed := sql.OpenDB(VectorProbeConnector{Connector: VectorDriverConnector{DBDriver: db.Driver(), DSN: ":memory:"}, Probe: probe})
+	defer func() { _ = observed.Close() }()
+	var fingerprint string
+	var chunks, dimensions int
+	if err := observed.QueryRowContext(t.Context(), "SELECT 'fingerprint' AS space,1 AS chunk_count,2 AS dimensions").Scan(&fingerprint, &chunks, &dimensions); err != nil {
+		t.Fatal(err)
+	}
+	if probe.Rows != 1 || probe.ScalarSQLNS <= 0 || probe.ScalarRows != 1 || probe.ScalarBytes != 27 {
+		t.Fatalf("admission rows=%d time=%d", probe.Rows, probe.ScalarSQLNS)
 	}
 }
 

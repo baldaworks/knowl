@@ -15,7 +15,7 @@ it needs no separately installed SQLite extension. Embeddings remain off until
 configured and still require their chosen provider. Native format upgrades run
 numbered Goose SQL on Open: stop old writers, migrate, rebuild and verify before
 resuming. See [search/recovery](search.md) and the
-[measured latency regressions](testing/native-vectors.md). For a PostgreSQL store,
+[current and historical measurements](testing/native-vectors.md). For a PostgreSQL store,
 follow its separate [optional pgvector operator procedure](postgres.md).
 
 ## Prepare a project

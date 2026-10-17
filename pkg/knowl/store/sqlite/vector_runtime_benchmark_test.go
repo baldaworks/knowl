@@ -34,7 +34,9 @@ func BenchmarkVectorRuntime(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer func() { _ = store.Close() }()
+			publicationStarted := time.Now()
 			err = store.Rebuild(ctx, snapshot)
+			observation.PublicationNS = time.Since(publicationStarted).Nanoseconds()
 			var failure *app.EmbeddingError
 			if errors.As(err, &failure) && failure.Code == knowl.RetrievalProjectionCapacity {
 				observation.Outcome = "capacity_rejected"
@@ -45,6 +47,11 @@ func BenchmarkVectorRuntime(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+			reuseStarted := time.Now()
+			if err := store.Project(ctx, knowl.ContentCommit{Snapshot: snapshot}); err != nil {
+				b.Fatal(err)
+			}
+			observation.ReuseNS = time.Since(reuseStarted).Nanoseconds()
 			var chunks int
 			if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM knowl_embedding_chunks WHERE scope=?", snapshot.Scope).Scan(&chunks); err != nil || chunks != c.Chunks {
 				b.Fatalf("published chunks=%d want=%d err=%v", chunks, c.Chunks, err)
@@ -152,6 +159,8 @@ func vectorAddTransfer(total *searchtest.VectorTransferProbe, p searchtest.Vecto
 	total.EvidenceRows += p.EvidenceRows
 	total.ResultBytes += p.ResultBytes
 	total.ScalarSQLNS += p.ScalarSQLNS
+	total.ScalarRows += p.ScalarRows
+	total.ScalarBytes += p.ScalarBytes
 	total.RankingSQLNS += p.RankingSQLNS
 	total.VectorSQLNS += p.VectorSQLNS
 }

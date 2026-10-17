@@ -259,10 +259,14 @@ normal Goose-on-Open and historical Go migration 19 stay supported. Optional Dow
 base Down. See [operator recovery](postgres.md), especially existing empty-history
 corruption, which is never automatically bootstrapped or repaired.
 
-Enabled reads validate the complete bounded scope in native scalar SQL without
-stored-vector transfer, including unselected/nonwinning rows, and check coverage,
-lexical candidates, filters and original references in one consistent read
-transaction. SQL aggregates all eligible native scores to page winners before
+Knowl owns supported SQL writes. Publication, reuse and recovery fully validate
+coverage, vectors, model space and budgets before atomic ready publication;
+lexical page changes invalidate incompatible readiness. Enabled reads admit
+existing scalar ready/snapshot/model state without coverage or full-vector
+audits, and retain lexical candidates, filters and consumed original evidence
+in one consistent read transaction. Detecting arbitrary out-of-band corruption
+in nonselected rows on each read is outside this trust boundary. SQL aggregates
+all eligible native scores to page winners before
 limiting candidates. Equal native scores choose lowest chunk ordinal and then
 bytewise page identity; close unequal scores retain native order, not a production
 epsilon. Old Go near-unit dot/backends may return different ordering/evidence.
@@ -277,14 +281,16 @@ Results retain original evidence and citations; semantic similarity does not
 establish factual agreement.
 
 Zero stored-vector transfer is not a speed promise: the
-[actual comparison](testing/native-vectors.md) found material supported-query
-latency regressions while reducing Go allocation volume. Full-scope validation
-remains mandatory. Separately labeled isolated 100000-chunk kernels omit both
+[actual comparison](testing/native-vectors.md) records mixed current latency
+results alongside original material regressions and lower Go allocation volume.
+Full validation remains mandatory for publication/reuse/recovery, while ordinary
+reads admit existing scalar state. Separately labeled isolated 100000-chunk kernels omit both
 sides' production integrity/caps and cannot establish supported capacity.
 
 Projection capacity is 8,192 chunks, 1 MiB of coverage metadata and 64 MiB in
-total per scope. Ready state covers every eligible page and all its chunks;
-incompatible, incomplete or over-capacity dense state fails as a whole.
+total per scope. Ready state records a fully validated complete projection;
+publication rejects incompatible, incomplete or over-capacity staged data.
+Reads reject incompatible readiness/snapshot/model state or invalid consumed evidence.
 `failure_policy: lexical` returns
 explicit degraded lexical results for classified embedding failures; `strict`
 returns a typed failure. Invalid input and caller cancellation never become

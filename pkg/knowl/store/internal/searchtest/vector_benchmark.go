@@ -215,6 +215,7 @@ func VectorRuntimeFixture(ctx context.Context, c VectorBenchmarkCase) (knowl.Wor
 type VectorTransferProbe struct {
 	Rows, VectorRows, VectorBytes, MetadataRows, MetadataBytes, CandidateRows, EvidenceRows, ResultBytes int64
 	ScalarSQLNS, RankingSQLNS, VectorSQLNS                                                               int64
+	ScalarRows, ScalarBytes                                                                              int64
 	Record                                                                                               bool
 	Queries                                                                                              []VectorRecordedQuery
 }
@@ -309,7 +310,7 @@ func (r *vectorProbeRows) Close() error {
 			r.probe.RankingSQLNS += elapsed
 		case slices.Contains(columns, "vector"):
 			r.probe.VectorSQLNS += elapsed
-		case len(columns) <= 2:
+		case len(columns) <= 2 || slices.Contains(columns, "chunk_count"):
 			r.probe.ScalarSQLNS += elapsed
 		}
 		r.closed = true
@@ -322,6 +323,10 @@ func (r *vectorProbeRows) Next(values []driver.Value) error {
 	}
 	columns := r.Columns()
 	r.probe.Rows++
+	scalar := len(columns) <= 2 || slices.Contains(columns, "chunk_count")
+	if scalar {
+		r.probe.ScalarRows++
+	}
 	if len(columns) == 7 && columns[0] == "digest" && columns[6] == "okf_metadata" {
 		r.probe.EvidenceRows++
 	}
@@ -340,6 +345,9 @@ func (r *vectorProbeRows) Next(values []driver.Value) error {
 			bytes = int64(len(v.UTC().Format(time.RFC3339Nano)))
 		}
 		r.probe.ResultBytes += bytes
+		if scalar {
+			r.probe.ScalarBytes += bytes
+		}
 		switch columns[i] {
 		case "vector":
 			r.probe.VectorRows++
@@ -361,6 +369,7 @@ type VectorBenchmarkObservation struct {
 	Mode, Implementation, Backend, Outcome, Reason, Checksum, GoVersion, Provider string
 	Case                                                                          VectorBenchmarkCase
 	Samples                                                                       int
+	PublicationNS, ReuseNS                                                        int64
 	WallNS                                                                        []int64
 	MedianNS, P95NS, MaxNS, NSPerOp, BPerOp, AllocsPerOp                          float64
 	Transfer                                                                      VectorTransferProbe

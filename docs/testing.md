@@ -475,12 +475,17 @@ not promise production throughput or two successful commits from overlapping pla
 
 ## Native vector comparison harness
 
-[Actual local results](testing/native-vectors.md) record a material full-query
-latency regression on both backends despite zero stored-vector transfer and
-lower Go allocation volume. Isolated kernel timings are not production latency.
+[Actual local results](testing/native-vectors.md) retain the original full-query
+regression and the subsequent trusted-publication comparison. Each version is
+dated separately; isolated kernel timings are not production latency.
 
 `BenchmarkVectorRuntime` executes the real `SearchWithReport` interface,
-including all readiness/integrity, source filtering, fusion and evidence work.
+including scalar readiness/snapshot/model admission, source filtering, fusion
+and consumed-evidence validation. Complete write/reuse/recovery validation and
+page-change invalidation establish publication integrity; ordinary reads do not
+repeat a full coverage/vector audit. Backend actual-driver/structured-plan
+tests cover search/context/health admission, with actual startup/lint composition
+tests retaining repair and failure behavior.
 `BenchmarkVectorKernel` instead compares native scalar/page SQL with an isolated
 full-vector-transfer/Go-dot baseline on separate disposable tables. Both kernel
 paths omit production validation, caps, inference, fusion and evidence; their
@@ -524,12 +529,18 @@ starting before fixture preparation/migrations/container startup and shared by
 setup, correctness/plans and measured repetitions. CPU fixture loops check the
 context; driver work receives it. Unsupported cases have no timing claim.
 
-JSON observations contain actual wall samples, sample count/median/p95/max,
+JSON observations contain actual wall samples, sample count/median/min/max,
 ns/op, B/op, allocs/op, typed retrieval reports and real scanned transfer counts.
+The compatibility `P95NS` field is nearest-rank max at n=3, not a reliable p95 claim.
+New runtime observations also record one publication and one authenticated reuse
+setup cost per case, outside the warm-query timer; these are single observations,
+not distributions. `ScannedChunks` is the admitted published population.
 Bytes are decoded logical result-cell bytes, not wire framing or server storage.
 `LogicalScoredPairs` is explicitly an estimate, not executor work. Runtime
 scalar/ranking/vector SQL intervals include client row consumption and cannot
-be called server CPU or the complete Go integrity phase. PostgreSQL plans parse
+be called server CPU or independent additive median phases. The refined scalar
+counter includes both guard and fixed metadata rows; historical counters keep
+their original definition. PostgreSQL plans parse
 `EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON)` numerical executor work; SQLite records
 structured `EXPLAIN QUERY PLAN`, not invented executor counters. Bound vectors
 and raw SQL are never serialized. Record hardware, versions/settings and exact

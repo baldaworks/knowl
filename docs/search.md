@@ -15,13 +15,20 @@ close unequal scores keep native database order, without an ordering epsilon.
 This can change page order or evidence from the old near-unit Go dot product,
 and between backends. Lexical ordering and bounded fusion remain unchanged.
 
-Native queries validate the entire bounded scope, including nonwinning and
-unselected-source chunks, without transferring stored vectors into Go. This
-includes model-space/dimension compatibility: incompatible active-scope rows
-cannot be silently filtered out to report valid dense retrieval. This
-does **not** guarantee lower latency: [actual paired measurements](testing/native-vectors.md)
-show material full-query regressions at 8192 chunks despite lower allocation
-volume. Separate isolated kernels are not production throughput.
+Knowl owns database writes. Publication, maintenance reuse and recovery fully
+validate coverage, model/dimensions, counts, budgets and vectors before atomic
+ready publication; page changes invalidate incompatible projections. Search,
+context selection, startup and lint admit existing scalar readiness, snapshot
+and active model state. Search also validates the current page digest, ordinal
+and content hash wherever it consumes winning evidence. Ordinary reads neither
+transfer stored vectors into Go nor repeat full coverage/vector integrity
+audits. Detecting arbitrary out-of-band SQL corruption in nonselected rows on
+each read is outside this trust boundary; startup and lint are admission/repair
+checks, not offline integrity auditors. [Paired measurements](testing/native-vectors.md)
+retain the original slow-query results alongside the refined implementation;
+exact scans and isolated kernels imply no production latency promise.
+The trust refinement reuses existing validated native-format readiness and
+requires no new schema migration, cache, setting or rebuild solely for that change.
 
 Search configuration is independent of how you run Knowl: project-local CLI,
 MCP/HTTP service and Go applications share the same retrieval behavior. The
@@ -88,9 +95,10 @@ required prefixes and server truncation disabled.
 The 64 MiB bound accounts for logical float32 vector payload and bounded metadata,
 not extra PostgreSQL native-storage headers. Dimensions 1–4096 are supported by
 exact scalar retrieval; no ANN index, chunk shortlist or increased capacity is
-implied. `ScannedChunks` counts the successfully validated complete scope before
-source filtering, not only SQL candidates. Candidates/evidence remain bounded
-by `min(100,max(20,4*k))`; complete scalar/integrity database work is still needed.
+implied. `ScannedChunks` is the admitted published full-scope chunk count before
+source filtering, not a fresh integrity audit or the SQL candidate count.
+Candidates/evidence remain bounded by `min(100,max(20,4*k))`; exhaustive eligible
+cosine scoring remains database work proportional to the population/windows.
 
 Rune limits are not tokenizer limits. The service must reject token overflow
 rather than silently truncate; the pinned TEI reports `input_limit`. Chunk/rune
