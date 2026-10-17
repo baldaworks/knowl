@@ -21,7 +21,7 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 	defer cancel()
 	container, err := postgres.Run(
 		ctx,
-		"postgres:16-alpine",
+		"pgvector/pgvector:0.8.2-pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc",
 		postgres.WithDatabase("knowl"),
 		postgres.WithUsername("knowl"),
 		postgres.WithPassword("knowl"),
@@ -37,6 +37,10 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get PostgreSQL Testcontainer connection string: %v", err)
 	}
+	// The positive dense contract requires operator-provisioned pgvector. This
+	// fixture owns the disposable database; application Open never installs it.
+	operator := nativeOpen(t, dsn)
+	nativeExec(t, operator.db, `CREATE EXTENSION vector`)
 	t.Run("operator-documents", func(t *testing.T) { runOperatorDocumentsPostgres(t, dsn) })
 	t.Run("operator-cursor", func(t *testing.T) { runOperatorCursorBoundsPostgres(t, dsn) })
 	t.Run("operator-retry", func(t *testing.T) { runOperatorRetryOperationsPostgres(t, dsn) })

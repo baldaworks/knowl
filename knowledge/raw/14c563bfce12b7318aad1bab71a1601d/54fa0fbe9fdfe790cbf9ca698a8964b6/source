@@ -1,0 +1,48 @@
+# Knowl v0.7.0
+
+This release adds gradual reconciliation when configured sources are removed
+or replaced, preserves content rejection diagnostics, and fixes Azure SSH Git
+wiki synchronization.
+
+## Changes
+
+- Configured source owners move through `active`, `retiring`, and `deleted`.
+  Removing a source schedules bounded, durable page reconciliation: pages
+  supported only by that owner are removed, while mixed-source pages are
+  recomputed from their remaining active evidence. Immutable raw history stays
+  available. Retirement completes only after an authoritative check finds no
+  remaining page references.
+- Replacing a filesystem source with Git creates an independent source owner,
+  not a citation alias. Accept the replacement before removing the old source;
+  reconciliation is gradual and does not promise an atomic global cutover.
+- Rejected content plans retain page paths, rule codes, and dependency reasons,
+  including when no safe changes remain (`plan.empty_safe_subset`). Invalid
+  content is still not published.
+- Git synchronization supports Azure SSH wiki repositories and resolves fetched
+  commits correctly.
+- The repository wiki now includes updated local Codex guidance and nested
+  navigation catalogs. Existing accepted revisions and update history remain
+  preserved.
+
+## Installation
+
+After publication, run from a local project root:
+
+```bash
+npx --yes @baldaworks/knowl@0.7.0 setup codex
+```
+
+The plugin, MCP launcher, and five native npm packages use version `0.7.0`.
+Existing local Codex, HTTP service, and embedded Go workflows remain supported.
+
+## Upgrade and recovery
+
+Back up the complete workspace and durable store, and stop existing writers
+before upgrading. Source retirement adds durable lifecycle and reconciliation
+state; use the matching binary for that state. Prefer a forward fix over an
+in-place downgrade once retirement begins: older code does not enforce retiring
+source publication authority.
+
+See [source retirement and recovery](../operations.md#gradual-source-retirement-status-and-recovery)
+for status and retry commands, and [publishing](../publishing.md) for release
+verification and distribution details.

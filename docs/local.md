@@ -10,6 +10,14 @@ need network access to download its pinned npm package.
 For a persistent HTTP/MCP host, use the [service quickstart](service.md).
 For another agent, see [Bring your own agent](agents.md).
 
+The default SQLite binary bundles native cosine SQL, including CGO-free builds;
+it needs no separately installed SQLite extension. Embeddings remain off until
+configured and still require their chosen provider. Native format upgrades run
+numbered Goose SQL on Open: stop old writers, migrate, rebuild and verify before
+resuming. See [search/recovery](search.md) and the
+[current and historical measurements](testing/native-vectors.md). For a PostgreSQL store,
+follow its separate [optional pgvector operator procedure](postgres.md).
+
 ## Prepare a project
 
 From a cloned Knowl repository:

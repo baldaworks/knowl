@@ -16,7 +16,7 @@ func TestEmbeddingCancellationBeforeSQL(t *testing.T) {
 	if err := store.publishEmbeddings(ctx, "scope", hybrid.ProjectionState{}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled publication=%v", err)
 	}
-	if _, _, err := embeddingProjectionTx(ctx, nil, "scope", "space", 1); !errors.Is(err, context.Canceled) {
+	if _, _, err := maintenanceEmbeddingProjectionTx(ctx, nil, "scope", "space", 1); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled read=%v", err)
 	}
 }

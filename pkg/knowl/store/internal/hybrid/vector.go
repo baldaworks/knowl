@@ -50,18 +50,3 @@ func validateVector(vector []float32, dimensions int) error {
 	}
 	return nil
 }
-
-// Cosine compares validated unit vectors using stable float64 accumulation.
-func Cosine(left, right []float32) (float64, error) {
-	if err := validateVector(left, len(left)); err != nil {
-		return 0, err
-	}
-	if err := validateVector(right, len(left)); err != nil {
-		return 0, err
-	}
-	dot := 0.0
-	for i, v := range left {
-		dot += float64(v) * float64(right[i])
-	}
-	return max(-1, min(1, dot)), nil
-}

@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/releases/v0.7.1.md
+version: 212713471924fdd179dfd137bfa1a6bd6651e4ef9c24cec9e051ec96d313b23f
+digest: 212713471924fdd179dfd137bfa1a6bd6651e4ef9c24cec9e051ec96d313b23f
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: releases/v0.7.1.md
+    revision: 212713471924fdd179dfd137bfa1a6bd6651e4ef9c24cec9e051ec96d313b23f
+    uri: file:///tmp/knowl-native-vectors.EOicQS/docs/releases/v0.7.1.md
+received_at: 2026-10-17T11:25:21.577517Z

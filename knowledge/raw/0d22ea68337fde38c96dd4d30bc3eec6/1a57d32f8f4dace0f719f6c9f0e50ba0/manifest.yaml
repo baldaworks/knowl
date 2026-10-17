@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/design.md
+version: c9a981be23b39a137da77ad85726d8382d33306b44e801022bcdd4de4b525132
+digest: c9a981be23b39a137da77ad85726d8382d33306b44e801022bcdd4de4b525132
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: design.md
+    revision: c9a981be23b39a137da77ad85726d8382d33306b44e801022bcdd4de4b525132
+    uri: file:///tmp/knowl-native-vectors.EOicQS/docs/design.md
+received_at: 2026-10-17T11:25:21.358696Z

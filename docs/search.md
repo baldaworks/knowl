@@ -6,6 +6,30 @@ semantic candidates and returns evidence from the same published wiki. An
 embedding model helps match related wording; it does not generate answers or
 maintain pages.
 
+Semantic page scoring executes exhaustively inside the database: bundled
+CGO-free sqlite-vec for SQLite, or operator-provisioned pgvector for PostgreSQL.
+Each eligible page receives its maximum **native true cosine** across every
+query window and chunk before the page candidate limit is applied. Equal native
+scores use the lowest winning chunk ordinal, then bytewise page identity;
+close unequal scores keep native database order, without an ordering epsilon.
+This can change page order or evidence from the old near-unit Go dot product,
+and between backends. Lexical ordering and bounded fusion remain unchanged.
+
+Knowl owns database writes. Publication, maintenance reuse and recovery fully
+validate coverage, model/dimensions, counts, budgets and vectors before atomic
+ready publication; page changes invalidate incompatible projections. Search,
+context selection, startup and lint admit existing scalar readiness, snapshot
+and active model state. Search also validates the current page digest, ordinal
+and content hash wherever it consumes winning evidence. Ordinary reads neither
+transfer stored vectors into Go nor repeat full coverage/vector integrity
+audits. Detecting arbitrary out-of-band SQL corruption in nonselected rows on
+each read is outside this trust boundary; startup and lint are admission/repair
+checks, not offline integrity auditors. [Paired measurements](testing/native-vectors.md)
+retain the original slow-query results alongside the refined implementation;
+exact scans and isolated kernels imply no production latency promise.
+The trust refinement reuses existing validated native-format readiness and
+requires no new schema migration, cache, setting or rebuild solely for that change.
+
 Search configuration is independent of how you run Knowl: project-local CLI,
 MCP/HTTP service and Go applications share the same retrieval behavior. The
 wiki maintainer remains your separately configured [agent](agents.md).
@@ -68,6 +92,14 @@ required prefixes and server truncation disabled.
 | Semantic input | Markdown/OKF pages: heading sections, up to 384 runes per input, split at block boundaries; queries and source signals: up to four 384-rune windows with 64-rune overlap |
 | Projection | At most 8,192 chunks, 1 MiB of page coverage metadata and 64 MiB total per scope; 15-minute rebuild or earlier caller deadline |
 
+The 64 MiB bound accounts for logical float32 vector payload and bounded metadata,
+not extra PostgreSQL native-storage headers. Dimensions 1–4096 are supported by
+exact scalar retrieval; no ANN index, chunk shortlist or increased capacity is
+implied. `ScannedChunks` is the admitted published full-scope chunk count before
+source filtering, not a fresh integrity audit or the SQL candidate count.
+Candidates/evidence remain bounded by `min(100,max(20,4*k))`; exhaustive eligible
+cosine scoring remains database work proportional to the population/windows.
+
 Rune limits are not tokenizer limits. The service must reject token overflow
 rather than silently truncate; the pinned TEI reports `input_limit`. Chunk/rune
 coverage omissions for bounded queries/source signals appear in the Go report;
@@ -119,13 +151,25 @@ on startup before later projections can reuse unchanged inputs. A strict
 projection error can occur after a canonical commit: repair the derived
 projection, preserving the committed facts and raw evidence.
 
-Migration 16 adds disposable vector state and bounded operation reports in both
-stores. Migration 21 expands the ordinal range and adds a bounded page coverage
-manifest. Existing partial indexes are incompatible with the new preprocessing
-identity and are rebuilt on startup. Down removes derived vector additions while
-preserving canonical/raw content and older durable state. Stop writers and pair
-the schema with a compatible binary before rollback. Disabling embeddings retains
-the default lexical behavior and
+Migration 16 originally added disposable vector state/reports, and 21 coverage.
+The native transition is numbered Goose SQL migration 26 on both backends: it adds a format
+marker and invalidates derived dense state, preserving canonical/raw/source and
+operation data. SQLite keeps portable little-endian float32 BLOBs with the
+bundled native capability, including `CGO_ENABLED=0`; no extension installation,
+shared-library load path or external model process is needed for its SQL math.
+Inference still uses the configured provider.
+
+Stop old writers, migrate with the matching binary, rebuild, verify actual
+semantic retrieval and only then resume. Format/preprocessing changes require
+fresh dense publication; do not treat legacy state as ready. PostgreSQL's base
+stream stays extension-free and its additional optional Goose SQL migration 1 converts
+derived vectors to native pgvector only when capability/authority permit.
+See [PostgreSQL deployment and recovery](postgres.md) for two histories,
+provision/reopen/rebuild, runtime grants, corrupt empty history and optional-first
+Down. All new application schema changes are Goose SQL; normal Goose-on-Open
+and historical Go migration 19 remain, not a blanket ban on migration DDL at startup.
+Down invalidates derived native state; pair schema and compatible binary and
+rebuild before resuming. Disabling embeddings retains default lexical behavior and
 ignores derived vectors. See [pending-operation recovery](operations.md#upgrading-pending-operations)
 for generation changes.
 

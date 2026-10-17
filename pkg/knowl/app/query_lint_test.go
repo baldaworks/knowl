@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -63,6 +64,40 @@ func TestQueryIsWikiFirstBoundedAndCited(t *testing.T) {
 		if _, err := queryService.Page(ctx, "local", reserved, knowl.ReadLimits{Pages: 1}); !errors.Is(err, app.ErrPageNotFound) {
 			t.Errorf("reserved page %q error = %v, want page-not-found", reserved, err)
 		}
+	}
+}
+
+func TestLintUsesNativeProjectionAdmissionWithoutInference(t *testing.T) {
+	workspace, operations, _, _ := newWorkflow(t, false, nil)
+	p := &maintenanceProjectionProvider{}
+	index, err := sqlite.Open(t.Context(), operations.Path(), app.EmbeddingOptions{Provider: p, FailurePolicy: app.EmbeddingStrict, Space: app.EmbeddingSpace{Model: "lint-trust", Revision: "1", Dimensions: 2, PassagePrefix: "passage: "}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = index.Close() }()
+	prepareCanonicalQueryWorkspace(t, workspace, index)
+	service, err := app.NewLintService(workspace, index, app.LintOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := p.passages
+	report, err := service.Lint(t.Context(), "local")
+	if err != nil || !report.Healthy() {
+		t.Fatalf("ready lint=%+v err=%v", report, err)
+	}
+	snapshot, err := workspace.Snapshot(t.Context(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.ProjectWithoutInference(t.Context(), knowl.ContentCommit{Snapshot: snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	report, err = service.Lint(t.Context(), "local")
+	if err != nil || !hasFinding(report.Findings, "projection.drift") {
+		t.Fatalf("invalidated lint=%+v err=%v", report, err)
+	}
+	if p.passages != before {
+		t.Fatalf("lint inferred passage inputs=%d before=%d", p.passages, before)
 	}
 }
 

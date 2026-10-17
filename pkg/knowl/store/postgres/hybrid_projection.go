@@ -25,7 +25,8 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	if err != nil {
 		return err
 	}
-	if err := store.rebuildLexicalIfCurrent(ctx, snapshot, prior.lexical); err != nil {
+	var published lexicalObservation
+	if err := store.rebuildLexicalIfCurrent(ctx, snapshot, prior.lexical, &published); err != nil {
 		return err
 	}
 	state, staged, err := store.embedding.BuildWithReuse(ctx, snapshot, snapshotDigest(snapshot), prior.state, prior.chunks, prior.pages)
@@ -35,13 +36,12 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 			return failure
 		}
 		state = hybrid.ProjectionState{Space: store.embedding.Fingerprint, SnapshotDigest: snapshotDigest(snapshot), Dimensions: store.embedding.Space.Dimensions, Mode: knowl.RetrievalDegraded, Reason: report.Reason}
-		return errors.Join(failure, store.publishEmbeddings(ctx, snapshot.Scope, state, nil))
+		return errors.Join(failure, store.publishEmbeddingsChecked(ctx, snapshot.Scope, state, nil, &published))
 	}
-	return store.publishEmbeddings(ctx, snapshot.Scope, state, staged)
+	return store.publishEmbeddingsChecked(ctx, snapshot.Scope, state, staged, &published)
 }
 
-// previousProjection reads the old lexical pages and dense state from one
-// consistent snapshot. Inference starts only after the transaction is closed.
+// lexicalObservation is a local compare-and-swap token, never durable readiness.
 type lexicalObservation struct {
 	exists  bool
 	digest  string
@@ -57,6 +57,9 @@ type priorProjection struct {
 
 func (store *Store) previousProjection(ctx context.Context, scope knowl.ScopeRef) (priorProjection, error) {
 	var prior priorProjection
+	if err := store.verifyNativeVectors(ctx); err != nil {
+		return prior, err
+	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return prior, err
@@ -83,7 +86,7 @@ func (store *Store) previousProjection(ctx context.Context, scope knowl.ScopeRef
 	if !healthy {
 		return prior, nil
 	}
-	state, chunks, err := embeddingProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	state, chunks, err := maintenanceEmbeddingProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
 	if err != nil {
 		if ctx.Err() != nil {
 			return priorProjection{}, ctx.Err()
@@ -170,7 +173,8 @@ func (store *Store) rebuildWithTimeout(ctx context.Context, snapshot knowl.Works
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	if err := store.rebuildLexical(ctx, snapshot); err != nil {
+	var published lexicalObservation
+	if err := store.rebuildLexicalChecked(ctx, snapshot, nil, &published); err != nil {
 		return err
 	}
 	if store.embedding == nil {
@@ -183,14 +187,17 @@ func (store *Store) rebuildWithTimeout(ctx context.Context, snapshot knowl.Works
 			return failure
 		}
 		state = hybrid.ProjectionState{Space: store.embedding.Fingerprint, SnapshotDigest: snapshotDigest(snapshot), Dimensions: store.embedding.Space.Dimensions, Mode: knowl.RetrievalDegraded, Reason: report.Reason}
-		return errors.Join(failure, store.publishEmbeddings(ctx, snapshot.Scope, state, nil))
+		return errors.Join(failure, store.publishEmbeddingsChecked(ctx, snapshot.Scope, state, nil, &published))
 	}
-	return store.publishEmbeddings(ctx, snapshot.Scope, state, chunks)
+	return store.publishEmbeddingsChecked(ctx, snapshot.Scope, state, chunks, &published)
 }
 
 func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
 	if store.embedding == nil {
 		return store.checkLexicalProjection(ctx, snapshot)
+	}
+	if err := store.verifyNativeVectors(ctx); err != nil {
+		return err
 	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
@@ -200,12 +207,12 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 	if err := checkLexicalProjectionUsing(ctx, tx, snapshot); err != nil {
 		return err
 	}
-	state, _, err := embeddingProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	published, err := store.readDenseProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
 	if err != nil {
 		return err
 	}
-	if state.Mode == knowl.RetrievalDegraded {
-		_, err = store.embedding.Failure(ctx, store.embedding.Report(), embeddingFailure(state.Reason))
+	if published.State.Mode == knowl.RetrievalDegraded {
+		_, err = store.embedding.Failure(ctx, store.embedding.Report(), embeddingFailure(published.State.Reason))
 	}
 	return err
 }
@@ -216,13 +223,16 @@ func (store *Store) ProjectionDegraded(ctx context.Context, scope knowl.ScopeRef
 	if store.embedding == nil {
 		return false, nil
 	}
+	if err := store.verifyNativeVectors(ctx); err != nil {
+		return false, err
+	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	state, _, err := embeddingProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
-	return state.Mode == knowl.RetrievalDegraded, err
+	published, err := store.readDenseProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	return published.State.Mode == knowl.RetrievalDegraded, err
 }
 
 func (store *Store) MaintenanceRetrievalPolicy() *app.MaintenanceRetrievalPolicy {
@@ -238,12 +248,13 @@ func (store *Store) ProjectWithoutInference(ctx context.Context, commit knowl.Co
 		defer cancel()
 	}
 	snapshot := commit.Snapshot
-	if err := store.rebuildLexical(ctx, snapshot); err != nil {
+	var published lexicalObservation
+	if err := store.rebuildLexicalChecked(ctx, snapshot, nil, &published); err != nil {
 		return err
 	}
 	if store.embedding == nil {
 		return nil
 	}
 	state := hybrid.ProjectionState{Space: store.embedding.Fingerprint, SnapshotDigest: snapshotDigest(snapshot), Dimensions: store.embedding.Space.Dimensions, Mode: knowl.RetrievalDegraded, Reason: knowl.RetrievalProjectionNotReady}
-	return store.publishEmbeddings(ctx, snapshot.Scope, state, nil)
+	return store.publishEmbeddingsChecked(ctx, snapshot.Scope, state, nil, &published)
 }

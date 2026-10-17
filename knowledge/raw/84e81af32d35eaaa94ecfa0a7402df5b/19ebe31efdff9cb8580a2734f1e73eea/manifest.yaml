@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/postgres.md
+version: 70888829c1127d091a9c411bbe062a67d3e9da37094408df577821faf8c5c656
+digest: 70888829c1127d091a9c411bbe062a67d3e9da37094408df577821faf8c5c656
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: postgres.md
+    revision: 70888829c1127d091a9c411bbe062a67d3e9da37094408df577821faf8c5c656
+    uri: file:///tmp/knowl-native-vectors.EOicQS/docs/postgres.md
+received_at: 2026-10-17T11:25:21.450618Z

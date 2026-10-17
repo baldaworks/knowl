@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/local-codex.md
+version: fd3890adabd370f2b1d99a280bc9fd95564337ed871fe5be66c7b1f4ef085de6
+digest: fd3890adabd370f2b1d99a280bc9fd95564337ed871fe5be66c7b1f4ef085de6
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: local-codex.md
+    revision: fd3890adabd370f2b1d99a280bc9fd95564337ed871fe5be66c7b1f4ef085de6
+    uri: file:///tmp/knowl-native-vectors.EOicQS/docs/local-codex.md
+received_at: 2026-10-17T11:25:21.387575Z

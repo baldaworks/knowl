@@ -31,17 +31,19 @@ const (
 // RetrievalReport is per-call bounded evidence. It contains no source/query text,
 // endpoint URLs, credentials or upstream bodies. Missing legacy reports stay nil.
 type RetrievalReport struct {
-	Requested          RetrievalMode    `json:"requested"`
-	Effective          RetrievalMode    `json:"effective"`
-	Reason             RetrievalFailure `json:"reason,omitempty"`
-	ModelSpace         string           `json:"model_space,omitempty"`
-	LexicalCandidates  int              `json:"lexical_candidates"`
-	VectorCandidates   int              `json:"vector_candidates"`
-	FusedCandidates    int              `json:"fused_candidates"`
-	ScannedChunks      int              `json:"scanned_chunks"`
-	QueryOmittedRunes  int              `json:"query_omitted_runes"`
-	IndexOmittedChunks int              `json:"index_omitted_chunks"`
-	IndexOmittedRunes  int              `json:"index_omitted_runes"`
+	Requested         RetrievalMode    `json:"requested"`
+	Effective         RetrievalMode    `json:"effective"`
+	Reason            RetrievalFailure `json:"reason,omitempty"`
+	ModelSpace        string           `json:"model_space,omitempty"`
+	LexicalCandidates int              `json:"lexical_candidates"`
+	VectorCandidates  int              `json:"vector_candidates"`
+	FusedCandidates   int              `json:"fused_candidates"`
+	// ScannedChunks is the published full-scope population admitted before source
+	// filtering; it does not imply a repeated integrity audit of stored vectors.
+	ScannedChunks      int `json:"scanned_chunks"`
+	QueryOmittedRunes  int `json:"query_omitted_runes"`
+	IndexOmittedChunks int `json:"index_omitted_chunks"`
+	IndexOmittedRunes  int `json:"index_omitted_runes"`
 }
 
 // RetrievalStatus is the public, safe summary of a retrieval attempt.

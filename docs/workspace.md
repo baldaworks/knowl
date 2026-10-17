@@ -199,6 +199,12 @@ schema digest, cited source references, and committed file paths. A maintainer
 cannot rewrite it as an arbitrary edit; its prior digest is part of staging and
 commit preconditions.
 
+Log lint identifies a commit by its operation ID and generation together: a
+later plan for the same operation may have a different generation. An identical
+repeated audit record produces a warning; conflicting metadata for the same
+commit identity produces an error. Logged file paths are historical targets,
+including deletions, and need not exist in the current wiki.
+
 Every `log.md` is a reserved, newest-first ISO-date-grouped OKF control. Source
 OKF logs remain immutable raw evidence and are not imported into the semantic
 wiki. Attested Computation metadata on semantic pages is parsed, preserved,

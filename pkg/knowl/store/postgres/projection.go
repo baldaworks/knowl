@@ -21,16 +21,11 @@ func (store *Store) Project(ctx context.Context, commit knowl.ContentCommit) err
 	return store.project(ctx, commit.Snapshot)
 }
 
-// Rebuild recreates all projections from canonical Markdown snapshots.
-func (store *Store) rebuildLexical(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
-	return store.rebuildLexicalChecked(ctx, snapshot, nil)
+func (store *Store) rebuildLexicalIfCurrent(ctx context.Context, snapshot knowl.WorkspaceSnapshot, observed lexicalObservation, published *lexicalObservation) error {
+	return store.rebuildLexicalChecked(ctx, snapshot, &observed, published)
 }
 
-func (store *Store) rebuildLexicalIfCurrent(ctx context.Context, snapshot knowl.WorkspaceSnapshot, observed lexicalObservation) error {
-	return store.rebuildLexicalChecked(ctx, snapshot, &observed)
-}
-
-func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.WorkspaceSnapshot, observed *lexicalObservation) error {
+func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.WorkspaceSnapshot, observed, published *lexicalObservation) error {
 	if err := validateScope(snapshot.Scope); err != nil {
 		return err
 	}
@@ -183,8 +178,18 @@ func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.Wo
 		len(semanticPages), projectedLinks, now); err != nil {
 		return fmt.Errorf("record projection readiness: %w", err)
 	}
+	var identity lexicalObservation
+	if published != nil {
+		identity.exists = true
+		if err := tx.QueryRowContext(ctx, `SELECT snapshot_digest,xmin::text FROM knowl_projection_state WHERE scope=$1`, snapshot.Scope).Scan(&identity.digest, &identity.version); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit projection rebuild: %w", err)
+	}
+	if published != nil {
+		*published = identity
 	}
 	return nil
 }

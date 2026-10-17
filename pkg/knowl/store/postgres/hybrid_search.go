@@ -104,7 +104,11 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	engine := store.embedding
 	report := engine.Report()
 	report.QueryOmittedRunes = prepared.OmittedRunes
-	vectors, err := engine.EmbedQuery(ctx, prepared)
+	var vectors [][]float32
+	err := store.nativeErr
+	if err == nil {
+		vectors, err = engine.EmbedQuery(ctx, prepared)
+	}
 	if err != nil {
 		report, err = engine.Failure(ctx, report, err)
 		if err != nil {
@@ -134,13 +138,13 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	var dense []knowl.PageID
 	denseMatches := make(map[knowl.PageID]hybrid.Chunk)
 	if report.Effective == knowl.RetrievalHybrid {
-		var state hybrid.ProjectionState
-		var chunks []hybrid.Chunk
-		state, chunks, err = embeddingProjectionTx(ctx, tx, scope, engine.Fingerprint, engine.Space.Dimensions)
-		if err == nil && state.Mode == knowl.RetrievalDegraded {
-			err = embeddingFailure(state.Reason)
-		}
+		published, ranked, denseErr := store.densePagesTx(ctx, tx, scope, vectors, sources, channelLimit)
+		report.ScannedChunks = published.PublishedChunks
+		err = denseErr
 		if err != nil {
+			if denseTransactionFailed(ctx, err) {
+				return nil, nil, report, resultMetadata, err
+			}
 			failed := app.FailedRetrievalReport(ctx, report, err)
 			resultMetadata.VectorProjection = &knowl.VectorProjectionStatus{State: knowl.VectorInvalid, Reason: failed.Reason}
 			report, err = engine.Failure(ctx, report, err)
@@ -149,21 +153,11 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 			}
 		} else {
 			resultMetadata.VectorProjection = &knowl.VectorProjectionStatus{State: knowl.VectorReady}
-			report.ScannedChunks = len(chunks)
-			report.IndexOmittedChunks = state.OmittedChunks
-			report.IndexOmittedRunes = state.OmittedRunes
-			chunks, err = filterEmbeddingChunks(ctx, tx, scope, chunks, sources)
-			if err != nil {
-				return nil, nil, report, resultMetadata, err
-			}
-			var ranked []hybrid.RankedPage
-			ranked, err = hybrid.RankWithEvidence(ctx, vectors, chunks, channelLimit)
-			if err != nil {
-				return nil, nil, report, resultMetadata, err
-			}
+			report.IndexOmittedChunks = published.State.OmittedChunks
+			report.IndexOmittedRunes = published.State.OmittedRunes
 			for _, match := range ranked {
-				dense = append(dense, match.PageID)
-				denseMatches[match.PageID] = match.Chunk
+				dense = append(dense, match.Evidence.PageID)
+				denseMatches[match.Evidence.PageID] = match.Evidence
 			}
 			report.VectorCandidates = len(dense)
 		}
@@ -247,44 +241,6 @@ func readDenseEvidence(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, id
 		return "", embeddingFailure(knowl.RetrievalProjectionDrift)
 	}
 	return hybrid.OriginalEvidence(ctx, fields, space, chunk, characters)
-}
-
-func filterEmbeddingChunks(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, chunks []hybrid.Chunk, sources []knowl.SourceID) ([]hybrid.Chunk, error) {
-	if len(sources) == 0 {
-		return chunks, nil
-	}
-	placeholders := make([]string, len(sources))
-	args := []any{scope}
-	for i, source := range sources {
-		placeholders[i] = fmt.Sprintf("$%d", i+2)
-		args = append(args, source)
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT c.page_id FROM knowl_embedding_chunks c WHERE c.scope=$1 AND EXISTS(SELECT 1 FROM knowl_page_sources s WHERE s.scope=c.scope AND s.page_id=c.page_id AND s.source_id IN (`+strings.Join(placeholders, ",")+`)) LIMIT 8193`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	allowed := make(map[knowl.PageID]bool)
-	for rows.Next() {
-		var id knowl.PageID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		allowed[id] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(allowed) > hybrid.MaxChunks {
-		return nil, embeddingFailure(knowl.RetrievalProjectionCapacity)
-	}
-	filtered := make([]hybrid.Chunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		if allowed[chunk.PageID] {
-			filtered = append(filtered, chunk)
-		}
-	}
-	return filtered, nil
 }
 
 func readHybridReferences(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, ids []knowl.PageID, characters int) ([]knowl.PageReference, error) {
