@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/testing/native-vectors.md
+version: 62fb85104bd4fdaf9bd9783125ce5d47303a784697c97b0307c176cd96ee5ff8
+digest: 62fb85104bd4fdaf9bd9783125ce5d47303a784697c97b0307c176cd96ee5ff8
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: testing/native-vectors.md
+    revision: 62fb85104bd4fdaf9bd9783125ce5d47303a784697c97b0307c176cd96ee5ff8
+    uri: file:///tmp/knowl-native-vectors.EOicQS/docs/testing/native-vectors.md
+received_at: 2026-10-17T11:25:21.675682Z
