@@ -60,13 +60,13 @@ func TestPostgresNativePublicBounds(t *testing.T) {
 		}
 		*transfer = nativeTransferCounts{}
 		refs, report, err := store.SearchWithReport(t.Context(), snapshot.Scope, nativeSearchNeedle, knowl.ReadLimits{Pages: 1}, nil)
-		if err != nil || len(refs) != 1 || report.ScannedChunks != count || report.VectorCandidates != 1 || transfer.denseRows != 1 || transfer.evidenceRows != 1 || transfer.vectorBytes != 0 || transfer.coverageBytes != len(coverage) || transfer.metadataRows != 1 {
+		if err != nil || len(refs) != 1 || report.ScannedChunks != count || report.VectorCandidates != 1 || transfer.denseRows != 1 || transfer.evidenceRows != 1 || transfer.vectorBytes != 0 || transfer.coverageBytes != 0 || transfer.metadataRows != 0 {
 			t.Fatalf("count=%d refs=%v report=%+v transfers=%+v err=%v", count, refs, report, transfer, err)
 		}
 		t.Logf("Search chunks=%d candidates=%d evidence=%d stored-vector-bytes=%d coverage-bytes=%d metadata-rows=%d total-rows=%d", count, transfer.denseRows, transfer.evidenceRows, transfer.vectorBytes, transfer.coverageBytes, transfer.metadataRows, transfer.rows)
 		*transfer = nativeTransferCounts{}
 		ids, report, _, err := store.SelectContextWithDiagnostics(t.Context(), snapshot.Scope, knowl.SourceSummary{Title: nativeSearchNeedle}, knowl.ReadLimits{Pages: 1})
-		if err != nil || len(ids) != 1 || report.ScannedChunks != count || report.VectorCandidates != 1 || transfer.denseRows != 1 || transfer.evidenceRows != 0 || transfer.vectorBytes != 0 || transfer.coverageBytes != len(coverage) {
+		if err != nil || len(ids) != 1 || report.ScannedChunks != count || report.VectorCandidates != 1 || transfer.denseRows != 1 || transfer.evidenceRows != 0 || transfer.vectorBytes != 0 || transfer.coverageBytes != 0 {
 			t.Fatalf("count=%d ids=%v report=%+v transfers=%+v err=%v", count, ids, report, transfer, err)
 		}
 		t.Logf("Context chunks=%d candidates=%d evidence=%d stored-vector-bytes=%d coverage-bytes=%d total-rows=%d", count, transfer.denseRows, transfer.evidenceRows, transfer.vectorBytes, transfer.coverageBytes, transfer.rows)
@@ -77,44 +77,15 @@ func TestPostgresNativePublicBounds(t *testing.T) {
 		}
 		t.Logf("empty eligibility chunks=%d candidates=%d stored-vector-bytes=%d", count, transfer.denseRows, transfer.vectorBytes)
 	}
-	// The extra row is foreign-space but must count before space/source filtering.
-	if _, err := original.ExecContext(t.Context(), `INSERT INTO knowl_embedding_chunks SELECT scope,$1,page_id,page_digest,ordinal,content_hash,dimensions,vector FROM knowl_embedding_chunks WHERE scope=$2 AND ordinal=0`, strings.Repeat("f", 64), snapshot.Scope); err != nil {
+	// Capacity is admitted from fully validated publication state, not a new
+	// population audit. Publication tests enforce the actual population limit.
+	if _, err := original.ExecContext(t.Context(), `ALTER TABLE knowl_embedding_state DROP CONSTRAINT knowl_embedding_state_chunk_count_check`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := original.ExecContext(t.Context(), "UPDATE knowl_embedding_state SET chunk_count=8193 WHERE scope=$1", snapshot.Scope); err != nil {
 		t.Fatal(err)
 	}
 	assertPostgresPublicBoundFailure(t, store, snapshot.Scope, knowl.RetrievalProjectionCapacity)
-	if err := store.Rebuild(t.Context(), snapshot); err != nil {
-		t.Fatal(err)
-	}
-	coverage, err := hybrid.EncodeCoverage([]hybrid.PageCoverage{{PageID: boundsPageID, PageDigest: boundsPageID, Chunks: 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	coverage += strings.Repeat(" ", 1048576-len(coverage))
-	if _, err := original.ExecContext(t.Context(), "UPDATE knowl_embedding_state SET coverage=$1 WHERE scope=$2", coverage, snapshot.Scope); err != nil {
-		t.Fatal(err)
-	}
-	*transfer = nativeTransferCounts{}
-	_, report, err := store.SearchWithReport(t.Context(), snapshot.Scope, nativeSearchNeedle, knowl.ReadLimits{Pages: 1}, nil)
-	if err != nil || report.ScannedChunks != 1 || transfer.coverageBytes != 1048576 || transfer.vectorBytes != 0 || transfer.denseRows != 1 {
-		t.Fatalf("exact coverage report=%+v transfer=%+v err=%v", report, transfer, err)
-	}
-	t.Logf("coverage boundary bytes=%d candidates=%d stored-vector-bytes=%d", transfer.coverageBytes, transfer.denseRows, transfer.vectorBytes)
-	*transfer = nativeTransferCounts{}
-	_, report, _, err = store.SelectContextWithDiagnostics(t.Context(), snapshot.Scope, knowl.SourceSummary{Title: nativeSearchNeedle}, knowl.ReadLimits{Pages: 1})
-	if err != nil || report.ScannedChunks != 1 || transfer.coverageBytes != 1048576 || transfer.denseRows != 1 || transfer.vectorBytes != 0 {
-		t.Fatalf("exact context coverage report=%+v transfer=%+v err=%v", report, transfer, err)
-	}
-	if _, err := original.ExecContext(t.Context(), "ALTER TABLE knowl_embedding_state DROP CONSTRAINT knowl_embedding_state_coverage_check"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := original.ExecContext(t.Context(), "UPDATE knowl_embedding_state SET coverage=coverage||' ' WHERE scope=$1", snapshot.Scope); err != nil {
-		t.Fatal(err)
-	}
-	*transfer = nativeTransferCounts{}
-	assertPostgresPublicBoundFailure(t, store, snapshot.Scope, knowl.RetrievalProjectionDrift)
-	if transfer.coverageBytes != 0 || transfer.vectorBytes != 0 {
-		t.Fatalf("oversized readiness transferred before bound: %+v", transfer)
-	}
 }
 
 func assertPostgresPublicBoundFailure(t *testing.T, store *Store, scope knowl.ScopeRef, reason knowl.RetrievalFailure) {
@@ -189,23 +160,6 @@ func TestPostgresNativePublicLogicalBytes(t *testing.T) {
 		t.Fatalf("exact 64MiB context=%v report=%+v err=%v", ids, report, err)
 	}
 	t.Logf("logical projection bytes=67108864 validated chunks=%d coverage-bytes=%d", report.ScannedChunks, len(coverage))
-	store.embedding.FailurePolicy = app.EmbeddingFallbackLexical
-	for _, contextSelection := range []bool{false, true} {
-		deadline, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-		if contextSelection {
-			_, report, _, err = store.SelectContextWithDiagnostics(deadline, snapshot.Scope, knowl.SourceSummary{Title: nativeSearchNeedle}, knowl.ReadLimits{Pages: 1})
-		} else {
-			_, report, err = store.SearchWithReport(deadline, snapshot.Scope, nativeSearchNeedle, knowl.ReadLimits{Pages: 1}, nil)
-		}
-		cancel()
-		if !errors.Is(err, context.DeadlineExceeded) || report.ScannedChunks != 0 {
-			t.Fatalf("scan deadline context=%v report=%+v err=%v", contextSelection, report, err)
-		}
-	}
-	if _, err := store.db.ExecContext(t.Context(), "UPDATE knowl_embedding_state SET coverage=coverage||' ' WHERE scope=$1", snapshot.Scope); err != nil {
-		t.Fatal(err)
-	}
-	assertPostgresPublicBoundFailure(t, store, snapshot.Scope, knowl.RetrievalProjectionCapacity)
 }
 
 func TestPostgresNativePublicWaitCancellationAndInvalidDimensions(t *testing.T) {

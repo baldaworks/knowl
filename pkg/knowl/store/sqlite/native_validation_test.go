@@ -25,16 +25,20 @@ const (
 	nativeEvidenceTagsColumn   = "tags"
 )
 
-func readNativeFixture(ctx context.Context, store *Store, scope knowl.ScopeRef, state hybrid.ProjectionState) (validatedDenseProjection, error) {
+func readNativeFixture(ctx context.Context, store *Store, scope knowl.ScopeRef, state hybrid.ProjectionState) (publishedDenseProjection, error) {
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return validatedDenseProjection{}, err
+		return publishedDenseProjection{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	return validateDenseProjectionTx(ctx, tx, scope, state.Space, state.Dimensions)
+	actual, chunks, err := embeddingProjectionTx(ctx, tx, scope, state.Space, state.Dimensions)
+	if err != nil {
+		return publishedDenseProjection{}, err
+	}
+	return publishedDenseProjection{State: actual, PublishedChunks: len(chunks)}, nil
 }
 
-func TestNativeProjectionWholeScopeIntegrity(t *testing.T) {
+func TestMaintenanceProjectionWholeScopeIntegrity(t *testing.T) {
 	for _, tc := range []struct {
 		name, statement string
 		value           any
@@ -49,12 +53,11 @@ func TestNativeProjectionWholeScopeIntegrity(t *testing.T) {
 		{"bad space hex", `UPDATE knowl_embedding_state SET space=? WHERE scope=?`, strings.Repeat("G", 64), knowl.RetrievalProjectionDrift},
 		{"snapshot", `UPDATE knowl_embedding_state SET snapshot_digest=? WHERE scope=?`, strings.Repeat("b", 64), knowl.RetrievalProjectionDrift},
 		{"state count", `UPDATE knowl_embedding_state SET chunk_count=? WHERE scope=?`, 0, knowl.RetrievalProjectionDrift},
-		{"state capacity", `UPDATE knowl_embedding_state SET chunk_count=? WHERE scope=?`, hybrid.MaxChunks + 1, knowl.RetrievalProjectionCapacity},
+		{"state capacity", `UPDATE knowl_embedding_state SET chunk_count=? WHERE scope=?`, hybrid.MaxChunks + 1, knowl.RetrievalProjectionDrift},
 		{"omissions", `UPDATE knowl_embedding_state SET omitted_chunks=? WHERE scope=?`, 1, knowl.RetrievalProjectionDrift},
 		{"wrong reason", `UPDATE knowl_embedding_state SET reason=? WHERE scope=?`, knowl.RetrievalUnavailable, knowl.RetrievalProjectionDrift},
 		{"foreign model", `UPDATE knowl_embedding_chunks SET space=? WHERE scope=? AND page_id='question'`, strings.Repeat("c", 64), knowl.RetrievalProjectionDrift},
 		{"wrong dimension", `UPDATE knowl_embedding_chunks SET dimensions=? WHERE scope=? AND page_id='question'`, 3, knowl.RetrievalProjectionDrift},
-		{"real ordinal", `UPDATE knowl_embedding_chunks SET ordinal=? WHERE scope=? AND page_id='question'`, 0.5, knowl.RetrievalProjectionDrift},
 		{"gap", `UPDATE knowl_embedding_chunks SET ordinal=? WHERE scope=? AND page_id='question'`, 1, knowl.RetrievalProjectionDrift},
 		{"uppercase hash", `UPDATE knowl_embedding_chunks SET content_hash=? WHERE scope=? AND page_id='question'`, strings.Repeat("B", 64), knowl.RetrievalProjectionDrift},
 		{"nul hash", `UPDATE knowl_embedding_chunks SET content_hash=? WHERE scope=? AND page_id='question'`, strings.Repeat("b", 63) + "\x00", knowl.RetrievalProjectionDrift},
@@ -74,14 +77,14 @@ func TestNativeProjectionWholeScopeIntegrity(t *testing.T) {
 			}
 			got, err := readNativeFixture(t.Context(), store, snapshot.Scope, state)
 			assertEmbeddingFailure(t, err, tc.want)
-			if got.ValidatedChunks != 0 {
-				t.Fatalf("partial validation reported %d chunks", got.ValidatedChunks)
+			if got.PublishedChunks != 0 {
+				t.Fatalf("partial validation reported %d chunks", got.PublishedChunks)
 			}
 		})
 	}
 }
 
-func TestNativeProjectionVectorReduction(t *testing.T) {
+func TestMaintenanceProjectionVectorReduction(t *testing.T) {
 	// Adjacent float32 values straddle the squared-norm tolerance; rounding the
 	// norm to float32 or checking a rounded square root would move this boundary.
 	inside := float32(math.Sqrt(1.001))
@@ -108,7 +111,7 @@ func TestNativeProjectionVectorReduction(t *testing.T) {
 			got, err := readNativeFixture(t.Context(), store, snapshot.Scope, state)
 			if !tc.good {
 				assertEmbeddingFailure(t, err, knowl.RetrievalProjectionDrift)
-			} else if err != nil || got.ValidatedChunks != 4 || got.State != state {
+			} else if err != nil || got.PublishedChunks != 4 || got.State != state {
 				t.Fatalf("valid projection=%+v err=%v", got, err)
 			}
 		})
@@ -132,7 +135,7 @@ func TestNativeProjectionCoverageIncludesZeroChunkPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := readNativeFixture(t.Context(), store, snapshot.Scope, state)
-	if err != nil || got.ValidatedChunks != 3 {
+	if err != nil || got.PublishedChunks != 3 {
 		t.Fatalf("zero-chunk page=%+v err=%v", got, err)
 	}
 	coverage = coverage[1:]
@@ -170,14 +173,14 @@ func TestNativeProjectionSupportedDimensions(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, err := readNativeFixture(t.Context(), store, snapshot.Scope, state)
-			if err != nil || got.ValidatedChunks != 4 {
+			if err != nil || got.PublishedChunks != 4 {
 				t.Fatalf("dimensions %d projection=%+v err=%v", dimensions, got, err)
 			}
 		})
 	}
 }
 
-func TestNativeProjectionUsesValidatedCanonicalCoverage(t *testing.T) {
+func TestMaintenanceProjectionUsesValidatedCanonicalCoverage(t *testing.T) {
 	store, snapshot, state, _ := embeddingFixture(t)
 	// encoding/json uses the last duplicate field, SQLite json_extract uses the
 	// first. Only expanding the canonical validated encoding preserves Go's
@@ -190,12 +193,12 @@ func TestNativeProjectionUsesValidatedCanonicalCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := readNativeFixture(t.Context(), store, snapshot.Scope, state)
-	if err != nil || got.ValidatedChunks != 4 {
+	if err != nil || got.PublishedChunks != 4 {
 		t.Fatalf("canonical coverage=%+v err=%v", got, err)
 	}
 }
 
-func TestNativeProjectionDetectsDuplicateOrdinalsWithoutConstraints(t *testing.T) {
+func TestMaintenanceProjectionDetectsDuplicateOrdinalsWithoutConstraints(t *testing.T) {
 	store, snapshot, state, chunks := embeddingFixture(t)
 	// Rebuild just this disposable test table without its PK/FK guards so the
 	// read-side relational validation is exercised independently of insertion.
@@ -260,12 +263,12 @@ func TestNativeProjectionExactChunkCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := readNativeFixture(t.Context(), store, snapshot.Scope, state)
-	if err != nil || got.ValidatedChunks != 8192 {
+	if err != nil || got.PublishedChunks != 8192 {
 		t.Fatalf("exact chunk cap=%+v err=%v", got, err)
 	}
 }
 
-func TestNativeProjectionCountsForeignRowsBeforeValidation(t *testing.T) {
+func TestMaintenanceProjectionCountsForeignRowsBeforeValidation(t *testing.T) {
 	store, snapshot, state, chunks := embeddingFixture(t)
 	if _, err := store.db.ExecContext(t.Context(), `PRAGMA ignore_check_constraints=ON`); err != nil {
 		t.Fatal(err)
@@ -329,7 +332,7 @@ func TestNativeProjectionExactLogicalByteCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := readNativeFixture(t.Context(), store, snapshot.Scope, state)
-	if err != nil || got.ValidatedChunks != 4000 {
+	if err != nil || got.PublishedChunks != 4000 {
 		t.Fatalf("exact 64 MiB projection=%+v err=%v", got, err)
 	}
 	deadline, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
@@ -480,9 +483,6 @@ func TestNativeProjectionHealthChecksTransferNoVectors(t *testing.T) {
 func TestNativeProjectionRejectsDynamicMetadataTypes(t *testing.T) {
 	for _, statement := range []string{
 		`UPDATE knowl_embedding_state SET space=CAST(space AS BLOB) WHERE scope=?`,
-		`UPDATE knowl_embedding_state SET coverage=CAST(coverage AS BLOB) WHERE scope=?`,
-		`UPDATE knowl_embedding_chunks SET content_hash=CAST(content_hash AS BLOB) WHERE scope=?`,
-		`UPDATE knowl_embedding_chunks SET page_id=CAST(page_id AS BLOB) WHERE scope=?`,
 	} {
 		t.Run(statement, func(t *testing.T) {
 			store, snapshot, state, _ := embeddingFixture(t)

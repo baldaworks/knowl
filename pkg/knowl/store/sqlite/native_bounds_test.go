@@ -49,13 +49,13 @@ func TestSQLiteNativePublicBounds(t *testing.T) {
 		}
 		*transfer = validationTransfers{}
 		refs, report, err := store.SearchWithReport(t.Context(), snapshot.Scope, nativeQueryNeedle, knowl.ReadLimits{Pages: 1}, nil)
-		if err != nil || len(refs) != 1 || report.ScannedChunks != count || report.VectorCandidates != 1 || transfer.denseRows != 1 || transfer.evidenceRows != 1 || transfer.vectorBytes != 0 || transfer.coverageBytes != len(coverage) || transfer.metadataRows != 1 {
+		if err != nil || len(refs) != 1 || report.ScannedChunks != count || report.VectorCandidates != 1 || transfer.denseRows != 1 || transfer.evidenceRows != 1 || transfer.vectorBytes != 0 || transfer.coverageBytes != 0 || transfer.metadataRows != 0 {
 			t.Fatalf("count=%d refs=%v report=%+v transfers=%+v err=%v", count, refs, report, transfer, err)
 		}
 		t.Logf("Search chunks=%d candidates=%d evidence=%d stored-vector-bytes=%d coverage-bytes=%d metadata-rows=%d total-rows=%d", count, transfer.denseRows, transfer.evidenceRows, transfer.vectorBytes, transfer.coverageBytes, transfer.metadataRows, transfer.rows)
 		*transfer = validationTransfers{}
 		ids, report, _, err := store.SelectContextWithDiagnostics(t.Context(), snapshot.Scope, knowl.SourceSummary{Title: nativeQueryNeedle}, knowl.ReadLimits{Pages: 1})
-		if err != nil || len(ids) != 1 || report.ScannedChunks != count || report.VectorCandidates != 1 || transfer.denseRows != 1 || transfer.evidenceRows != 0 || transfer.vectorBytes != 0 || transfer.coverageBytes != len(coverage) {
+		if err != nil || len(ids) != 1 || report.ScannedChunks != count || report.VectorCandidates != 1 || transfer.denseRows != 1 || transfer.evidenceRows != 0 || transfer.vectorBytes != 0 || transfer.coverageBytes != 0 {
 			t.Fatalf("count=%d ids=%v report=%+v transfers=%+v err=%v", count, ids, report, transfer, err)
 		}
 		t.Logf("Context chunks=%d candidates=%d evidence=%d stored-vector-bytes=%d coverage-bytes=%d total-rows=%d", count, transfer.denseRows, transfer.evidenceRows, transfer.vectorBytes, transfer.coverageBytes, transfer.rows)
@@ -66,47 +66,15 @@ func TestSQLiteNativePublicBounds(t *testing.T) {
 		}
 		t.Logf("empty eligibility chunks=%d candidates=%d stored-vector-bytes=%d", count, transfer.denseRows, transfer.vectorBytes)
 	}
-	// The extra row is foreign-space but must count before space/source filtering.
-	if _, err := original.ExecContext(t.Context(), `INSERT INTO knowl_embedding_chunks SELECT scope,?,page_id,page_digest,ordinal,content_hash,dimensions,vector FROM knowl_embedding_chunks WHERE scope=? AND ordinal=0`, strings.Repeat("f", 64), snapshot.Scope); err != nil {
+	// Capacity is admitted from fully validated publication state, not a new
+	// population audit. Publication tests enforce the actual population limit.
+	if _, err := original.ExecContext(t.Context(), `PRAGMA ignore_check_constraints=ON`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := original.ExecContext(t.Context(), "UPDATE knowl_embedding_state SET chunk_count=8193 WHERE scope=?", snapshot.Scope); err != nil {
 		t.Fatal(err)
 	}
 	assertSQLitePublicBoundFailure(t, store, snapshot.Scope, knowl.RetrievalProjectionCapacity)
-	store.db = original
-	rebuildErr := store.Rebuild(t.Context(), snapshot)
-	store.db = observed
-	if rebuildErr != nil {
-		t.Fatal(rebuildErr)
-	}
-	coverage, err := hybrid.EncodeCoverage([]hybrid.PageCoverage{{PageID: boundsPageID, PageDigest: boundsPageID, Chunks: 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	coverage += strings.Repeat(" ", 1048576-len(coverage))
-	if _, err := original.ExecContext(t.Context(), "UPDATE knowl_embedding_state SET coverage=? WHERE scope=?", coverage, snapshot.Scope); err != nil {
-		t.Fatal(err)
-	}
-	*transfer = validationTransfers{}
-	_, report, err := store.SearchWithReport(t.Context(), snapshot.Scope, nativeQueryNeedle, knowl.ReadLimits{Pages: 1}, nil)
-	if err != nil || report.ScannedChunks != 1 || transfer.coverageBytes != 1048576 || transfer.vectorBytes != 0 || transfer.denseRows != 1 {
-		t.Fatalf("exact coverage report=%+v transfer=%+v err=%v", report, transfer, err)
-	}
-	t.Logf("coverage boundary bytes=%d candidates=%d stored-vector-bytes=%d", transfer.coverageBytes, transfer.denseRows, transfer.vectorBytes)
-	*transfer = validationTransfers{}
-	_, report, _, err = store.SelectContextWithDiagnostics(t.Context(), snapshot.Scope, knowl.SourceSummary{Title: nativeQueryNeedle}, knowl.ReadLimits{Pages: 1})
-	if err != nil || report.ScannedChunks != 1 || transfer.coverageBytes != 1048576 || transfer.denseRows != 1 || transfer.vectorBytes != 0 {
-		t.Fatalf("exact context coverage report=%+v transfer=%+v err=%v", report, transfer, err)
-	}
-	if _, err := original.ExecContext(t.Context(), "PRAGMA ignore_check_constraints=ON"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := original.ExecContext(t.Context(), "UPDATE knowl_embedding_state SET coverage=coverage||' ' WHERE scope=?", snapshot.Scope); err != nil {
-		t.Fatal(err)
-	}
-	*transfer = validationTransfers{}
-	assertSQLitePublicBoundFailure(t, store, snapshot.Scope, knowl.RetrievalProjectionDrift)
-	if transfer.coverageBytes != 0 || transfer.vectorBytes != 0 {
-		t.Fatalf("oversized readiness transferred before bound: %+v", transfer)
-	}
 }
 
 func assertSQLitePublicBoundFailure(t *testing.T, store *Store, scope knowl.ScopeRef, reason knowl.RetrievalFailure) {
@@ -176,23 +144,6 @@ func TestSQLiteNativePublicLogicalBytes(t *testing.T) {
 		t.Fatalf("exact 64MiB context=%v report=%+v err=%v", ids, report, err)
 	}
 	t.Logf("logical projection bytes=67108864 validated chunks=%d coverage-bytes=%d", report.ScannedChunks, len(coverage))
-	store.embedding.FailurePolicy = app.EmbeddingFallbackLexical
-	for _, contextSelection := range []bool{false, true} {
-		deadline, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-		if contextSelection {
-			_, report, _, err = store.SelectContextWithDiagnostics(deadline, snapshot.Scope, knowl.SourceSummary{Title: nativeQueryNeedle}, knowl.ReadLimits{Pages: 1})
-		} else {
-			_, report, err = store.SearchWithReport(deadline, snapshot.Scope, nativeQueryNeedle, knowl.ReadLimits{Pages: 1}, nil)
-		}
-		cancel()
-		if !errors.Is(err, context.DeadlineExceeded) || report.ScannedChunks != 0 {
-			t.Fatalf("scan deadline context=%v report=%+v err=%v", contextSelection, report, err)
-		}
-	}
-	if _, err := store.db.ExecContext(t.Context(), "UPDATE knowl_embedding_state SET coverage=coverage||' ' WHERE scope=?", snapshot.Scope); err != nil {
-		t.Fatal(err)
-	}
-	assertSQLitePublicBoundFailure(t, store, snapshot.Scope, knowl.RetrievalProjectionCapacity)
 }
 
 func TestSQLiteNativePublicWaitCancellationAndInvalidDimensions(t *testing.T) {

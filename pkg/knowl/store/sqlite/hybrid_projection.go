@@ -45,7 +45,7 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	return store.publishEmbeddingsChecked(ctx, snapshot.Scope, state, staged, nonce)
 }
 
-// previousProjection is maintenance-only: it captures fully validated current-
+// previousProjection is maintenance-only: it captures fully published current-
 // format vectors and old lexical pages for authenticated reuse. Inference runs
 // only after this read transaction has released its locks.
 func (store *Store) previousProjection(ctx context.Context, snapshot knowl.WorkspaceSnapshot) (*hybrid.ProjectionState, []hybrid.Chunk, []knowl.PageSnapshot, error) {
@@ -189,12 +189,12 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 	if err := checkLexicalProjectionUsing(ctx, tx, snapshot); err != nil {
 		return err
 	}
-	validated, err := validateDenseProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	published, err := readDenseProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
 	if err != nil {
 		return err
 	}
-	if validated.State.Mode == knowl.RetrievalDegraded {
-		_, err = store.embedding.Failure(ctx, store.embedding.Report(), embeddingFailure(validated.State.Reason))
+	if published.State.Mode == knowl.RetrievalDegraded {
+		_, err = store.embedding.Failure(ctx, store.embedding.Report(), embeddingFailure(published.State.Reason))
 	}
 	return err
 }
@@ -210,8 +210,8 @@ func (store *Store) ProjectionDegraded(ctx context.Context, scope knowl.ScopeRef
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	validated, err := validateDenseProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
-	return validated.State.Mode == knowl.RetrievalDegraded, err
+	published, err := readDenseProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	return published.State.Mode == knowl.RetrievalDegraded, err
 }
 
 func (store *Store) MaintenanceRetrievalPolicy() *app.MaintenanceRetrievalPolicy {

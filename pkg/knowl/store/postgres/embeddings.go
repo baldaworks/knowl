@@ -31,6 +31,9 @@ func (store *Store) publishEmbeddingsChecked(ctx context.Context, scope knowl.Sc
 	if err := hybrid.ValidateProjection(ctx, state, chunks); err != nil {
 		return err
 	}
+	if store.embedding != nil && (state.Space != store.embedding.Fingerprint || state.Dimensions != store.embedding.Space.Dimensions) {
+		return embeddingFailure(knowl.RetrievalProjectionDrift)
+	}
 	if err := store.verifyNativeVectors(ctx); err != nil {
 		return err
 	}

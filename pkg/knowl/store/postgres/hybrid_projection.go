@@ -207,12 +207,12 @@ func (store *Store) CheckProjection(ctx context.Context, snapshot knowl.Workspac
 	if err := checkLexicalProjectionUsing(ctx, tx, snapshot); err != nil {
 		return err
 	}
-	validated, err := store.validateDenseProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	published, err := store.readDenseProjectionTx(ctx, tx, snapshot.Scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
 	if err != nil {
 		return err
 	}
-	if validated.State.Mode == knowl.RetrievalDegraded {
-		_, err = store.embedding.Failure(ctx, store.embedding.Report(), embeddingFailure(validated.State.Reason))
+	if published.State.Mode == knowl.RetrievalDegraded {
+		_, err = store.embedding.Failure(ctx, store.embedding.Report(), embeddingFailure(published.State.Reason))
 	}
 	return err
 }
@@ -231,8 +231,8 @@ func (store *Store) ProjectionDegraded(ctx context.Context, scope knowl.ScopeRef
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	validated, err := store.validateDenseProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
-	return validated.State.Mode == knowl.RetrievalDegraded, err
+	published, err := store.readDenseProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	return published.State.Mode == knowl.RetrievalDegraded, err
 }
 
 func (store *Store) MaintenanceRetrievalPolicy() *app.MaintenanceRetrievalPolicy {

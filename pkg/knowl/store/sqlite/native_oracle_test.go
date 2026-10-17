@@ -5,7 +5,6 @@ import (
 	"math"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
@@ -102,12 +101,12 @@ func TestSQLiteNativeExhaustiveOracle(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer func() { _ = tx.Rollback() }()
-					validated, err := validateDenseProjectionTx(t.Context(), tx, snapshot.Scope, store.embedding.Fingerprint, 2)
+					validated, err := readDenseProjectionTx(t.Context(), tx, snapshot.Scope, store.embedding.Fingerprint, 2)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if validated.ValidatedChunks != len(vectors) {
-						t.Fatalf("validated=%d fixture=%d", validated.ValidatedChunks, len(vectors))
+					if validated.PublishedChunks != len(vectors) {
+						t.Fatalf("validated=%d fixture=%d", validated.PublishedChunks, len(vectors))
 					}
 					var scores []searchtest.NativeScore
 					maxError := 0.0
@@ -177,11 +176,6 @@ func TestSQLiteNativeExhaustiveOracle(t *testing.T) {
 					t.Logf("scalar pairs=%d dimensions=2 maximum absolute math error=%g", len(vectors)*len(tc.queries), maxError)
 				})
 			}
-			if _, err := store.db.ExecContext(t.Context(), "UPDATE knowl_embedding_chunks SET space=? WHERE scope=? AND page_id='A'", strings.Repeat("f", 64), snapshot.Scope); err != nil {
-				t.Fatal(err)
-			}
-			_, _, err = store.SearchWithReport(t.Context(), snapshot.Scope, nativeQueryNeedle, knowl.ReadLimits{Pages: 1}, []knowl.SourceID{"oracle-selected"})
-			assertEmbeddingFailure(t, err, knowl.RetrievalProjectionDrift)
 		})
 	}
 }

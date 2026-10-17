@@ -25,6 +25,9 @@ func (store *Store) publishEmbeddingsChecked(ctx context.Context, scope knowl.Sc
 	if err := hybrid.ValidateProjection(ctx, state, chunks); err != nil {
 		return err
 	}
+	if store.embedding != nil && (state.Space != store.embedding.Fingerprint || state.Dimensions != store.embedding.Space.Dimensions) {
+		return embeddingFailure(knowl.RetrievalProjectionDrift)
+	}
 	if err := store.mu.LockContext(ctx); err != nil {
 		return err
 	}
@@ -92,8 +95,8 @@ func (store *Store) publishEmbeddingsChecked(ctx context.Context, scope knowl.Sc
 	return nil
 }
 
-// embeddingProjectionTx reads and validates complete state and rows in the same
-// transaction that the caller uses for lexical candidates and original evidence.
+// embeddingProjectionTx reads and fully validates maintenance input for reuse.
+// Ordinary retrieval and readiness use scalar readDenseProjectionTx admission.
 func embeddingProjectionTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, space string, dimensions int) (hybrid.ProjectionState, []hybrid.Chunk, error) {
 	var state hybrid.ProjectionState
 	var bounded, currentFormat bool

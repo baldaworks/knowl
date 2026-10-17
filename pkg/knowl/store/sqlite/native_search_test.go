@@ -186,7 +186,7 @@ func TestSQLiteNativeSearchNegativeCloseAndBinaryTies(t *testing.T) {
 	check([]knowl.PageID{"ä", "Z", "a"})
 }
 
-func TestSQLiteNativeSearchSourceEligibilityAndWholeScopeValidation(t *testing.T) {
+func TestSQLiteNativeSearchSourceEligibility(t *testing.T) {
 	store, snapshot := nativeSearchFixture(t, []knowl.PageSnapshot{
 		{ID: "excluded", Path: "wiki/excluded.md", Digest: "x", Body: "Excluded evidence"},
 		{ID: "included", Path: "wiki/included.md", Digest: "i", Body: "Included evidence"},
@@ -219,20 +219,6 @@ func TestSQLiteNativeSearchSourceEligibilityAndWholeScopeValidation(t *testing.T
 	if err != nil || len(refs) != 1 || report.ScannedChunks != 2 {
 		t.Fatalf("foreign scope refs=%v report=%+v err=%v", refs, report, err)
 	}
-	// Corruption on an unselected page must fail before eligibility or LIMIT.
-	if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_embedding_chunks SET vector=zeroblob(8) WHERE scope=? AND page_id=?`, snapshot.Scope, "excluded"); err != nil {
-		t.Fatal(err)
-	}
-	refs, report, err = store.SearchWithReport(t.Context(), snapshot.Scope, nativeQueryNeedle, knowl.ReadLimits{Pages: 1}, []knowl.SourceID{nativeSelected})
-	assertEmbeddingFailure(t, err, knowl.RetrievalProjectionDrift)
-	if len(refs) != 0 || report.ScannedChunks != 0 || report.Effective != knowl.RetrievalFailed {
-		t.Fatalf("corruption refs=%v report=%+v", refs, report)
-	}
-	_, report, _, err = store.SelectContextWithDiagnostics(t.Context(), snapshot.Scope, knowl.SourceSummary{Title: nativeQueryNeedle}, knowl.ReadLimits{Pages: 1})
-	assertEmbeddingFailure(t, err, knowl.RetrievalProjectionDrift)
-	if report.ScannedChunks != 0 {
-		t.Fatalf("corrupt context report=%+v", report)
-	}
 }
 
 func TestSQLiteNativeSearchEmptyReadyProjection(t *testing.T) {
@@ -243,16 +229,14 @@ func TestSQLiteNativeSearchEmptyReadyProjection(t *testing.T) {
 	}
 }
 
-func TestSQLiteNativeSearchCorruptNonwinnerPolicies(t *testing.T) {
+func TestSQLiteNativeSearchScalarAdmissionPolicies(t *testing.T) {
 	for _, policy := range []app.EmbeddingFailurePolicy{app.EmbeddingStrict, app.EmbeddingFallbackLexical} {
 		for _, tc := range []struct {
 			name, sql string
 			arg       any
 		}{
-			{"foreign model", `UPDATE knowl_embedding_chunks SET space=? WHERE scope=? AND page_id='nonwinner'`, strings.Repeat("f", 64)},
 			{"snapshot", `UPDATE knowl_embedding_state SET snapshot_digest=? WHERE scope=?`, strings.Repeat("f", 64)},
 			{"old native format", `UPDATE knowl_embedding_state SET native_format=? WHERE scope=?`, 0},
-			{"nonwinner dimension", `UPDATE knowl_embedding_chunks SET dimensions=? WHERE scope=? AND page_id='nonwinner'`, 3},
 		} {
 			t.Run(string(policy)+"/"+tc.name, func(t *testing.T) {
 				store, snapshot := nativeSearchFixture(t, []knowl.PageSnapshot{

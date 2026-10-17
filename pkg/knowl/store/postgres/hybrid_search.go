@@ -138,8 +138,8 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	var dense []knowl.PageID
 	denseMatches := make(map[knowl.PageID]hybrid.Chunk)
 	if report.Effective == knowl.RetrievalHybrid {
-		validated, ranked, denseErr := store.densePagesTx(ctx, tx, scope, vectors, sources, channelLimit)
-		report.ScannedChunks = validated.ValidatedChunks
+		published, ranked, denseErr := store.densePagesTx(ctx, tx, scope, vectors, sources, channelLimit)
+		report.ScannedChunks = published.PublishedChunks
 		err = denseErr
 		if err != nil {
 			if denseTransactionFailed(ctx, err) {
@@ -153,8 +153,8 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 			}
 		} else {
 			resultMetadata.VectorProjection = &knowl.VectorProjectionStatus{State: knowl.VectorReady}
-			report.IndexOmittedChunks = validated.State.OmittedChunks
-			report.IndexOmittedRunes = validated.State.OmittedRunes
+			report.IndexOmittedChunks = published.State.OmittedChunks
+			report.IndexOmittedRunes = published.State.OmittedRunes
 			for _, match := range ranked {
 				dense = append(dense, match.Evidence.PageID)
 				denseMatches[match.Evidence.PageID] = match.Evidence

@@ -90,20 +90,13 @@ type Chunk struct {
 // compare model space, snapshot and current page identities in one transaction.
 // Degraded state has no coverage; ready coverage includes zero-chunk pages.
 func ValidateProjectionMetadata(ctx context.Context, state ProjectionState) ([]PageCoverage, error) {
-	if err := ctx.Err(); err != nil {
+	if err := ValidateProjectionState(ctx, state); err != nil {
 		return nil, err
 	}
-	if state.ChunkCount > MaxChunks {
-		return nil, failure(knowl.RetrievalProjectionCapacity)
-	}
-	if !digest(state.Space) || !digest(state.SnapshotDigest) || state.Dimensions < 1 || state.Dimensions > 4096 || state.ChunkCount < 0 {
-		return nil, failure(knowl.RetrievalProjectionDrift)
-	}
-	report := knowl.RetrievalReport{Requested: knowl.RetrievalHybrid, Effective: state.Mode, Reason: state.Reason, ModelSpace: state.Space[:16], IndexOmittedChunks: state.OmittedChunks, IndexOmittedRunes: state.OmittedRunes}
-	if app.ValidateRetrievalReport(report) != nil || (state.Mode != knowl.RetrievalHybrid && state.Mode != knowl.RetrievalDegraded) || (state.Mode == knowl.RetrievalDegraded && (state.ChunkCount != 0 || state.Coverage != "")) || (state.Mode == knowl.RetrievalHybrid && (state.OmittedChunks != 0 || state.OmittedRunes != 0)) {
-		return nil, failure(knowl.RetrievalProjectionDrift)
-	}
 	if state.Mode == knowl.RetrievalDegraded {
+		if state.Coverage != "" {
+			return nil, failure(knowl.RetrievalProjectionDrift)
+		}
 		return nil, nil
 	}
 	pages, err := DecodeCoverage(state.Coverage)
@@ -118,6 +111,25 @@ func ValidateProjectionMetadata(ctx context.Context, state ProjectionState) ([]P
 		return nil, failure(knowl.RetrievalProjectionDrift)
 	}
 	return pages, nil
+}
+
+// ValidateProjectionState admits fixed publication fields only. It does not
+// establish coverage or vector integrity; writers must use ValidateProjection.
+func ValidateProjectionState(ctx context.Context, state ProjectionState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if state.ChunkCount > MaxChunks {
+		return failure(knowl.RetrievalProjectionCapacity)
+	}
+	if !digest(state.Space) || !digest(state.SnapshotDigest) || state.Dimensions < 1 || state.Dimensions > 4096 || state.ChunkCount < 0 {
+		return failure(knowl.RetrievalProjectionDrift)
+	}
+	report := knowl.RetrievalReport{Requested: knowl.RetrievalHybrid, Effective: state.Mode, Reason: state.Reason, ModelSpace: state.Space[:16], IndexOmittedChunks: state.OmittedChunks, IndexOmittedRunes: state.OmittedRunes}
+	if app.ValidateRetrievalReport(report) != nil || (state.Mode != knowl.RetrievalHybrid && state.Mode != knowl.RetrievalDegraded) || (state.Mode == knowl.RetrievalDegraded && state.ChunkCount != 0) || (state.Mode == knowl.RetrievalHybrid && (state.OmittedChunks != 0 || state.OmittedRunes != 0)) {
+		return failure(knowl.RetrievalProjectionDrift)
+	}
+	return nil
 }
 
 // ValidateProjection checks bounded metadata, complete ordinals and vector data.

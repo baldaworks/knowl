@@ -286,7 +286,7 @@ func runNativeSearchFilters(t *testing.T, store *Store) {
 			t.Fatalf("source=%s refs=%v report=%+v err=%v", source, refs, report, err)
 		}
 	}
-	for _, mutation := range []string{`UPDATE knowl_embedding_chunks SET vector='[0,0]' WHERE scope='native-search' AND page_id='excluded'`, `UPDATE knowl_embedding_chunks SET space=repeat('f',64) WHERE scope='native-search' AND page_id='excluded'`, `UPDATE knowl_embedding_state SET snapshot_digest=repeat('f',64) WHERE scope='native-search'`} {
+	for _, mutation := range []string{`UPDATE knowl_embedding_state SET snapshot_digest=repeat('f',64) WHERE scope='native-search'`} {
 		if err := store.Rebuild(t.Context(), snapshot); err != nil {
 			t.Fatal(err)
 		}
@@ -335,8 +335,8 @@ func runNativeSearchRecovery(t *testing.T, owner *Store, dsn string) {
 		t.Fatalf("preflight=%v", store.nativeErr)
 	}
 	// Revoke only after Open: the statement really aborts the query transaction.
-	nativeExec(t, owner.db, `REVOKE EXECUTE ON FUNCTION "vector extension".vector_dims("vector extension".vector) FROM PUBLIC`)
-	defer nativeExec(t, owner.db, `GRANT EXECUTE ON FUNCTION "vector extension".vector_dims("vector extension".vector) TO PUBLIC`)
+	nativeExec(t, owner.db, `REVOKE SELECT ON knowl_embedding_state FROM search_runtime`)
+	defer nativeExec(t, owner.db, `GRANT SELECT ON knowl_embedding_state TO search_runtime`)
 	for _, strict := range []bool{false, true} {
 		store.embedding.FailurePolicy = app.EmbeddingFallbackLexical
 		if strict {
@@ -351,7 +351,7 @@ func runNativeSearchRecovery(t *testing.T, owner *Store, dsn string) {
 			t.Fatalf("refs=%v ids=%v report=%+v context=%+v errors=%v/%v", refs, ids, report, contextReport, searchErr, contextErr)
 		}
 	}
-	nativeExec(t, owner.db, `GRANT EXECUTE ON FUNCTION "vector extension".vector_dims("vector extension".vector) TO PUBLIC`)
+	nativeExec(t, owner.db, `GRANT SELECT ON knowl_embedding_state TO search_runtime`)
 	// Use the real extension-owned operator function with a disposable fault body.
 	nativeExec(t, owner.db, `CREATE OR REPLACE FUNCTION "vector extension".cosine_distance("vector extension".vector,"vector extension".vector) RETURNS float8 LANGUAGE plpgsql IMMUTABLE STRICT AS $$ BEGIN RAISE EXCEPTION 'secret DSN vector SQL' USING ERRCODE='P0001'; END $$`)
 	store.embedding.FailurePolicy = app.EmbeddingFallbackLexical

@@ -15,7 +15,8 @@ type denseMatch struct {
 	Score    float64
 }
 
-// rankDensePagesTx follows successful whole-scope validation in this snapshot.
+// rankDensePagesTx follows scalar admission of a fully validated publication
+// in this snapshot.
 // Materializing scalar scores makes invalid values visible before MAX can hide
 // them, and ensures every eligible chunk/window participates before the page limit.
 func rankDensePagesTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, space string, queries [][]float32, sources []knowl.SourceID, limit int) ([]denseMatch, error) {

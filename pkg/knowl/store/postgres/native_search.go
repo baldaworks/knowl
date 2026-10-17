@@ -23,7 +23,8 @@ type denseMatch struct {
 
 const nativeVectorTypeName = "vector"
 
-// rankDensePagesTx requires successful whole-scope validation in this snapshot.
+// rankDensePagesTx requires scalar admission of a fully validated publication
+// in this snapshot.
 // Materialized scalar scores retain invalid results before MAX or LIMIT can
 // hide them. PostgreSQL sorts NaN above infinity, so the finite range predicate
 // rejects it as well as either infinity.
@@ -100,31 +101,31 @@ func (store *Store) rankDensePagesTx(ctx context.Context, tx *sql.Tx, scope know
 
 // densePagesTx owns the private savepoint. Even a statement permission error
 // must be rolled back before context neighbors/recent pages can use the snapshot.
-func (store *Store) densePagesTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, queries [][]float32, sources []knowl.SourceID, limit int) (validatedDenseProjection, []denseMatch, error) {
-	var validated validatedDenseProjection
+func (store *Store) densePagesTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef, queries [][]float32, sources []knowl.SourceID, limit int) (publishedDenseProjection, []denseMatch, error) {
+	var published publishedDenseProjection
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT knowl_dense_read`); err != nil {
-		return validated, nil, errors.Join(sql.ErrTxDone, redactDenseError(ctx, err))
+		return published, nil, errors.Join(sql.ErrTxDone, redactDenseError(ctx, err))
 	}
-	validated, err := store.validateDenseProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
+	published, err := store.readDenseProjectionTx(ctx, tx, scope, store.embedding.Fingerprint, store.embedding.Space.Dimensions)
 	var matches []denseMatch
-	if err == nil && validated.State.Mode == knowl.RetrievalDegraded {
-		err = embeddingFailure(validated.State.Reason)
+	if err == nil && published.State.Mode == knowl.RetrievalDegraded {
+		err = embeddingFailure(published.State.Reason)
 	}
 	if err == nil {
 		matches, err = store.rankDensePagesTx(ctx, tx, scope, store.embedding.Fingerprint, queries, sources, limit)
 	}
 	if err != nil {
 		if denseTransactionFailed(ctx, err) {
-			return validated, nil, redactDenseError(ctx, err)
+			return published, nil, redactDenseError(ctx, err)
 		}
 		if _, rollbackErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT knowl_dense_read`); rollbackErr != nil {
-			return validated, nil, errors.Join(sql.ErrTxDone, redactDenseError(ctx, rollbackErr))
+			return published, nil, errors.Join(sql.ErrTxDone, redactDenseError(ctx, rollbackErr))
 		}
 	}
 	if _, releaseErr := tx.ExecContext(ctx, `RELEASE SAVEPOINT knowl_dense_read`); releaseErr != nil {
-		return validated, nil, errors.Join(sql.ErrTxDone, redactDenseError(ctx, releaseErr))
+		return published, nil, errors.Join(sql.ErrTxDone, redactDenseError(ctx, releaseErr))
 	}
-	return validated, matches, redactDenseError(ctx, denseValidationError(ctx, err))
+	return published, matches, redactDenseError(ctx, denseValidationError(ctx, err))
 }
 
 func denseTransactionFailed(ctx context.Context, err error) bool {

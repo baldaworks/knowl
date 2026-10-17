@@ -134,15 +134,15 @@ func (store *Store) retrieveHybrid(ctx context.Context, scope knowl.ScopeRef, qu
 	var dense []knowl.PageID
 	denseMatches := make(map[knowl.PageID]hybrid.Chunk)
 	if report.Effective == knowl.RetrievalHybrid {
-		var validated validatedDenseProjection
-		validated, err = validateDenseProjectionTx(ctx, tx, scope, engine.Fingerprint, engine.Space.Dimensions)
-		state := validated.State
+		var published publishedDenseProjection
+		published, err = readDenseProjectionTx(ctx, tx, scope, engine.Fingerprint, engine.Space.Dimensions)
+		state := published.State
 		if err == nil && state.Mode == knowl.RetrievalDegraded {
 			err = embeddingFailure(state.Reason)
 		}
 		var ranked []denseMatch
 		if err == nil {
-			report.ScannedChunks = validated.ValidatedChunks
+			report.ScannedChunks = published.PublishedChunks
 			ranked, err = rankDensePagesTx(ctx, tx, scope, engine.Fingerprint, vectors, sources, channelLimit)
 		}
 		if err != nil {

@@ -176,30 +176,15 @@ func TestSQLiteNativeLifecycleReuseFailureAndCorruption(t *testing.T) {
 		t.Fatalf("unauthenticated prior reused; inference calls=%d", p.calls)
 	}
 	assertSQLiteLifecycleRetrieval(t, store, snapshot.Scope, knowl.RetrievalHybrid, "")
-	for _, policy := range []app.EmbeddingFailurePolicy{app.EmbeddingStrict, app.EmbeddingFallbackLexical} {
-		store.embedding.FailurePolicy = policy
-		setNativeSearchVector(t, store, snapshot.Scope, "excluded-page", []float32{0, 1})
-		if _, err := store.db.ExecContext(t.Context(), `UPDATE knowl_embedding_chunks SET vector=zeroblob(8) WHERE scope=? AND page_id='excluded-page'`, snapshot.Scope); err != nil {
-			t.Fatal(err)
-		}
-		_, report, err := store.SearchWithReport(t.Context(), snapshot.Scope, lifecycleQuery, knowl.ReadLimits{Pages: 1}, []knowl.SourceID{"lifecycle-selected"})
-		if policy == app.EmbeddingStrict {
-			assertEmbeddingFailure(t, err, knowl.RetrievalProjectionDrift)
-		} else if err != nil || report.Effective != knowl.RetrievalDegraded {
-			t.Fatalf("fallback=%+v err=%v", report, err)
-		}
-		if report.ScannedChunks != 0 {
-			t.Fatalf("partial scan=%+v", report)
-		}
-		want := knowl.RetrievalFailed
-		if policy == app.EmbeddingFallbackLexical {
-			want = knowl.RetrievalDegraded
-		}
-		assertSQLiteLifecycleRetrieval(t, store, snapshot.Scope, want, knowl.RetrievalProjectionDrift)
-		if err := store.Rebuild(t.Context(), snapshot); err != nil {
-			t.Fatal(err)
-		}
+	// Reject malformed application publication before ready state can change.
+	state, chunks, _, err := store.previousProjection(t.Context(), snapshot)
+	if err != nil {
+		t.Fatal(err)
 	}
+	chunks[0].Vector = []float32{0, 0}
+	assertEmbeddingFailure(t, store.publishEmbeddings(t.Context(), snapshot.Scope, *state, chunks), knowl.RetrievalProjectionDrift)
+	assertSQLiteLifecycleRetrieval(t, store, snapshot.Scope, knowl.RetrievalHybrid, "")
+	store.embedding.FailurePolicy = app.EmbeddingFallbackLexical
 	p.fail = true
 	if err := store.Rebuild(t.Context(), snapshot); err != nil {
 		t.Fatal(err)
