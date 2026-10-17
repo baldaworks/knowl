@@ -1,8 +1,8 @@
 {
-  "release_version": "0.7.1",
+  "release_version": "0.8.0",
   "argv": {
-    "setup": ["npx", "--yes", "@baldaworks/knowl@0.7.1", "setup", "codex"],
-    "replace": ["npx", "--yes", "@baldaworks/knowl@0.7.1", "setup", "codex", "--replace"],
-    "validate": ["npx", "--yes", "@baldaworks/knowl@0.7.1", "validate"]
+    "setup": ["npx", "--yes", "@baldaworks/knowl@0.8.0", "setup", "codex"],
+    "replace": ["npx", "--yes", "@baldaworks/knowl@0.8.0", "setup", "codex", "--replace"],
+    "validate": ["npx", "--yes", "@baldaworks/knowl@0.8.0", "validate"]
   }
 }

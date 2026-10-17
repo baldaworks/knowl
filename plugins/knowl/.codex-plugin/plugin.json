@@ -1,6 +1,6 @@
 {
   "name": "knowl",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Project-scoped Knowl setup, bounded knowledge runs, and local MCP tools for Codex.",
   "author": {
     "name": "Baldaworks",
