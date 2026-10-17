@@ -1,0 +1,12 @@
+scope: local
+adapter: wiki-filesystem
+id: knowl-docs/workspace.md
+version: 71295f092aa67b4f9e1d6c21db3f14f596f6319b940a51102d256747c96f093b
+digest: 71295f092aa67b4f9e1d6c21db3f14f596f6319b940a51102d256747c96f093b
+media_type: text/markdown
+source_document:
+    source_id: knowl-docs
+    document_id: workspace.md
+    revision: 71295f092aa67b4f9e1d6c21db3f14f596f6319b940a51102d256747c96f093b
+    uri: file:///tmp/knowl-native-vectors.EOicQS/docs/workspace.md
+received_at: 2026-10-17T19:48:36.896378Z

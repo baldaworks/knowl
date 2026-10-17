@@ -82,8 +82,6 @@ func TestCheckedInSelfWikiContract(t *testing.T) {
 	if len(ordinaryPages) == 0 {
 		t.Fatal("checked-in self-wiki has no ordinary pages")
 	}
-	pageIDs := make(map[string]struct{}, len(ordinaryPages))
-	var sourceRefs []string
 	for _, pagePath := range ordinaryPages {
 		content, readErr := os.ReadFile(pagePath)
 		if readErr != nil {
@@ -96,28 +94,39 @@ func TestCheckedInSelfWikiContract(t *testing.T) {
 		if len(metadata.SourceRefs) == 0 {
 			t.Fatalf("ordinary page %s has no provenance", pagePath)
 		}
-		pageIDs[metadata.ID] = struct{}{}
 		for _, sourceRef := range metadata.SourceRefs {
 			assertSelfWikiSourceRef(t, pagePath, sourceRef, allowedDocuments)
 		}
-		sourceRefs = append(sourceRefs, metadata.SourceRefs...)
 	}
-	for _, pageID := range []string{
-		"concepts/architecture",
-		"concepts/content-and-trust-boundaries",
-		"concepts/public-contract",
-		"concepts/releases",
-		"concepts/service-operations",
-	} {
-		if _, exists := pageIDs[pageID]; !exists {
-			t.Errorf("self-wiki missing representative semantic page %q", pageID)
+	// Generated page names are model-dependent; verify resolved provenance
+	// coverage instead of freezing one maintainer's taxonomy.
+	snapshot, err := workspace.Snapshot(context.Background(), config.Scope)
+	if err != nil {
+		t.Fatalf("snapshot checked-in self-wiki: %v", err)
+	}
+	coveredDocuments := make(map[string]struct{})
+	for _, page := range snapshot.Pages {
+		for _, document := range page.SourceDocuments {
+			if document.SourceID != source.ID {
+				t.Errorf("page %q cites unexpected source %q", page.ID, document.SourceID)
+			}
+			coveredDocuments[string(document.DocumentID)] = struct{}{}
 		}
 	}
-	joinedRefs := strings.Join(sourceRefs, "\n")
-	for _, marker := range []string{"/design.md@", "/operations.md@", "/workspace.md@", "/sidecar.md@", "/releases/"} {
-		if !strings.Contains(joinedRefs, marker) {
-			t.Errorf("ordinary-page provenance does not cover %q", marker)
+	for _, document := range []string{"design.md", "operations.md", "workspace.md", "sidecar.md"} {
+		if _, covered := coveredDocuments[document]; !covered {
+			t.Errorf("ordinary-page provenance does not cover document %q", document)
 		}
+	}
+	releaseCovered := false
+	for document := range coveredDocuments {
+		if filepath.Dir(document) == "releases" {
+			releaseCovered = true
+			break
+		}
+	}
+	if !releaseCovered {
+		t.Error("ordinary-page provenance does not cover a release document")
 	}
 
 	for _, artifact := range []string{"Taskfile.yml", filepath.Join("knowledge", "schema.md"), filepath.Join("knowledge", "wiki", "index.md"), filepath.Join("knowledge", "wiki", "log.md")} {
