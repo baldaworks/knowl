@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	testVersion         = "0.7.1"
+	testVersion         = "0.8.0"
 	driftedPackagePin   = "@baldaworks/knowl@0.6.2"
 	driftedVersion      = "0.6.2"
 	packageNameKey      = "name"
@@ -122,7 +122,7 @@ func TestRepositoryContractRejectsVersionDrift(t *testing.T) {
 		{
 			name: "release documentation metadata",
 			mutate: func(t *testing.T, root string) {
-				mutateJSONObject(t, filepath.Join(root, "docs/releases/v0.7.1.json"), func(object map[string]any) {
+				mutateJSONObject(t, filepath.Join(root, "docs/releases/v0.8.0.json"), func(object map[string]any) {
 					object["npm_package"] = "@baldaworks/other"
 				})
 			},
@@ -286,7 +286,7 @@ func copyContractFixture(t *testing.T) string {
 	paths := []string{
 		".omnidist/omnidist.yaml",
 		".agents/plugins/marketplace.json",
-		"docs/releases/v0.7.1.json",
+		"docs/releases/v0.8.0.json",
 		"plugins/knowl/.codex-plugin/plugin.json",
 		"plugins/knowl/.mcp.json",
 		"plugins/knowl/skills/run/contract.json",
