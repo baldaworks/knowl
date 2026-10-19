@@ -340,6 +340,71 @@ Search configuration, full-page coverage, external APIs, local TEI and rebuild
 recovery are documented in the [search guide](search.md). Embeddings are optional
 and independent of the maintainer and deployment method.
 
+## Database schema migrations
+
+SQLite and PostgreSQL apply all required pending Goose migrations automatically
+during ordinary startup, before listeners or workers start. A required migration
+or schema-validation error stops startup; lexical fallback does not bypass it.
+New migrations are SQL Goose; the released historical Go migration 19 remains
+part of the embedded Knowl migration set. Routine installs/upgrades do not need
+a separate Goose executable or manual history-table selection.
+
+For optional database-only administration, stop all writers/hosts and take
+database plus canonical/raw backups first. Use the same configuration as the
+application:
+
+```bash
+knowl migrate up
+```
+
+Up applies all pending required migrations; an up-to-date database is a no-op.
+`--config-dir` and `--profile` select configuration as usual, for example:
+
+```bash
+knowl --config-dir /path/to/config-root --profile production migrate up
+```
+
+Storage selection uses `knowl.storage`; relative SQLite paths resolve against
+the configured workspace. PostgreSQL with embeddings enabled requires
+operator-provisioned pgvector; lexical-only PostgreSQL does not. See
+[PostgreSQL permissions and recovery](postgres.md).
+
+The commands only migrate the database and exit. They do not start HTTP/MCP,
+workers or source synchronization, inspect canonical wiki content, resolve
+model/embedding credentials, call those providers or rebuild projections.
+Ordinary configuration parsing and shape validation still apply. Migrations
+may invalidate derived projections; normal application startup subsequently
+prepares those projections.
+
+Success prints JSON containing `backend`, `direction` and executed `steps`,
+each with `stream` and `version`. For example, repeated Up on current SQLite:
+
+```json
+{"backend":"sqlite","direction":"up","steps":[]}
+```
+
+For deliberate rollback, stop all writers/hosts, back up canonical/raw data and
+the database, and select a compatible binary/configuration before running:
+
+```bash
+knowl migrate down
+```
+
+Down reverses one last migration, not the whole upgrade. PostgreSQL reverses
+one optional-vector migration first when applied, otherwise one base migration,
+even if embeddings are now disabled. At zero applied migrations it is a no-op;
+it never implicitly runs Up. Down can discard schema/data. Migration locks do
+not make live application writes safe. Starting the current binary afterward
+automatically reapplies pending required Up migrations; do not restart it in
+the middle of an intended downgrade.
+
+Failures return a nonzero exit and no success JSON. Earlier Up steps may already
+have committed before a later failure; correct the cause and retry using real
+Goose history. Unknown or corrupt history is not automatically repaired. Keep
+database credentials in protected config/environment, not command arguments.
+The separate `migrate okf-v0.2` command below changes canonical content, not
+just database schema.
+
 ## Supported operator workflow
 
 Local workspace bootstrap:

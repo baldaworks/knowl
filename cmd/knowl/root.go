@@ -99,6 +99,9 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 			}
 			loaded, err := loadConfig(cmd.Context(), configDir, profile)
 			if err != nil {
+				if cmd.Annotations[databaseMigrationAnnotation] != "" {
+					return databaseMigrationConfigError(err)
+				}
 				return err
 			}
 			cmd.SetContext(log.Logger.WithContext(loaded))

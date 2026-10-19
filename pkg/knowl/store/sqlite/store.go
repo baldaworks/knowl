@@ -7,18 +7,13 @@ import (
 	"database/sql"
 	"embed"
 	"errors"
-	"fmt"
-	"io/fs"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/writelock"
-	"github.com/pressly/goose/v3"
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	_ "modernc.org/sqlite"
 	_ "modernc.org/sqlite/vec"
 )
@@ -64,24 +59,11 @@ func Open(ctx context.Context, path string, options ...app.EmbeddingOptions) (*S
 	if err != nil {
 		return nil, err
 	}
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return nil, fmt.Errorf("sqlite path is required")
-	}
-	if err := os.MkdirAll(filepath.Dir(trimmed), 0o700); err != nil {
-		return nil, fmt.Errorf("create sqlite parent: %w", err)
-	}
-	databaseURL := url.URL{Scheme: "file", Path: trimmed}
-	query := databaseURL.Query()
-	query.Set("_txlock", "immediate")
-	databaseURL.RawQuery = query.Encode()
-	db, err := sql.Open("sqlite", databaseURL.String())
+	db, err := openConnection(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	store := &Store{db: db, path: trimmed, embedding: embedding}
+	store := &Store{db: db, path: strings.TrimSpace(path), embedding: embedding}
 	if err := store.configure(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -96,28 +78,6 @@ func (store *Store) Close() error { return store.db.Close() }
 func (store *Store) Path() string { return store.path }
 
 func (store *Store) configure(ctx context.Context) error {
-	for _, statement := range []string{
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=5000",
-	} {
-		if _, err := store.db.ExecContext(ctx, statement); err != nil {
-			if statement == "PRAGMA journal_mode=WAL" {
-				continue
-			}
-			return fmt.Errorf("apply sqlite pragma: %w", err)
-		}
-	}
-	directory, err := fs.Sub(migrationFiles, "migrations")
-	if err != nil {
-		return fmt.Errorf("open embedded sqlite migrations: %w", err)
-	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, directory, goose.WithGoMigrations(operatorOperationsMigration()))
-	if err != nil {
-		return fmt.Errorf("create sqlite migration provider: %w", err)
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("apply sqlite migrations: %w", err)
-	}
-	return nil
+	_, err := migrateDatabase(ctx, store.db, knowl.MigrationUp)
+	return err
 }

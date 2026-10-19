@@ -21,7 +21,65 @@ checked-in type has `dsn`, not a `dsn_env` setting. Keep real credentials/local
 overrides out of source control; `.config/knowl/*.local.yaml` is local-only.
 Embedding `api_key_env` configures the separate embedding credential, not SQL.
 
-## Two standard Goose streams
+## Install and upgrade
+
+Start Knowl normally with the selected PostgreSQL configuration. Before serving
+requests or starting workers, Knowl applies all required Goose migrations and
+validates the required schema. No separate Goose executable, SQL-directory
+selection or history-table flags are needed. A required migration or schema
+validation failure stops startup, even with lexical fallback configured.
+
+For lexical-only operation, pgvector is not required. Before enabling embeddings,
+a PostgreSQL operator must provision the extension once in this database using
+the deployment's supported package/service procedure. For a default trusted
+schema, the operator SQL is:
+
+```sql
+CREATE EXTENSION vector;
+```
+
+Knowl never installs the extension. If already provisioned, verify the existing
+deployment instead of reinstalling. Knowl creates and upgrades its application
+tables and constraints automatically; missing extension access or permission to
+apply pending DDL is a startup error, not a reason to silently serve degraded.
+
+For format upgrades, stop all writers/hosts, including old binaries, and back up
+canonical/raw data and the database with its migration histories. Start the
+compatible new binary under migration authority, let startup rebuild the derived
+projection, and verify real semantic retrieval before resuming writers.
+`/readyz` alone is not a dense guarantee: provider/projection failures after
+successful schema initialization still follow the configured search policy.
+Do not roll old and new writers concurrently across a format transition.
+
+## Optional migration administration
+
+To apply schema changes separately from application startup, stop writers/hosts
+and back up first. Use the ordinary Knowl configuration and, when needed, its
+`--config-dir` and `--profile` flags:
+
+```sh
+knowl migrate up
+```
+
+This applies all pending required migrations and exits without starting the
+service, resolving model/embedding credentials, synchronizing sources or
+rebuilding projections. The loaded configuration must still be valid;
+`knowl.embeddings.enabled` determines whether native schema is required.
+Use the same storage configuration mechanisms for the migration role as for
+the runtime; no separate migration DSN setting is needed. Keep credentials out
+of command arguments and source control. See the shared
+[migration command contract](operations.md#database-schema-migrations).
+
+Migration authority needs permission to create/use history tables and alter
+owned application tables/constraints, plus access to the extension
+schema/type/functions when embeddings are enabled. A runtime role can instead
+start on a fully pre-applied, recognized current schema without DDL ownership or
+extension-install authority. It needs ordinary Knowl table/sequence access,
+schema usage/native function execution and SELECT on the required Goose
+histories. Grant optional-history access after pre-application; never create an
+empty history as a permission workaround.
+
+## Internal migration compatibility
 
 Opening a store still runs embedded Goose migrations. All new application
 schema changes are numbered Goose SQL, not ad hoc initializer DDL or a custom
@@ -32,111 +90,61 @@ version protocol. The historical Go migration 19 remains registered by Knowl.
 | Base, always considered on Open | `pkg/knowl/store/postgres/migrations` plus historical Go migration 19 | `goose_db_version` | SQL migration 26 adds `native_format` and invalidates derived dense state; remains extension-free |
 | Optional, only for enabled dense with verified pgvector | `pkg/knowl/store/postgres/pgvector_migrations` | `goose_pgvector_db_version` | SQL migration 1 replaces derived BYTEA vectors with extension-owned unbounded `vector` and a dimension constraint |
 
-Up order is **base before optional**. An unavailable extension leaves optional
-SQL pending, not falsely recorded as applied; lexical-only operation remains
-usable and does not create the optional history. After operator provisioning,
-reopen with embeddings enabled to retry pending SQL, then rebuild the derived
-projection. Rebuild/query do not install the extension or repair migration
-history. A cached unavailable admission is not fixed by querying again.
+Knowl preserves these two released histories internally. Up runs base before
+optional; optional Up is required when embeddings are enabled. Lexical-only
+startup does not create the optional history. Operators do not select a stream.
+Use the compatible Knowl binary: the base SQL directory alone omits historical
+Go migration 19. Rebuild/query do not install the extension or repair history.
 
 Dense admission resolves the extension's owned type/functions/operator from
 catalogs, including a trusted nondefault extension schema; it does not trust a
 same-named search-path object. Tested locally with PostgreSQL 16.14 and
 pgvector 0.8.2. No ANN index or additional dimensions/capacity knob is required.
 
-## Provision and pre-apply in a maintenance window
-
-Stop **all** writers/hosts, including old binaries. Back up canonical/raw data
-and the database with both migration histories. Use a compatible Knowl binary
-under migration authority to initialize/upgrade the base stream through 26;
-its ordinary Open registers historical Go migration 19. A standalone Goose
-SQL-directory invocation is **not a replacement for fresh base initialization** or that Go
-migration. Do not concurrently run CLI migrations with Knowl or other migrators.
-
-Separately, an operator with appropriate PostgreSQL authority installs pgvector
-in this database using its supported package/service procedure. For a default
-trusted schema, the operator SQL is:
-
-```sql
-CREATE EXTENSION vector;
-```
-
-This is operator provisioning outside Knowl, not application startup SQL. If
-already provisioned, verify the existing deployment instead of reinstalling.
-Do not put extension installation into Knowl's base migration directory.
-
-For the optional **SQL-only** stream, ordinary Goose CLI templates are valid
-after base initialization. Use a Goose CLI compatible with the checked-in
-v3.27.3 library, from this checkout. Supply `GOOSE_DBSTRING` securely in the
-operator environment for the intended database/migration role; no DSN value is
-shown in these commands. Disable shell tracing and treat migration tool logs
-as sensitive. `-env none` avoids unexpectedly loading another `.env` file.
-Use these templates only for a genuinely absent fresh history or recognized
-valid existing history, never as a repair for an already-empty/corrupt table.
-
-```sh
-GOOSE_DRIVER=postgres goose -env none \
-  -dir pkg/knowl/store/postgres/pgvector_migrations \
-  -table goose_pgvector_db_version status
-GOOSE_DRIVER=postgres goose -env none \
-  -dir pkg/knowl/store/postgres/pgvector_migrations \
-  -table goose_pgvector_db_version up
-```
-
-Migration authority needs permission to create/use the standard history and
-alter the owned embedding tables/constraints, plus access to the extension
-schema/type/functions. A runtime role can instead use a fully pre-applied,
-recognized current history: it needs its ordinary Knowl table/sequence access,
-schema usage/native function execution and **SELECT on both Goose histories**,
-including `goose_pgvector_db_version`, but not ownership or extension-install
-authority. If the optional history did not exist, grant its SELECT only after
-pre-application; do not create an empty history as a permission workaround.
-Denied pending DDL remains typed `unavailable` or configured lexical degradation
-until a privileged operator pre-applies it and Knowl is reopened.
-
-With the matching new binary, reopen, explicitly rebuild or let the documented
-startup rebuild complete, then check real semantic retrieval reports/evidence.
-`/readyz` alone is not a dense guarantee. Resume writers only after verification.
-Do not roll old and new writers concurrently across this format transition.
-
 ## Failure, corrupt history and recovery
 
-Ordinary transactional optional SQL failure rolls back schema/data/history;
-if a valid standard version 0 history remains, remove the actual external cause
-and ordinary Up on a later reopen can retry. This is different from an
+Migration commands fail with a nonzero exit and no success JSON. Individual
+transactional migrations roll back on failure, but earlier Up steps may already
+have committed, including the base stream before a native-schema failure.
+Fix the actual cause and retry startup or `knowl migrate up`; committed Goose
+history determines the remaining work. This is different from an
 **existing but empty** `goose_pgvector_db_version`: that is corrupt history,
-not a fresh installation. Knowl fails closed with a redacted typed `unavailable`
-reason and leaves it unchanged. Unknown/duplicate/inconsistent history or an
-unrecognized schema also cannot be admitted as ready native state.
+not a fresh installation. Knowl fails closed with safe migration diagnostics
+and leaves it unchanged. Unknown/duplicate/inconsistent history or an
+unrecognized required native schema also stops initialization.
 
 Keep hosts stopped and recover outside Knowl from trusted deployment evidence
 or a known-good matching database/history restore. This guide deliberately
 provides no blind repair SQL: do not insert a fabricated version 0, drop/recreate
 history, use `-no-versioning`, or add an alternate bootstrap. After supported
-operator recovery, ordinary Goose Up and read-only history/schema validation
-govern admission. Reopen and rebuild; queries do not perform automatic repair.
+operator recovery, ordinary startup or `knowl migrate up` applies pending work
+and validates the required schema. Restart and rebuild; queries do not perform
+automatic repair.
 Preserve canonical pages, raw evidence, source state and durable operations.
 
 ## Rollback order
 
-Stop writers and back up first. Roll the optional stream Down **before** base
-SQL migration 26 Down. For optional current version 1, the one-step template is:
+Stop all writers/hosts first, back up canonical/raw data and the database, and
+select a compatible binary/configuration. A deliberate one-step rollback is:
 
 ```sh
-GOOSE_DRIVER=postgres goose -env none \
-  -dir pkg/knowl/store/postgres/pgvector_migrations \
-  -table goose_pgvector_db_version down
+knowl migrate down
 ```
 
-Optional Down invalidates derived dense state and returns the vector column to
-BYTEA. Base SQL migration 26 refuses the wrong order while native type remains.
-Use a matching Knowl migration provider/binary for the required base direction,
-especially if crossing historical Go migration 19; do not treat the SQL directory
-as a complete standalone base migrator. Neither rollback step uninstalls the operator's
-extension nor deletes canonical/raw/source/operation data. Schema rollback is
+Knowl reverses exactly one migration per call: optional first if it has applied
+migrations, otherwise base. This ordering also applies when embeddings are now
+disabled. No applied migration means a successful no-op. Down never runs Up.
+
+Optional migration 1 Down invalidates derived dense state and returns the vector
+column to BYTEA. Base SQL migration 26 refuses the wrong order while native type
+remains.
+Neither of those rollback steps uninstalls the operator's extension nor deletes
+canonical/raw/source/operation data. Other historical Down steps can discard
+schema/data; review the intended step before each call. Schema rollback is
 not vector reuse: pair the schema with a compatible binary and rebuild before
-resuming. Do not reopen the new dense-enabled binary midway through rollback,
-because ordinary optional Up can apply the pending transition again.
+resuming. Starting the current binary again automatically reapplies required
+pending Up migrations, so do not restart it midway through an intended downgrade.
+Migration advisory locks coordinate migrators, not live application writes.
 
 Publication, reuse and recovery fully validate the bounded projection before
 atomic readiness; page changes invalidate incompatible state. Ordinary reads

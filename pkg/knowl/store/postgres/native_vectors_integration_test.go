@@ -50,19 +50,17 @@ func TestPostgresNativeSchema(t *testing.T) {
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_embedding_state`, 0)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_projection_state WHERE scope='native'`, 1)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM pg_attribute WHERE attrelid='knowl_embedding_state'::regclass AND attname='native_format' AND NOT attisdropped`, 1)
-		dense := nativeOpen(t, dsn, nativeOptions())
-		nativeAssertCount(t, dense.db, `SELECT count(*) FROM pg_class WHERE relname='goose_pgvector_db_version'`, 0)
-		_, report, err := dense.SearchWithReport(ctx, "native", "query", knowl.ReadLimits{}, nil)
-		nativeAssertUnavailable(t, err)
-		if report.Reason != knowl.RetrievalUnavailable {
-			t.Fatalf("absent extension reason=%v", report.Reason)
+		for _, policy := range []app.EmbeddingFailurePolicy{app.EmbeddingStrict, app.EmbeddingFallbackLexical} {
+			options := nativeOptions()
+			options.FailurePolicy = policy
+			nativeAssertOpenFailure(t, dsn, knowl.MigrationStageValidation, options)
 		}
-		assertPostgresNativeLifecycleFailure(t, dense, "native", "query", knowl.RetrievalUnavailable)
+		nativeAssertCount(t, store.db, `SELECT count(*) FROM pg_class WHERE relname='goose_pgvector_db_version'`, 0)
 		nativeExec(t, store.db, `CREATE SCHEMA "vector extension"`)
 		nativeExec(t, store.db, `CREATE EXTENSION vector SCHEMA "vector extension"`)
 		lexical := nativeOpen(t, dsn)
 		nativeAssertCount(t, lexical.db, `SELECT count(*) FROM pg_class WHERE relname='goose_pgvector_db_version'`, 0)
-		dense = nativeOpen(t, dsn, nativeOptions())
+		dense := nativeOpen(t, dsn, nativeOptions())
 		if dense.nativeErr != nil {
 			_, migrationErr := nativeOptionalProvider(t, dense.db).Up(ctx)
 			t.Fatalf("native initialization=%v migration=%v", dense.nativeErr, migrationErr)
@@ -158,9 +156,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 			}
 			nativeSeedAuthoritative(t, store.db)
 			nativeExec(t, store.db, corruption.damage)
-			bad := nativeOpen(t, databaseDSN, nativeOptions())
-			nativeAssertUnavailable(t, bad.nativeErr)
-			assertPostgresNativeLifecycleFailure(t, bad, "native", "lexical", knowl.RetrievalUnavailable)
+			nativeAssertOpenFailure(t, databaseDSN, knowl.MigrationStageHistory, nativeOptions())
 		})
 	}
 	t.Run("empty-history-preserved-until-operator-recovery", func(t *testing.T) {
@@ -177,24 +173,13 @@ func TestPostgresNativeSchema(t *testing.T) {
 		nativeExec(t, store.db, `CREATE TABLE native_history_backup AS TABLE goose_pgvector_db_version`)
 		nativeExec(t, store.db, `DELETE FROM goose_pgvector_db_version`)
 		before := nativeAuthoritative(t, store.db)
-		damaged := nativeOpen(t, databaseDSN, nativeOptions())
-		nativeAssertUnavailable(t, damaged.nativeErr)
+		nativeAssertOpenFailure(t, databaseDSN, knowl.MigrationStageHistory, nativeOptions())
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM goose_pgvector_db_version`, 0)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM pg_attribute WHERE attrelid='knowl_embedding_chunks'::regclass AND attname='vector' AND atttypid='bytea'::regtype`, 1)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_embedding_state`, 1)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_embedding_chunks WHERE octet_length(vector)=4`, 1)
 		if after := nativeAuthoritative(t, store.db); before != after {
 			t.Fatal("corrupt history Open changed authoritative rows")
-		}
-		_, report, err := damaged.SearchWithReport(ctx, "native", "lexical", knowl.ReadLimits{}, nil)
-		nativeAssertUnavailable(t, err)
-		if report.Reason != knowl.RetrievalUnavailable {
-			t.Fatalf("empty history reason=%v", report.Reason)
-		}
-		assertPostgresNativeLifecycleFailure(t, damaged, "native", "lexical", knowl.RetrievalUnavailable)
-		nativeAssertCount(t, store.db, `SELECT count(*) FROM goose_pgvector_db_version`, 0)
-		if after := nativeAuthoritative(t, store.db); before != after {
-			t.Fatal("public corrupt-history queries changed authoritative rows")
 		}
 		// Only the fixture operator restores the trustworthy pre-damage history.
 		nativeExec(t, store.db, `INSERT INTO goose_pgvector_db_version(id,version_id,is_applied,tstamp) SELECT id,version_id,is_applied,tstamp FROM native_history_backup`)
@@ -216,8 +201,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 			t.Fatal(err)
 		}
 		nativeExec(t, store.db, `INSERT INTO goose_pgvector_db_version(version_id,is_applied) VALUES(-1,true)`)
-		bad := nativeOpen(t, databaseDSN, nativeOptions())
-		nativeAssertUnavailable(t, bad.nativeErr)
+		nativeAssertOpenFailure(t, databaseDSN, knowl.MigrationStageHistory, nativeOptions())
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_embedding_state`, 1)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM goose_pgvector_db_version WHERE version_id=1`, 0)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM pg_attribute WHERE attrelid='knowl_embedding_chunks'::regclass AND attname='vector' AND atttypid='bytea'::regtype`, 1)
@@ -228,8 +212,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		nativeSeed(t, store.db, false)
 		nativeExec(t, store.db, `CREATE EXTENSION vector`)
 		nativeExec(t, store.db, `ALTER TABLE knowl_embedding_chunks ALTER COLUMN ordinal TYPE bigint`)
-		bad := nativeOpen(t, databaseDSN, nativeOptions())
-		nativeAssertUnavailable(t, bad.nativeErr)
+		nativeAssertOpenFailure(t, databaseDSN, knowl.MigrationStageApply, nativeOptions())
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_embedding_state`, 1)
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM goose_pgvector_db_version WHERE version_id=1`, 0)
 	})
@@ -263,14 +246,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		// An unknown constraint with the expected name must not admit readiness.
 		nativeExec(t, store.db, `ALTER TABLE knowl_embedding_chunks DROP CONSTRAINT knowl_embedding_chunks_vector_check`)
 		nativeExec(t, store.db, `ALTER TABLE knowl_embedding_chunks ADD CONSTRAINT knowl_embedding_chunks_vector_check CHECK (true)`)
-		bad := nativeOpen(t, databaseDSN, nativeOptions())
-		nativeAssertUnavailable(t, bad.nativeErr)
-		_, report, err := bad.SearchWithReport(ctx, "native", "query", knowl.ReadLimits{}, nil)
-		nativeAssertUnavailable(t, err)
-		if report.Reason != knowl.RetrievalUnavailable {
-			t.Fatalf("schema drift reason=%v", report.Reason)
-		}
-		assertPostgresNativeLifecycleFailure(t, bad, "native", "lexical", knowl.RetrievalUnavailable)
+		nativeAssertOpenFailure(t, databaseDSN, knowl.MigrationStageValidation, nativeOptions())
 	})
 	t.Run("unknown-history", func(t *testing.T) {
 		databaseDSN := nativeDatabase(t, dsn, "history")
@@ -282,9 +258,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		}
 		nativeSeedAuthoritative(t, store.db)
 		nativeExec(t, store.db, `INSERT INTO goose_pgvector_db_version(version_id,is_applied) VALUES(99,true)`)
-		bad := nativeOpen(t, databaseDSN, nativeOptions())
-		nativeAssertUnavailable(t, bad.nativeErr)
-		assertPostgresNativeLifecycleFailure(t, bad, "native", "lexical", knowl.RetrievalUnavailable)
+		nativeAssertOpenFailure(t, databaseDSN, knowl.MigrationStageHistory, nativeOptions())
 	})
 	t.Run("runtime-role-and-pending-authority", func(t *testing.T) {
 		databaseDSN := nativeDatabase(t, dsn, "privileges")
@@ -299,9 +273,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 			t.Fatal(err)
 		}
 		runtimeURL.User = url.UserPassword("native_runtime", "fixture-runtime")
-		pending := nativeOpen(t, runtimeURL.String(), nativeOptions())
-		nativeAssertUnavailable(t, pending.nativeErr)
-		assertPostgresNativeLifecycleFailure(t, pending, "native", "lexical", knowl.RetrievalUnavailable)
+		nativeAssertOpenFailure(t, runtimeURL.String(), knowl.MigrationStageApply, nativeOptions())
 		nativeAssertCount(t, store.db, `SELECT count(*) FROM pg_class WHERE relname='goose_pgvector_db_version'`, 0)
 		dense := nativeOpen(t, databaseDSN, nativeOptions())
 		if dense.nativeErr != nil {
@@ -360,11 +332,7 @@ func TestPostgresNativeSchema(t *testing.T) {
 		}
 		deadlineOptional, cancelOptional := context.WithTimeout(ctx, 100*time.Millisecond)
 		defer cancelOptional()
-		locker, err := lock.NewPostgresSessionLocker()
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = configureNativeVectors(deadlineOptional, db, locker)
+		_, err = migrateDatabase(deadlineOptional, db, knowl.MigrationUp, true)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("optional lock deadline=%v", err)
 		}
@@ -446,6 +414,19 @@ func nativeOpen(t *testing.T, dsn string, options ...app.EmbeddingOptions) *Stor
 	return store
 }
 
+func nativeAssertOpenFailure(t *testing.T, dsn string, stage knowl.MigrationStage, options ...app.EmbeddingOptions) {
+	t.Helper()
+	store, err := Open(t.Context(), dsn, options...)
+	if store != nil {
+		_ = store.Close()
+		t.Fatal("failed required initialization returned a usable store")
+	}
+	var failure *knowl.MigrationError
+	if !errors.As(err, &failure) || failure.Stage != stage || failure.Stream != "pgvector" {
+		t.Fatalf("required initialization failure=%v, want pgvector/%s", err, stage)
+	}
+}
+
 func nativeBaseProvider(t *testing.T, db *sql.DB) *goose.Provider {
 	t.Helper()
 	directory, err := fs.Sub(migrationFiles, "migrations")
@@ -481,13 +462,5 @@ func nativeAssertCount(t *testing.T, db *sql.DB, query string, want int) {
 	var got int
 	if err := db.QueryRowContext(t.Context(), query).Scan(&got); err != nil || got != want {
 		t.Fatalf("count=%d want=%d err=%v", got, want, err)
-	}
-}
-
-func nativeAssertUnavailable(t *testing.T, err error) {
-	t.Helper()
-	var failure *app.EmbeddingError
-	if !errors.As(err, &failure) || failure.Code != knowl.RetrievalUnavailable {
-		t.Fatalf("expected typed unavailable, got %v", err)
 	}
 }
