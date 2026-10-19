@@ -333,9 +333,12 @@ func runNativePublicationAtomicity(t *testing.T, dsn string) {
 }
 
 func runNativePublicationSchemaChecks(t *testing.T, dsn string) {
-	for _, corruption := range []struct{ name, query string }{
-		{"history", `DELETE FROM goose_pgvector_db_version`},
-		{"shape", `ALTER TABLE knowl_embedding_chunks DROP CONSTRAINT knowl_embedding_chunks_vector_check`},
+	for _, corruption := range []struct {
+		name, query string
+		stage       knowl.MigrationStage
+	}{
+		{"history", `DELETE FROM goose_pgvector_db_version`, knowl.MigrationStageHistory},
+		{"shape", `ALTER TABLE knowl_embedding_chunks DROP CONSTRAINT knowl_embedding_chunks_vector_check`, knowl.MigrationStageValidation},
 	} {
 		t.Run(corruption.name, func(t *testing.T) {
 			databaseDSN := nativePublicationDatabase(t, dsn, "schema_"+corruption.name)
@@ -353,8 +356,7 @@ func runNativePublicationSchemaChecks(t *testing.T, dsn string) {
 			_, err = store.previousProjection(t.Context(), snapshot.Scope)
 			assertEmbeddingFailure(t, err, knowl.RetrievalUnavailable)
 			nativeAssertCount(t, store.db, `SELECT count(*) FROM knowl_embedding_chunks`, 1)
-			reopened := nativeOpen(t, databaseDSN, nativeOptions())
-			assertPostgresNativeLifecycleFailure(t, reopened, snapshot.Scope, nativeQuery, knowl.RetrievalUnavailable)
+			nativeAssertOpenFailure(t, databaseDSN, corruption.stage, nativeOptions())
 			if corruption.name == "history" {
 				nativeAssertCount(t, store.db, `SELECT count(*) FROM goose_pgvector_db_version`, 0)
 			} else {

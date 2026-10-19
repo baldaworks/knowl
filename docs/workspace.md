@@ -277,6 +277,11 @@ reads, source list, and source status do not invoke hierarchy reconciliation.
 
 ## Explicit OKF migration
 
+Database schema migrations run automatically during startup. Optional
+[`knowl migrate up/down`](operations.md#database-schema-migrations) only administer
+the configured database; they do not migrate canonical content or rebuild its
+projection. They are distinct from the command below.
+
 Startup and read-only commands never migrate content. To upgrade a legacy
 canonical workspace, stop writers, take a backup, and run:
 

@@ -136,8 +136,9 @@ An explicit rebuild replaces lexical state and computes every page vector again
 in batches of at most 16 without holding SQL locks during inference. Dense
 publication checks the current snapshot and complete page coverage; a
 conflicting update discards a stale build. A classified failure saves degraded
-state even under strict policy. With lexical fallback, startup may be ready
-while semantic retrieval is degraded; `/readyz` alone is not a hybrid guarantee.
+state even under strict policy. After successful required schema initialization,
+lexical fallback allows startup to be ready while semantic retrieval is degraded;
+`/readyz` alone is not a hybrid guarantee.
 Read the retrieval status. Invalid input and caller cancellation never return
 successful fallback.
 
@@ -159,15 +160,18 @@ bundled native capability, including `CGO_ENABLED=0`; no extension installation,
 shared-library load path or external model process is needed for its SQL math.
 Inference still uses the configured provider.
 
-Stop old writers, migrate with the matching binary, rebuild, verify actual
-semantic retrieval and only then resume. Format/preprocessing changes require
+Stop old writers, start the matching binary to apply migrations automatically,
+let startup rebuild, verify actual semantic retrieval and only then resume.
+Format/preprocessing changes require
 fresh dense publication; do not treat legacy state as ready. PostgreSQL's base
 stream stays extension-free and its additional optional Goose SQL migration 1 converts
-derived vectors to native pgvector only when capability/authority permit.
-See [PostgreSQL deployment and recovery](postgres.md) for two histories,
-provision/reopen/rebuild, runtime grants, corrupt empty history and optional-first
-Down. All new application schema changes are Goose SQL; normal Goose-on-Open
-and historical Go migration 19 remain, not a blanket ban on migration DDL at startup.
+derived vectors to native pgvector when embeddings are enabled. Missing required
+extension capability, migration authority or valid schema stops startup even
+with lexical fallback configured. See [PostgreSQL deployment and recovery](postgres.md)
+for extension provisioning, runtime grants and corrupt-history recovery, and
+[optional database-only Up/Down](operations.md#database-schema-migrations).
+All new application schema changes are Goose SQL; automatic startup migrations
+and historical Go migration 19 remain supported.
 Down invalidates derived native state; pair schema and compatible binary and
 rebuild before resuming. Disabling embeddings retains default lexical behavior and
 ignores derived vectors. See [pending-operation recovery](operations.md#upgrading-pending-operations)

@@ -9,7 +9,6 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
-	"github.com/pressly/goose/v3/lock"
 )
 
 //go:embed pgvector_migrations/*.sql
@@ -26,6 +25,16 @@ type nativeVectorCapability struct {
 }
 
 func readNativeVectorCapability(ctx context.Context, db *sql.DB) (nativeVectorCapability, error) {
+	capability, err := readNativeVectorCapabilityCause(ctx, db)
+	if err != nil {
+		return nativeVectorCapability{}, nativeUnavailable(ctx)
+	}
+	return capability, nil
+}
+
+// Migration failures keep the trusted driver cause for SQLSTATE/errors.As.
+// Runtime callers retain the redacted retrieval-unavailable contract above.
+func readNativeVectorCapabilityCause(ctx context.Context, db *sql.DB) (nativeVectorCapability, error) {
 	var capability nativeVectorCapability
 	err := db.QueryRowContext(ctx, `SELECT n.nspname,t.oid::bigint,f.oid::bigint
         FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace
@@ -37,29 +46,7 @@ func readNativeVectorCapability(ctx context.Context, db *sql.DB) (nativeVectorCa
         AND EXISTS (SELECT 1 FROM pg_operator o JOIN pg_depend od ON od.classid='pg_operator'::regclass AND od.objid=o.oid AND od.refclassid='pg_extension'::regclass AND od.refobjid=e.oid AND od.deptype='e' WHERE o.oprnamespace=n.oid AND o.oprname='<=>' AND o.oprleft=t.oid AND o.oprright=t.oid AND o.oprresult='float8'::regtype)
         AND EXISTS (SELECT 1 FROM pg_proc nf JOIN pg_depend nd ON nd.classid='pg_proc'::regclass AND nd.objid=nf.oid AND nd.refclassid='pg_extension'::regclass AND nd.refobjid=e.oid AND nd.deptype='e' WHERE nf.pronamespace=n.oid AND nf.proname='vector_norm' AND nf.proargtypes=ARRAY[t.oid]::oidvector AND has_function_privilege(nf.oid,'EXECUTE'))`).Scan(&capability.schema, &capability.typeOID, &capability.dimsOID)
 	if err != nil {
-		return nativeVectorCapability{}, nativeUnavailable(ctx)
-	}
-	return capability, nil
-}
-
-func configureNativeVectors(ctx context.Context, db *sql.DB, locker lock.SessionLocker) (nativeVectorCapability, error) {
-	capability, err := readNativeVectorCapability(ctx, db)
-	if err != nil {
 		return nativeVectorCapability{}, err
-	}
-	directory, err := fs.Sub(pgvectorMigrationFiles, "pgvector_migrations")
-	if err != nil {
-		return nativeVectorCapability{}, nativeUnavailable(ctx)
-	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, directory, goose.WithTableName(pgvectorHistory), goose.WithSessionLocker(locker), goose.WithDisableGlobalRegistry(true))
-	if err != nil {
-		return nativeVectorCapability{}, nativeUnavailable(ctx)
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		return nativeVectorCapability{}, nativeUnavailable(ctx)
-	}
-	if err := validateNativeSchema(ctx, db, provider, capability); err != nil {
-		return nativeVectorCapability{}, nativeUnavailable(ctx)
 	}
 	return capability, nil
 }

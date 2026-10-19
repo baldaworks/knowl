@@ -7,17 +7,14 @@ import (
 	"database/sql"
 	"embed"
 	"errors"
-	"fmt"
-	"io/fs"
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/writelock"
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
-	"github.com/pressly/goose/v3/lock"
 )
 
 //go:embed migrations/*.sql
@@ -63,17 +60,11 @@ func Open(ctx context.Context, dsn string, options ...app.EmbeddingOptions) (*St
 	if err != nil {
 		return nil, err
 	}
-	trimmed := strings.TrimSpace(dsn)
-	if trimmed == "" {
-		return nil, fmt.Errorf("postgres dsn is required")
-	}
-	db, err := sql.Open("pgx", trimmed)
+	db, err := openConnection(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres: %w", err)
+		return nil, err
 	}
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(10)
-	store := &Store{db: db, dsn: trimmed, embedding: embedding}
+	store := &Store{db: db, dsn: strings.TrimSpace(dsn), embedding: embedding}
 	if err := store.configure(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -93,29 +84,15 @@ func (store *Store) Close() error {
 func (store *Store) DSN() string { return store.dsn }
 
 func (store *Store) configure(ctx context.Context) error {
-	if err := store.db.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping postgres: %w", err)
-	}
-	directory, err := fs.Sub(migrationFiles, "migrations")
-	if err != nil {
-		return fmt.Errorf("open embedded postgres migrations: %w", err)
-	}
-	locker, err := lock.NewPostgresSessionLocker()
-	if err != nil {
+	if _, err := migrateDatabase(ctx, store.db, knowl.MigrationUp, store.embedding != nil); err != nil {
 		return err
 	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, store.db, directory, goose.WithGoMigrations(operatorOperationsMigration()), goose.WithSessionLocker(locker))
-	if err != nil {
-		return fmt.Errorf("create postgres migration provider: %w", err)
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("apply postgres migrations: %w", err)
-	}
 	if store.embedding != nil {
-		store.native, store.nativeErr = configureNativeVectors(ctx, store.db, locker)
-		if ctx.Err() != nil {
-			return ctx.Err()
+		capability, err := readNativeVectorCapabilityCause(ctx, store.db)
+		if err != nil {
+			return migrationFailure(knowl.MigrationStageValidation, nativeMigrationStream, err)
 		}
+		store.native = capability
 	}
 	return nil
 }
