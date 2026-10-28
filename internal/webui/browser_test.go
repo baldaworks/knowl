@@ -23,6 +23,13 @@ func TestBrowserSecurity(t *testing.T) { runSecurityBrowser(t, "security.cjs") }
 func TestBrowserRepairs(t *testing.T) { runSecurityBrowser(t, "repairs.cjs") }
 
 func TestBrowserFacadeModes(t *testing.T) {
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set(webui.FragmentHeader, "1")
+		_, _ = w.Write([]byte(`<p id="cross-origin-login">external login</p>`))
+	}))
+	defer attacker.Close()
 	serverFor := func(mode webui.AuthMode) *httptest.Server {
 		ui, err := webui.New(webui.Dependencies{AuthMode: mode})
 		if err != nil {
@@ -30,9 +37,23 @@ func TestBrowserFacadeModes(t *testing.T) {
 		}
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/ui/fragments/") {
+				body := `<p id="mode-content">read-only knowledge</p>`
+				switch r.URL.Query().Get("case") {
+				case "location":
+					w.Header().Set("Location", "/ui/knowledge")
+					body = `<p id="redirected-login">login</p>`
+				case "same-origin-redirect":
+					http.Redirect(w, r, "/ui/fragments/knowledge?case=redirect-target", http.StatusFound)
+					return
+				case "cross-origin-redirect":
+					http.Redirect(w, r, attacker.URL+"/login", http.StatusFound)
+					return
+				case "redirect-target":
+					body = `<p id="redirected-login">login</p>`
+				}
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.Header().Set(webui.FragmentHeader, "1")
-				_, _ = w.Write([]byte(`<p id="mode-content">read-only knowledge</p>`))
+				_, _ = w.Write([]byte(body))
 				return
 			}
 			ui.ServeHTTP(w, r)

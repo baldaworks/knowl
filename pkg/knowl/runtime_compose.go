@@ -358,10 +358,10 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		return nil, fmt.Errorf("compose Knowl MCP HTTP handler: %w", err)
 	}
 	mux := http.NewServeMux()
-	mcpPolicy := httpserver.FacadePolicy{RequireToken: runtime.config.MCP.AuthMode == AuthModeToken, ReadOnly: runtime.config.MCP.AccessMode == AccessModeReadOnly, ProtocolPOST: true}
+	mcpPolicy := httpserver.FacadePolicy{RequireToken: runtime.config.MCP.AuthMode == AuthModeToken, ReadOnly: runtime.config.MCP.AccessMode == AccessModeReadOnly, ProtocolHTTP: true}
 	mcpFallbackPolicy := mcpPolicy
 	mcpFallbackPolicy.ReadOnly = true
-	mcpFallbackPolicy.ProtocolPOST = false
+	mcpFallbackPolicy.ProtocolHTTP = false
 	apiPolicy := httpserver.FacadePolicy{RequireToken: runtime.config.API.AuthMode == AuthModeToken, ReadOnly: runtime.config.API.AccessMode == AccessModeReadOnly}
 	mux.Handle("/mcp", httpserver.WithFacadePolicy(mcpHandler, runtime.config.OperatorToken, mcpPolicy))
 	mux.Handle("/mcp/", httpserver.WithFacadePolicy(httpHandler, runtime.config.OperatorToken, mcpFallbackPolicy))
