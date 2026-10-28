@@ -1,5 +1,14 @@
 # Context and maintenance baseline
 
+For the public SearchTome retrieval benchmark, see the [runbook](testing/searchtome.md)
+and [recorded E5 and EmbeddingGemma 2 results](testing/searchtome-results.md).
+These measurements use a different corpus from the controlled baseline below.
+The [CPU embedding quality gate](#real-cpu-embedding-quality-gate) describes
+the smaller controlled evaluation; the [native vector comparison harness](#native-vector-comparison-harness)
+and its [recorded measurements](testing/native-vectors.md) cover database
+vector execution and performance. These evaluations answer different questions
+and should not be combined into a single accuracy or latency claim.
+
 The `context-baseline-v1` fixtures measure real retrieval, ingest, provider input
 and scheduler behavior throughout Epic `knowl-wxe`. Improved scenarios become
 strict regression gates while unrepaired quality cases remain observations.
