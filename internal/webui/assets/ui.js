@@ -346,7 +346,9 @@
   document.addEventListener('htmx:beforeSwap', event => {
     const xhr = event.detail.xhr;
     if (!canRequest() || pending.get(xhr) !== generation) {event.detail.shouldSwap = false; event.preventDefault(); return;}
-    if (!protectedURL(xhr.responseURL)) {if(authMode==='proxy')disconnect('Your access session expired. Reconnect through the configured identity provider.');event.detail.shouldSwap = false; event.preventDefault(); return;}
+    const requestedURL=protectedURL(event.detail.requestConfig.path),responseURL=protectedURL(xhr.responseURL);
+    const redirected=requestedURL&&responseURL&&(requestedURL.pathname!==responseURL.pathname||requestedURL.search!==responseURL.search);
+    if (!requestedURL || !responseURL || (authMode==='proxy' && (xhr.getResponseHeader('Location')!==null || redirected))) {if(authMode==='proxy')disconnect('Your access session expired. Reconnect through the configured identity provider.');event.detail.shouldSwap = false; event.preventDefault(); return;}
     if (xhr.status === 401) {disconnect(authMode==='token'?'Token was rejected or the session expired. Paste the exact token value without extra quotes, backticks, or asterisks from copied formatting, then Connect again.':'Your access session expired. Reconnect through the configured identity provider.',authMode==='token'); event.detail.shouldSwap = false; event.preventDefault(); return;}
     if(xhr.getResponseHeader('X-Knowl-Fragment')!=='1'){event.detail.shouldSwap=false;event.preventDefault();requestFailed(event.detail.target);return;}
     if(poll?.xhr===xhr && (xhr.status===0 || xhr.status>=500)) {event.detail.shouldSwap=false;event.preventDefault();return;}

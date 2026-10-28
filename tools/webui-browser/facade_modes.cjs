@@ -16,18 +16,27 @@ const {chromium} = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright');
       assert.equal(await page.locator('#connection-card').isVisible(),false);
       assert.ok(requests.every(request=>!request.headers.authorization));
       if(mode==='proxy') {
+        const reconnect=async()=>{
+          const navigation=page.waitForRequest(request=>request.isNavigationRequest() && request.frame()===page.mainFrame());
+          await page.locator('#connect-form button').click();
+          const target=new URL((await navigation).url());
+          assert.equal(target.origin,origin);
+          assert.equal(target.pathname,'/ui/knowledge');
+          await page.locator('#mode-content').waitFor();
+        };
+        const rejected=async(path,selector)=>{
+          await page.evaluate(path=>htmx.ajax('GET',path,{target:'#screen',swap:'innerHTML'}).catch(()=>{}),path);
+          await page.waitForFunction(()=>document.body.dataset.connectionState==='disconnected');
+          assert.equal(await page.locator(selector).count(),0);
+          assert.match(await page.locator('#connection-feedback').textContent(),/identity provider/);
+          await reconnect();
+        };
         await page.route('**/ui/fragments/knowledge',route=>route.fulfill({status:200,contentType:'text/html',body:'<script>window.proxyPwned=true</script><p id="untrusted-login">login</p>'}),{times:1});
-        await page.evaluate(()=>htmx.ajax('GET','/ui/fragments/knowledge',{target:'#screen',swap:'innerHTML'}).catch(()=>{}));
-        await page.waitForFunction(()=>document.body.dataset.connectionState==='disconnected');
-        assert.equal(await page.locator('#untrusted-login,#screen script').count(),0);
+        await rejected('/ui/fragments/knowledge','#untrusted-login,#screen script');
         assert.equal(await page.evaluate(()=>window.proxyPwned),undefined);
-        assert.match(await page.locator('#connection-feedback').textContent(),/identity provider/);
-        const navigation=page.waitForRequest(request=>request.isNavigationRequest() && request.frame()===page.mainFrame());
-        await page.locator('#connect-form button').click();
-        const reconnect=await navigation;
-        const target=new URL(reconnect.url());
-        assert.equal(target.origin,origin);
-        assert.equal(target.pathname,'/ui/knowledge');
+        await rejected('/ui/fragments/knowledge?case=location','#redirected-login');
+        await rejected('/ui/fragments/knowledge?case=same-origin-redirect','#redirected-login');
+        await rejected('/ui/fragments/knowledge?case=cross-origin-redirect','#cross-origin-login');
       }
       await page.close();
     }

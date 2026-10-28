@@ -15,7 +15,7 @@ const mcpEndpointPath = "/mcp"
 type FacadePolicy struct {
 	RequireToken bool
 	ReadOnly     bool
-	ProtocolPOST bool
+	ProtocolHTTP bool
 }
 
 // WithFacadePolicy enforces one normalized facade policy.
@@ -39,7 +39,8 @@ func WithFacadePolicy(next http.Handler, token string, policy FacadePolicy) http
 			}
 		}
 		if policy.ReadOnly && request.Method != http.MethodGet && request.Method != http.MethodHead {
-			if !policy.ProtocolPOST || request.Method != http.MethodPost || request.URL.Path != mcpEndpointPath {
+			protocolMethod := request.Method == http.MethodPost || request.Method == http.MethodDelete
+			if !policy.ProtocolHTTP || !protocolMethod || request.URL.Path != mcpEndpointPath {
 				writeHTTPError(response, http.StatusForbidden, "read_only")
 				return
 			}

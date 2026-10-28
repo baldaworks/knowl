@@ -96,8 +96,10 @@ func TestFacadePolicy(t *testing.T) {
 		{name: "token read missing bearer", method: http.MethodGet, path: authTestRetrievePath, policy: FacadePolicy{RequireToken: true, ReadOnly: true}, wantStatus: http.StatusUnauthorized},
 		{name: "token read", method: http.MethodGet, path: authTestRetrievePath, policy: FacadePolicy{RequireToken: true, ReadOnly: true}, bearer: token, wantStatus: http.StatusNoContent, wantCalls: 1},
 		{name: "token write", method: http.MethodPost, path: authTestIngestPath, policy: FacadePolicy{RequireToken: true}, bearer: token, wantStatus: http.StatusNoContent, wantCalls: 1},
-		{name: "exact mcp protocol post", method: http.MethodPost, path: mcpEndpointPath, policy: FacadePolicy{ReadOnly: true, ProtocolPOST: true}, wantStatus: http.StatusNoContent, wantCalls: 1},
-		{name: "mcp prefix post denied", method: http.MethodPost, path: "/mcp/unknown", policy: FacadePolicy{ReadOnly: true, ProtocolPOST: true}, wantStatus: http.StatusForbidden},
+		{name: "exact mcp protocol post", method: http.MethodPost, path: mcpEndpointPath, policy: FacadePolicy{ReadOnly: true, ProtocolHTTP: true}, wantStatus: http.StatusNoContent, wantCalls: 1},
+		{name: "exact mcp protocol delete", method: http.MethodDelete, path: mcpEndpointPath, policy: FacadePolicy{ReadOnly: true, ProtocolHTTP: true}, wantStatus: http.StatusNoContent, wantCalls: 1},
+		{name: "mcp prefix post denied", method: http.MethodPost, path: "/mcp/unknown", policy: FacadePolicy{ReadOnly: true, ProtocolHTTP: true}, wantStatus: http.StatusForbidden},
+		{name: "mcp prefix delete denied", method: http.MethodDelete, path: "/mcp/unknown", policy: FacadePolicy{ReadOnly: true, ProtocolHTTP: true}, wantStatus: http.StatusForbidden},
 		{name: "trusted write bypass", method: http.MethodPost, path: authTestIngestPath, policy: FacadePolicy{RequireToken: true, ReadOnly: true}, trusted: true, wantStatus: http.StatusNoContent, wantCalls: 1},
 	}
 	for _, test := range tests {

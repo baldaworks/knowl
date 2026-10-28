@@ -134,6 +134,53 @@ func TestHTTPMCPReadOnlyModesHideWriteTools(t *testing.T) {
 	}
 }
 
+func TestHTTPMCPReadOnlyModeAllowsSessionDelete(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.ListenAddr = hostListenAddr
+	config.OperatorToken = "reader-token"
+	config.MCP = knowl.FacadeConfig{AuthMode: knowl.AuthModeToken, AccessMode: knowl.AccessModeReadOnly}
+	host, err := knowl.NewHost(ctx, config, provider.Fixture{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownHost(t, host)
+
+	deleteStatus := make(chan int, 1)
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: hostMCPClientName, Version: hostMCPClientVersion}, nil)
+	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{
+		Endpoint:             "http://" + host.Addr() + "/mcp",
+		HTTPClient:           &http.Client{Transport: recordingBearerTransport{token: config.OperatorToken, deleteStatus: deleteStatus}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case status := <-deleteStatus:
+		if status != http.StatusNoContent {
+			t.Fatalf("MCP session DELETE status = %d, want %d", status, http.StatusNoContent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MCP session close did not issue DELETE")
+	}
+}
+
 func TestHostServesMCPContract(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
@@ -400,6 +447,21 @@ func (transport bearerTransport) RoundTrip(request *http.Request) (*http.Respons
 	request = request.Clone(request.Context())
 	request.Header.Set("Authorization", "Bearer "+transport.token)
 	return http.DefaultTransport.RoundTrip(request)
+}
+
+type recordingBearerTransport struct {
+	token        string
+	deleteStatus chan<- int
+}
+
+func (transport recordingBearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	request = request.Clone(request.Context())
+	request.Header.Set("Authorization", "Bearer "+transport.token)
+	response, err := http.DefaultTransport.RoundTrip(request)
+	if err == nil && request.Method == http.MethodDelete {
+		transport.deleteStatus <- response.StatusCode
+	}
+	return response, err
 }
 
 func closeMCPClient(t *testing.T, session *sdkmcp.ClientSession) {
