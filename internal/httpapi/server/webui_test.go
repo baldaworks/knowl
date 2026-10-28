@@ -21,7 +21,7 @@ const (
 )
 
 func TestUIBoundaryErrorsAreTrustedFragments(t *testing.T) {
-	h, err := NewWebHandler(nil, Dependencies{Ready: func() bool { return true }}, uiTestToken)
+	h, err := NewWebHandler(nil, Dependencies{Ready: func() bool { return true }}, WebOptions{AuthMode: "token", Token: uiTestToken})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestUIOperationReadUsesSafePublicStatusAndNoWriters(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h, err := NewWebHandler(nil, Dependencies{Query: query, Scope: "ui-scope", Ready: func() bool { return true }}, uiTestToken)
+			h, err := NewWebHandler(nil, Dependencies{Query: query, Scope: "ui-scope", Ready: func() bool { return true }}, WebOptions{AuthMode: "token", Token: uiTestToken})
 			if err != nil {
 				t.Fatal(err)
 			}

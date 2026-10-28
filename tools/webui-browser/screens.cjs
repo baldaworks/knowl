@@ -114,7 +114,7 @@ async function savedSourceOutcomes(page) {
   assert.equal(await page.locator('.wiki-tree [data-wiki-path="index.md"]').count(),1,'root index is a file beside folders');
   assert.equal(await page.locator('.wiki-tree > .card-body > .wiki-tree-list > [data-wiki-path]').count(),50);
   const firstMore=await page.locator('.wiki-tree-more button').getAttribute('data-directory-url');
-  await page.route(url=>url.pathname==='/ui/fragments/wiki-directory'&&url.searchParams.get('cursor')===new URL(firstMore,page.url()).searchParams.get('cursor'),route=>route.fulfill({status:409,headers:{'Content-Type':'text/html','X-Knowl-Error':'snapshot_changed'},body:'<div data-error-code="snapshot_changed">Knowledge changed</div>'}),{times:1});
+  await page.route(url=>url.pathname==='/ui/fragments/wiki-directory'&&url.searchParams.get('cursor')===new URL(firstMore,page.url()).searchParams.get('cursor'),route=>route.fulfill({status:409,headers:{'Content-Type':'text/html','X-Knowl-Fragment':'1','X-Knowl-Error':'snapshot_changed'},body:'<div data-error-code="snapshot_changed">Knowledge changed</div>'}),{times:1});
   const stale=page.waitForResponse(response=>response.status()===409&&new URL(response.url()).pathname==='/ui/fragments/wiki-directory');
   await page.locator('.wiki-tree-more button').click();
   await stale;
@@ -137,7 +137,7 @@ async function savedSourceOutcomes(page) {
   await page.locator('[data-wiki-path="empty"] > [data-tree-expand]').click();
   await page.getByText('No published files in this folder.',{exact:true}).waitFor();
   assert.equal(await page.getByText('No published files in this folder.',{exact:true}).isVisible(),true,'empty folder reports an empty branch');
-  await page.route(url=>url.pathname==='/ui/fragments/wiki-directory'&&url.searchParams.get('directory')==='sources'&&!url.searchParams.has('cursor'),route=>route.fulfill({status:404,headers:{'Content-Type':'text/html','X-Knowl-Error':'directory_not_found'},body:'<div data-error-code="directory_not_found">Folder changed</div>'}),{times:1});
+  await page.route(url=>url.pathname==='/ui/fragments/wiki-directory'&&url.searchParams.get('directory')==='sources'&&!url.searchParams.has('cursor'),route=>route.fulfill({status:404,headers:{'Content-Type':'text/html','X-Knowl-Fragment':'1','X-Knowl-Error':'directory_not_found'},body:'<div data-error-code="directory_not_found">Folder changed</div>'}),{times:1});
   await page.locator('[data-wiki-path="sources"] [data-tree-expand]').click();
   await page.locator('[data-wiki-path="sources"] [data-error-code="directory_not_found"]').waitFor();
   assert.equal(await page.locator('[data-wiki-path="sources"] [data-error-code="directory_not_found"]').isVisible(),true,'folder read errors must be visible');

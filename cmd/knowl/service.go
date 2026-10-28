@@ -80,6 +80,8 @@ func hostConfig(ctx context.Context) (knowl.Config, error) {
 	config.StorePath = storage.Path
 	config.PostgresDSN = storage.DSN
 	config.OperatorToken = loaded.Document.Knowl.Operator.Token
+	config.API = loaded.Document.Knowl.API
+	config.MCP = loaded.Document.Knowl.MCP
 	config.Web = loaded.Document.Knowl.Web
 	config.Embeddings = loaded.Document.Knowl.Embeddings
 	config.Output = loaded.Document.Knowl.Output

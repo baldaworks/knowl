@@ -212,10 +212,11 @@ Notes:
 - when storage is omitted, Knowl defaults to SQLite.
 - default local listen address is `127.0.0.1:8080`; container deployments
   may override it with `0.0.0.0:8080` or another literal IP bind.
-- when `knowl.operator.token` is non-empty, `/v1/*` and `/mcp` require an
-  `Authorization: Bearer <token>` header. Health and readiness probes remain
-  unauthenticated. Keep tokenless deployments on a trusted, loopback-only
-  network boundary.
+- API, MCP and Web authentication are configured independently. Empty
+  `auth_mode` resolves to `token` when `knowl.operator.token` is nonempty and
+  to `public` otherwise. Empty `access_mode` always resolves to `read_only`.
+  Health and readiness probes remain unauthenticated. See
+  [HTTP facade access control](access-control.md).
 
 Git sources use the same `source list`, `source sync`, `source status`,
 scheduling, retry, and maintenance lifecycle as filesystem sources. They only
@@ -269,6 +270,8 @@ an existing valid provider/workspace configuration to enable them:
 knowl:
   web:
     enabled: true
+    auth_mode: token
+    access_mode: read_only
   server:
     listen_addr: 127.0.0.1:8080
   operator:
@@ -277,7 +280,8 @@ knowl:
 
 Set `KNOWL_OPERATOR_TOKEN` to a local secret before starting the service. Keep
 secret overrides in `.config/knowl/*.local.yaml` or the process environment;
-do not commit them. Startup rejects enabled web access with an empty token.
+do not commit them. Token and proxy Web modes reject an empty operator token;
+public mode does not require one.
 For embedded Go applications the corresponding fields are `Config.Web.Enabled`
 and `Config.OperatorToken`. MCP stdio disables web access.
 
@@ -289,9 +293,11 @@ header. Disabled web routes return 404. Health probes remain public.
 The browser keeps the token in memory for the current document. Reload,
 **Disconnect**, or an authorization failure clears the connection. It is not
 saved in cookies, local/session storage, browser URLs, or exported search JSON.
-Data responses use `Cache-Control: no-store`. Treat the operator token as a
-write-capable credential: it also authorizes `POST /v1/ingest` and the existing
-MCP tools. The read-only UI does not narrow the token's authority.
+Data responses use `Cache-Control: no-store`. The operator token is accepted
+only by facades configured for token authentication. Write capability is
+separate: API/MCP must explicitly select `access_mode: read_write`; otherwise
+ingest is denied and the MCP write tool is not registered. The read-only UI
+does not change another facade's authority.
 
 Keep local access on loopback. For remote access, terminate HTTPS at a trusted
 reverse proxy and restrict direct access to the Go listener. Knowl serves HTTP
@@ -1212,14 +1218,17 @@ MCP is the primary agent-facing interface.
 The running service exposes MCP Streamable HTTP on its existing listener at
 `http://127.0.0.1:8080/mcp`.
 
-When an operator token is configured, MCP clients must send the same bearer
-token in the HTTP `Authorization` header.
+MCP authentication follows `knowl.mcp.auth_mode`. Token mode requires the
+operator bearer in the HTTP `Authorization` header; public mode does not.
 
-The baseline server exposes exactly:
+The read-only default exposes exactly:
 
 - `knowl_retrieve`
-- `knowl_ingest`
 - `knowl_operation`
+
+Explicit token-authenticated `access_mode: read_write` additionally exposes
+`knowl_ingest`. See [HTTP facade access control](access-control.md) for native
+tool omission and gateway call-denial behavior.
 
 MCP and HTTP call the same underlying application services.
 

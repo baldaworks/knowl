@@ -79,6 +79,8 @@ func runMCPStdio(cmd *cobra.Command, _ []string) error {
 func stdioHostConfig(config knowlruntime.Config) knowlruntime.Config {
 	config.ListenAddr = "127.0.0.1:0"
 	config.OperatorToken = ""
+	config.API = knowlruntime.FacadeConfig{}
+	config.MCP = knowlruntime.FacadeConfig{}
 	config.Web = knowlruntime.WebConfig{}
 	return config
 }

@@ -2,6 +2,7 @@ package knowl_test
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
@@ -78,6 +79,61 @@ func TestSharedSDKAdapterMatchesRegistryTools(t *testing.T) {
 	}
 }
 
+func TestHTTPMCPReadOnlyModesHideWriteTools(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+		auth  knowl.AuthMode
+	}{
+		{name: "public", auth: knowl.AuthModePublic},
+		{name: "token", token: "reader-token", auth: knowl.AuthModeToken},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			workspace, err := contentfs.New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := workspace.Init(); err != nil {
+				t.Fatal(err)
+			}
+			config := knowl.DefaultConfig()
+			config.Workspace = workspace.Root()
+			config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+			config.ListenAddr = hostListenAddr
+			config.OperatorToken = test.token
+			config.MCP = knowl.FacadeConfig{AuthMode: test.auth, AccessMode: knowl.AccessModeReadOnly}
+			host, err := knowl.NewHost(ctx, config, provider.Fixture{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := host.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			defer shutdownHost(t, host)
+
+			session := connectMCPClientWithToken(t, ctx, host, test.token)
+			defer closeMCPClient(t, session)
+			listed, err := session.ListTools(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(listed.Tools) != 2 {
+				t.Fatalf("tool count = %d, want 2", len(listed.Tools))
+			}
+			for _, tool := range listed.Tools {
+				if tool.Name == hostIngestToolName {
+					t.Fatal("read-only MCP advertised knowl_ingest")
+				}
+			}
+			if result, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: hostIngestToolName}); err == nil && !result.IsError {
+				t.Fatal("read-only MCP accepted direct knowl_ingest call")
+			}
+		})
+	}
+}
+
 func TestHostServesMCPContract(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
@@ -95,6 +151,7 @@ func TestHostServesMCPContract(t *testing.T) {
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
+	enableFacadeWrites(&config)
 	config.IngestOptions.AutoApply = true
 	maintainer := provider.Fixture{Result: domain.ModelEditPlan{
 		SchemaDigest: schema.Digest,
@@ -116,6 +173,7 @@ func TestHostServesMCPContract(t *testing.T) {
 	)
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{
 		Endpoint:             "http://" + host.Addr() + "/mcp",
+		HTTPClient:           mcpHTTPClient(config.OperatorToken),
 		DisableStandaloneSSE: true,
 	}, nil)
 	if err != nil {
@@ -228,6 +286,7 @@ func TestStreamableMCPIngestRunsInBackground(t *testing.T) {
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
+	enableFacadeWrites(&config)
 	config.IngestOptions.AutoApply = true
 	host, err := knowl.NewHost(ctx, config, maintainer)
 	if err != nil {
@@ -308,16 +367,39 @@ func waitForMCPHostOperationStatus(t *testing.T, session *sdkmcp.ClientSession, 
 }
 
 func connectMCPClient(t *testing.T, ctx context.Context, host *knowl.Host) *sdkmcp.ClientSession {
+	return connectMCPClientWithToken(t, ctx, host, hostWriteToken)
+}
+
+func connectMCPClientWithToken(t *testing.T, ctx context.Context, host *knowl.Host, token string) *sdkmcp.ClientSession {
 	t.Helper()
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: hostMCPClientName, Version: hostMCPClientVersion}, nil)
+	var httpClient *http.Client
+	if token != "" {
+		httpClient = mcpHTTPClient(token)
+	}
 	session, err := client.Connect(ctx, &sdkmcp.StreamableClientTransport{
 		Endpoint:             "http://" + host.Addr() + "/mcp",
+		HTTPClient:           httpClient,
 		DisableStandaloneSSE: true,
 	}, nil)
 	if err != nil {
 		t.Fatalf("connect MCP client: %v", err)
 	}
 	return session
+}
+
+func mcpHTTPClient(token string) *http.Client {
+	return &http.Client{Transport: bearerTransport{token: token}}
+}
+
+type bearerTransport struct {
+	token string
+}
+
+func (transport bearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	request = request.Clone(request.Context())
+	request.Header.Set("Authorization", "Bearer "+transport.token)
+	return http.DefaultTransport.RoundTrip(request)
 }
 
 func closeMCPClient(t *testing.T, session *sdkmcp.ClientSession) {

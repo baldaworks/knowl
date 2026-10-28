@@ -38,6 +38,7 @@ func TestBrowserLiveSourceWiki(t *testing.T) {
 	fixture := newCommandWorkflowFixture(t, true)
 	fixture.config.Web.Enabled = true
 	fixture.config.OperatorToken = liveBrowserToken
+	fixture.config.API = knowl.FacadeConfig{AuthMode: knowl.AuthModeToken, AccessMode: knowl.AccessModeReadWrite}
 	maintainer := &countingBrowserMaintainer{Fixture: fixture.maintainer}
 	host, err := knowl.NewHost(t.Context(), fixture.config, maintainer)
 	if err != nil {

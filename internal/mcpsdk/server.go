@@ -19,6 +19,17 @@ const (
 // NewServer maps one trusted-scope Knowl registry to the shared SDK server
 // used by both HTTP and stdio transports.
 func NewServer(registry *knowlmcp.Server) (*sdkmcp.Server, error) {
+	return NewServerWithOptions(registry, ServerOptions{})
+}
+
+// ServerOptions controls the capabilities exposed by one SDK server.
+type ServerOptions struct {
+	ReadOnly bool
+}
+
+// NewServerWithOptions maps one trusted-scope Knowl registry to an SDK server
+// while allowing transports to expose a capability-restricted view.
+func NewServerWithOptions(registry *knowlmcp.Server, options ServerOptions) (*sdkmcp.Server, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("knowl MCP registry is required")
 	}
@@ -29,6 +40,9 @@ func NewServer(registry *knowlmcp.Server) (*sdkmcp.Server, error) {
 		},
 	)
 	for _, definition := range registry.Tools() {
+		if options.ReadOnly && !definition.ReadOnly {
+			continue
+		}
 		server.AddTool(&sdkmcp.Tool{
 			Name:        definition.Name,
 			Description: definition.Description,

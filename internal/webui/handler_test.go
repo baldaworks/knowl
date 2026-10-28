@@ -78,6 +78,19 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 		}
 	}
 }
+
+func TestFragmentsCarryTrustedResponseMarker(t *testing.T) {
+	h, err := New(Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.Fragments(w, httptest.NewRequest(http.MethodGet, "/ui/fragments/unknown", nil))
+	if w.Header().Get(FragmentHeader) != "1" {
+		t.Fatal("fragment response marker missing")
+	}
+}
+
 func walk(n *html.Node, visit func(*html.Node)) {
 	visit(n)
 	for c := n.FirstChild; c != nil; c = c.NextSibling {

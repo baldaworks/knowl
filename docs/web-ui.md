@@ -15,19 +15,23 @@ Knowl configuration:
 knowl:
   web:
     enabled: true
+    auth_mode: token
+    access_mode: read_only
   operator:
     token: ${KNOWL_OPERATOR_TOKEN}
 ```
 
 Set the named environment variable to your operator secret and restart
-`knowl start`. Enabled web access requires a nonempty token. With the default
+`knowl start`. Token-mode web access requires a nonempty token. With the default
 listener, open `http://127.0.0.1:8080/ui/`, enter the token, and select
 **Connect**. The token stays in memory for the current document; reload or
 **Disconnect** clears it. Navigation within the connected UI keeps the session.
 The shell and assets are public, while workspace reads require authentication.
 
 Use HTTPS through a trusted proxy for access beyond loopback. The token also
-permits ingestion through the existing agent API, even though the UI only reads.
+permits ingestion only on API/MCP facades explicitly configured read-write; the
+UI itself only reads. Public and proxy-authenticated Web profiles are described
+in the [access-control guide](access-control.md).
 Keep local secret overrides out of Git. See
 [configuration and security](operations.md#optional-web-ui-and-operator-reads)
 and [container setup](service.md#optional-browser-access).

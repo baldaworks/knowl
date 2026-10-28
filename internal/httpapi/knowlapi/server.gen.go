@@ -586,6 +586,9 @@ type RetrieveQuery = string
 // RetrieveSource defines model for RetrieveSource.
 type RetrieveSource = []string
 
+// IngestForbidden defines model for IngestForbidden.
+type IngestForbidden = ErrorResponse
+
 // JSONBodyBadRequest defines model for JSONBodyBadRequest.
 type JSONBodyBadRequest = ErrorResponse
 
@@ -906,6 +909,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	return m
 }
 
+type IngestForbiddenJSONResponse ErrorResponse
+
 type JSONBodyBadRequestJSONResponse ErrorResponse
 
 type NotFoundJSONResponse ErrorResponse
@@ -1006,9 +1011,7 @@ func (response IngestKnowledge401JSONResponse) VisitIngestKnowledgeResponse(w ht
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
-type IngestKnowledge403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
+type IngestKnowledge403JSONResponse struct{ IngestForbiddenJSONResponse }
 
 func (response IngestKnowledge403JSONResponse) VisitIngestKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")

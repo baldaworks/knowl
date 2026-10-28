@@ -2,6 +2,8 @@
 (() => {
   'use strict';
   let token = '', generation = 0, connectionState = 'disconnected', focusScreen = false;
+  const authMode = document.body.dataset.authMode;
+  const canRequest = () => connectionState === 'connecting' || connectionState === 'connected';
   let sourcesOpener = null, sourcesScroll = 0, rawOpener = null;
   let operationOpener = null, operationScroll = 0;
   let searchSnapshot = null, searchVisitSerial = 0, searchRendered = false;
@@ -46,7 +48,7 @@
     const modal = open && mobile.matches;
     const wasModal = sidebar.getAttribute('aria-modal') === 'true';
     backgrounds.forEach(element => {element.inert = modal;});
-    if (!open && sidebar.contains(document.activeElement)) (connected ? navToggle : document.getElementById('operator-token')).focus({preventScroll:true});
+    if (!open && sidebar.contains(document.activeElement)) (connected ? navToggle : authMode === 'token' ? document.getElementById('operator-token') : document.querySelector('#connect-form button')).focus({preventScroll:true});
     sidebar.hidden = !connected; sidebar.inert = !open;
     sidebar.setAttribute('aria-hidden',String(!open));
     navToggle.hidden = !connected; navToggle.setAttribute('aria-expanded',String(open));
@@ -84,7 +86,7 @@
     document.getElementById('connection-card').hidden=connected;
     document.getElementById('connection-card').setAttribute('aria-busy',String(connecting));
     document.querySelector('#connect-form button').disabled=connecting;
-    document.getElementById('disconnect').hidden=!connected && !connecting;
+    document.getElementById('disconnect').hidden=authMode!=='token' || (!connected && !connecting);
     document.getElementById('disconnect').textContent=connecting?'Cancel':'Disconnect';
     document.getElementById('connection-status').textContent=connected?'Connected':connecting?'Connecting…':'Disconnected';
     screen.hidden=!connected;
@@ -97,7 +99,7 @@
     token = ''; abortRequests(); document.getElementById('operator-token').value = '';
     sourcesOpener=null;rawOpener=null;operationOpener=null;searchSnapshot=null;searchRendered=false;treeSnapshots.clear();renderedTreeEntry=0;knownNavigation=false;currentTrail=[];screen.replaceChildren();
     setConnectionState('disconnected',feedback,invalid);
-    if(focus)document.getElementById('operator-token').focus({preventScroll:true});
+    if(focus)(authMode==='token'?document.getElementById('operator-token'):document.querySelector('#connect-form button')).focus({preventScroll:true});
   }
   function localMessage(target,text) {const note=document.createElement('div');note.className='empty-state';note.textContent=text;target.replaceChildren(note);}
   function addRawClose(target) {
@@ -117,11 +119,11 @@
     target.focus({preventScroll:true});
   }
   function requestFailed(target) {
-    if(connectionState==='connecting')disconnect('Connection failed. Check the server and token, then Connect to retry.');
+    if(connectionState==='connecting' || authMode==='proxy')disconnect(authMode==='token'?'Connection failed. Check the server and token, then Connect to retry.':authMode==='proxy'?'Your access session may have expired. Reconnect through the configured identity provider.':'Connection failed. Retry the public knowledge view.');
     else {target.removeAttribute('aria-busy');localMessage(target,'Request failed. Select again or refresh this view to retry.');if(target.id==='raw-source')addRawClose(target);}
   }
   function load() {
-    if (!token) return;
+    if (!canRequest()) return;
     const params = new URLSearchParams(location.search);
     let path='/ui/fragments/'+selected();
     if(selected()==='knowledge') {
@@ -133,7 +135,7 @@
     const request=htmx.ajax('GET', path, {target: screen, swap: 'innerHTML'});
     const current=generation;
     request.then(()=>{
-      if(token && generation===current && selected()==='operations' && params.has('operation_id')) htmx.ajax('GET','/ui/fragments/operation?operation_id='+encodeURIComponent(params.get('operation_id')),{target:'#operation-detail',swap:'innerHTML'}).catch(()=>{});
+      if(canRequest() && generation===current && selected()==='operations' && params.has('operation_id')) htmx.ajax('GET','/ui/fragments/operation?operation_id='+encodeURIComponent(params.get('operation_id')),{target:'#operation-detail',swap:'innerHTML'}).catch(()=>{});
     }).catch(() => {});
   }
   function rememberSearch() {
@@ -160,7 +162,7 @@
     document.getElementById('header-view').textContent = names[key];
     for (const link of document.querySelectorAll('[data-screen]')) {link.classList.toggle('active', link.dataset.screen === key); if(link.dataset.screen === key) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');}
     const params=new URLSearchParams(location.search);
-    if(event?.type==='popstate' && token && key==='search' && searchSnapshot && Number.isSafeInteger(history.state?.searchEntry) && history.state.searchEntry===searchSnapshot.entry) {
+    if(event?.type==='popstate' && canRequest() && key==='search' && searchSnapshot && Number.isSafeInteger(history.state?.searchEntry) && history.state.searchEntry===searchSnapshot.entry) {
       screen.replaceChildren(...searchSnapshot.view.cloneNode(true).childNodes);
       screen.querySelector('#query').value=searchSnapshot.query;
       htmx.process(screen);
@@ -169,10 +171,10 @@
     if(key==='search') {searchSnapshot=null;searchRendered=false;}
     const treeEntry=history.state?.treeEntry;
     const snapshot=Number.isSafeInteger(treeEntry)?treeSnapshots.get(treeEntry):null;
-    if(event?.type==='popstate' && token && key==='knowledge' && params.get('view')==='all' && !params.has('page_id') && snapshot?.hasChildNodes()) {
+    if(event?.type==='popstate' && canRequest() && key==='knowledge' && params.get('view')==='all' && !params.has('page_id') && snapshot?.hasChildNodes()) {
       treeSnapshots.delete(treeEntry);screen.replaceChildren(...snapshot.childNodes);adoptKnowledge();screen.focus({preventScroll:true});focusScreen=false;return;
     }
-    message(token ? 'Loading view…' : 'Connect to read knowledge.'); load();
+    message(canRequest() ? 'Loading view…' : authMode==='token' ? 'Connect to read knowledge.' : 'Reconnect to read knowledge.'); load();
   }
   function navigationState(url) {
     if(url.pathname!=='/ui/knowledge')return null;
@@ -206,7 +208,9 @@
     history.replaceState(state,'',location.href);
   }
   document.getElementById('connect-form').addEventListener('submit', event => {
-    event.preventDefault(); const value = document.getElementById('operator-token').value.trim(); disconnect('',false,false); if (!value) return;
+    event.preventDefault();
+    if(authMode==='proxy') {location.assign(new URL(location.pathname+location.search,location.origin).href);return;}
+    const value = document.getElementById('operator-token').value.trim(); disconnect('',false,false); if (authMode==='token' && !value) return;
     token = value; setConnectionState('connecting'); navigate();
   });
   document.getElementById('disconnect').addEventListener('click', () => disconnect());
@@ -224,7 +228,7 @@
     const requestGeneration=generation;
     treePending++;button.disabled=true;
     htmx.ajax('GET',url.pathname+url.search,{target,swap}).then(()=>{
-      if(token && generation===requestGeneration && !target.querySelector('[data-error-code]'))onSuccess();
+      if(canRequest() && generation===requestGeneration && !target.querySelector('[data-error-code]'))onSuccess();
     }).catch(()=>{}).finally(()=>{
       treePending--;
       if(target.isConnected && target.classList.contains('wiki-tree-branch') && target.hasChildNodes()) {target.hidden=false;button.setAttribute('aria-expanded','true');}
@@ -290,8 +294,8 @@
     event.preventDefault(); if(connectionState!=='connected')return;if(mobile.matches)pushMenu.collapse();history.pushState(null, '', '/ui/' + link.dataset.screen); navigate();
   });
   document.addEventListener('htmx:configRequest', event => {
-    if (!token || !protectedURL(event.detail.path) || event.detail.verb !== 'get') {event.preventDefault(); return;}
-    event.detail.headers.Authorization = 'Bearer ' + token;
+    if (!canRequest() || !protectedURL(event.detail.path) || event.detail.verb !== 'get') {event.preventDefault(); return;}
+    if(authMode==='token')event.detail.headers.Authorization = 'Bearer ' + token;
     const path=protectedURL(event.detail.path).pathname;
     const ids=history.state?.catalogIds;
     if(knownNavigation && ['/ui/fragments/knowledge','/ui/fragments/page'].includes(path) && Array.isArray(ids) && ids.length>0 && ids.length<=catalogDepth && ids.every(id=>typeof id==='string' && id.length<=2048)) {
@@ -303,7 +307,7 @@
   });
   document.addEventListener('htmx:beforeRequest', event => {
     const url = protectedURL(event.detail.requestConfig.path);
-    if (!token || !url) {event.preventDefault(); return;}
+    if (!canRequest() || !url) {event.preventDefault(); return;}
     if(url.pathname==='/ui/fragments/search' && event.detail.target.id==='search-results') {searchRendered=false;searchSnapshot=null;}
     // Whole-screen replacements cancel older reads, including catalog continuation.
     // Advance before aborting so canceled requests cannot display an error.
@@ -341,8 +345,10 @@
   });
   document.addEventListener('htmx:beforeSwap', event => {
     const xhr = event.detail.xhr;
-    if (!token || pending.get(xhr) !== generation || !protectedURL(xhr.responseURL)) {event.detail.shouldSwap = false; event.preventDefault(); return;}
-    if (xhr.status === 401) {disconnect('Token was rejected or the session expired. Paste the exact token value without extra quotes, backticks, or asterisks from copied formatting, then Connect again.',true); event.detail.shouldSwap = false; event.preventDefault(); return;}
+    if (!canRequest() || pending.get(xhr) !== generation) {event.detail.shouldSwap = false; event.preventDefault(); return;}
+    if (!protectedURL(xhr.responseURL)) {if(authMode==='proxy')disconnect('Your access session expired. Reconnect through the configured identity provider.');event.detail.shouldSwap = false; event.preventDefault(); return;}
+    if (xhr.status === 401) {disconnect(authMode==='token'?'Token was rejected or the session expired. Paste the exact token value without extra quotes, backticks, or asterisks from copied formatting, then Connect again.':'Your access session expired. Reconnect through the configured identity provider.',authMode==='token'); event.detail.shouldSwap = false; event.preventDefault(); return;}
+    if(xhr.getResponseHeader('X-Knowl-Fragment')!=='1'){event.detail.shouldSwap=false;event.preventDefault();requestFailed(event.detail.target);return;}
     if(poll?.xhr===xhr && (xhr.status===0 || xhr.status>=500)) {event.detail.shouldSwap=false;event.preventDefault();return;}
     const error = xhr.getResponseHeader('X-Knowl-Error');
     const trustedErrors={invalid_request:400,limit_invalid:400,cursor_invalid:400,catalog_not_found:404,directory_not_found:404,page_not_found:404,source_revision_not_found:404,operation_not_found:404,source_not_found:404,snapshot_changed:409,read_limit_exceeded:413,unsupported_format:415,retrieval_failed:503,capability_unavailable:503,not_ready:503,workspace_unavailable:503};
@@ -355,7 +361,7 @@
   });
   document.addEventListener('htmx:afterRequest', event => {
     const xhr = event.detail.xhr;
-    const current=token && pending.get(xhr)===generation;
+    const current=canRequest() && pending.get(xhr)===generation;
     const wasPoll=poll?.xhr===xhr;
     if(current && wasPoll) {
       poll.xhr=null;
@@ -364,7 +370,7 @@
       else stopPolling();
     } else if(current && xhr.status===200 && protectedURL(event.detail.requestConfig.path)?.pathname==='/ui/fragments/operation') adoptOperation();
     if (current && !wasPoll) {event.detail.target.removeAttribute('aria-busy');if(xhr.status===0)requestFailed(event.detail.target);}
-    if(token && pending.get(xhr)===generation && xhr.getResponseHeader('X-Knowl-Error')==='snapshot_changed') {
+    if(canRequest() && pending.get(xhr)===generation && xhr.getResponseHeader('X-Knowl-Error')==='snapshot_changed') {
       const url=protectedURL(event.detail.requestConfig.path);if(url && url.searchParams.has('cursor')) {
         url.searchParams.delete('cursor');
         if(url.pathname==='/ui/fragments/wiki-directory') {
@@ -392,24 +398,24 @@
   compact.addEventListener('change',syncDisclosures);
   document.addEventListener('htmx:afterSwap', event => {
     if(event.detail.target===screen && selected()==='knowledge')adoptKnowledge();
-    if(token && pending.get(event.detail.xhr)===generation && poll?.xhr!==event.detail.xhr && ['raw-source','source-detail','operation-detail'].includes(event.detail.target.id)) {
+    if(canRequest() && pending.get(event.detail.xhr)===generation && poll?.xhr!==event.detail.xhr && ['raw-source','source-detail','operation-detail'].includes(event.detail.target.id)) {
       if(event.detail.target.id==='raw-source')addRawClose(event.detail.target);
       revealDetail(event.detail.target);
     }
   });
   document.addEventListener('htmx:afterSettle', event => {
-    if(token && selected()==='search' && event.detail.target.id==='search-results' && screen.contains(event.detail.target) && event.detail.xhr.status===200 && event.detail.target.querySelector('#response-json-data'))searchRendered=true;
+    if(canRequest() && selected()==='search' && event.detail.target.id==='search-results' && screen.contains(event.detail.target) && event.detail.xhr.status===200 && event.detail.target.querySelector('#response-json-data'))searchRendered=true;
     syncDisclosures();
-    if(token && detailRead?.xhr===event.detail.xhr && detailRead.generation===generation) {revealDetail(detailRead.target);detailRead=null;}
+    if(canRequest() && detailRead?.xhr===event.detail.xhr && detailRead.generation===generation) {revealDetail(detailRead.target);detailRead=null;}
     if(focusScreen && connectionState==='connected'){screen.focus({preventScroll:true});focusScreen=false;}
     for(const snippet of screen.querySelectorAll('.evidence-snippet')) {const toggle=snippet.nextElementSibling;if(toggle?.matches('[data-toggle-snippet]')) toggle.hidden=snippet.scrollHeight<=snippet.clientHeight;}
   });
 
   function schedulePoll(delay) {
-    if(!poll || !token || document.hidden || poll.xhr) return;
+    if(!poll || !canRequest() || document.hidden || poll.xhr) return;
     clearTimeout(poll.timer);
     poll.timer=setTimeout(()=>{
-      if(!poll || !token || document.hidden || poll.xhr) return;
+      if(!poll || !canRequest() || document.hidden || poll.xhr) return;
       issuingPoll=true;
       try {htmx.ajax('GET',poll.url,{target:'#operation-detail',swap:'innerHTML'}).catch(()=>{});} finally {issuingPoll=false;}
     },delay===undefined?poll.delay:delay);
@@ -429,6 +435,6 @@
   });
   addEventListener('popstate', navigate);
   addEventListener('pagehide', () => disconnect('',false,false));
-  addEventListener('pageshow', event => {if(event.persisted) disconnect();});
-  setConnectionState('disconnected'); navigate();
+  addEventListener('pageshow', event => {if(event.persisted){if(authMode==='token')disconnect();else{setConnectionState('connecting');navigate();}}});
+  if(authMode==='token')setConnectionState('disconnected');else setConnectionState('connecting');navigate();
 })();

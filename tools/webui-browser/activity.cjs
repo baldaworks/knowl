@@ -20,7 +20,7 @@ async function visibleDetail(page,id) {
   requests++;active++;maxActive=Math.max(maxActive,active);
   const response=await route.fetch();
   if(hold){const ready=hold;hold=null;await new Promise(resolve=>{release=resolve;ready();});}
-  try{if(status!==200)await route.fulfill({status,headers:{'Content-Type':'text/html','X-Knowl-Error':status===401?'unauthorized':'workspace_unavailable'},body:'<div data-error-code="workspace_unavailable">Unavailable</div>'});else await route.fulfill({response});}finally{active--;}
+  try{if(status!==200)await route.fulfill({status,headers:{'Content-Type':'text/html','X-Knowl-Fragment':'1','X-Knowl-Error':status===401?'unauthorized':'workspace_unavailable'},body:'<div data-error-code="workspace_unavailable">Unavailable</div>'});else await route.fulfill({response});}finally{active--;}
  });
  const settle=()=>page.evaluate(()=>Promise.resolve());
  const done=()=>page.waitForFunction(()=>document.querySelector('.operation-detail')&&!document.querySelector('.htmx-request'));

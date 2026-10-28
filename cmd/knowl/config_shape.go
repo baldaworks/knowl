@@ -19,6 +19,8 @@ type AppConfig struct {
 	Storage    StorageConfig             `mapstructure:"storage"`
 	Scope      knowltypes.ScopeRef       `mapstructure:"scope"`
 	Server     ServerConfig              `mapstructure:"server"`
+	API        knowl.FacadeConfig        `mapstructure:"api"`
+	MCP        knowl.FacadeConfig        `mapstructure:"mcp"`
 	Web        knowl.WebConfig           `mapstructure:"web"`
 	Operator   OperatorConfig            `mapstructure:"operator"`
 	Sources    []SourceConfig            `mapstructure:"sources"`
@@ -170,6 +172,8 @@ type rawAppConfig struct {
 	Storage     StorageConfig          `mapstructure:"storage"`
 	Scope       knowltypes.ScopeRef    `mapstructure:"scope"`
 	Server      ServerConfig           `mapstructure:"server"`
+	API         knowl.FacadeConfig     `mapstructure:"api"`
+	MCP         knowl.FacadeConfig     `mapstructure:"mcp"`
 	Web         knowl.WebConfig        `mapstructure:"web"`
 	Operator    OperatorConfig         `mapstructure:"operator"`
 	Sources     []SourceConfig         `mapstructure:"sources"`
@@ -244,6 +248,8 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 		Storage:    config.Storage,
 		Scope:      config.Scope,
 		Server:     config.Server,
+		API:        config.API,
+		MCP:        config.MCP,
 		Operator:   config.Operator,
 		Web:        config.Web,
 		Sources:    config.Sources,

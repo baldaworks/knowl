@@ -22,9 +22,19 @@ import (
 var embedded embed.FS
 
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+const FragmentHeader = "X-Knowl-Fragment"
+
+type AuthMode string
+
+const (
+	AuthModePublic AuthMode = "public"
+	AuthModeToken  AuthMode = "token"
+	AuthModeProxy  AuthMode = "proxy"
+)
 
 // Dependencies are read-only presentation inputs. They never expose writers.
 type Dependencies struct {
+	AuthMode          AuthMode
 	EmbeddingsEnabled bool
 	Operator          *app.OperatorService
 	Retrieve          func(context.Context, string, []string) (knowlapi.RetrieveResult, error)
@@ -39,6 +49,9 @@ type Handler struct {
 
 func New(dependencies Dependencies) (*Handler, error) { return newHandler(embedded, dependencies) }
 func newHandler(files fs.FS, dependencies Dependencies) (*Handler, error) {
+	if dependencies.AuthMode == "" {
+		dependencies.AuthMode = AuthModeToken
+	}
 	if err := validateAssets(files); err != nil {
 		return nil, err
 	}
@@ -113,11 +126,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.render(w, 200, "shell", struct {
-		Title   string
-		Screens []string
-	}{title, []string{"Knowledge", "Search", "Operations", "Sources"}})
+		Title    string
+		Screens  []string
+		AuthMode AuthMode
+	}{title, []string{"Knowledge", "Search", "Operations", "Sources"}, h.dependencies.AuthMode})
 }
 func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(FragmentHeader, "1")
 	if r.Method != http.MethodGet {
 		h.Error(w, 405, "method_not_allowed")
 		return

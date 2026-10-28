@@ -14,10 +14,15 @@ import (
 
 const uiInternalErrorCode = "internal_error"
 
+type WebOptions struct {
+	AuthMode string
+	Token    string
+}
+
 // NewWebHandler mounts no routes itself. Composition mounts its public shell and
 // protected fragments on the same host listener only when web is enabled.
-func NewWebHandler(service *app.OperatorService, dependencies Dependencies, token string) (http.Handler, error) {
-	ui, err := webui.New(webui.Dependencies{Operator: service, OperationStatus: httpOperationStatus, EmbeddingsEnabled: dependencies.EmbeddingsEnabled,
+func NewWebHandler(service *app.OperatorService, dependencies Dependencies, options WebOptions) (http.Handler, error) {
+	ui, err := webui.New(webui.Dependencies{AuthMode: webui.AuthMode(options.AuthMode), Operator: service, OperationStatus: httpOperationStatus, EmbeddingsEnabled: dependencies.EmbeddingsEnabled,
 		Retrieve: func(ctx context.Context, query string, sources []string) (knowlapi.RetrieveResult, error) {
 			if dependencies.Query == nil {
 				return knowlapi.RetrieveResult{}, app.ErrOperatorCapabilityUnavailable
@@ -42,7 +47,7 @@ func NewWebHandler(service *app.OperatorService, dependencies Dependencies, toke
 	if err != nil {
 		return nil, err
 	}
-	fragments := WithOperatorAuth(WithOperatorReadBoundary(http.HandlerFunc(ui.Fragments), dependencies.Ready), token)
+	fragments := WithOperatorAuth(WithOperatorReadBoundary(http.HandlerFunc(ui.Fragments), dependencies.Ready), options.Token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/ui/fragments/") {
 			ui.ServeHTTP(w, r)
