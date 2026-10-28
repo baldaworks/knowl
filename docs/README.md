@@ -27,6 +27,7 @@ in this repository. Compare [source documentation](.) with the
 
 - [Product design](design.md): architecture, contracts and invariants.
 - [Testing and measurements](testing.md): verification and retrieval evaluations.
+- [SearchTome evaluation](testing/searchtome-results.md): lexical and hybrid retrieval results, methodology and reproduction runbook.
 - [HTTP API](../api/openapi/knowl.yaml): the public OpenAPI contract.
 - [Go application integration](operations.md#go-application-integration).
 - [Release history](releases/): version-specific changes and historical instructions.
