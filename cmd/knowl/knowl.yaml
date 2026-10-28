@@ -39,3 +39,13 @@ knowl:
     listen_addr: 127.0.0.1:8080
   operator:
     token: ""
+  api:
+    auth_mode: ""
+    access_mode: read_only
+  mcp:
+    auth_mode: ""
+    access_mode: read_only
+  web:
+    enabled: false
+    auth_mode: ""
+    access_mode: read_only

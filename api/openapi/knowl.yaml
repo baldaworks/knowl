@@ -53,8 +53,9 @@ paths:
       description: |
         Returns bounded grounded evidence and provenance for one query.
 
-        When the host configures an operator token, callers must send it as a
-        bearer token. Trusted in-process operator workflows bypass HTTP auth.
+        When `knowl.api.auth_mode` resolves to `token`, callers must send the
+        configured operator bearer. Trusted in-process operator workflows
+        bypass HTTP auth.
 
         Supplying a non-empty `scope` query parameter is forbidden and yields
         `scope_override_forbidden`.
@@ -120,7 +121,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/ScopeOverrideForbidden'
+          $ref: '#/components/responses/IngestForbidden'
         '422':
           $ref: '#/components/responses/OperationFailed'
         '503':
@@ -165,7 +166,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: Required for business endpoints when `knowl.operator.token` is configured.
+      description: Required on an API facade when `knowl.api.auth_mode` resolves to `token`.
   parameters:
     RetrieveQuery:
       name: query
@@ -242,6 +243,19 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             error: scope_override_forbidden
+    IngestForbidden:
+      description: Ingest is disabled by read-only facade policy or the caller attempted to override the trusted host scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            read_only:
+              value:
+                error: read_only
+            scope_override:
+              value:
+                error: scope_override_forbidden
     Unauthorized:
       description: The configured operator bearer token is missing or invalid.
       headers:

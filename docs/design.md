@@ -61,9 +61,10 @@ The optional [operator web UI](web-ui.md) adds four server-rendered screens:
 Knowledge, Search, Operations, and Sources. Its separate
 [operator read API](../api/openapi/operator.yaml) exposes eight GET routes bound
 to the configured workspace and scope. It adds no agent business operations.
-Both are disabled by default and share the existing HTTP listener. Enabled web
-access requires the operator token; that credential also authorizes the existing
-agent write endpoints.
+Both are disabled by default and share the existing HTTP listener. Enabled Web
+access can be public, direct-token, or proxy-authenticated and remains read-only.
+API and MCP authentication and write capability are configured independently;
+see [HTTP facade access control](access-control.md).
 
 The UI reads current canonical pages and immutable accepted raw revisions.
 Page references support a page as a whole, without claim-level attribution.

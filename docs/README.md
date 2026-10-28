@@ -13,6 +13,7 @@ retrieve evidence from it:
 - [Codex plugin](local-codex.md): skills and consumer MCP integration.
 - [Search](search.md): lexical search, optional hybrid search, external embedding APIs and a local TEI server.
 - [Web UI](web-ui.md): browse pages, saved sources, search and processing history.
+- [HTTP facade access control](access-control.md): independent API, MCP and Web authentication, read-only defaults, and proxy deployments.
 - [Operations](operations.md): shared configuration, sources, authentication, diagnostics and recovery.
 - [Workspace and export](workspace.md): canonical Markdown, immutable raw sources and OKF portability.
 

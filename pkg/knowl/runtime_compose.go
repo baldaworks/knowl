@@ -351,23 +351,37 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		Waker:  runtime.scheduler,
 		Ready:  host.Ready,
 	})
-	mcpHandler, err := mcphttp.NewHandler(runtime.mcp, host.Ready)
+	mcpHandler, err := mcphttp.NewHandlerWithOptions(runtime.mcp, host.Ready, mcphttp.HandlerOptions{
+		ReadOnly: runtime.config.MCP.AccessMode == AccessModeReadOnly,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("compose Knowl MCP HTTP handler: %w", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", httpserver.WithOperatorAuth(mcpHandler, runtime.config.OperatorToken))
-	mux.Handle("/mcp/", httpserver.WithOperatorAuth(httpHandler, runtime.config.OperatorToken))
-	mux.Handle("/v1", httpHandler)
-	mux.Handle("/v1/", httpserver.WithOperatorAuth(httpHandler, runtime.config.OperatorToken))
+	mcpPolicy := httpserver.FacadePolicy{RequireToken: runtime.config.MCP.AuthMode == AuthModeToken, ReadOnly: runtime.config.MCP.AccessMode == AccessModeReadOnly, ProtocolPOST: true}
+	mcpFallbackPolicy := mcpPolicy
+	mcpFallbackPolicy.ReadOnly = true
+	mcpFallbackPolicy.ProtocolPOST = false
+	apiPolicy := httpserver.FacadePolicy{RequireToken: runtime.config.API.AuthMode == AuthModeToken, ReadOnly: runtime.config.API.AccessMode == AccessModeReadOnly}
+	mux.Handle("/mcp", httpserver.WithFacadePolicy(mcpHandler, runtime.config.OperatorToken, mcpPolicy))
+	mux.Handle("/mcp/", httpserver.WithFacadePolicy(httpHandler, runtime.config.OperatorToken, mcpFallbackPolicy))
+	mux.Handle("/v1", httpserver.WithFacadePolicy(httpHandler, runtime.config.OperatorToken, apiPolicy))
+	mux.Handle("/v1/", httpserver.WithFacadePolicy(httpHandler, runtime.config.OperatorToken, apiPolicy))
 	mux.Handle("/", httpHandler)
 	if runtime.config.Web.Enabled {
-		ui, uiErr := httpserver.NewWebHandler(host.operator, httpserver.Dependencies{EmbeddingsEnabled: runtime.config.Embeddings.Enabled, Scope: runtime.config.Scope, Query: runtime.query, Ready: host.Ready}, runtime.config.OperatorToken)
+		webToken := ""
+		if runtime.config.Web.AuthMode != AuthModePublic {
+			webToken = runtime.config.OperatorToken
+		}
+		ui, uiErr := httpserver.NewWebHandler(host.operator, httpserver.Dependencies{EmbeddingsEnabled: runtime.config.Embeddings.Enabled, Scope: runtime.config.Scope, Query: runtime.query, Ready: host.Ready}, httpserver.WebOptions{
+			AuthMode: string(runtime.config.Web.AuthMode),
+			Token:    webToken,
+		})
 		if uiErr != nil {
 			return nil, fmt.Errorf("compose web UI: %w", uiErr)
 		}
 		mux.Handle("/ui/", ui)
-		mux.Handle("/operator/v1/", httpserver.WithOperatorAuth(httpserver.NewOperatorHandler(host.operator, host.Ready), runtime.config.OperatorToken))
+		mux.Handle("/operator/v1/", httpserver.WithFacadePolicy(httpserver.NewOperatorHandler(host.operator, host.Ready), runtime.config.OperatorToken, httpserver.FacadePolicy{RequireToken: runtime.config.Web.AuthMode != AuthModePublic, ReadOnly: true}))
 	}
 	host.handler = mux
 	return host, nil

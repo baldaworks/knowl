@@ -13,6 +13,17 @@ import (
 
 // NewHandler adapts one trusted-scope Knowl MCP registry to Streamable HTTP.
 func NewHandler(registry *knowlmcp.Server, ready func() bool) (http.Handler, error) {
+	return NewHandlerWithOptions(registry, ready, HandlerOptions{})
+}
+
+// HandlerOptions controls the capabilities exposed over Streamable HTTP.
+type HandlerOptions struct {
+	ReadOnly bool
+}
+
+// NewHandlerWithOptions adapts one trusted-scope Knowl MCP registry to a
+// capability-restricted Streamable HTTP endpoint.
+func NewHandlerWithOptions(registry *knowlmcp.Server, ready func() bool, options HandlerOptions) (http.Handler, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("knowl MCP registry is required")
 	}
@@ -20,7 +31,7 @@ func NewHandler(registry *knowlmcp.Server, ready func() bool) (http.Handler, err
 		ready = func() bool { return true }
 	}
 
-	server, err := mcpsdk.NewServer(registry)
+	server, err := mcpsdk.NewServerWithOptions(registry, mcpsdk.ServerOptions{ReadOnly: options.ReadOnly})
 	if err != nil {
 		return nil, err
 	}

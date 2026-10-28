@@ -36,6 +36,7 @@ func TestCodexACPIngestProducesValidPlan(t *testing.T) {
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
+	enableFacadeWrites(&config)
 	factory := agentfactory.New(map[string]agentconfig.Config{
 		"codex": {
 			Type: agentconfig.AgentTypeCodexACP,

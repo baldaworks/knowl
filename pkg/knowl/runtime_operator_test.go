@@ -6,16 +6,71 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 )
 
-func TestWebConfigValidationPrecedesComposition(t *testing.T) {
+func TestWebAuthModesRemainIndependentFromMCP(t *testing.T) {
+	for _, test := range []struct {
+		mode              AuthMode
+		fragmentAnonymous int
+	}{
+		{mode: AuthModePublic, fragmentAnonymous: http.StatusOK},
+		{mode: AuthModeToken, fragmentAnonymous: http.StatusUnauthorized},
+		{mode: AuthModeProxy, fragmentAnonymous: http.StatusUnauthorized},
+	} {
+		t.Run(string(test.mode), func(t *testing.T) {
+			config := DefaultConfig()
+			config.Workspace = t.TempDir()
+			config.OperatorToken = operatorRuntimeToken
+			config.Web = WebConfig{Enabled: true, AuthMode: test.mode, AccessMode: AccessModeReadOnly}
+			config.MCP = FacadeConfig{AuthMode: AuthModeToken, AccessMode: AccessModeReadOnly}
+			host, err := NewHost(t.Context(), config, provider.Fixture{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = host.Close() })
+			if err := host.PrepareReadOnly(); err != nil {
+				t.Fatal(err)
+			}
+			request := func(path, token string) *httptest.ResponseRecorder {
+				r := httptest.NewRequest(http.MethodGet, path, nil)
+				if token != "" {
+					r.Header.Set("Authorization", "Bearer "+token)
+				}
+				w := httptest.NewRecorder()
+				host.Handler().ServeHTTP(w, r)
+				return w
+			}
+			if got := request("/ui/fragments/knowledge", "").Code; got != test.fragmentAnonymous {
+				t.Fatalf("anonymous fragment status = %d, want %d", got, test.fragmentAnonymous)
+			}
+			if got := request("/ui/fragments/knowledge", operatorRuntimeToken).Code; got != http.StatusOK {
+				t.Fatalf("upstream-authenticated fragment status = %d", got)
+			}
+			if got := request("/mcp", "").Code; got != http.StatusUnauthorized {
+				t.Fatalf("MCP status = %d, want 401", got)
+			}
+			shell := request("/ui/knowledge", "")
+			body := shell.Body.String()
+			if !strings.Contains(body, `data-auth-mode="`+string(test.mode)+`"`) {
+				t.Fatalf("shell does not declare mode %q", test.mode)
+			}
+			if strings.Contains(body, operatorRuntimeToken) {
+				t.Fatal("operator token leaked into shell")
+			}
+		})
+	}
+}
+
+func TestTokenWebConfigValidationPrecedesComposition(t *testing.T) {
 	config := DefaultConfig()
 	config.Workspace = filepath.Join(t.TempDir(), "uncreated")
 	config.Web.Enabled = true
+	config.Web.AuthMode = AuthModeToken
 	for _, token := range []string{"", " \t\n"} {
 		config.OperatorToken = token
 		if err := config.Validate(); !errors.Is(err, ErrWebConfigInvalid) {

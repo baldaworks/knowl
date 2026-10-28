@@ -89,7 +89,7 @@ agent's installation, authentication or model selection before retrying. See
 ## Next steps
 
 - [Codex plugin](local-codex.md): connect Codex as a consumer of this knowledge.
-- [Web UI](web-ui.md): enable browser access with a fixed listener and operator token.
+- [Web UI](web-ui.md): enable optional public, direct-token, or proxy-authenticated browser access.
 - [Search](search.md): optionally add an embedding API or local TEI server.
 - [Knowl's own wiki](examples/own-docs-wiki.md): see this workflow applied to the repository's documentation.
 

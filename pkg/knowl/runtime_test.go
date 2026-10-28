@@ -47,6 +47,13 @@ const hostRetrieveToolName = "knowl_retrieve"
 const hostIngestToolName = "knowl_ingest"
 const hostOperationToolName = "knowl_operation"
 const hostProviderID = "provider"
+const hostWriteToken = "test-write-token"
+
+func enableFacadeWrites(config *knowl.Config) {
+	config.OperatorToken = hostWriteToken
+	config.API = knowl.FacadeConfig{AuthMode: knowl.AuthModeToken, AccessMode: knowl.AccessModeReadWrite}
+	config.MCP = knowl.FacadeConfig{AuthMode: knowl.AuthModeToken, AccessMode: knowl.AccessModeReadWrite}
+}
 
 func TestHostOperatorTokenProtectsBusinessEndpoints(t *testing.T) {
 	workspace, err := contentfs.New(t.TempDir())
@@ -107,6 +114,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 		t.Fatalf("read schema: %v", err)
 	}
 	config := knowl.DefaultConfig()
+	enableFacadeWrites(&config)
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
@@ -268,6 +276,7 @@ func TestHostRestartResumesAcceptedOperationThroughHTTPAndMCP(t *testing.T) {
 		t.Fatalf("read schema: %v", err)
 	}
 	config := knowl.DefaultConfig()
+	enableFacadeWrites(&config)
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
@@ -348,6 +357,7 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 		t.Fatalf("read schema: %v", err)
 	}
 	config := knowl.DefaultConfig()
+	enableFacadeWrites(&config)
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
@@ -489,6 +499,7 @@ func TestHostIngestReturnsBeforeMaintainerPlanCompletes(t *testing.T) {
 		},
 	}
 	config := knowl.DefaultConfig()
+	enableFacadeWrites(&config)
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
@@ -616,6 +627,7 @@ func TestHostStopAllowsActiveOperationToFinishAndIsIdempotent(t *testing.T) {
 		},
 	}
 	config := knowl.DefaultConfig()
+	enableFacadeWrites(&config)
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
@@ -837,6 +849,7 @@ func doHostRequest(t *testing.T, host *knowl.Host, method, path string, body []b
 func doHostRequestDetailed(t *testing.T, host *knowl.Host, method, path string, body []byte) ([]byte, int, http.Header, error) {
 	t.Helper()
 	request := httptest.NewRequest(method, "http://knowl"+path, bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+hostWriteToken)
 	response := httptest.NewRecorder()
 	host.Handler().ServeHTTP(response, request)
 	return response.Body.Bytes(), response.Code, response.Header(), nil

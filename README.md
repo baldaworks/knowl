@@ -92,9 +92,10 @@ configuration, offline use, and supported scope.
 
 ### MCP and HTTP
 
-Connect other agents to the self-hosted service over MCP. Knowl exposes three
-tools: `knowl_retrieve` for evidence, `knowl_ingest` for durable inputs, and
-`knowl_operation` for operation status.
+Connect other agents to the self-hosted service over MCP. The read-only default
+exposes `knowl_retrieve` for evidence and `knowl_operation` for operation
+status. Explicit token-authenticated read-write mode also exposes
+`knowl_ingest` for durable inputs.
 
 The same capabilities are available through HTTP. See
 [service connection guide](docs/service.md#connect-an-mcp-client),
@@ -116,8 +117,8 @@ and ownership boundaries.
 Enable the optional [web UI](docs/web-ui.md) to browse published pages, inspect
 their saved source revisions, retrieve evidence, and follow maintenance status.
 It runs inside the Go service with locally bundled assets and is disabled by
-default. Connect with an operator token; use HTTPS when exposing the service
-beyond loopback.
+default. Web authentication can be public, direct-token, or delegated to a
+trusted proxy; use HTTPS when exposing the service beyond loopback.
 
 ## Search Across Different Wording
 

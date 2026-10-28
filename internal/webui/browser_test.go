@@ -22,6 +22,39 @@ func TestBrowserSecurity(t *testing.T) { runSecurityBrowser(t, "security.cjs") }
 
 func TestBrowserRepairs(t *testing.T) { runSecurityBrowser(t, "repairs.cjs") }
 
+func TestBrowserFacadeModes(t *testing.T) {
+	serverFor := func(mode webui.AuthMode) *httptest.Server {
+		ui, err := webui.New(webui.Dependencies{AuthMode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/ui/fragments/") {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Header().Set(webui.FragmentHeader, "1")
+				_, _ = w.Write([]byte(`<p id="mode-content">read-only knowledge</p>`))
+				return
+			}
+			ui.ServeHTTP(w, r)
+		}))
+	}
+	public := serverFor(webui.AuthModePublic)
+	defer public.Close()
+	proxy := serverFor(webui.AuthModeProxy)
+	defer proxy.Close()
+	script, err := filepath.Abs("../../tools/webui-browser/facade_modes.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), "node", script)
+	cmd.Env = append(os.Environ(), "KNOWL_BROWSER_PUBLIC_URL="+public.URL, "KNOWL_BROWSER_PROXY_URL="+proxy.URL)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("browser: %v\n%s", err, output)
+	}
+	t.Log(string(output))
+}
+
 func runSecurityBrowser(t *testing.T, scriptName string) {
 	t.Helper()
 	ui, err := webui.New(webui.Dependencies{})
@@ -36,6 +69,7 @@ func runSecurityBrowser(t *testing.T, scriptName string) {
 	fragments := server.WithOperatorAuth(server.WithOperatorReadBoundary(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", webui.CSP)
+		w.Header().Set(webui.FragmentHeader, "1")
 		if err := view.Execute(w, struct {
 			Markdown  template.HTML
 			Raw, JSON string
