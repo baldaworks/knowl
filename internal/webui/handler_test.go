@@ -17,7 +17,7 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range []string{"/ui/", "/ui/knowledge", "/ui/search", "/ui/operations", "/ui/sources"} {
+	for _, route := range []string{"/ui/", "/ui/knowledge", "/ui/search", "/ui/operations", "/ui/sources", "/ui/statistics"} {
 		r := httptest.NewRecorder()
 		h.ServeHTTP(r, httptest.NewRequest(http.MethodGet, route, nil))
 		if r.Code != 200 {
@@ -58,7 +58,7 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 				favicon++
 			}
 		})
-		if logo != 2 || favicon != 1 || connect != 1 || navigation != 4 || !guestMenu || !guestToggle {
+		if logo != 2 || favicon != 1 || connect != 1 || navigation != 5 || !guestMenu || !guestToggle {
 			t.Fatalf("%s logo=%d favicon=%d connect=%d navigation=%d", route, logo, favicon, connect, navigation)
 		}
 	}

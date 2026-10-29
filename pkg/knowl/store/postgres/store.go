@@ -52,6 +52,7 @@ var (
 	_ app.SearchIndex              = (*Store)(nil)
 	_ app.SourceStateStore         = (*Store)(nil)
 	_ app.SourceLifecycleStore     = (*Store)(nil)
+	_ app.StatisticsReader         = (*Store)(nil)
 )
 
 // Open opens a PostgreSQL operational store and runs its embedded migrations.

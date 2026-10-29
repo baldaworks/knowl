@@ -102,6 +102,12 @@ type OperatorSourceReader interface {
 	Source(ctx context.Context, scope knowl.ScopeRef, id knowl.SourceID) (knowl.OperatorSourceSummary, error)
 }
 
+// StatisticsReader returns one current, detached statistics snapshot for a
+// trusted scope. Implementations must not persist observations.
+type StatisticsReader interface {
+	Statistics(ctx context.Context, scope knowl.ScopeRef) (knowl.OperatorStatistics, error)
+}
+
 // OperatorReaders contains only independently optional read capabilities.
 type OperatorReaders struct {
 	Catalogs    CatalogReader
@@ -113,4 +119,5 @@ type OperatorReaders struct {
 	Documents   SourceDocumentLister
 	Operations  OperationLister
 	Retirements SourceRetirementReader
+	Statistics  StatisticsReader
 }

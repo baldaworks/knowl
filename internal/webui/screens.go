@@ -478,6 +478,7 @@ func validFragmentQuery(r *http.Request) bool {
 	case searchFragment:
 		allowed["query"] = true
 		allowed["source"] = true
+	case statisticsFragment:
 	}
 	q := r.URL.Query()
 	for key, values := range q {

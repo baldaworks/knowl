@@ -56,15 +56,16 @@ func newHandler(files fs.FS, dependencies Dependencies) (*Handler, error) {
 		return nil, err
 	}
 	t, err := template.New("ui").Funcs(template.FuncMap{
-		"lower":         strings.ToLower,
-		"pageURL":       pageURL,
-		"treePageURL":   treePageURL,
-		"rawURL":        func(ref string) string { return fragmentURL("source-revision", url.Values{"source_ref": {ref}}) },
-		"shortRevision": shortRevision,
-		"shortIdentity": shortIdentity,
-		"activityTime":  activityTime,
-		"operationURL":  operationURL,
-		"sourceURL":     sourceURL,
+		"lower":           strings.ToLower,
+		"pageURL":         pageURL,
+		"treePageURL":     treePageURL,
+		"rawURL":          func(ref string) string { return fragmentURL("source-revision", url.Values{"source_ref": {ref}}) },
+		"shortRevision":   shortRevision,
+		"shortIdentity":   shortIdentity,
+		"activityTime":    activityTime,
+		"statisticsBytes": statisticsBytes,
+		"operationURL":    operationURL,
+		"sourceURL":       sourceURL,
 		"publicStatus": func(status domain.OperationStatus) string {
 			if status == "" || dependencies.OperationStatus == nil {
 				return "unavailable"
@@ -121,6 +122,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		title = "Operations"
 	case "/ui/sources":
 		title = "Sources"
+	case "/ui/statistics":
+		title = "Statistics"
 	default:
 		http.NotFound(w, r)
 		return
@@ -129,7 +132,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Title    string
 		Screens  []string
 		AuthMode AuthMode
-	}{title, []string{"Knowledge", "Search", "Operations", "Sources"}, h.dependencies.AuthMode})
+	}{title, []string{"Knowledge", "Search", "Operations", "Sources", "Statistics"}, h.dependencies.AuthMode})
 }
 func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(FragmentHeader, "1")
@@ -138,7 +141,7 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
-	case knowledgeFragment, pageFragment, wikiDirectoryFragment, sourceRevisionFragment, searchFragment, operationsFragment, operationFragment, sourcesFragment, sourceFragment:
+	case knowledgeFragment, pageFragment, wikiDirectoryFragment, sourceRevisionFragment, searchFragment, operationsFragment, operationFragment, sourcesFragment, sourceFragment, statisticsFragment:
 		if !validFragmentQuery(r) {
 			h.Error(w, 400, errorInvalidRequest)
 			return
@@ -160,6 +163,8 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 			h.sources(w, r)
 		case sourceFragment:
 			h.source(w, r)
+		case statisticsFragment:
+			h.statistics(w, r)
 		}
 	default:
 		h.Error(w, 404, "not_found")
