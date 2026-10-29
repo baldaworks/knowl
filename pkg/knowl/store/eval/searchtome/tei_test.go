@@ -76,6 +76,23 @@ func TestGemmaServerIdentity(t *testing.T) {
 	}
 }
 
+func TestLiteRTServerIdentity(t *testing.T) {
+	info := TEIInfo{Model: LiteRTSpace.Model, Revision: LiteRTSpace.Revision, Version: "litert-lm/0.18.0", DType: "int4-qat", ModelFileSHA256: liteRTModelSHA256}
+	truncates := false
+	info.AutoTruncate = &truncates
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(info)
+	}))
+	defer server.Close()
+	if _, _, err := LocalEmbeddingServer(t.Context(), server.URL+teiPath, LiteRTSpace); err != nil {
+		t.Fatal(err)
+	}
+	info.ModelFileSHA256 = "wrong"
+	if _, _, err := LocalEmbeddingServer(t.Context(), server.URL+teiPath, LiteRTSpace); !errors.Is(err, ErrTEI) {
+		t.Fatalf("mismatched model file accepted: %v", err)
+	}
+}
+
 type batchCounter struct{ sizes []int }
 
 func (b *batchCounter) Embed(_ context.Context, inputs []string) ([][]float32, error) {

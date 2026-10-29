@@ -15,24 +15,36 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 )
 
-var ErrTEI = errors.New("local reference TEI unavailable or incompatible")
+var ErrTEI = errors.New("local embedding server unavailable or incompatible")
+
+const liteRTModelSHA256 = "2d079ee2f6f066b1f368e8d7c819f55214eaef1d0513b312321901f30ab286fb"
 
 type TEIInfo struct {
-	Model        string `json:"model_id"`
-	Revision     string `json:"model_sha"`
-	Version      string `json:"version"`
-	DType        string `json:"model_dtype"`
-	AutoTruncate *bool  `json:"auto_truncate"`
+	Model           string `json:"model_id"`
+	Revision        string `json:"model_sha"`
+	Version         string `json:"version"`
+	DType           string `json:"model_dtype"`
+	AutoTruncate    *bool  `json:"auto_truncate"`
+	ModelFileSHA256 string `json:"model_file_sha256,omitempty"`
 }
 
 func validServerInfo(info TEIInfo, space app.EmbeddingSpace) bool {
 	version := teiVersion
-	if space == Gemma2Space {
+	dtype := teiFloat32
+	switch space {
+	case Gemma2Space:
 		version = "sentence-transformers/6.1.0"
-	} else if space != ReferenceSpace {
+	case LiteRTSpace:
+		version = "litert-lm/0.18.0"
+		dtype = "int4-qat"
+		if info.ModelFileSHA256 != liteRTModelSHA256 {
+			return false
+		}
+	case ReferenceSpace:
+	default:
 		return false
 	}
-	return info.Model == space.Model && info.Revision == space.Revision && info.Version == version && info.DType == teiFloat32 && info.AutoTruncate != nil && !*info.AutoTruncate
+	return info.Model == space.Model && info.Revision == space.Revision && info.Version == version && info.DType == dtype && info.AutoTruncate != nil && !*info.AutoTruncate
 }
 
 // LocalTEI verifies the reference server before any corpus text is sent.
