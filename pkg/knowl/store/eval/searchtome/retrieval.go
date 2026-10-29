@@ -14,6 +14,7 @@ import (
 
 var ReferenceSpace = app.EmbeddingSpace{Model: "intfloat/multilingual-e5-base", Revision: "d128750597153bb5987e10b1c3493a34e5a4502a", Dimensions: 768, QueryPrefix: "query: ", PassagePrefix: "passage: "}
 var Gemma2Space = app.EmbeddingSpace{Model: "google/embeddinggemma-2", Revision: "f9972ac22e696a105c482202646979e33e4b5a1e", Dimensions: 768, QueryPrefix: "task: search result | query: ", PassagePrefix: "title: none | text: "}
+var LiteRTSpace = app.EmbeddingSpace{Model: "litert-community/embeddinggemma-2-text-270m-litert-lm", Revision: "9be6e8b90982095dc05c2bd162e4b954ee4dbac7", Dimensions: 768, QueryPrefix: "task: search result | query: ", PassagePrefix: "title: none | text: "}
 var ErrProjection = errors.New("benchmark projection is not ready")
 
 type ResultPage struct {

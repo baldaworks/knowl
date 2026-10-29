@@ -83,13 +83,17 @@ func run() error {
 	datasetName := flag.String("dataset", "dataset", "dataset directory name under .searchtome-benchmark")
 	runName := flag.String("run", "", "new run directory name")
 	endpoint := flag.String("tei", "http://127.0.0.1:8080/v1/embeddings", "local TEI endpoint")
-	model := flag.String("model", "e5", "embedding model: e5 or gemma2")
+	model := flag.String("model", "e5", "embedding model: e5, gemma2 or litert")
 	limit := flag.Int("limit", 0, "queries per domain for smoke; 0 runs all")
 	flag.Parse()
 	space := st.ReferenceSpace
-	if *model == "gemma2" {
+	switch *model {
+	case "e5":
+	case "gemma2":
 		space = st.Gemma2Space
-	} else if *model != "e5" {
+	case "litert":
+		space = st.LiteRTSpace
+	default:
 		return errors.New("unsupported embedding model")
 	}
 	if !validName(*runName) || !validName(*datasetName) || *runName == *datasetName || *limit < 0 {

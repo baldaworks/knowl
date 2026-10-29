@@ -3,8 +3,8 @@
 This benchmark compares Knowl's SQLite lexical retrieval with the actual
 hybrid pipeline, using isolated canonical workspaces. The recorded SearchTome
 revision is `48d3b3545950b3857dc3657fb22e4b79b8ed8df5`.
-See the [recorded results and methodology](searchtome-results.md) for the E5
-and EmbeddingGemma 2 full runs, per-domain metrics and limitations.
+See the [recorded results and methodology](searchtome-results.md) for the E5,
+EmbeddingGemma 2 and LiteRT-LM full runs, per-domain metrics and limitations.
 The [pinned manifest](../../pkg/knowl/store/eval/searchtome/pinned_manifest.json)
 contains the SHA-256 and record count of every corpus, train, dev and test
 file at that revision. The runner verifies all 24 files and records field
@@ -237,6 +237,65 @@ The server reports its declared pinned revision, but an OpenAI-compatible
 endpoint alone cannot attest the model weights. Inspect the local server and
 model cache when reproducing the run. Existing E5 reports are never reused or
 overwritten. Inference backend and latency differ from the E5 TEI run.
+
+### LiteRT-LM EmbeddingGemma 2 experiment
+
+The `--model litert` profile evaluates the official text-only 270M LiteRT-LM
+model on CPU with two threads, int4 QAT weights and 768-dimensional normalized
+embeddings. Its task prefixes are the same as the preceding float32 Gemma
+experiment, to make this particular comparison easier to interpret; Google's
+LiteRT-LM guide also documents other task-specific prefixes. Model quantization,
+inference runtime and numeric behavior still differ from the float32 run.
+
+The adapter verifies the model file's SHA-256 before loading it, rejects input
+overflow instead of truncating, and exposes a loopback-only OpenAI-compatible
+embedding endpoint. It calls LiteRT-LM's embedding API and does not perform
+retrieval. The endpoint's metadata can be verified by inspecting the local
+adapter and model file; an HTTP response alone is not a weight attestation.
+
+From the repository root, prepare an isolated environment and download the
+exact model revision. The file is about 165 MB:
+
+```sh
+test -d .searchtome-benchmark && test ! -L .searchtome-benchmark
+python3 -m venv .searchtome-benchmark/litert-venv
+TMPDIR="$PWD/.searchtome-benchmark/tmp" \
+PIP_CACHE_DIR="$PWD/.searchtome-benchmark/litert-pip-cache" \
+  .searchtome-benchmark/litert-venv/bin/pip install \
+  -r cmd/knowl-searchtome/litert-requirements.txt
+mkdir .searchtome-benchmark/litert-model
+curl --fail --location \
+  --output .searchtome-benchmark/litert-model/embeddinggemma-2-text-270m.litertlm \
+  https://huggingface.co/litert-community/embeddinggemma-2-text-270m-litert-lm/resolve/9be6e8b90982095dc05c2bd162e4b954ee4dbac7/embeddinggemma-2-text-270m.litertlm
+sha256sum .searchtome-benchmark/litert-model/embeddinggemma-2-text-270m.litertlm
+```
+
+The expected SHA-256 is
+`2d079ee2f6f066b1f368e8d7c819f55214eaef1d0513b312321901f30ab286fb`.
+Create or reuse the local cache and start the adapter in one terminal:
+
+```sh
+if [ ! -e .searchtome-benchmark/litert-cache ] && [ ! -L .searchtome-benchmark/litert-cache ]; then
+  mkdir .searchtome-benchmark/litert-cache
+fi
+test -d .searchtome-benchmark/litert-cache && test ! -L .searchtome-benchmark/litert-cache
+TMPDIR="$PWD/.searchtome-benchmark/tmp" \
+XDG_CACHE_HOME="$PWD/.searchtome-benchmark/litert-cache" \
+PYTHONDONTWRITEBYTECODE=1 \
+  .searchtome-benchmark/litert-venv/bin/python cmd/knowl-searchtome/litert_server.py
+```
+
+In a second terminal, use fresh run names:
+
+```sh
+go run ./cmd/knowl-searchtome --dataset dataset --run litert-smoke \
+  --model litert --tei http://127.0.0.1:8082/v1/embeddings --limit 3
+go run ./cmd/knowl-searchtome --dataset dataset --run litert-full \
+  --model litert --tei http://127.0.0.1:8082/v1/embeddings
+```
+
+Stop the adapter with Ctrl-C after the run. Run the checksum and metric
+verification shown above on `litert-full` and retain its output separately.
 
 Check `git status --short` before any commit: downloaded data, model cache,
 stores and run results must stay out of Git. To reclaim space, inspect the
