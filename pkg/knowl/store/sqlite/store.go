@@ -51,6 +51,7 @@ var (
 	_ app.SearchIndex              = (*Store)(nil)
 	_ app.SourceStateStore         = (*Store)(nil)
 	_ app.SourceLifecycleStore     = (*Store)(nil)
+	_ app.StatisticsReader         = (*Store)(nil)
 )
 
 // Open opens or creates a Knowl SQLite operational store and runs migrations.

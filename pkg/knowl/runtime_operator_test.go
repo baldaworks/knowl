@@ -153,7 +153,7 @@ func TestOperatorRuntimeEnabledAndDisabled(t *testing.T) {
 			if enabled {
 				want = 200
 			}
-			for _, path := range []string{"/ui/knowledge", "/ui/search", "/ui/operations", "/ui/sources", "/ui/assets/knowl-logo.png"} {
+			for _, path := range []string{"/ui/knowledge", "/ui/search", "/ui/operations", "/ui/sources", "/ui/statistics", "/ui/assets/knowl-logo.png"} {
 				if got := request(path, ""); got != want {
 					t.Fatalf("shell %s: %d", path, got)
 				}

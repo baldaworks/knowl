@@ -47,6 +47,7 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 	t.Run("operator-migration", func(t *testing.T) { runOperatorMigrationPostgres(t, dsn) })
 	t.Run("operator-operations", func(t *testing.T) { runOperatorOperationsPostgres(t, dsn) })
 	t.Run("operation-details", func(t *testing.T) { runOperationDetailsPostgres(t, dsn) })
+	t.Run("statistics", func(t *testing.T) { runStatisticsPostgres(t, dsn) })
 	t.Run("correction-reports", func(t *testing.T) { runCorrectionReportPostgres(t, dsn) })
 	t.Run("correction-report-migration", func(t *testing.T) { runCorrectionReportMigrationPostgres(t, dsn) })
 	t.Run("operation-details-migration", func(t *testing.T) { runOperationDetailsMigrationPostgres(t, dsn) })

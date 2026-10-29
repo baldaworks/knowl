@@ -1,8 +1,9 @@
 # Read your wiki in a browser
 
 Knowl's optional web UI lets you read published knowledge, inspect its saved
-sources, search for evidence, and follow processing. It shares the Go service's
-HTTP listener and persistent workspace. Four server-rendered screens use
+sources, search for evidence, follow processing, and inspect current database
+statistics. It shares the Go service's HTTP listener and persistent workspace.
+Five server-rendered screens use
 bundled, pinned local assets; a normal Go build needs no Node runtime or
 frontend tooling.
 
@@ -131,6 +132,32 @@ sync and accepted revisions. Only a saved reconciled tombstone confirms
 deletion; omission from a bounded page does not. Use **Next** controls for more
 rows. General lists start at 50 rows, Operations at 10; continuation is bounded
 and may need a refresh when the workspace changes or the service restarts.
+
+## Statistics
+
+Statistics reads the database when the page is opened and presents the current
+state from one consistent, read-only database view. It does not save a copy,
+record history, draw time-series charts, or poll in the background. Select
+**Refresh snapshot**, reload, or open the page again to take another reading.
+
+The knowledge section is limited to the configured scope. It reports pages,
+links, configured sources, accepted source documents, operations grouped by
+lifecycle status, projection cursors, and embedding coverage. Embedding
+statistics validate the configured model identity and dimensions without
+loading vector values.
+
+The storage section is deployment-wide rather than scope-bound. It identifies
+the backend, reports the database size when the backend exposes it, and gives
+exact row counts and available size facts for a fixed allowlist of Knowl tables.
+There is no table-name or scope selector. SQLite reports the main database
+allocation; optional `dbstat` details are shown only when the SQLite build
+provides them. PostgreSQL reports database and relation sizes when its catalog
+permissions allow those reads. An unavailable optional metric is labeled with
+its reason and does not prevent the remaining statistics from rendering.
+
+The page uses the same public, token, or proxy authentication mode as the rest
+of the enabled Web UI and is always read-only. Enabling it adds no API or MCP
+endpoint and requires no database migration.
 
 ## Source-to-wiki walkthrough
 

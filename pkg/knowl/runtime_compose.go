@@ -340,6 +340,8 @@ func newHost(runtime composedRuntime) (*Host, error) {
 	}
 	readers.Operations, _ = runtime.operations.(app.OperationLister)
 	readers.Documents, _ = runtime.sourceState.(app.SourceDocumentLister)
+	statistics, _ := runtime.operations.(app.StatisticsReader)
+	readers.Statistics = &operatorStatisticsReader{host: host, reader: statistics}
 	host.operator, err = app.NewOperatorService(runtime.config.Scope, readers, app.OperatorOptions{ReadLimits: runtime.config.ReadLimits})
 	if err != nil {
 		return nil, fmt.Errorf("compose operator reads: %w", err)
