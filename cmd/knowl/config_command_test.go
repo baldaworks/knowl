@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl"
-	"github.com/normahq/runtime/v2/agentconfig"
-	"github.com/normahq/runtime/v2/appconfig"
+	"github.com/baldaworks/runtime/v2/agentconfig"
+	"github.com/baldaworks/runtime/v2/appconfig"
 )
 
 func TestRootCommandLoadsConfigIntoRunContext(t *testing.T) {
@@ -275,7 +275,7 @@ knowl:
 func TestSelectedRuntimeProviderValidatesSelectorBeforeHostConstruction(t *testing.T) {
 	providerConfig := agentconfig.Config{
 		Type:   quickstartProviderID,
-		OpenAI: &agentconfig.LocalAPIConfig{Model: "test-model"},
+		OpenAI: &agentconfig.LocalAPIConfig{Model: "test-model", APIKey: "test-key"},
 	}
 	for _, test := range []struct {
 		name       string

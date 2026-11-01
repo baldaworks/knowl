@@ -58,7 +58,7 @@ profiles:
 	args := []string{databaseMigrationConfigDirFlag, configRoot, "--profile", "migration", migrateCommandName}
 	path := filepath.Join("selected", "state.db")
 	result := runDatabaseMigrationCommand(t, args, domain.MigrationUp)
-	if result.Backend != defaultStore || result.Direction != domain.MigrationUp || len(result.Steps) != 25 {
+	if result.Backend != defaultStore || result.Direction != domain.MigrationUp || len(result.Steps) != 26 {
 		t.Fatalf("fresh up result=%+v", result)
 	}
 	for index, step := range result.Steps {
@@ -70,12 +70,12 @@ profiles:
 			t.Fatalf("up step %d=%+v", index, step)
 		}
 	}
-	assertDatabaseMigrationVersion(t, path, 26)
+	assertDatabaseMigrationVersion(t, path, 27)
 	result = runDatabaseMigrationCommand(t, args, domain.MigrationUp)
 	if result.Steps == nil || len(result.Steps) != 0 {
 		t.Fatalf("repeated up steps=%+v", result.Steps)
 	}
-	for _, version := range []int64{26, 25} {
+	for _, version := range []int64{27, 26} {
 		result = runDatabaseMigrationCommand(t, args, domain.MigrationDown)
 		if result.Direction != domain.MigrationDown || len(result.Steps) != 1 || result.Steps[0] != (domain.MigrationStep{Stream: databaseMigrationBaseStream, Version: version}) {
 			t.Fatalf("down result=%+v", result)
@@ -132,18 +132,18 @@ func TestDatabaseMigrationSQLFailureHasNoSuccessAndRetryUsesCommittedHistory(t *
 	if err := os.WriteFile(canonical, invalid, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(t.Context(), `CREATE TRIGGER reject_cli_version BEFORE INSERT ON goose_db_version WHEN NEW.version_id=26 BEGIN SELECT RAISE(ABORT,'postgres://private:secret@driver-detail'); END`); err != nil {
+	if _, err := db.ExecContext(t.Context(), `CREATE TRIGGER reject_cli_version BEFORE INSERT ON goose_db_version WHEN NEW.version_id=27 BEGIN SELECT RAISE(ABORT,'postgres://private:secret@driver-detail'); END`); err != nil {
 		t.Fatal(err)
 	}
 	stdout, _, err := executeCLICommand(newRootCommand(), append(args, "up"), nil)
 	var failure *domain.MigrationError
-	if stdout != "" || !errors.As(err, &failure) || failure.Stage != domain.MigrationStageApply || failure.Version != 26 {
+	if stdout != "" || !errors.As(err, &failure) || failure.Stage != domain.MigrationStageApply || failure.Version != 27 {
 		t.Fatalf("failed migration output=%q error=%v", stdout, err)
 	}
-	if err.Error() != (&domain.MigrationError{Stage: domain.MigrationStageApply, Stream: databaseMigrationBaseStream, Version: 26}).Error() {
+	if err.Error() != (&domain.MigrationError{Stage: domain.MigrationStageApply, Stream: databaseMigrationBaseStream, Version: 27}).Error() {
 		t.Fatalf("unsafe SQL diagnostic=%q", err.Error())
 	}
-	assertDatabaseMigrationVersion(t, path, 25)
+	assertDatabaseMigrationVersion(t, path, 26)
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -157,15 +157,15 @@ func TestDatabaseMigrationSQLFailureHasNoSuccessAndRetryUsesCommittedHistory(t *
 	if !errors.As(err, &exit) || exit.ExitCode() != 1 || len(output) != 0 || stderr.Len() == 0 {
 		t.Fatalf("SQL failure process err=%v stdout=%q stderr=%q", err, output, stderr.String())
 	}
-	assertDatabaseMigrationVersion(t, path, 25)
+	assertDatabaseMigrationVersion(t, path, 26)
 	if _, err := db.ExecContext(t.Context(), `DROP TRIGGER reject_cli_version`); err != nil {
 		t.Fatal(err)
 	}
 	result := runDatabaseMigrationCommand(t, args, domain.MigrationUp)
-	if len(result.Steps) != 1 || result.Steps[0] != (domain.MigrationStep{Stream: databaseMigrationBaseStream, Version: 26}) {
+	if len(result.Steps) != 1 || result.Steps[0] != (domain.MigrationStep{Stream: databaseMigrationBaseStream, Version: 27}) {
 		t.Fatalf("retry result=%+v", result)
 	}
-	assertDatabaseMigrationVersion(t, path, 26)
+	assertDatabaseMigrationVersion(t, path, 27)
 	actual, err := os.ReadFile(canonical)
 	if err != nil || !bytes.Equal(actual, invalid) {
 		t.Fatalf("migration touched invalid canonical content: %v", err)

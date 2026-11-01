@@ -12,8 +12,8 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl"
 	types "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/baldaworks/knowl/pkg/knowlfx"
-	"github.com/normahq/runtime/v2/agentfactory"
-	"github.com/normahq/runtime/v2/mcpregistry"
+	"github.com/baldaworks/runtime/v2/agentfactory"
+	"github.com/baldaworks/runtime/v2/mcpregistry"
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 )

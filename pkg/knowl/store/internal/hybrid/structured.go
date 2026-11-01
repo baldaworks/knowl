@@ -36,7 +36,11 @@ func prepareStructuredPage(ctx context.Context, page SemanticFields, space app.E
 	if (page.Format == "") != (page.OKF == nil) {
 		return PreparedText{}, failure(knowl.RetrievalInvalidInput)
 	}
-	fields := []string{page.Title, page.Body}
+	wikiPaths, err := NormalizeWikiPaths(page.WikiPaths)
+	if err != nil {
+		return PreparedText{}, err
+	}
+	fields := append([]string{page.Title, page.Body}, wikiPaths...)
 	if page.OKF != nil {
 		fields = append(fields, page.OKF.Type, page.OKF.Description)
 		fields = append(fields, page.OKF.Tags...)
@@ -56,7 +60,8 @@ func prepareStructuredPage(ctx context.Context, page SemanticFields, space app.E
 	if !utf8.ValidString(space.PassagePrefix) {
 		return PreparedText{}, failure(knowl.RetrievalInvalidInput)
 	}
-	contextParts := []string{page.Title}
+	contextParts := append([]string{}, wikiPaths...)
+	contextParts = append(contextParts, page.Title)
 	if page.OKF != nil {
 		contextParts = append(contextParts, page.OKF.Type, strings.Join(page.OKF.Tags, "\n"), page.OKF.Description)
 	} else {
