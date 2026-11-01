@@ -32,7 +32,7 @@ func TestMigrateSQLiteLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	versions := []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26}
+	versions := []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 27}
 	if len(result.Steps) != len(versions) {
 		t.Fatalf("Up steps=%+v", result.Steps)
 	}
@@ -64,7 +64,7 @@ func TestMigrateSQLiteLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if got := migrationHistory(t, db); len(got) != 26 || got[len(got)-1] != 26 {
+	if got := migrationHistory(t, db); len(got) != 27 || got[len(got)-1] != 27 {
 		t.Fatalf("Open did not upgrade: %+v", got)
 	}
 }
@@ -150,27 +150,27 @@ func TestMigrateSQLiteTransactionalFailureRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := migrationTestDB(t, path)
-	if _, err := db.ExecContext(t.Context(), `CREATE TRIGGER interrupt_migration BEFORE INSERT ON goose_db_version WHEN NEW.version_id=26 BEGIN SELECT RAISE(ABORT,'secret-driver-text'); END`); err != nil {
+	if _, err := db.ExecContext(t.Context(), `CREATE TRIGGER interrupt_migration BEFORE INSERT ON goose_db_version WHEN NEW.version_id=27 BEGIN SELECT RAISE(ABORT,'secret-driver-text'); END`); err != nil {
 		t.Fatal(err)
 	}
 	before := migrationHistory(t, db)
 	result, err := Migrate(t.Context(), path, knowl.MigrationUp)
 	var failure *knowl.MigrationError
-	if !errors.As(err, &failure) || failure.Stage != knowl.MigrationStageApply || failure.Version != 26 || len(result.Steps) != 0 {
+	if !errors.As(err, &failure) || failure.Stage != knowl.MigrationStageApply || failure.Version != 27 || len(result.Steps) != 0 {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}
 	if !reflect.DeepEqual(before, migrationHistory(t, db)) {
 		t.Fatal("failed Up committed history")
 	}
 	var columns int
-	if err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pragma_table_info('knowl_embedding_state') WHERE name='native_format'`).Scan(&columns); err != nil || columns != 0 {
+	if err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pragma_table_info('knowl_pages') WHERE name='wiki_paths'`).Scan(&columns); err != nil || columns != 0 {
 		t.Fatalf("failed Up committed schema: %d %v", columns, err)
 	}
 	if _, err := db.ExecContext(t.Context(), `DROP TRIGGER interrupt_migration`); err != nil {
 		t.Fatal(err)
 	}
 	result, err = Migrate(t.Context(), path, knowl.MigrationUp)
-	if err != nil || !reflect.DeepEqual(result.Steps, []knowl.MigrationStep{{Stream: migrationTestStream, Version: 26}}) {
+	if err != nil || !reflect.DeepEqual(result.Steps, []knowl.MigrationStep{{Stream: migrationTestStream, Version: 27}}) {
 		t.Fatalf("retry: %+v %v", result, err)
 	}
 }
@@ -181,7 +181,7 @@ func TestMigrateSQLitePartialProgress(t *testing.T) {
 	if _, err := Migrate(t.Context(), path, knowl.MigrationUp); err != nil {
 		t.Fatal(err)
 	}
-	for range 3 {
+	for range 4 {
 		if _, err := Migrate(t.Context(), path, knowl.MigrationDown); err != nil {
 			t.Fatal(err)
 		}

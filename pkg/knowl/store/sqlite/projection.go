@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
@@ -80,6 +81,14 @@ func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.Wo
 		if encodeErr != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, encodeErr)
 		}
+		wikiPaths, err := hybrid.NormalizeWikiPaths(page.WikiPaths)
+		if err != nil {
+			return err
+		}
+		encodedPaths, err := json.Marshal(wikiPaths)
+		if err != nil {
+			return err
+		}
 		updatedAt := page.UpdatedAt
 		if updatedAt.IsZero() {
 			updatedAt = now
@@ -108,10 +117,10 @@ func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.Wo
 			sourceDocument = string(encodedDocument)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO knowl_pages (page_id, scope, path, title, tags, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, tags=excluded.tags, description=excluded.description, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, source_documents=excluded.source_documents, format=excluded.format, okf_metadata=excluded.okf_metadata, updated_at=excluded.updated_at`,
-			page.ID, snapshot.Scope, page.Path, page.Title, values.Tags, values.Description, values.Body, page.Digest, sourceRefs, sourceID, sourceDocument, encodedDocuments, values.Format, nullableJSON(values.Metadata), updatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			INSERT INTO knowl_pages (page_id, scope, path, title, tags, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at, wiki_paths)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(scope, path) DO UPDATE SET page_id=excluded.page_id, title=excluded.title, tags=excluded.tags, description=excluded.description, body=excluded.body, digest=excluded.digest, source_refs=excluded.source_refs, source_id=excluded.source_id, source_document=excluded.source_document, source_documents=excluded.source_documents, format=excluded.format, okf_metadata=excluded.okf_metadata, updated_at=excluded.updated_at, wiki_paths=excluded.wiki_paths`,
+			page.ID, snapshot.Scope, page.Path, page.Title, values.Tags, values.Description, values.Body, page.Digest, sourceRefs, sourceID, sourceDocument, encodedDocuments, values.Format, nullableJSON(values.Metadata), updatedAt.UTC().Format(time.RFC3339Nano), string(encodedPaths)); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
 		for _, document := range documents {
@@ -216,6 +225,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		Tags            string
 		Description     string
 		Body            string
+		WikiPaths       []string
 		OKF             json.RawMessage
 		SourceRefs      []string
 		SourceDocument  *knowl.SourceDocument
@@ -233,10 +243,14 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		if err != nil {
 			return ""
 		}
+		wikiPaths, err := hybrid.NormalizeWikiPaths(page.WikiPaths)
+		if err != nil {
+			return ""
+		}
 		sourceRefs := append([]string(nil), page.SourceRefs...)
 		sort.Strings(sourceRefs)
 		pages = append(pages, digestPage{
-			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
+			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title, WikiPaths: wikiPaths,
 			Format: values.Format, Tags: values.Tags, Description: values.Description, Body: values.Body, OKF: values.Metadata,
 			SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
 			SourceDocuments: projectionmeta.SourceDocuments(page),

@@ -26,7 +26,7 @@ func TestPostgresMigrationOperation(t *testing.T) {
 		migrationAssertSteps(t, target, knowl.MigrationDown, false, nil)
 		nativeAssertCount(t, db, `SELECT count(*) FROM pg_class WHERE relname IN ('goose_db_version','goose_pgvector_db_version')`, 0)
 		result, err := Migrate(t.Context(), target, knowl.MigrationUp, false)
-		if err != nil || len(result.Steps) != 26 || result.Steps[18].Version != 19 {
+		if err != nil || len(result.Steps) != 27 || result.Steps[18].Version != 19 {
 			t.Fatalf("base Up result=%+v error=%v", result, err)
 		}
 		nativeAssertCount(t, db, `SELECT count(*) FROM pg_extension WHERE extname='vector'`, 0)
@@ -37,11 +37,11 @@ func TestPostgresMigrationOperation(t *testing.T) {
 		migrationAssertSteps(t, target, knowl.MigrationUp, true, []knowl.MigrationStep{{Stream: nativeMigrationStream, Version: 1}})
 		migrationAssertSteps(t, target, knowl.MigrationUp, true, nil)
 		migrationAssertSteps(t, target, knowl.MigrationDown, false, []knowl.MigrationStep{{Stream: nativeMigrationStream, Version: 1}})
-		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 26)
-		migrationAssertSteps(t, target, knowl.MigrationDown, false, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 26}})
-		migrationAssertSteps(t, target, knowl.MigrationUp, true, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 26}, {Stream: nativeMigrationStream, Version: 1}})
+		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 27)
+		migrationAssertSteps(t, target, knowl.MigrationDown, false, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 27}})
+		migrationAssertSteps(t, target, knowl.MigrationUp, true, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 27}, {Stream: nativeMigrationStream, Version: 1}})
 		migrationAssertSteps(t, target, knowl.MigrationDown, false, []knowl.MigrationStep{{Stream: nativeMigrationStream, Version: 1}})
-		for version := int64(26); version > 0; version-- {
+		for version := int64(27); version > 0; version-- {
 			migrationAssertSteps(t, target, knowl.MigrationDown, false, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: version}})
 		}
 		migrationAssertSteps(t, target, knowl.MigrationDown, true, nil)
@@ -53,7 +53,7 @@ func TestPostgresMigrationOperation(t *testing.T) {
 		db := migrationTestDB(t, target)
 		result, err := Migrate(t.Context(), target, knowl.MigrationUp, true)
 		_ = migrationAssertFailure(t, err, knowl.MigrationStageValidation, nativeMigrationStream)
-		if len(result.Steps) != 26 {
+		if len(result.Steps) != 27 {
 			t.Fatalf("committed base steps=%+v", result)
 		}
 		nativeExec(t, db, `CREATE EXTENSION vector`)
@@ -128,21 +128,21 @@ func TestPostgresMigrationOperation(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		nativeExec(t, db, `CREATE FUNCTION reject_base_version() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.version_id=26 THEN RAISE EXCEPTION 'postgres://private:secret@driver-detail' USING ERRCODE='P0001'; END IF; RETURN NEW; END $$`)
+		nativeExec(t, db, `CREATE FUNCTION reject_base_version() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.version_id=27 THEN RAISE EXCEPTION 'postgres://private:secret@driver-detail' USING ERRCODE='P0001'; END IF; RETURN NEW; END $$`)
 		nativeExec(t, db, `CREATE TRIGGER reject_base_version BEFORE INSERT ON goose_db_version FOR EACH ROW EXECUTE FUNCTION reject_base_version()`)
 		result, err := Migrate(t.Context(), target, knowl.MigrationUp, false)
 		failure := migrationAssertFailure(t, err, knowl.MigrationStageApply, baseMigrationStream)
-		want := []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 24}, {Stream: baseMigrationStream, Version: 25}}
-		if !reflect.DeepEqual(result.Steps, want) || failure.Version != 26 || failure.SQLState != migrationTriggerSQLState {
+		want := []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 25}, {Stream: baseMigrationStream, Version: 26}}
+		if !reflect.DeepEqual(result.Steps, want) || failure.Version != 27 || failure.SQLState != migrationTriggerSQLState {
 			t.Fatalf("partial result=%+v failure=%+v", result, failure)
 		}
-		if err.Error() != (&knowl.MigrationError{Stage: knowl.MigrationStageApply, Stream: baseMigrationStream, Version: 26, SQLState: migrationTriggerSQLState}).Error() {
+		if err.Error() != (&knowl.MigrationError{Stage: knowl.MigrationStageApply, Stream: baseMigrationStream, Version: 27, SQLState: migrationTriggerSQLState}).Error() {
 			t.Fatalf("unsafe diagnostic=%q", err.Error())
 		}
-		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 25)
-		nativeAssertCount(t, db, `SELECT count(*) FROM pg_attribute WHERE attrelid='knowl_embedding_state'::regclass AND attname='native_format' AND NOT attisdropped`, 0)
+		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 26)
+		nativeAssertCount(t, db, `SELECT count(*) FROM pg_attribute WHERE attrelid='knowl_pages'::regclass AND attname='wiki_paths' AND NOT attisdropped`, 0)
 		nativeExec(t, db, `DROP TRIGGER reject_base_version ON goose_db_version`)
-		migrationAssertSteps(t, target, knowl.MigrationUp, false, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 26}})
+		migrationAssertSteps(t, target, knowl.MigrationUp, false, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 27}})
 	})
 	t.Run("reject-optional-history-even-when-disabled", func(t *testing.T) {
 		target := nativeDatabase(t, dsn, "migration_bad_optional")
@@ -154,7 +154,7 @@ func TestPostgresMigrationOperation(t *testing.T) {
 		nativeExec(t, db, `INSERT INTO goose_pgvector_db_version(version_id,is_applied) VALUES(99,true)`)
 		_, err := Migrate(t.Context(), target, knowl.MigrationDown, false)
 		_ = migrationAssertFailure(t, err, knowl.MigrationStageHistory, nativeMigrationStream)
-		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 26)
+		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 27)
 		nativeAssertCount(t, db, `SELECT count(*) FROM goose_pgvector_db_version`, 3)
 		// Lexical-only Up does not make an unused native history mandatory.
 		migrationAssertSteps(t, target, knowl.MigrationUp, false, nil)
@@ -165,10 +165,10 @@ func TestPostgresMigrationOperation(t *testing.T) {
 		for _, fixture := range []struct{ name, mutation string }{
 			{"empty_ledger", `DELETE FROM goose_db_version`},
 			{"unknown", `INSERT INTO goose_db_version(version_id,is_applied) VALUES(99,true)`},
-			{"false", `UPDATE goose_db_version SET is_applied=false WHERE version_id=26`},
-			{"duplicate", `INSERT INTO goose_db_version(version_id,is_applied) VALUES(26,true)`},
+			{"false", `UPDATE goose_db_version SET is_applied=false WHERE version_id=27`},
+			{"duplicate", `INSERT INTO goose_db_version(version_id,is_applied) VALUES(27,true)`},
 			{"missing_zero", `DELETE FROM goose_db_version WHERE version_id=0`},
-			{"out_of_order", `UPDATE goose_db_version SET version_id=CASE version_id WHEN 25 THEN 26 WHEN 26 THEN 25 ELSE version_id END`},
+			{"out_of_order", `UPDATE goose_db_version SET version_id=CASE version_id WHEN 25 THEN 27 WHEN 27 THEN 25 ELSE version_id END`},
 		} {
 			t.Run(fixture.name, func(t *testing.T) {
 				target := nativeDatabase(t, dsn, "migration_bad_"+fixture.name)
@@ -222,7 +222,7 @@ func TestPostgresMigrationOperation(t *testing.T) {
 			}
 			steps[result.Steps[0]] = true
 		}
-		if !steps[knowl.MigrationStep{Stream: nativeMigrationStream, Version: 1}] || !steps[knowl.MigrationStep{Stream: baseMigrationStream, Version: 26}] {
+		if !steps[knowl.MigrationStep{Stream: nativeMigrationStream, Version: 1}] || !steps[knowl.MigrationStep{Stream: baseMigrationStream, Version: 27}] {
 			t.Fatalf("steps=%+v", steps)
 		}
 		conn, err := db.Conn(t.Context())
@@ -250,7 +250,7 @@ func TestPostgresMigrationOperation(t *testing.T) {
 		if err := locker.SessionUnlock(t.Context(), conn); err != nil {
 			t.Fatal(err)
 		}
-		migrationAssertSteps(t, target, knowl.MigrationUp, true, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 26}, {Stream: nativeMigrationStream, Version: 1}})
+		migrationAssertSteps(t, target, knowl.MigrationUp, true, []knowl.MigrationStep{{Stream: baseMigrationStream, Version: 27}, {Stream: nativeMigrationStream, Version: 1}})
 	})
 	t.Run("startup-and-standalone-share-lock", func(t *testing.T) {
 		target := nativeDatabase(t, dsn, "migration_startup_concurrent")
@@ -294,7 +294,7 @@ func TestPostgresMigrationOperation(t *testing.T) {
 				t.Fatalf("blocked operation lost cancellation: %v", err)
 			}
 		}
-		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 26)
+		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 27)
 		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_pgvector_db_version`, 1)
 		if err := locker.SessionUnlock(t.Context(), conn); err != nil {
 			t.Fatal(err)
@@ -328,7 +328,7 @@ func TestPostgresMigrationOperation(t *testing.T) {
 		if !reflect.DeepEqual(result.Steps, []knowl.MigrationStep{{Stream: nativeMigrationStream, Version: 1}}) {
 			t.Fatalf("concurrent Down=%+v", result)
 		}
-		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 26)
+		nativeAssertCount(t, db, `SELECT max(version_id) FROM goose_db_version`, 27)
 		// Either serialized order is valid: startup before Down leaves bytea;
 		// startup after Down reapplies the native migration. Both must agree
 		// with the committed native history, never a mixed schema/history.

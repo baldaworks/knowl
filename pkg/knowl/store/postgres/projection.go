@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/store/internal/hybrid"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/lexical"
 	"github.com/baldaworks/knowl/pkg/knowl/store/internal/projectionmeta"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
@@ -88,6 +89,14 @@ func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.Wo
 		if encodeErr != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, encodeErr)
 		}
+		wikiPaths, err := hybrid.NormalizeWikiPaths(page.WikiPaths)
+		if err != nil {
+			return err
+		}
+		encodedPaths, err := json.Marshal(wikiPaths)
+		if err != nil {
+			return err
+		}
 		updatedAt := page.UpdatedAt
 		if updatedAt.IsZero() {
 			updatedAt = now
@@ -117,8 +126,8 @@ func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.Wo
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO knowl_pages (
-				scope, page_id, path, title, tags, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at, search_vector
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13, $14::jsonb, $15,
+				scope, page_id, path, title, tags, description, body, digest, source_refs, source_id, source_document, source_documents, format, okf_metadata, updated_at, wiki_paths, search_vector
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13, $14::jsonb, $15, $20::jsonb,
 				setweight(to_tsvector('simple'::regconfig, $16), 'A') ||
 				setweight(to_tsvector('simple'::regconfig, $17), 'B') ||
 				setweight(to_tsvector('simple'::regconfig, $18), 'C') ||
@@ -137,9 +146,10 @@ func (store *Store) rebuildLexicalChecked(ctx context.Context, snapshot knowl.Wo
 				format = EXCLUDED.format,
 				okf_metadata = EXCLUDED.okf_metadata,
 				updated_at = EXCLUDED.updated_at,
+				wiki_paths = EXCLUDED.wiki_paths,
 				search_vector = EXCLUDED.search_vector`,
 			snapshot.Scope, page.ID, page.Path, page.Title, values.Tags, values.Description, values.Body, page.Digest,
-			string(sourceRefs), sourceID, sourceDocument, string(encodedDocuments), values.Format, nullableJSON(values.Metadata), updatedAt.UTC(), encoded.Title, encoded.Tags, encoded.Description, encoded.Body); err != nil {
+			string(sourceRefs), sourceID, sourceDocument, string(encodedDocuments), values.Format, nullableJSON(values.Metadata), updatedAt.UTC(), encoded.Title, encoded.Tags, encoded.Description, encoded.Body, string(encodedPaths)); err != nil {
 			return fmt.Errorf("project page %q: %w", page.Path, err)
 		}
 		for _, document := range documents {
@@ -255,6 +265,7 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		Tags            string
 		Description     string
 		Body            string
+		WikiPaths       []string
 		OKF             json.RawMessage
 		SourceRefs      []string
 		SourceDocument  *knowl.SourceDocument
@@ -272,10 +283,14 @@ func snapshotDigest(snapshot knowl.WorkspaceSnapshot) string {
 		if err != nil {
 			return ""
 		}
+		wikiPaths, err := hybrid.NormalizeWikiPaths(page.WikiPaths)
+		if err != nil {
+			return ""
+		}
 		sourceRefs := append([]string(nil), page.SourceRefs...)
 		sort.Strings(sourceRefs)
 		pages = append(pages, digestPage{
-			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title,
+			ID: page.ID, Path: page.Path, Digest: page.Digest, Title: page.Title, WikiPaths: wikiPaths,
 			Format: values.Format, Tags: values.Tags, Description: values.Description, Body: values.Body, OKF: values.Metadata,
 			SourceRefs: sourceRefs, SourceDocument: page.SourceDocument,
 			SourceDocuments: projectionmeta.SourceDocuments(page),

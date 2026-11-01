@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/normahq/runtime/v2/appconfig"
+	"github.com/baldaworks/runtime/v2/appconfig"
 )
 
 //go:embed knowl.yaml

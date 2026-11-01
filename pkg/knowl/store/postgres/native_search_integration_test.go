@@ -52,6 +52,7 @@ func TestPostgresNativeSearch(t *testing.T) {
 	nativeExec(t, owner.db, `CREATE SCHEMA "vector extension"`)
 	nativeExec(t, owner.db, `CREATE EXTENSION vector SCHEMA "vector extension"`)
 	store := nativeOpen(t, dsn, nativeOptions())
+	t.Run("wiki-path-storage", func(t *testing.T) { runPostgresWikiPathStorage(t, store) })
 	t.Run("page-aggregation-bounded-transfer", func(t *testing.T) { runNativeSearchCrowding(t, store, dsn) })
 	t.Run("windows-ordinal-and-C-ties", func(t *testing.T) { runNativeSearchWindows(t, store) })
 	t.Run("sources-scope-and-corruption", func(t *testing.T) { runNativeSearchFilters(t, store) })

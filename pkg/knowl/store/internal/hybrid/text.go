@@ -28,7 +28,7 @@ const (
 	MaxCoverageBytes     = 1 << 20
 	MaxProjectionBytes   = 64 << 20
 	MaxSemanticBytes     = 4 << 20
-	PreprocessingVersion = "semantic-nfc-v3-structured-sections-blocks-query4"
+	PreprocessingVersion = "semantic-nfc-v4-wiki-paths-structured-sections-blocks-query4"
 )
 
 // PreparedText contains bounded model inputs and explicit omitted coverage.
@@ -159,11 +159,12 @@ func PreparePage(ctx context.Context, page knowl.PageSnapshot, space app.Embeddi
 	if err != nil {
 		return PreparedText{}, err
 	}
-	return PreparePageFields(ctx, SemanticFields{Title: page.Title, Tags: values.Tags, Description: values.Description, Body: values.Body, Format: values.Format, OKF: page.OKF}, space)
+	return PreparePageFields(ctx, SemanticFields{WikiPaths: page.WikiPaths, Title: page.Title, Tags: values.Tags, Description: values.Description, Body: values.Body, Format: values.Format, OKF: page.OKF}, space)
 }
 
 // SemanticFields are the original page fields persisted by lexical projection.
 type SemanticFields struct {
+	WikiPaths                      []string
 	Title, Tags, Description, Body string
 	Format                         string
 	OKF                            *okf.Metadata

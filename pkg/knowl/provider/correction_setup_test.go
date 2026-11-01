@@ -8,7 +8,7 @@ import (
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
-	"github.com/normahq/runtime/v2/agentfactory"
+	"github.com/baldaworks/runtime/v2/agentfactory"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
