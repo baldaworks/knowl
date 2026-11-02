@@ -177,13 +177,30 @@ func SourceRefAliases(source knowl.AcceptedSource) []string {
 // ValidateAcceptedSourceDescriptor validates complete configured-source
 // provenance before immutable bytes are exposed to maintenance providers.
 func ValidateAcceptedSourceDescriptor(source knowl.AcceptedSource) error {
+	wantID := string(source.SourceDocument.SourceID) + "/" + string(source.SourceDocument.DocumentID)
+	if validateAcceptedProvenanceIdentity(source) != nil || source.SourceDocument == (knowl.SourceDocument{}) ||
+		ValidateSourceDocument(source.SourceDocument) != nil || source.SourceDocument.Revision != source.Version.Version || source.Source.ID != wantID {
+		return ErrSourceInvalid
+	}
+	return nil
+}
+
+// ValidateAcceptedProvenanceDescriptor validates immutable accepted evidence.
+// Configured sources always require complete document ownership; application
+// evidence may have no configured source document.
+func ValidateAcceptedProvenanceDescriptor(source knowl.AcceptedSource) error {
+	if source.Source.Adapter == string(knowl.SourceAdapterFilesystem) || source.Source.Adapter == string(knowl.SourceAdapterGit) ||
+		source.SourceDocument != (knowl.SourceDocument{}) {
+		return ValidateAcceptedSourceDescriptor(source)
+	}
+	return validateAcceptedProvenanceIdentity(source)
+}
+
+func validateAcceptedProvenanceIdentity(source knowl.AcceptedSource) error {
 	identity := SourceRefIdentity{Source: source.Source, Revision: source.Version.Version}
 	mediaType, _, mediaErr := mime.ParseMediaType(source.MediaType)
-	wantID := string(source.SourceDocument.SourceID) + "/" + string(source.SourceDocument.DocumentID)
-	if strings.TrimSpace(string(source.Scope)) == "" || ValidateSourceRefIdentity(identity) != nil ||
-		len(SourceRefAliases(source)) == 0 || source.SourceDocument == (knowl.SourceDocument{}) ||
-		ValidateSourceDocument(source.SourceDocument) != nil || source.SourceDocument.Revision != source.Version.Version ||
-		source.Source.ID != wantID || !validSHA256(source.Version.Digest) || source.Version.Digest != strings.ToLower(source.Version.Digest) ||
+	if strings.TrimSpace(string(source.Scope)) == "" || ValidateSourceRefIdentity(identity) != nil || len(SourceRefAliases(source)) == 0 ||
+		!validSHA256(source.Version.Digest) || source.Version.Digest != strings.ToLower(source.Version.Digest) ||
 		mediaErr != nil || strings.TrimSpace(mediaType) == "" || !validManifestRef(source.ManifestRef) {
 		return ErrSourceInvalid
 	}

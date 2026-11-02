@@ -265,7 +265,7 @@ func (workspace *Workspace) ResolveAcceptedSources(ctx context.Context, scope kn
 			return nil, app.ErrSourceInvalid
 		}
 		source, acceptedErr := manifest.accepted()
-		if acceptedErr != nil || !validSourceManifest(manifest) || app.ValidateAcceptedSourceDescriptor(source) != nil ||
+		if acceptedErr != nil || !validSourceManifest(manifest) || app.ValidateAcceptedProvenanceDescriptor(source) != nil ||
 			source.Scope != scope || source.ManifestRef != workspaceRawDir+"/"+relative {
 			return nil, app.ErrSourceInvalid
 		}

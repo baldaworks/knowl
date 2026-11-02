@@ -36,7 +36,7 @@ func TestHostSQLiteMigrationsPrecedeReadiness(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 	var version int
-	if err := db.QueryRowContext(t.Context(), `SELECT max(version_id) FROM goose_db_version WHERE is_applied`).Scan(&version); err != nil || version != 27 {
+	if err := db.QueryRowContext(t.Context(), `SELECT max(version_id) FROM goose_db_version WHERE is_applied`).Scan(&version); err != nil || version != 28 {
 		t.Fatalf("startup schema version=%d err=%v", version, err)
 	}
 }

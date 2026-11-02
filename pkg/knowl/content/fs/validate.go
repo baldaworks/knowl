@@ -277,9 +277,11 @@ func validateRetirementPageEdit(edit prospectiveEdit, pageID knowl.PageID, exist
 			if _, declared := planRefs[ref]; !declared {
 				return nil, contentInvalidError(edit.Target, "citation.plan_missing")
 			}
-			if owner, ok := acceptedSourceOwner(rawSources[ref]); !ok {
+			source := rawSources[ref]
+			if app.ValidateAcceptedProvenanceDescriptor(source) != nil {
 				return nil, contentInvalidError(edit.Target, "citation.unknown_source")
-			} else if retirementOwns(retirement, owner) {
+			}
+			if owner, configured := acceptedSourceOwner(source); configured && retirementOwns(retirement, owner) {
 				return nil, contentDependencyInvalidError(edit.Target, app.CitationSourceRetiringCode, string(owner.Adapter)+":"+string(owner.SourceID))
 			}
 		}

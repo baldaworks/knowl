@@ -706,3 +706,39 @@ func (index *retirementProjection) Project(_ context.Context, commit knowl.Conte
 	return nil
 }
 func (*retirementProjection) Rebuild(context.Context, knowl.WorkspaceSnapshot) error { return nil }
+
+func TestRetirementPageServiceCommitsMixedInlineEvidenceWithoutConfiguredOwner(t *testing.T) {
+	fixture, active, retiring, _ := mixedRetirementFixture(t)
+	inline := retirementAccepted("inline", "application", "note", "v1", "text/plain")
+	inline.SourceDocument = knowl.SourceDocument{}
+	refs := []string{app.SourceRefKey(active), app.SourceRefKey(inline)}
+	slices.Sort(refs)
+	fixture.page = retirementPage(t, "concepts/mixed", append(slices.Clone(refs), app.SourceRefKey(retiring)), "Mixed facts")
+	fixture.content.raw[app.SourceRefKey(inline)] = []byte("application facts")
+	fixture.maintainer.result = replacementRetirementPlan(fixture.page, fixture.schema.Digest, refs)
+	owner := retirementOwner(retiring)
+	request := fixture.request([]knowl.AcceptedSource{active, inline, retiring}, owner)
+	content := &retirementOperationContent{retirementContentFixture: &fixture.content, schema: fixture.schema, stages: make(map[knowl.OperationID]knowl.StagedChange)}
+	store, err := sqlite.Open(t.Context(), t.TempDir()+"/mixed-inline.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	committer := &retirementOperationCommitter{}
+	service, err := app.NewRetirementPageService(content, store, &retirementProjection{}, fixture.lifecycle(), committer, &fixture.maintainer, app.RetirementPageOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := service.Reserve(t.Context(), request.Scope, owner, fixture.states[owner].RetirementGeneration, request.Page.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.ClaimOperation(t.Context(), request.Scope, reservation.ID, knowl.WorkLease{Token: "mixed", ExpiresAt: time.Now().UTC().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.RunToTerminal(t.Context(), claim)
+	if err != nil || result.Operation.Status != knowl.StatusCommitted || committer.calls != 1 || len(fixture.maintainer.inputs) != 1 {
+		t.Fatalf("mixed inline retirement = %#v, %v, commits %d", result, err, committer.calls)
+	}
+}

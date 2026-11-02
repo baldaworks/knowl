@@ -404,6 +404,14 @@ not make live application writes safe. Starting the current binary afterward
 automatically reapplies pending required Up migrations; do not restart it in
 the middle of an intended downgrade.
 
+Schema 28 adds recovery-only retirement identity and its bounded private audit
+payload. Stop all writers and back up the operational database and matching
+workspace before upgrading; ordinary startup applies the migration. Its Down
+refuses to discard any recorded recovery proof, including proof retained after
+that owner was genuinely reactivated. Keep the upgraded database and roll
+forward, or restore the matching backup with a compatible binary while writers
+remain stopped. A binary downgrade alone is not a coherent rollback.
+
 Failures return a nonzero exit and no success JSON. Earlier Up steps may already
 have committed before a later failure; correct the cause and retry using real
 Goose history. Unknown or corrupt history is not automatically repaired. Keep
@@ -484,6 +492,29 @@ checkpoint before cleanup starts. This is readiness ordering, not a replacement
 mapping: no config field aliases owners or declares provenance equivalence.
 Removing an owner without an addition is a pure deletion and needs no such gate.
 
+A historical owner can be absent from lifecycle state, for example after an
+adapter change predating lifecycle bootstrap. The regular retirement worker
+also scans durable accepted source operations in bounded operation-ID windows.
+It creates a missing exact owner as `retiring` only when that operation matches
+an accepted descriptor cited by a current canonical page and the original
+immutable raw bytes still match their digest. The worker rechecks the page
+under the shared apply fence and inserts against the current authority. It
+preserves existing active, retiring and deleted rows. No alias, additional
+configuration, recovery command or externally supplied proof is involved.
+
+Historical configuration identity remains unknown: the recovered row has an
+empty `ConfigDigest` and a separate `RecoveryProofDigest`; status exposes the
+optional `recovery_proof_digest`. That proof authorizes retirement only. Its
+bounded canonical preimage remains private durable audit metadata even if the
+page later disappears or a genuine configured activation clears the live proof
+binding. Raw revisions and accepted operation history remain intact.
+
+Recovery conservatively waits for all current active owners' accepted-sync
+readiness. Readiness means sync acceptance and durable maintenance reservation
+(or replay/convergence), not that every maintenance operation has committed.
+Queued or failed maintenance may still need the retirement to finish first.
+This recovery gate does not change the normal replacement ordering above.
+
 Retirement is deliberately gradual. Status may show unchanged canonical pages
 that still cite the retiring owner at the same time as committed pages that no
 longer cite it. `operations.pending`, `planned`, `applying`,
@@ -510,6 +541,32 @@ activation rejects the old stage with `citation.source_authority_changed`.
 Unrelated source configuration changes do not invalidate an otherwise current
 stage. Once canonical publication has committed, journal and projection replay
 complete even if source authority subsequently changes.
+
+For a missing historical owner, leave the normal worker running and inspect
+adapter-qualified status again after discovery. Before discovery it can still
+report `retirement.unowned_ref`; this does not create a lifecycle row. Missing
+or mismatched manifests/raw bytes, malformed provenance and stale page
+preimages block recovery without scheduling cleanup. The coordinator returns
+typed errors such as `ErrSourceLifecycleInvalid`, `ErrRetirementPageStale` or a
+`CanonicalProvenanceFailure`; these are not proof fields to supply through the
+CLI. Inspect the reported failure and restore authentic missing evidence from
+a coherent backup when appropriate. Do not manufacture configuration digests,
+relabel adapters or insert lifecycle rows manually. Once the owner exists,
+use ordinary retirement status and page retry:
+
+```bash
+./knowl source status legacy-docs --retirement-adapter wiki-filesystem
+./knowl source retry legacy-docs --retirement-adapter wiki-filesystem --page-id concepts/example --dry-run
+./knowl source retry legacy-docs --retirement-adapter wiki-filesystem --page-id concepts/example
+```
+
+Keep the normal worker (`./knowl start`) running to execute queued work. Mixed
+pages are rewritten from current configured active evidence and valid accepted
+application/inline evidence, which needs no configured owner. Old-only pages
+are deleted through ordinary retirement. Neither outcome deletes immutable raw
+history. A failed ordinary source operation can then be inspected and retried
+with its existing `source status` / `source retry` workflow; retry does not
+substitute for retirement discovery.
 
 Preview a page-specific retry first, then requeue it through the same command
 without `--dry-run`. Omitting `--page-id` targets all failed page operations for

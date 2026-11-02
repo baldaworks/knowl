@@ -682,6 +682,10 @@ components:
         activated_epoch: {type: integer, format: int64}
         retirement_generation: {type: string}
         retirement_epoch: {type: integer, format: int64}
+        recovery_proof_digest:
+          type: string
+          description: Optional SHA-256 audit identity of proved historical ownership; it does not grant active configuration authority.
+          pattern: '^[a-f0-9]{64}$'
         readiness: {$ref: '#/components/schemas/SourceRetirementReadinessStatus'}
         discovery: {$ref: '#/components/schemas/SourceRetirementDiscovery'}
         operations: {$ref: '#/components/schemas/SourceRetirementOperationCounts'}

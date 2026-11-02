@@ -85,7 +85,7 @@ func TestSQLiteNativeLifecycleLegacyUpgrade(t *testing.T) {
 	if _, err := provider.Up(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	assertNativeMigrationState(t, provider, store.db, 27, 0, 0, 1)
+	assertNativeMigrationState(t, provider, store.db, 28, 0, 0, 1)
 	if !reflect.DeepEqual(before, nativeAuthoritativeRows(t, store.db)) {
 		t.Fatal("migration changed authoritative page/raw/source/operation rows")
 	}

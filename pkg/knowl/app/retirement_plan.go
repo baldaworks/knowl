@@ -274,6 +274,13 @@ func (planner *RetirementPlanner) PlanRetirement(ctx context.Context, request Re
 			return knowl.RetirementPlanResult{}, err
 		}
 		source := sources[ref]
+		if source.Source.Adapter != string(knowl.SourceAdapterFilesystem) && source.Source.Adapter != string(knowl.SourceAdapterGit) {
+			if !supportedRetirementMediaType(source.MediaType) {
+				return planner.failure(page.Path, ref, RetirementEvidenceUnsupportedCode, ErrRetirementEvidenceUnsupported)
+			}
+			active = append(active, retirementActiveSource{ref: ref, source: source})
+			continue
+		}
 		owner := sourceOwner(source)
 		state, exists := states[owner]
 		if !exists {
@@ -593,9 +600,8 @@ func normalizeRequestedRetirementRefs(input, pageRefs []string) ([]string, error
 }
 
 func validateResolvedRetirementSource(scope knowl.ScopeRef, ref string, source knowl.AcceptedSource) error {
-	owner := sourceOwner(source)
-	if source.Scope != scope || !SourceRefMatches(ref, source) || ValidateAcceptedSourceDescriptor(source) != nil ||
-		!strings.HasPrefix(source.ManifestRef, "raw/") || !strings.HasSuffix(source.ManifestRef, "/manifest.yaml") || ValidateSourceOwner(owner) != nil {
+	if source.Scope != scope || !SourceRefMatches(ref, source) || ValidateAcceptedProvenanceDescriptor(source) != nil ||
+		!strings.HasPrefix(source.ManifestRef, "raw/") || !strings.HasSuffix(source.ManifestRef, "/manifest.yaml") {
 		return ErrRetirementPlanInvalid
 	}
 	return nil
@@ -623,7 +629,7 @@ func normalizeAuthorizedRetiring(scope knowl.ScopeRef, input []knowl.SourceLifec
 func sameRetiringLifecycle(actual, expected knowl.SourceLifecycle) bool {
 	return actual.Scope == expected.Scope && actual.Owner == expected.Owner && actual.State == knowl.SourceLifecycleRetiring &&
 		actual.AuthorityGeneration == expected.AuthorityGeneration && actual.AuthorityEpoch == expected.AuthorityEpoch &&
-		actual.ConfigDigest == expected.ConfigDigest && actual.RetirementGeneration == expected.RetirementGeneration && actual.RetirementEpoch == expected.RetirementEpoch &&
+		actual.ConfigDigest == expected.ConfigDigest && actual.RecoveryProofDigest == expected.RecoveryProofDigest && actual.RetirementGeneration == expected.RetirementGeneration && actual.RetirementEpoch == expected.RetirementEpoch &&
 		actual.Ready == expected.Ready && actual.ReplacementPending == expected.ReplacementPending && actual.BlockerCode == expected.BlockerCode
 }
 
