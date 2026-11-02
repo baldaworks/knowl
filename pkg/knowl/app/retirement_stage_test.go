@@ -145,11 +145,33 @@ func TestRevalidateRetirementStageRequiresCurrentExactAuthorityAndOwners(t *test
 	}
 }
 
+func TestRevalidateRetirementStageBindsRecoveryProof(t *testing.T) {
+	fixture := newRetirementFixture(t)
+	owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: retirementTestLegacySourceID}
+	state := retirementLifecycle(owner, knowl.SourceLifecycleRetiring, fixture.authority)
+	state.ConfigDigest = ""
+	state.RecoveryProofDigest = strings.Repeat("d", 64)
+	fixture.states[owner] = state
+	staged := retirementStagedChange(fixture, state)
+	if err := app.RevalidateRetirementStage(t.Context(), fixture.lifecycle(), staged); err != nil {
+		t.Fatal(err)
+	}
+	staged.Retirement.Owners[0].RecoveryProofDigest = strings.Repeat("e", 64)
+	if err := app.RevalidateRetirementStage(t.Context(), fixture.lifecycle(), staged); !errors.Is(err, app.ErrRetirementLifecycleConflict) {
+		t.Fatalf("changed proof error = %v", err)
+	}
+	staged.Retirement.Owners[0].RecoveryProofDigest = ""
+	staged.Retirement.Owners[0].ConfigDigest = state.RecoveryProofDigest
+	if err := app.RevalidateRetirementStage(t.Context(), fixture.lifecycle(), staged); !errors.Is(err, app.ErrRetirementLifecycleConflict) {
+		t.Fatalf("proof as config error = %v", err)
+	}
+}
+
 func retirementStagedChange(fixture *retirementFixture, state knowl.SourceLifecycle) knowl.StagedChange {
 	return knowl.StagedChange{OperationID: "retire-one", Digest: strings.Repeat("f", 64), Files: []string{fixture.page.Path}, Retirement: &knowl.RetirementPlanContext{
 		Scope: retirementTestScope, PageID: "concepts/one", PagePath: "wiki/concepts/one.md", PageDigest: strings.Repeat("1", 64),
 		AuthorityGeneration: fixture.authority.Generation, AuthorityEpoch: fixture.authority.Epoch,
-		Owners: []knowl.RetirementOwnerAuthority{{Owner: state.Owner, ConfigDigest: state.ConfigDigest, RetirementGeneration: state.RetirementGeneration, RetirementEpoch: state.RetirementEpoch}},
+		Owners: []knowl.RetirementOwnerAuthority{{Owner: state.Owner, ConfigDigest: state.ConfigDigest, RecoveryProofDigest: state.RecoveryProofDigest, RetirementGeneration: state.RetirementGeneration, RetirementEpoch: state.RetirementEpoch}},
 	}}
 }
 

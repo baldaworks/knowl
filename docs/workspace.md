@@ -304,12 +304,24 @@ operation per affected page. A `wiki-filesystem:fastronome-wiki` owner and a
 `git:fastronome-wiki` owner are independent even when their IDs and documents
 match; the workspace never rewrites one ref into the other.
 
+When the historical exact owner has no lifecycle row, normal retirement
+advancement can recover it from a durable accepted source operation, a current
+canonical citation of that exact accepted descriptor, and matching immutable
+raw bytes. Recovery creates retirement authority only; it never infers the
+unknown historical configuration digest or aliases an old adapter to a current
+one. `RecoveryProofDigest` is separate from `ConfigDigest`, and the private
+bounded proof metadata survives later cleanup and genuine reactivation.
+Existing lifecycle rows, including deleted tombstones, are preserved. Until
+proof is discovered, the absent owner can still be reported as unowned.
+
 An unchanged page may retain its pre-transition retiring ref while it awaits its
 turn. A newly staged page may not introduce or retain that ref. An old-only page
 is deleted together with the smallest catalog closure required to keep the OKF
-graph valid. A mixed page is replaced using only active accepted evidence; its
-catalog membership can remain unchanged. Exact page and catalog digests are
-checked again at commit. Failure preserves that complete page unit and its
+graph valid. A mixed page is replaced using configured active accepted evidence
+and valid accepted application/inline evidence; inline evidence needs no
+configured source lifecycle. Its catalog membership can remain unchanged. Exact
+page and catalog digests are checked again at commit. Failure preserves that
+complete page unit and its
 path/target diagnostics, including all reasons that led to
 `plan.empty_safe_subset`, while unrelated page units may continue.
 
@@ -323,6 +335,12 @@ retiring its still-configured owner or deleting curated pages.
 Retirement uses the same page-local recovery journal as other canonical writes;
 there is no full-wiki snapshot, global rollback, or filesystem/search joint
 transaction. Keep one Host/coordinator in charge of a workspace writer set.
+
+Schema 28 is applied by ordinary startup after writers have stopped and a
+matching database/workspace backup has been taken. Downgrading that migration
+refuses to erase used recovery proof even after genuine reactivation; roll
+forward or restore a coherent backup with a compatible binary.
+
 For operational rollback, restore the exact removed source in configuration and
 let normal synchronization rebuild what remains necessary. Stop writers during
 a binary downgrade after retirement has begun and roll forward with the

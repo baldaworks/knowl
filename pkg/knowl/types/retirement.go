@@ -6,6 +6,7 @@ package knowl
 type RetirementOwnerAuthority struct {
 	Owner                SourceOwner `json:"owner" yaml:"owner"`
 	ConfigDigest         string      `json:"config_digest" yaml:"config_digest"`
+	RecoveryProofDigest  string      `json:"recovery_proof_digest,omitempty" yaml:"recovery_proof_digest,omitempty"`
 	RetirementGeneration string      `json:"retirement_generation" yaml:"retirement_generation"`
 	RetirementEpoch      uint64      `json:"retirement_epoch" yaml:"retirement_epoch"`
 }

@@ -335,6 +335,9 @@ the complete contract:
 | --- | --- |
 | Independent replacement | Shared lifecycle contracts keep equal-ID filesystem/Git owners distinct; source reconcile independently fetches an equal revision under the Git adapter. |
 | Durable lifecycle | SQLite and integration-tagged PostgreSQL lifecycle contracts exercise active/retiring/deleted CAS, restart, cancellation, re-addition, and concurrent finalization. |
+| Missing historical owner | Real filesystem/SQLite automatic advancement authenticates durable operation, current citation and immutable raw; unmatched provenance windows continue, while stale, tampered and uncited proof creates no owner. |
+| Recovery persistence | Shared SQLite/PostgreSQL contracts cover bounded candidate windows, invalid descriptors, readiness, concurrent activation, existing tombstones, restart and preserved private audit; migration 27→28 preserves rows and indexes, and Down refuses used proof. |
+| Mixed inline evidence | Resolver, canonical provenance, planner and page service retain accepted inline facts without a configured lifecycle while configured filesystem/Git descriptors remain strict. |
 | Replacement ordering | runtime lifecycle and coordinator fixtures block discovery until all additions are ready and allow pure deletion immediately. |
 | Retiring-ref containment | filesystem staging rejects retained or newly introduced refs with typed owner/path diagnostics while canonical pre-transition pages remain readable. |
 | Old-only deletion | planner and real workspace fixtures delete one page with its exact catalog closure and preimages. |
@@ -358,6 +361,31 @@ go test -count=1 ./pkg/knowl/app ./pkg/knowl/content/fs \
 go test -tags integration -count=1 ./pkg/knowl/store/postgres \
   -run 'TestPostgresSourceLifecycleContract|TestStoreContractWithTestcontainers'
 ```
+
+Reproduce the historical missing-owner repair locally without a model or an
+external eval corpus:
+
+```sh
+go test -count=1 ./pkg/knowl -run 'TestAutomaticRetirementRecoversHistoricalOwner|TestLegacyFilesystemIncidentAutomaticallyRetiresAndRetriesThreeDocuments'
+go test -count=1 ./pkg/knowl/store/sqlite \
+  -run 'TestSQLiteSourceLifecycleRecovery|TestSQLiteSourceRecoveryMigrationPreservesRowsAndAudit'
+go test -tags integration -count=1 ./pkg/knowl/store/postgres \
+  -run '^TestPostgresSourceRecoveryWithTestcontainers$'
+go test -count=1 ./pkg/knowl/app ./pkg/knowl/content/fs \
+  -run 'TestAcceptedProvenanceKeepsConfiguredOwnershipStrict|TestRetirementPlannerPreservesAcceptedInlineEvidenceWithoutLifecycle|TestRetirementPlannerAuthenticatesInlineRawAndMedia|TestRetirementPageServiceCommitsMixedInlineEvidenceWithoutConfiguredOwner|TestPageProvenanceAndResolverPreserveAcceptedInlineEvidence|TestAcceptedResolverRejectsConfiguredSourceWithoutDocument'
+```
+
+The three-document incident fixture uses the original legacy reference and
+document identities with synthetic local facts. It first observes the three
+ordinary maintenance failures, then runs automatic retirement and normal
+retry to committed status. It verifies old-only deletion, retained Git/inline
+facts, and unchanged raw bytes and accepted operation descriptors.
+
+The integration command starts PostgreSQL through Testcontainers and requires
+Docker. Recovery readiness fixtures deliberately allow pending maintenance
+when accepted-sync readiness is true; operation completion is not a recovery
+prerequisite. These deterministic fixtures establish local behavior, not a
+production repair result or a retrieval benchmark.
 
 The full repository race run remains mandatory for this contract; focused race
 runs are diagnostic aids, not substitutes.

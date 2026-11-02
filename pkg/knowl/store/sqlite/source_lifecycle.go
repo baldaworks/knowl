@@ -17,7 +17,7 @@ const sourceLifecycleColumns = `scope, adapter, source_id, state, config_digest,
 authority_generation, authority_epoch, activated_generation, activated_epoch,
 retirement_generation, retirement_epoch, scan_cursor,
 scan_round_matches, scan_complete, ready, replacement_pending, blocker_code, activated_at, retiring_at,
-deleted_at, updated_at`
+deleted_at, updated_at, recovery_proof_digest, recovery_proof_payload`
 
 func (store *Store) ReconcileSourceLifecycles(ctx context.Context, request app.SourceLifecycleReconcileRequest) error {
 	normalized, err := app.NormalizeSourceLifecycleReconcile(request)
@@ -172,6 +172,7 @@ WHERE scope = ? AND state = 'retiring' AND retirement_epoch = ?`, updatedAt, nor
 			}
 			next := current
 			next.State, next.ConfigDigest = knowl.SourceLifecycleActive, item.ConfigDigest
+			next.RecoveryProofDigest = ""
 			next.AuthorityGeneration, next.AuthorityEpoch = normalized.AuthorityGeneration, nextEpoch
 			next.ActivatedGeneration, next.ActivatedEpoch = normalized.AuthorityGeneration, nextEpoch
 			next.ScanCursor, next.ScanRoundMatches, next.ScanComplete, next.Ready, next.ReplacementPending, next.BlockerCode = "", 0, false, false, 0, ""
@@ -180,7 +181,7 @@ WHERE scope = ? AND state = 'retiring' AND retirement_epoch = ?`, updatedAt, nor
 				return app.ErrSourceLifecycleInvalid
 			}
 			result, execErr := tx.ExecContext(ctx, `UPDATE knowl_source_lifecycle SET
-state = 'active', config_digest = ?, authority_generation = ?, authority_epoch = ?, activated_generation = ?, activated_epoch = ?,
+state = 'active', config_digest = ?, recovery_proof_digest = '', authority_generation = ?, authority_epoch = ?, activated_generation = ?, activated_epoch = ?,
 scan_cursor = '', scan_round_matches = 0, scan_complete = 0, ready = 0, replacement_pending = 0, blocker_code = '',
 activated_at = ?, retiring_at = '', deleted_at = '', updated_at = ?
 WHERE scope = ? AND adapter = ? AND source_id = ? AND state = ? AND authority_epoch = ?`, item.ConfigDigest, normalized.AuthorityGeneration,
@@ -489,6 +490,7 @@ type lifecycleScanner interface{ Scan(dest ...any) error }
 
 func scanSQLiteSourceLifecycle(scanner lifecycleScanner) (knowl.SourceLifecycle, error) {
 	var state knowl.SourceLifecycle
+	var recoveryPayload string
 	var adapter, sourceID, lifecycleState string
 	var authorityEpoch, activatedEpoch, retirementEpoch int64
 	var scanComplete, ready int
@@ -496,7 +498,7 @@ func scanSQLiteSourceLifecycle(scanner lifecycleScanner) (knowl.SourceLifecycle,
 	err := scanner.Scan(&state.Scope, &adapter, &sourceID, &lifecycleState, &state.ConfigDigest,
 		&state.AuthorityGeneration, &authorityEpoch, &state.ActivatedGeneration, &activatedEpoch,
 		&state.RetirementGeneration, &retirementEpoch, &state.ScanCursor,
-		&state.ScanRoundMatches, &scanComplete, &ready, &state.ReplacementPending, &state.BlockerCode, &activatedAt, &retiringAt, &deletedAt, &updatedAt)
+		&state.ScanRoundMatches, &scanComplete, &ready, &state.ReplacementPending, &state.BlockerCode, &activatedAt, &retiringAt, &deletedAt, &updatedAt, &state.RecoveryProofDigest, &recoveryPayload)
 	if err != nil {
 		return knowl.SourceLifecycle{}, err
 	}
@@ -519,7 +521,7 @@ func scanSQLiteSourceLifecycle(scanner lifecycleScanner) (knowl.SourceLifecycle,
 	if state.UpdatedAt, err = parseTime(updatedAt); err != nil {
 		return knowl.SourceLifecycle{}, app.ErrSourceLifecycleInvalid
 	}
-	if app.ValidateSourceLifecycle(state) != nil {
+	if app.ValidateSourceLifecycle(state) != nil || app.ValidateSourceLifecycleRecoveryPayload(state, recoveryPayload) != nil {
 		return knowl.SourceLifecycle{}, app.ErrSourceLifecycleInvalid
 	}
 	return state, nil

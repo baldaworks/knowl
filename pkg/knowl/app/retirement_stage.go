@@ -67,7 +67,7 @@ func ValidateRetirementPlanContext(retirement *knowl.RetirementPlanContext) erro
 	}
 	var previous knowl.SourceOwner
 	for index, authorized := range retirement.Owners {
-		if ValidateSourceOwner(authorized.Owner) != nil || !validExecutionDigest(authorized.ConfigDigest) || !validExecutionDigest(authorized.RetirementGeneration) ||
+		if ValidateSourceOwner(authorized.Owner) != nil || ValidateRetirementOwnerBinding(authorized.ConfigDigest, authorized.RecoveryProofDigest) != nil || !validExecutionDigest(authorized.RetirementGeneration) ||
 			authorized.RetirementEpoch == 0 || authorized.RetirementEpoch > retirement.AuthorityEpoch {
 			return ErrRetirementLifecycleConflict
 		}
@@ -103,7 +103,7 @@ func RevalidateRetirementStage(ctx context.Context, lifecycles SourceLifecycleRe
 		}
 		if stateErr != nil || ValidateSourceLifecycle(state) != nil || state.Scope != retirement.Scope || state.Owner != authorized.Owner ||
 			state.State != knowl.SourceLifecycleRetiring || state.AuthorityGeneration != retirement.AuthorityGeneration || state.AuthorityEpoch != retirement.AuthorityEpoch ||
-			state.ConfigDigest != authorized.ConfigDigest || state.RetirementGeneration != authorized.RetirementGeneration || state.RetirementEpoch != authorized.RetirementEpoch ||
+			state.ConfigDigest != authorized.ConfigDigest || state.RecoveryProofDigest != authorized.RecoveryProofDigest || state.RetirementGeneration != authorized.RetirementGeneration || state.RetirementEpoch != authorized.RetirementEpoch ||
 			state.ReplacementPending != 0 || state.BlockerCode != "" {
 			return errors.Join(ErrRetirementLifecycleConflict, stateErr)
 		}
@@ -237,7 +237,7 @@ func retirementPlanContext(request RetirementPlanningRequest) (*knowl.Retirement
 			return nil, ErrRetirementLifecycleConflict
 		}
 		seen[state.Owner] = struct{}{}
-		owners = append(owners, knowl.RetirementOwnerAuthority{Owner: state.Owner, ConfigDigest: state.ConfigDigest, RetirementGeneration: state.RetirementGeneration, RetirementEpoch: state.RetirementEpoch})
+		owners = append(owners, knowl.RetirementOwnerAuthority{Owner: state.Owner, ConfigDigest: state.ConfigDigest, RecoveryProofDigest: state.RecoveryProofDigest, RetirementGeneration: state.RetirementGeneration, RetirementEpoch: state.RetirementEpoch})
 	}
 	sort.Slice(owners, func(left, right int) bool {
 		if owners[left].Owner.Adapter != owners[right].Owner.Adapter {

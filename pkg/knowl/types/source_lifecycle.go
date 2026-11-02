@@ -34,6 +34,7 @@ type SourceLifecycle struct {
 	Owner                SourceOwner          `json:"owner"`
 	State                SourceLifecycleState `json:"state"`
 	ConfigDigest         string               `json:"config_digest"`
+	RecoveryProofDigest  string               `json:"recovery_proof_digest,omitempty"`
 	AuthorityGeneration  string               `json:"authority_generation"`
 	AuthorityEpoch       uint64               `json:"authority_epoch"`
 	ActivatedGeneration  string               `json:"activated_generation"`
@@ -92,6 +93,7 @@ type SourceRetirementReadinessStatus struct {
 
 // SourceRetirementStatus is the typed operator view of one exact owner.
 type SourceRetirementStatus struct {
+	RecoveryProofDigest  string                          `json:"recovery_proof_digest,omitempty"`
 	Owner                SourceOwner                     `json:"owner"`
 	State                SourceLifecycleState            `json:"state"`
 	AuthorityGeneration  string                          `json:"authority_generation"`

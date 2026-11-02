@@ -107,7 +107,7 @@ func runSourceLifecycleMigrationPostgres(t *testing.T, dsn string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.UpTo(ctx, 23); err != nil {
+	if _, err := provider.UpTo(ctx, 28); err != nil {
 		t.Fatal(err)
 	}
 	store := &Store{db: db}

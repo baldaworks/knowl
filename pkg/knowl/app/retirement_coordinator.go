@@ -130,18 +130,21 @@ type SourceRetirementCoordinatorDependencies struct {
 
 // SourceRetirementCoordinator advances exact owners in bounded windows.
 type SourceRetirementCoordinator struct {
-	scope            knowl.ScopeRef
-	lifecycles       SourceLifecycleStore
-	provenance       CanonicalProvenanceReader
-	pages            RetirementPageReserver
-	operations       RetirementOperationStore
-	projection       RetirementProjectionReader
-	applyCoordinator ApplyCoordinator
-	limits           CanonicalProvenanceLimits
-	now              func() time.Time
-	wake             func(knowl.OperationID)
-	advanceMu        sync.Mutex
-	ownerCursor      knowl.SourceOwner
+	scope             knowl.ScopeRef
+	lifecycles        SourceLifecycleStore
+	provenance        CanonicalProvenanceReader
+	pages             RetirementPageReserver
+	operations        RetirementOperationStore
+	projection        RetirementProjectionReader
+	applyCoordinator  ApplyCoordinator
+	limits            CanonicalProvenanceLimits
+	now               func() time.Time
+	wake              func(knowl.OperationID)
+	advanceMu         sync.Mutex
+	ownerCursor       knowl.SourceOwner
+	recoveryAfter     knowl.OperationID
+	recoveryCandidate *OrphanSourceOperation
+	recoveryCursor    CanonicalProvenanceCursor
 }
 
 // SourceRetirementAdvanceResult describes one bounded coordinator step.
@@ -200,6 +203,7 @@ func (coordinator *SourceRetirementCoordinator) Advance(ctx context.Context) ([]
 	coordinator.advanceMu.Lock()
 	defer coordinator.advanceMu.Unlock()
 	ctx = nonNilContext(ctx)
+	recoveryErr := coordinator.recoverOrphan(ctx)
 	states, err := coordinator.lifecycles.SourceLifecycles(ctx, coordinator.scope, SourceLifecycleListOptions{
 		State: knowl.SourceLifecycleRetiring, After: coordinator.ownerCursor, Limit: maxSourceLifecycleList,
 	})
@@ -220,6 +224,9 @@ func (coordinator *SourceRetirementCoordinator) Advance(ctx context.Context) ([]
 	}
 	results := make([]SourceRetirementAdvanceResult, 0, len(states))
 	failures := make([]error, 0)
+	if recoveryErr != nil && !knownRetirementBlocker(recoveryErr) {
+		failures = append(failures, recoveryErr)
+	}
 	for _, state := range states {
 		result, advanceErr := coordinator.advanceOwner(ctx, state.Owner)
 		results = append(results, result)
@@ -391,7 +398,8 @@ func (coordinator *SourceRetirementCoordinator) Status(ctx context.Context, owne
 		return knowl.SourceRetirementStatus{}, ErrSourceLifecycleInvalid
 	}
 	status := knowl.SourceRetirementStatus{
-		Owner: state.Owner, State: state.State, AuthorityGeneration: state.AuthorityGeneration, AuthorityEpoch: state.AuthorityEpoch,
+		RecoveryProofDigest: state.RecoveryProofDigest,
+		Owner:               state.Owner, State: state.State, AuthorityGeneration: state.AuthorityGeneration, AuthorityEpoch: state.AuthorityEpoch,
 		ActivatedGeneration: state.ActivatedGeneration, ActivatedEpoch: state.ActivatedEpoch,
 		RetirementGeneration: state.RetirementGeneration, RetirementEpoch: state.RetirementEpoch,
 		Discovery:   knowl.SourceRetirementDiscovery{Cursor: retirementCursorToken(state.ScanCursor), EOF: state.ScanComplete, RoundMatches: state.ScanRoundMatches},

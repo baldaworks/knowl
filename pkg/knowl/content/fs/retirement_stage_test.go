@@ -624,3 +624,42 @@ func retirementPageSourceRef(t *testing.T, workspace *Workspace) string {
 	}
 	return pages[0].SourceRefs[0]
 }
+
+func TestWorkspaceRetirementPreservesAcceptedInlineWithoutGrantingRemoval(t *testing.T) {
+	for _, retain := range []bool{true, false} {
+		t.Run(map[bool]string{true: "retain", false: "remove"}[retain], func(t *testing.T) {
+			workspace, plan, lifecycle := retirementDeleteFixture(t)
+			raw := []byte("application fact")
+			accepted, err := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{Scope: testScope, Source: knowl.SourceRef{Adapter: "inline", ID: "application"}, Version: knowl.SourceVersion{Version: "v1", Digest: digestBytes(raw)}, MediaType: operatorPlainText, Content: raw})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := app.SourceRefKey(accepted)
+			before := validWorkspacePageRefs(testPageOneID, "One", []string{retirementPageSourceRef(t, workspace), ref}, "old plus application fact")
+			writeCanonicalFixture(t, workspace, testPageOnePath, before)
+			plan.Retirement.PageDigest = digestBytes(before)
+			plan.Edits[0].ExpectedDigest = plan.Retirement.PageDigest
+			if retain {
+				plan.SourceRefs = []string{ref}
+				plan.Edits = []knowl.FileEdit{{Action: knowl.SourceMutationWrite, Path: testPageOnePath, ExpectedDigest: plan.Retirement.PageDigest, Content: validWorkspacePage(testPageOneID, "One", ref, "application fact")}}
+			}
+			staged, err := workspace.StagePlan(t.Context(), plan)
+			if !retain {
+				if !errors.Is(err, ErrContentInvalid) {
+					t.Fatalf("inline removal granted: stage=%#v err=%v", staged, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = commitRetirementForTest(t.Context(), newRetirementFSCoordinator(), lifecycle, workspace, staged); err != nil {
+				t.Fatal(err)
+			}
+			pages, err := workspace.ReadPages(t.Context(), testScope, []knowl.PageID{testPageOneID}, app.DefaultReadLimits())
+			if err != nil || len(pages) != 1 || !slices.Equal(pages[0].SourceRefs, []string{ref}) {
+				t.Fatalf("inline not preserved: %#v %v", pages, err)
+			}
+		})
+	}
+}

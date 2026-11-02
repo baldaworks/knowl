@@ -256,7 +256,7 @@ func NormalizeSourceLifecycleListOptions(options SourceLifecycleListOptions) (So
 // ValidateSourceLifecycle verifies a decoded durable row before it is trusted.
 func ValidateSourceLifecycle(state knowl.SourceLifecycle) error {
 	if strings.TrimSpace(string(state.Scope)) == "" || ValidateSourceOwner(state.Owner) != nil ||
-		!validSHA256(state.ConfigDigest) || !validSHA256(state.AuthorityGeneration) ||
+		ValidateRetirementOwnerBinding(state.ConfigDigest, state.RecoveryProofDigest) != nil || !validSHA256(state.AuthorityGeneration) ||
 		state.AuthorityEpoch > math.MaxInt64 || state.ActivatedEpoch > math.MaxInt64 || state.RetirementEpoch > math.MaxInt64 ||
 		state.ActivatedEpoch > state.AuthorityEpoch || state.RetirementEpoch > state.AuthorityEpoch ||
 		!validSHA256(state.ActivatedGeneration) ||
@@ -271,7 +271,7 @@ func ValidateSourceLifecycle(state knowl.SourceLifecycle) error {
 	}
 	switch state.State {
 	case knowl.SourceLifecycleActive:
-		if (state.AuthorityEpoch == 0) != (state.ActivatedEpoch == 0) || state.Ready && state.ActivatedEpoch == 0 ||
+		if state.RecoveryProofDigest != "" || !validSHA256(state.ConfigDigest) || (state.AuthorityEpoch == 0) != (state.ActivatedEpoch == 0) || state.Ready && state.ActivatedEpoch == 0 ||
 			!state.RetiringAt.IsZero() || !state.DeletedAt.IsZero() ||
 			state.ScanCursor != "" || state.ScanRoundMatches != 0 || state.ScanComplete || state.ReplacementPending != 0 || state.BlockerCode != "" {
 			return ErrSourceLifecycleInvalid
