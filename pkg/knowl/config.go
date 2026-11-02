@@ -81,6 +81,7 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	Embeddings      EmbeddingsConfig
 	Output          domain.OutputSettings
+	Timeouts        TimeoutsConfig
 }
 
 // DefaultConfig returns conservative local defaults.
@@ -144,6 +145,10 @@ func (config Config) normalized() (Config, error) {
 		return Config{}, fmt.Errorf("resolve workspace: %w", err)
 	}
 	config.Workspace = filepath.Clean(workspace)
+	config.Timeouts, err = config.Timeouts.Normalize()
+	if err != nil {
+		return Config{}, err
+	}
 	config.Embeddings, err = config.Embeddings.Normalize()
 	if err != nil {
 		return Config{}, err

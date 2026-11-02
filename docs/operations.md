@@ -646,6 +646,31 @@ stores expose the latest 100 records through `HierarchyRetryHistory`. Graph
 failures include bounded diagnostic codes, paths, and targets, such as
 `hierarchy.missing_child`, without storing provider candidate text.
 
+Operational execution budgets are configured independently from model planning:
+
+```yaml
+knowl:
+  timeouts:
+    projection_rebuild: 60m
+    hierarchy: 65m
+```
+
+`projection_rebuild` bounds a complete dense build, including startup repair and
+SQLite/PostgreSQL projection publication. Its default is 15 minutes.
+`hierarchy` bounds the complete explicit reconciliation, including slot admission,
+planning, canonical commit and publication. When omitted or zero, it defaults to
+the projection budget plus five minutes (20 minutes with default settings).
+An explicit positive hierarchy duration overrides this derived value; choose it
+large enough for both planning and publication. Negative durations and overflow
+of the derived budget are rejected. A shorter caller deadline still wins.
+
+The model's existing five-minute correction deadline is unchanged. Operational
+timeouts do not change model-space or maintenance-generation identity and do not
+requeue already committed documents. Match startup probes and deployment rollout
+budgets to the configured full-build time. Builds remain atomic and restartable,
+but currently do not checkpoint individual embedding batches: inspect the saved
+operation and use native recovery after a timeout instead of editing the database.
+
 Planner identity includes `hierarchy-v3` and the effective output policy in the
 durable operation identity. Planning uses deterministically ordered,
 bounded page metadata, excerpts, current memberships, and the schema digest;

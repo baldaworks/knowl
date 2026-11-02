@@ -58,7 +58,7 @@ func (host *Host) ReconcileHierarchy(ctx context.Context) (app.IngestResult, err
 	if service == nil {
 		return app.IngestResult{}, app.ErrMaintainerUnavailable
 	}
-	bounded, cancel := context.WithTimeout(ctx, app.MaxCorrectionDeadline)
+	bounded, cancel := context.WithTimeout(ctx, host.config.Timeouts.Hierarchy)
 	defer cancel()
 	use, err := host.slots.acquire(bounded)
 	if err != nil {
