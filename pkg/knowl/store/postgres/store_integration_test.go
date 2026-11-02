@@ -77,6 +77,16 @@ func TestStoreContractWithTestcontainers(t *testing.T) {
 			return store
 		}, func(err error) bool { return errors.Is(err, ErrProjectionDrift) })
 	})
+	t.Run("operational-timeouts", func(t *testing.T) {
+		searchtest.RunHybridOperationalTimeouts(t, func(t *testing.T, options ...app.EmbeddingOptions) searchtest.HybridIndex {
+			t.Helper()
+			store, err := Open(t.Context(), dsn, options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store
+		})
+	})
 	t.Run("embeddings", func(t *testing.T) { runEmbeddingPostgres(t, dsn) })
 	t.Run("generic", func(t *testing.T) { runGenericPostgres(t, dsn) })
 	runStoreContract(t, dsn)

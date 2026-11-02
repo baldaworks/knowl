@@ -76,3 +76,14 @@ func TestSQLiteSharedHybridContract(t *testing.T) {
 		return store
 	}, func(err error) bool { return errors.Is(err, ErrProjectionDrift) })
 }
+
+func TestHybridOperationalTimeouts(t *testing.T) {
+	searchtest.RunHybridOperationalTimeouts(t, func(t *testing.T, options ...app.EmbeddingOptions) searchtest.HybridIndex {
+		t.Helper()
+		store, err := Open(t.Context(), t.TempDir()+"/budget.sqlite", options...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	})
+}

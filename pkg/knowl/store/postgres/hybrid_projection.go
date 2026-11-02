@@ -20,7 +20,7 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	if store.embedding == nil {
 		return store.Rebuild(ctx, snapshot)
 	}
-	ctx, cancel := context.WithTimeout(ctx, hybrid.RebuildTimeout)
+	ctx, cancel := context.WithTimeout(ctx, store.embedding.RebuildTimeout())
 	defer cancel()
 	prior, err := store.previousProjection(ctx, snapshot.Scope)
 	if err != nil {
@@ -168,7 +168,7 @@ func previousPagesTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef) ([]k
 }
 
 func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
-	return store.rebuildWithTimeout(ctx, snapshot, hybrid.RebuildTimeout)
+	return store.rebuildWithTimeout(ctx, snapshot, store.embedding.RebuildTimeout())
 }
 
 func (store *Store) rebuildWithTimeout(ctx context.Context, snapshot knowl.WorkspaceSnapshot, timeout time.Duration) error {
@@ -248,7 +248,7 @@ func (store *Store) MaintenanceRetrievalPolicy() *app.MaintenanceRetrievalPolicy
 func (store *Store) ProjectWithoutInference(ctx context.Context, commit knowl.ContentCommit) error {
 	if store.embedding != nil {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hybrid.RebuildTimeout)
+		ctx, cancel = context.WithTimeout(ctx, store.embedding.RebuildTimeout())
 		defer cancel()
 	}
 	snapshot := commit.Snapshot

@@ -10,10 +10,22 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
+	"github.com/baldaworks/knowl/pkg/knowl"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
+
+func TestHostConfigDecodesOperationalTimeouts(t *testing.T) {
+	ctx := loadTestConfig(t, testConfigOptions{knowl: "provider: codex\ntimeouts:\n  projection_rebuild: 1h\n  hierarchy: 65m\n"})
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Timeouts != (knowl.TimeoutsConfig{ProjectionRebuild: time.Hour, Hierarchy: 65 * time.Minute}) {
+		t.Fatalf("operational timeouts were not decoded: %+v", config.Timeouts)
+	}
+}
 
 func TestLoadConfigUsesDefaultInternalIngestPolicyWhenConfigOmitsIt(t *testing.T) {
 	ctx := loadTestConfig(t, testConfigOptions{knowl: "provider: codex\n"})

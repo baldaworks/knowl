@@ -13,15 +13,15 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-const RebuildTimeout = 15 * time.Minute
 const FusionRankConstant = 60
 
 // Engine is immutable for one store lifetime. It owns no SQL transactions.
 type Engine struct {
-	Provider      app.EmbeddingProvider
-	Space         app.EmbeddingSpace
-	Fingerprint   string
-	FailurePolicy app.EmbeddingFailurePolicy
+	Provider       app.EmbeddingProvider
+	Space          app.EmbeddingSpace
+	Fingerprint    string
+	FailurePolicy  app.EmbeddingFailurePolicy
+	rebuildTimeout time.Duration
 }
 
 func New(options []app.EmbeddingOptions) (*Engine, error) {
@@ -33,10 +33,13 @@ func New(options []app.EmbeddingOptions) (*Engine, error) {
 	}
 	option := options[0]
 	if option.Provider == nil {
-		if option.Space != (app.EmbeddingSpace{}) || option.FailurePolicy != "" {
+		if option.Space != (app.EmbeddingSpace{}) || option.FailurePolicy != "" || option.RebuildTimeout != 0 {
 			return nil, failure(knowl.RetrievalInvalidConfiguration)
 		}
 		return nil, nil
+	}
+	if option.RebuildTimeout < 0 {
+		return nil, failure(knowl.RetrievalInvalidConfiguration)
 	}
 	space, err := app.NormalizeEmbeddingSpace(option.Space)
 	if err != nil {
@@ -53,7 +56,15 @@ func New(options []app.EmbeddingOptions) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{Provider: option.Provider, Space: space, Fingerprint: hash, FailurePolicy: policy}, nil
+	return &Engine{Provider: option.Provider, Space: space, Fingerprint: hash, FailurePolicy: policy, rebuildTimeout: option.RebuildTimeout}, nil
+}
+
+// RebuildTimeout returns the complete-build budget, including for an inert engine.
+func (engine *Engine) RebuildTimeout() time.Duration {
+	if engine == nil || engine.rebuildTimeout == 0 {
+		return app.DefaultProjectionRebuildTimeout
+	}
+	return engine.rebuildTimeout
 }
 
 // Build stages complete bounded vectors outside all SQL locks. Its caller first
@@ -128,7 +139,7 @@ func (engine *Engine) authenticatedPrevious(ctx context.Context, state Projectio
 
 func (engine *Engine) build(ctx context.Context, snapshot knowl.WorkspaceSnapshot, digest string, reusable map[knowl.PageID]map[string][]float32) (ProjectionState, []Chunk, error) {
 	state := ProjectionState{Space: engine.Fingerprint, SnapshotDigest: digest, Dimensions: engine.Space.Dimensions, Mode: knowl.RetrievalHybrid, ReadyAt: time.Now().UTC()}
-	buildCtx, cancel := context.WithTimeout(ctx, RebuildTimeout)
+	buildCtx, cancel := context.WithTimeout(ctx, engine.RebuildTimeout())
 	defer cancel()
 	pages := append([]knowl.PageSnapshot(nil), snapshot.Pages...)
 	sort.Slice(pages, func(i, j int) bool { return pages[i].ID < pages[j].ID })

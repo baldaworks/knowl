@@ -85,6 +85,7 @@ func hostConfig(ctx context.Context) (knowl.Config, error) {
 	config.Web = loaded.Document.Knowl.Web
 	config.Embeddings = loaded.Document.Knowl.Embeddings
 	config.Output = loaded.Document.Knowl.Output
+	config.Timeouts = loaded.Document.Knowl.Timeouts
 	config.Workers = loaded.Document.Knowl.Workers
 	sources := make([]types.Source, 0, len(loaded.Document.Knowl.Sources))
 	for _, configured := range loaded.Document.Knowl.Sources {

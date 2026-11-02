@@ -30,6 +30,13 @@ func openStore(ctx context.Context, config Config) (operationalStore, error) {
 	if err != nil {
 		return operationalStore{}, err
 	}
+	timeouts, err := config.Timeouts.Normalize()
+	if err != nil {
+		return operationalStore{}, err
+	}
+	for i := range embedding {
+		embedding[i].RebuildTimeout = timeouts.ProjectionRebuild
+	}
 	switch config.StoreDriver {
 	case StoreSQLite:
 		store, err := sqlite.Open(ctx, config.StorePath, embedding...)
