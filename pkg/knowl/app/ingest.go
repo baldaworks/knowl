@@ -821,7 +821,7 @@ func (service *IngestService) saveStagedPlan(ctx context.Context, operation know
 	// Failure evidence is separate from commit-bound plan warnings. Clear the
 	// previous attempt before SavePlan records the current staged warnings.
 	if len(operation.Diagnostics) > 0 {
-		if err := saveFailureDiagnostics(durableContext(ctx), service.operations, operation, nil, nil, nil); err != nil {
+		if err := saveFailureDiagnostics(durableContext(ctx), service.operations, operation.Key.Scope, operation, nil, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -924,7 +924,7 @@ func (service *IngestService) failIngest(ctx context.Context, result IngestResul
 		return result, cause
 	}
 	stateCtx := durableContext(ctx)
-	if err := saveFailureDiagnostics(stateCtx, service.operations, result.Operation, nil, result.Staged.Diagnostics, cause); err != nil {
+	if err := saveFailureDiagnostics(stateCtx, service.operations, result.Operation.Key.Scope, result.Operation, nil, result.Staged.Diagnostics, cause); err != nil {
 		return result, errors.Join(cause, err)
 	}
 	failure := executionFailure(class, result.Operation.ID, cause)
@@ -944,7 +944,7 @@ func (service *IngestService) failApply(ctx context.Context, scope knowl.ScopeRe
 		return ApplyResult{Operation: operation}, cause
 	}
 	stateCtx := durableContext(ctx)
-	if err := saveApplyFailureDiagnostics(stateCtx, service.operations, operation, cause, planDiagnostics); err != nil {
+	if err := saveApplyFailureDiagnostics(stateCtx, service.operations, operation.Key.Scope, operation, cause, planDiagnostics); err != nil {
 		return ApplyResult{Operation: operation}, errors.Join(cause, err)
 	}
 	failure := executionFailure(class, id, cause)

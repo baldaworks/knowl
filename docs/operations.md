@@ -612,13 +612,39 @@ catalogs, stop other writers and run:
 ./knowl validate
 ```
 
-This is the only hierarchy-specific mutation command. It constructs the normal
+This command constructs the normal
 provider, workspace, and selected store in process, claims exactly its reserved
 hierarchy operation, and does not start HTTP, the general operation scheduler,
 source jobs, or configured `on_start` synchronization. Output is structured
 JSON. A changed result includes its generation and affected catalog/log files;
 a converged replay returns `"changed":false` and leaves the canonical digest
 unchanged.
+
+If planning failed before a plan was staged (for example,
+`provider_output_exhausted` with `hierarchy_plan_invalid`), preview and retry that
+operation explicitly:
+
+```bash
+./knowl hierarchy retry <operation-id> --dry-run
+./knowl hierarchy retry <operation-id>
+./knowl hierarchy reconcile
+./knowl validate
+```
+
+The preview returns JSON without changing state or invoking the provider. The
+retry atomically archives the failed attempt and requeues the same operation;
+`reconcile` claims it and invokes planning again. The schema, snapshot, and
+planner/output policy must still match. Active, committed, wrong-kind, stale,
+and already staged operations are rejected. Existing staged work follows the
+normal replay path rather than replacing its plan. No database edits or catalog
+changes are required to reset a failed planning attempt.
+
+Migration 29 adds durable hierarchy retry history to SQLite and PostgreSQL.
+Work-attempt and manual-retry counters remain cumulative. Previous failures,
+correction summaries, and structured graph diagnostics survive later attempts;
+stores expose the latest 100 records through `HierarchyRetryHistory`. Graph
+failures include bounded diagnostic codes, paths, and targets, such as
+`hierarchy.missing_child`, without storing provider candidate text.
 
 Planner identity includes `hierarchy-v3` and the effective output policy in the
 durable operation identity. Planning uses deterministically ordered,

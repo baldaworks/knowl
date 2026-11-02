@@ -272,30 +272,32 @@ func TestValidateHierarchyPlanRejectsUnsafeOrIncompleteGraphs(t *testing.T) {
 		edit    func(*knowl.HierarchyInput, *knowl.HierarchyModelPlan, *HierarchyValidationOptions)
 		wantErr error
 		path    string
+		code    string
+		target  string
 	}{
 		{name: "schema digest mismatch", edit: func(_ *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			plan.SchemaDigest = strings.Repeat("f", 64)
 		}, wantErr: ErrHierarchyDigestMismatch},
 		{name: "missing ordinary page", edit: func(_ *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			catalogSpec(plan, hierarchyProductCat).Children = []string{hierarchyGlossary}
-		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyRoadmap},
+		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyRoadmap, code: "hierarchy.unreachable_page"},
 		{name: "catalog cycle", edit: func(_ *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			architecture := catalogSpec(plan, hierarchyArchitectureCat)
 			architecture.Children = append(architecture.Children, hierarchyRootPath)
-		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyRootPath},
+		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyRootPath, code: "hierarchy.cycle"},
 		{name: "unreachable catalog", edit: func(input *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			input.MinRootCatalogs = 1
 			catalogSpec(plan, hierarchyRootPath).Children = []string{hierarchyArchitectureCat, hierarchyRoadmap, hierarchyGlossary}
-		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyProductCat},
+		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyProductCat, code: "hierarchy.unreachable_catalog"},
 		{name: "flat multi-domain root", edit: func(_ *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			plan.Catalogs = []knowl.HierarchyCatalogSpec{{Path: hierarchyRootPath, Title: hierarchyRootTitle, Children: []string{
 				hierarchyArchitecture, hierarchyRoadmap, hierarchyGlossary,
 			}}}
-		}, wantErr: ErrHierarchyPlanInvalid, path: "semantic child catalogs"},
+		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyRootPath, code: "hierarchy.root_catalogs"},
 		{name: "broken target", edit: func(_ *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			architecture := catalogSpec(plan, hierarchyArchitectureCat)
 			architecture.Children = append(architecture.Children, "wiki/concepts/missing.md")
-		}, wantErr: ErrHierarchyPlanInvalid, path: "wiki/concepts/missing.md"},
+		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyArchitectureCat, target: "wiki/concepts/missing.md", code: "hierarchy.missing_child"},
 		{name: "ordinary model target", edit: func(_ *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			catalogSpec(plan, hierarchyArchitectureCat).Path = "wiki/concepts/provider-edit.md"
 		}, wantErr: ErrHierarchyForbiddenPath, path: "wiki/concepts/provider-edit.md"},
@@ -314,10 +316,10 @@ func TestValidateHierarchyPlanRejectsUnsafeOrIncompleteGraphs(t *testing.T) {
 		{name: "duplicate child", edit: func(_ *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			architecture := catalogSpec(plan, hierarchyArchitectureCat)
 			architecture.Children = append(architecture.Children, architecture.Children[0])
-		}, wantErr: ErrHierarchyPlanInvalid, path: "duplicate child"},
+		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyArchitecture, code: "hierarchy.duplicate_child"},
 		{name: "empty nested catalog", edit: func(_ *knowl.HierarchyInput, plan *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			catalogSpec(plan, hierarchyArchitectureCat).Children = nil
-		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyArchitectureCat},
+		}, wantErr: ErrHierarchyPlanInvalid, path: hierarchyArchitectureCat, code: "hierarchy.empty_catalog"},
 		{name: "source ordinary page", edit: func(input *knowl.HierarchyInput, _ *knowl.HierarchyModelPlan, _ *HierarchyValidationOptions) {
 			input.Pages[0].Path = "wiki/sources/source-a/page.md"
 		}, wantErr: ErrHierarchyForbiddenPath, path: "wiki/sources/source-a/page.md"},
@@ -339,7 +341,12 @@ func TestValidateHierarchyPlanRejectsUnsafeOrIncompleteGraphs(t *testing.T) {
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("error = %v, want %v", err, test.wantErr)
 			}
-			if test.path != "" && !strings.Contains(err.Error(), test.path) {
+			if test.code != "" {
+				var graph *HierarchyGraphError
+				if !errors.As(err, &graph) || graph.Diagnostic.Code != test.code || graph.Diagnostic.Path != test.path || graph.Diagnostic.Target != test.target {
+					t.Fatalf("graph diagnostic: %+v (%v)", graph, err)
+				}
+			} else if test.path != "" && !strings.Contains(err.Error(), test.path) {
 				t.Fatalf("error = %q, want affected value %q", err, test.path)
 			}
 		})

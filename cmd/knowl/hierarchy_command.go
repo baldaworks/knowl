@@ -15,6 +15,7 @@ import (
 
 type localHierarchyHost interface {
 	ReconcileHierarchy(ctx context.Context) (app.IngestResult, error)
+	RetryHierarchy(ctx context.Context, id knowl.OperationID, dryRun bool) (app.HierarchyRetryResult, error)
 	Stop(ctx context.Context) error
 }
 
@@ -42,6 +43,29 @@ func newHierarchyCommand() *cobra.Command {
 		SilenceUsage:  true,
 	}
 	command.AddCommand(newHierarchyReconcileCommand())
+	command.AddCommand(newHierarchyRetryCommand())
+	return command
+}
+
+func newHierarchyRetryCommand() *cobra.Command {
+	var dryRun bool
+	command := &cobra.Command{
+		Use:           "retry <operation-id>",
+		Short:         "Preview or requeue a failed hierarchy plan for unchanged inputs",
+		Args:          cobra.ExactArgs(1),
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withLocalHierarchyHost(cmd.Context(), func(host localHierarchyHost) error {
+				result, err := host.RetryHierarchy(cmd.Context(), knowl.OperationID(args[0]), dryRun)
+				if err != nil {
+					return err
+				}
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			})
+		},
+	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "preview without changing operation state or invoking the provider")
 	return command
 }
 
