@@ -61,6 +61,41 @@ func TestHierarchyReconcileCommandBuildsValidHierarchyAndReplaysAsNoOp(t *testin
 	}
 	t.Cleanup(func() { newLocalHierarchySession = original })
 
+	// A failed plan must be recoverable across fresh CLI sessions without
+	// editing canonical content or replacing the operation identity.
+	goodPlan := fixture.maintainer.HierarchyResult
+	fixture.maintainer.HierarchyResult.Catalogs = append([]knowl.HierarchyCatalogSpec(nil), goodPlan.Catalogs...)
+	fixture.maintainer.HierarchyResult.Catalogs[0].Children = []string{"wiki/entities/missing.md"}
+	failedSession, err := newLocalHierarchySession(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, failureErr := failedSession.Host.ReconcileHierarchy(ctx)
+	if err := failedSession.Host.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if failureErr == nil || failed.Operation.Status != knowl.StatusFailed {
+		t.Fatalf("initial hierarchy failure: %+v %v", failed, failureErr)
+	}
+	fixture.maintainer.HierarchyResult = goodPlan
+	for _, dryRun := range []bool{true, false} {
+		args := []string{"retry", string(failed.Operation.ID)}
+		if dryRun {
+			args = append(args, "--dry-run")
+		}
+		stdout, _, err := executeCLICommand(newHierarchyCommand(), args, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var retry app.HierarchyRetryResult
+		if err := json.Unmarshal([]byte(stdout), &retry); err != nil {
+			t.Fatal(err)
+		}
+		if retry.OperationID != failed.Operation.ID || retry.DryRun != dryRun || retry.Requeued == dryRun || retry.WorkAttempt != 1 {
+			t.Fatalf("retry JSON: %+v", retry)
+		}
+	}
+
 	stdout, stderr, err := executeCLICommand(newHierarchyCommand(), []string{hierarchyReconcileCommandName}, nil)
 	if err != nil {
 		t.Fatalf("reconcile hierarchy: %v, stderr=%s", err, stderr)
@@ -69,7 +104,7 @@ func TestHierarchyReconcileCommandBuildsValidHierarchyAndReplaysAsNoOp(t *testin
 	if err := json.Unmarshal([]byte(stdout), &first); err != nil {
 		t.Fatalf("decode hierarchy result: %v", err)
 	}
-	if first.Status != knowl.StatusCommitted || !first.Changed || first.Generation == "" || len(first.Files) < 4 {
+	if first.OperationID != failed.Operation.ID || first.Status != knowl.StatusCommitted || !first.Changed || first.Generation == "" || len(first.Files) < 4 {
 		t.Fatalf("hierarchy result = %#v", first)
 	}
 	if err := workspace.Validate(); err != nil {
@@ -162,6 +197,10 @@ func (observer *hierarchySourceObserver) count() int {
 func (host *stubHierarchyHost) ReconcileHierarchy(context.Context) (app.IngestResult, error) {
 	host.calls++
 	return host.result, host.operationErr
+}
+
+func (host *stubHierarchyHost) RetryHierarchy(context.Context, knowl.OperationID, bool) (app.HierarchyRetryResult, error) {
+	return app.HierarchyRetryResult{}, host.operationErr
 }
 
 func (host *stubHierarchyHost) Stop(context.Context) error {

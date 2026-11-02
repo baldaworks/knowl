@@ -5,7 +5,40 @@ import (
 	"fmt"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
+
+// RetryHierarchy previews or requeues a failed hierarchy operation, without
+// invoking the provider or starting source jobs or an HTTP listener.
+func (host *Host) RetryHierarchy(ctx context.Context, id domain.OperationID, dryRun bool) (app.HierarchyRetryResult, error) {
+	ctx = nonNilHostContext(ctx)
+	host.mu.Lock()
+	if host.closed || host.resourcesClosed {
+		host.mu.Unlock()
+		return app.HierarchyRetryResult{}, ErrHostClosed
+	}
+	scope := host.config.Scope
+	hasHierarchy := host.hierarchy != nil
+	host.mu.Unlock()
+	if !hasHierarchy {
+		return app.HierarchyRetryResult{}, app.ErrMaintainerUnavailable
+	}
+	bounded, cancel := context.WithTimeout(ctx, app.MaxCorrectionDeadline)
+	defer cancel()
+	use, err := host.slots.acquire(bounded)
+	if err != nil {
+		return app.HierarchyRetryResult{}, err
+	}
+	defer use.release()
+	if use.slot.hierarchy == nil {
+		return app.HierarchyRetryResult{}, app.ErrMaintainerUnavailable
+	}
+	result, err := use.slot.hierarchy.Retry(use.ctx, scope, id, dryRun)
+	if err == nil && result.Requeued {
+		host.scheduler.Wake("")
+	}
+	return result, err
+}
 
 // ReconcileHierarchy runs the explicit, synchronous hierarchy mutation without
 // starting the HTTP listener, general operation scheduler, or source jobs.

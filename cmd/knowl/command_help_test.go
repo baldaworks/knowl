@@ -273,7 +273,7 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 			name:      hierarchyCommandName,
 			cmd:       newHierarchyCommand(),
 			wantShort: "Manage the canonical semantic wiki hierarchy",
-			wantSubs:  []string{hierarchyReconcileCommandName},
+			wantSubs:  []string{hierarchyReconcileCommandName, "retry"},
 		},
 		{
 			name:      retrieveCommandName,

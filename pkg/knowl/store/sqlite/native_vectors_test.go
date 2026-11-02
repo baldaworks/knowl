@@ -100,7 +100,7 @@ func TestSQLiteNativeMigration(t *testing.T) {
 			if _, err := provider.Up(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			assertNativeMigrationState(t, provider, store.db, 28, 0, 0, 1)
+			assertNativeMigrationState(t, provider, store.db, 29, 0, 0, 1)
 			if !reflect.DeepEqual(before, nativeAuthoritativeRows(t, store.db)) {
 				t.Fatal("Up changed authoritative rows")
 			}
@@ -136,7 +136,7 @@ func TestSQLiteNativeMigration(t *testing.T) {
 			if _, err := provider.Up(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			assertNativeMigrationState(t, provider, store.db, 28, 0, 0, 1)
+			assertNativeMigrationState(t, provider, store.db, 29, 0, 0, 1)
 		})
 	}
 }

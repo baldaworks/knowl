@@ -314,17 +314,17 @@ func validateHierarchyGraph(catalogs []knowl.HierarchyCatalogSpec, pages map[str
 	rootPages := 0
 	for _, catalog := range catalogs {
 		if catalog.Path != hierarchyRootPath && len(catalog.Children) == 0 {
-			return fmt.Errorf("catalog %q has no children: %w", catalog.Path, ErrHierarchyPlanInvalid)
+			return hierarchyGraphError("hierarchy.empty_catalog", catalog.Path, "", ErrHierarchyPlanInvalid)
 		}
 		for _, child := range catalog.Children {
 			edges++
 			if edges > limits.MaxEdges {
-				return fmt.Errorf("catalog edge count %d exceeds %d at %q: %w", edges, limits.MaxEdges, catalog.Path, ErrHierarchyLimitExceeded)
+				return hierarchyGraphError("hierarchy.edge_limit", catalog.Path, "", ErrHierarchyLimitExceeded)
 			}
 			_, isCatalog := byPath[child]
 			_, isPage := pages[child]
 			if !isCatalog && !isPage {
-				return fmt.Errorf("catalog %q has missing child %q: %w", catalog.Path, child, ErrHierarchyPlanInvalid)
+				return hierarchyGraphError("hierarchy.missing_child", catalog.Path, child, ErrHierarchyPlanInvalid)
 			}
 			if catalog.Path == hierarchyRootPath {
 				if isCatalog {
@@ -336,20 +336,20 @@ func validateHierarchyGraph(catalogs []knowl.HierarchyCatalogSpec, pages map[str
 		}
 	}
 	if rootCatalogs < minRootCatalogs {
-		return fmt.Errorf("root has %d semantic child catalogs, requires %d: %w", rootCatalogs, minRootCatalogs, ErrHierarchyPlanInvalid)
+		return hierarchyGraphError("hierarchy.root_catalogs", hierarchyRootPath, "", ErrHierarchyPlanInvalid)
 	}
 	if len(pages) > 0 && rootPages == len(pages) && minRootCatalogs > 0 {
-		return fmt.Errorf("root directly enumerates all %d ordinary pages: %w", len(pages), ErrHierarchyPlanInvalid)
+		return hierarchyGraphError("hierarchy.flat_root", hierarchyRootPath, "", ErrHierarchyPlanInvalid)
 	}
 
 	state := make(map[string]uint8, len(catalogs))
 	var visit func(string, int) error
 	visit = func(catalogPath string, depth int) error {
 		if depth > limits.MaxDepth {
-			return fmt.Errorf("catalog %q exceeds graph depth %d: %w", catalogPath, limits.MaxDepth, ErrHierarchyLimitExceeded)
+			return hierarchyGraphError("hierarchy.depth", catalogPath, "", ErrHierarchyLimitExceeded)
 		}
 		if state[catalogPath] == 1 {
-			return fmt.Errorf("catalog cycle at %q: %w", catalogPath, ErrHierarchyPlanInvalid)
+			return hierarchyGraphError("hierarchy.cycle", catalogPath, "", ErrHierarchyPlanInvalid)
 		}
 		if state[catalogPath] == 2 {
 			return nil
@@ -370,7 +370,7 @@ func validateHierarchyGraph(catalogs []knowl.HierarchyCatalogSpec, pages map[str
 	}
 	for _, catalog := range catalogs {
 		if state[catalog.Path] != 2 {
-			return fmt.Errorf("catalog %q is unreachable from root: %w", catalog.Path, ErrHierarchyPlanInvalid)
+			return hierarchyGraphError("hierarchy.unreachable_catalog", catalog.Path, "", ErrHierarchyPlanInvalid)
 		}
 	}
 
@@ -394,7 +394,7 @@ func validateHierarchyGraph(catalogs []knowl.HierarchyCatalogSpec, pages map[str
 	sort.Strings(pagePaths)
 	for _, pagePath := range pagePaths {
 		if _, exists := reachable[pagePath]; !exists {
-			return fmt.Errorf("ordinary page %q is unreachable from root: %w", pagePath, ErrHierarchyPlanInvalid)
+			return hierarchyGraphError("hierarchy.unreachable_page", pagePath, "", ErrHierarchyPlanInvalid)
 		}
 	}
 	return nil
@@ -536,7 +536,7 @@ func normalizedPathSet(values []string, maxBytes int, allowCatalog bool) ([]stri
 			return nil, fmt.Errorf("child path %q: %w", value, ErrHierarchyForbiddenPath)
 		}
 		if _, exists := seen[canonical]; exists {
-			return nil, fmt.Errorf("duplicate child path %q: %w", canonical, ErrHierarchyPlanInvalid)
+			return nil, hierarchyGraphError("hierarchy.duplicate_child", canonical, "", ErrHierarchyPlanInvalid)
 		}
 		seen[canonical] = struct{}{}
 		result = append(result, canonical)

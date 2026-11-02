@@ -47,6 +47,21 @@ func TestPostgresSourceRecoveryWithTestcontainers(t *testing.T) {
 		t.Cleanup(func() { _ = store.Close() })
 		storetest.RunSourceLifecycleRecoveryContract(t, postgresRecoveryHarness(store, scoped))
 	})
+	t.Run("hierarchy_retry", func(t *testing.T) {
+		scoped := recoveryPostgresSchema(t, dsn)
+		store, err := Open(t.Context(), scoped)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		peer, err := Open(t.Context(), scoped)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = peer.Close() })
+		storetest.RunHierarchyRetryContract(t, store, peer)
+	})
+
 	t.Run("migration", func(t *testing.T) { testPostgresSourceRecoveryMigration(t, recoveryPostgresSchema(t, dsn)) })
 }
 
