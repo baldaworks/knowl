@@ -1,0 +1,20 @@
+/* Layout and existing owl crop only. Vendor styles supply theme and typography. */
+.brand-link { display: flex; gap: 11px; align-items: center; }
+.brand-symbol { position: relative; display: block; flex-shrink: 0; width: 38px; height: 38px; overflow: hidden; border-radius: 50%; }
+.brand-logo { position: absolute; width: 79px; height: 79px; max-width: none; left: -20.5px; top: -12.2px; }
+.app-main, .wiki-grid > *, .offcanvas-body, .card-body { min-width: 0; }
+.app-sidebar .sidebar-wrapper { height: calc(100dvh - var(--lte-app-header-height)); }
+#tree-scroll { min-height: 6rem; }
+#wiki-tree .nav-link { white-space: normal; }
+#wiki-tree .category-toggle, #wiki-tree .category-spacer { width: 2rem; min-height: 2.5rem; }
+#wiki-tree .category-ancestor { text-decoration: underline; }
+#wiki-tree .nav-link { min-width: 0; }
+.wiki-grid { display: grid; gap: 1.5rem; }
+pre { max-width: 100%; overflow: auto; }
+#article-body h2, #article-body h3 { scroll-margin-top: 5rem; }
+#page-context { --bs-offcanvas-width: 26rem; max-width: 100%; }
+#page-context .nav-tabs { flex-wrap: wrap; }
+@media (min-width: 1200px) {
+  .wiki-grid { grid-template-columns: minmax(0, 1fr) 22rem; }
+  #page-context { position: sticky; top: 1rem; }
+}
