@@ -101,7 +101,7 @@ type responsiveScreenReader struct{ *screenReader }
 
 func (f *responsiveScreenReader) Page(ctx context.Context, scope domain.ScopeRef, id domain.PageID, limits domain.ReadLimits) (domain.OperatorPage, error) {
 	page, err := f.screenReader.Page(ctx, scope, id, limits)
-	if kind, _ := okf.ClassifyPath(string(id) + ".md"); kind == okf.DocumentConcept && id != knowledgeDistantLeaf {
+	if kind, _ := okf.ClassifyPath(string(id) + ".md"); err == nil && kind == okf.DocumentConcept && id != knowledgeDistantLeaf && len(page.Sources) > 0 {
 		page.Sources[0].OriginalURI = "https://example.test/guide"
 		for _, name := range []string{"missing", "unsupported", "limit", "a & b?🦉", "additional"} {
 			page.Sources = append(page.Sources, domain.OperatorPageSource{SourceRef: "git:docs/" + name + "@accepted", Revision: "accepted", DocumentID: domain.DocumentID(name)})

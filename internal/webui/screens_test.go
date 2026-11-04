@@ -130,22 +130,18 @@ func TestKnowledgeLeafDetailsAndSourcesStartClosed(t *testing.T) {
 	var details *html.Node
 	var toggle, hidden, panel bool
 	walk(doc, func(n *html.Node) {
-		if hasAttribute(n, "class", "page-details") {
+		if hasAttribute(n, "id", "details") {
 			details = n
 		}
 		if hasAttribute(n, "aria-controls", "page-sources") {
 			toggle = true
-			if !hasAttribute(n, "aria-expanded", "false") {
-				t.Error("sources opener starts expanded")
+			if !hasAttribute(n, "aria-selected", "false") {
+				t.Error("sources tab starts selected")
 			}
 		}
 		if hasAttribute(n, "id", "page-sources") {
 			panel = true
-		}
-		for _, a := range n.Attr {
-			if a.Key == "class" && n.DataAtom == atom.Div && strings.Contains(" "+a.Val+" ", " sources-hidden ") {
-				hidden = true
-			}
+			hidden = !strings.Contains(" "+attribute(n, "class")+" ", " active ")
 		}
 	})
 	if !toggle || !panel || !hidden || details == nil {
@@ -283,7 +279,7 @@ func (f *screenReader) CatalogChildren(_ context.Context, _ domain.ScopeRef, par
 	if f.empty {
 		items = nil
 	}
-	return app.OperatorCatalogRead{Parent: domain.OperatorCatalogSummary{ID: "index", Title: screenRootTitle}, Children: app.OperatorReadPage[domain.OperatorCatalogChild]{Items: items, SnapshotVersion: f.snapshot}}, f.catalogErr
+	return app.OperatorCatalogRead{Parent: domain.OperatorCatalogSummary{ID: rootCatalogID, Title: screenRootTitle}, Children: app.OperatorReadPage[domain.OperatorCatalogChild]{Items: items, SnapshotVersion: f.snapshot}}, f.catalogErr
 }
 func (f *screenReader) PageSummaries(_ context.Context, _ domain.ScopeRef, o app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorPageSummary], error) {
 	f.calls++
@@ -351,7 +347,7 @@ func TestKnowledgeCurrentPageAndImmutableRaw(t *testing.T) {
 	var rawURL string
 	var article, source int
 	walk(doc, func(n *html.Node) {
-		if n.Data == "h2" && nodeText(n) == screenArticleTitle {
+		if n.Data == "h1" && hasAttribute(n, "id", "article-title") && nodeText(n) == screenArticleTitle {
 			article++
 		}
 		for _, a := range n.Attr {
@@ -455,11 +451,11 @@ func TestKnowledgeSnapshotContinuation(t *testing.T) {
 		t.Fatalf("stale status=%d header=%v", r.Code, r.Header())
 	}
 }
-func TestKnowledgeEmptyAndUncataloguedRemainDistinct(t *testing.T) {
+func TestKnowledgeEmptyAndUncataloguedKeepReadableRoot(t *testing.T) {
 	for _, tc := range []struct {
 		err     error
 		heading string
-	}{{nil, screenRootTitle}, {app.ErrOperatorCatalogNotFound, "No catalog available"}} {
+	}{{nil, screenRootTitle}, {app.ErrOperatorCatalogNotFound, screenRootTitle}} {
 		f := &screenReader{snapshot: screenSnapshot, empty: true, catalogErr: tc.err}
 		r, doc := fragmentDocument(t, screenHandler(t, f), knowledgeFragment)
 		if r.Code != 200 {

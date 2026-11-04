@@ -1,13 +1,17 @@
 'use strict';
 const assert=require('node:assert/strict');
-// Evaluate the rendered foreground against the first opaque ancestor surface.
+// Evaluate the rendered foreground against the composited ancestor surfaces, including native translucent active rows.
 async function readable(page,selector){
  const pairs=await page.locator(selector).evaluateAll(elements=>{
-  const luminance=color=>{const c=color.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4;});return c[0]*0.2126+c[1]*0.7152+c[2]*0.0722;};
+  const rgba=color=>{const values=color.match(/[\d.]+/g)?.map(Number)||[0,0,0,0];return [...values.slice(0,3),values[3]??1];};
+  const over=(front,back)=>front.slice(0,3).map((value,i)=>value*front[3]+back[i]*(1-front[3]));
+  const luminance=color=>{const c=color.map(v=>{v/=255;return v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4;});return c[0]*0.2126+c[1]*0.7152+c[2]*0.0722;};
   return elements.filter(e=>e.getClientRects().length && e.textContent.trim()).map(e=>{
-   let ancestor=e,background;
-   while(ancestor){background=getComputedStyle(ancestor).backgroundColor;if(background!=='rgba(0, 0, 0, 0)'&&background!=='transparent')break;ancestor=ancestor.parentElement;}
-   const foreground=getComputedStyle(e).color,light=luminance(foreground),dark=luminance(background||'rgb(255, 255, 255)');
+   const layers=[];
+   for(let ancestor=e;ancestor;ancestor=ancestor.parentElement)layers.push(rgba(getComputedStyle(ancestor).backgroundColor));
+   let background=[255,255,255];
+   for(const layer of layers.reverse())background=over(layer,background);
+   const foreground=getComputedStyle(e).color,light=luminance(over(rgba(foreground),background)),dark=luminance(background);
    return {element:e.className||e.id||e.tagName,foreground,background,ratio:(Math.max(light,dark)+0.05)/(Math.min(light,dark)+0.05)};
   });
  });

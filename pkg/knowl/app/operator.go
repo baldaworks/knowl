@@ -133,6 +133,21 @@ func validOperatorDirectory(directory string) bool {
 	return ValidOperatorReadPath(directory)
 }
 
+// WikiPageChildren reads a bounded branch of published pages. The optional
+// capability is discovered on the configured directory reader.
+func (service *OperatorService) WikiPageChildren(ctx context.Context, directory string, options OperatorListOptions) (knowl.OperatorList[knowl.OperatorWikiPage], error) {
+	if !validOperatorDirectory(directory) {
+		return knowl.OperatorList[knowl.OperatorWikiPage]{}, ErrOperatorInvalidRequest
+	}
+	if directory != "" && strings.Count(directory, "/")+1 > DefaultCatalogLimits().MaxDepth {
+		return knowl.OperatorList[knowl.OperatorWikiPage]{}, ErrOperatorReadLimitExceeded
+	}
+	reader, available := service.readers.Directories.(WikiPageTreeReader)
+	return operatorListRead(service, ctx, operatorWikiPagesEndpoint, directory, options, available, true, func(readCtx context.Context, readOptions OperatorReadOptions) (OperatorReadPage[knowl.OperatorWikiPage], error) {
+		return reader.WikiPageChildren(readCtx, service.scope, directory, readOptions)
+	})
+}
+
 // ValidOperatorReadPath checks literal canonical relative paths before a
 // descriptor-relative open. Percent is permitted in real filenames, except
 // alias-shaped escapes that could become separators or dot segments after an

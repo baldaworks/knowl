@@ -189,6 +189,7 @@ func TestOperatorIndexPage(t *testing.T) {
 		{operatorRootID, "Wiki root", "---\nokf_version: \"0.2\"\n---\n# Wiki root\n\n* [Team](catalogs/team/index.md)\n* [A](entities/a.md)\n"},
 		{operatorTestCatalogID, "Team", "# Team\n"},
 		{"catalogs/linked/index", "Linked", "# Linked\n\n* [A](../../entities/a.md)\n"},
+		{operatorRootID, operatorRootID, "## Optional section\n\nAuthored prose.\n"},
 	} {
 		t.Run(string(tc.id), func(t *testing.T) {
 			workspace := newSourceStageWorkspace(t)
@@ -238,7 +239,6 @@ func TestOperatorIndexReadFailures(t *testing.T) {
 		{name: "missing nested", id: operatorTestCatalogID, missing: true, want: app.ErrPageNotFound},
 		{name: "malformed root", id: operatorRootID, content: "---\ntitle: Invalid\n---\n# Root\n", want: app.ErrOperatorWorkspaceUnavailable},
 		{name: "nested frontmatter", id: operatorTestCatalogID, content: "---\nokf_version: \"0.2\"\n---\n# Team\n", want: app.ErrOperatorWorkspaceUnavailable},
-		{name: "invalid heading", id: operatorRootID, content: "## Root\n", want: app.ErrOperatorWorkspaceUnavailable},
 		{name: "invalid UTF8", id: operatorRootID, content: "# Root\n\xff", want: app.ErrOperatorWorkspaceUnavailable},
 		{name: "caller bytes", id: operatorRootID, content: operatorTestRootMarkdown, limits: knowl.ReadLimits{Bytes: 1}, want: app.ErrOperatorReadLimitExceeded},
 		{name: "caller characters", id: operatorRootID, content: operatorTestRootMarkdown, limits: knowl.ReadLimits{Characters: 1}, want: app.ErrOperatorReadLimitExceeded},

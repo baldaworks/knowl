@@ -8,6 +8,18 @@ async function visibleDetail(page,id) {
  assert.ok(state.top>=state.headerBottom && state.bottom<=state.height,'detail heading outside viewport: '+JSON.stringify(state));
  assert.equal(state.focused,true,'explicit detail read must focus '+id);
 }
+async function openSources(page) {
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ if(await page.evaluate(()=>matchMedia('(max-width:1199.98px)').matches)) {
+  await page.waitForFunction(()=>{const e=document.getElementById('page-context');return !e.classList.contains('showing')&&!e.classList.contains('hiding');});
+  if(!(await page.locator('#page-context').evaluate(e=>e.classList.contains('show')))) {
+   await page.locator('#context-toggle').click();
+   await page.waitForFunction(()=>{const e=document.getElementById('page-context');return e.classList.contains('show')&&!e.classList.contains('showing');});
+  }
+ }
+ await page.locator('#sources-tab').click();
+ await page.waitForFunction(()=>getComputedStyle(document.getElementById('page-sources')).opacity==='1');
+}
 async function savedSourceOutcomes(page) {
  const cases=[
   {width:320,index:1,code:'source_revision_not_found',status:404},
@@ -18,7 +30,7 @@ async function savedSourceOutcomes(page) {
   {width:1366,index:6,nearBottom:true}
  ];
  for(const test of cases) {
-  await page.setViewportSize({width:test.width,height:844});
+  await page.setViewportSize({width:test.width,height:844});await openSources(page);
   const control=page.locator('[hx-target="#raw-source"]').nth(test.index);
   const expected=new URL(await control.getAttribute('hx-get'),page.url()).searchParams.get('source_ref');
   const match=url=>url.pathname==='/ui/fragments/source-revision'&&url.searchParams.get('source_ref')===expected;
@@ -29,7 +41,7 @@ async function savedSourceOutcomes(page) {
    // Position the actual opener near the lower edge through ordinary user
    // scrolling before activation. The result is never scrolled by the test.
    const delta=await control.evaluate(e=>{const record=e.closest('.source-record');return record.getBoundingClientRect().bottom+parseFloat(getComputedStyle(record).marginBottom)-(innerHeight-69);});
-   await page.mouse.wheel(0,delta);await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   await page.evaluate(delta=>{const context=document.getElementById('page-context');if(context.classList.contains('show'))context.querySelector('.offcanvas-body').scrollBy(0,delta);else scrollBy(0,delta);},delta);await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
    const predicted=await control.evaluate(e=>{const record=e.closest('.source-record');return record.getBoundingClientRect().bottom+parseFloat(getComputedStyle(record).marginBottom);});
    assert.ok(Math.abs(predicted-(844-69))<3,'near-bottom ordinary opener fixture must reach the measured boundary');
   }
@@ -58,7 +70,7 @@ async function savedSourceOutcomes(page) {
   const position=await control.evaluate(e=>({top:e.getBoundingClientRect().top,bottom:e.getBoundingClientRect().bottom,header:document.querySelector('.app-header').getBoundingClientRect().bottom,height:innerHeight}));
   assert.ok(position.top>=position.header && position.bottom<=position.height,'close must return to a visible source opener: '+JSON.stringify(position));
  }
- await page.setViewportSize({width:1366,height:900});
+ await page.setViewportSize({width:1366,height:900});await openSources(page);
  let ready,release,delivered;
  const held=new Promise(resolve=>{ready=resolve;});const gate=new Promise(resolve=>{release=resolve;});const delivery=new Promise(resolve=>{delivered=resolve;});
  const first=page.locator('[hx-target="#raw-source"]').first();
@@ -88,28 +100,28 @@ async function savedSourceOutcomes(page) {
   await page.waitForFunction(()=>document.activeElement===document.getElementById('screen'),null,{timeout:5000});
   assert.equal(await page.locator('#screen').getAttribute('aria-label'),'Knowledge');
   assert.equal(await page.locator('#screen').evaluate(e=>getComputedStyle(e).outlineStyle),'none','keyboard Connect must not frame the entire wiki');
-  assert.equal(await page.locator('.document h1').textContent(),'Knowl Index','connect must read canonical root');
-  assert.equal(await page.locator('.knowledge-article h2').count(),0);
-  assert.equal(await page.locator('#page-sources,[data-toggle-sources]').count(),0);
+  assert.equal(await page.locator('#article-title').textContent(),'Knowl Index','connect must read canonical root');
+  assert.equal(await page.locator('.document h1').count(),0);
+  assert.equal(await page.locator('#sources-tab').getAttribute('aria-selected'),'false');
   assert.equal(await page.locator('.catalog-panel').count(),0,'authored root index is the primary navigation');
   await page.locator('.document').getByRole('link',{name:'Team',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Team');
+  await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Team');
   await page.locator('.document').getByRole('link',{name:'Distant leaf',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Distant leaf');
-  assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Knowl Index','Team','Distant leaf']);
-  assert.equal(await page.locator('[data-toggle-sources] .counter').textContent(),'0');
-  assert.equal(await page.locator('.source-panel').isVisible(),false);
-  await page.locator('[data-toggle-sources]').click();
+  await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Distant leaf');
+  assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Knowl Index','Distant leaf']);
+  assert.equal(await page.locator('#sources-tab span').textContent(),'0');
+  assert.equal(await page.locator('#sources-tab').getAttribute('aria-selected'),'false');
+  await openSources(page);
   assert.equal(await page.getByText('No saved source references are recorded for this page.',{exact:true}).isVisible(),true,'zero-source leaf remains truthful and accessible');
-  await page.locator('[data-close-sources]').click();
-  assert.equal(await page.locator('[data-toggle-sources]').evaluate(e=>e===document.activeElement),true);
+  await page.locator('#contents-tab').click();
+  assert.equal(await page.locator('#contents-tab').getAttribute('aria-selected'),'true');
   await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('link',{name:'Knowl Index',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Knowl Index');
+  await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Knowl Index');
   await readable(page,'#header-view,#connection-status,.panel-description,.source-kind,.source-meta,.source-note,.technical-details dt');
   await artifact('knowledge-desktop');
   await page.getByRole('link',{name:'All pages',exact:true}).click();
   await page.locator('.wiki-tree').waitFor();
-  assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Knowl Index','All pages']);
+  assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Root','All pages']);
   assert.equal(await page.locator('.knowledge-article').count(),0,'All pages never selects a first article');
   assert.equal(await page.locator('.wiki-tree [data-wiki-path="index.md"]').count(),1,'root index is a file beside folders');
   assert.equal(await page.locator('.wiki-tree > .card-body > .wiki-tree-list > [data-wiki-path]').count(),50);
@@ -146,28 +158,28 @@ async function savedSourceOutcomes(page) {
   await page.locator('[data-wiki-path="sources/distant"] [data-tree-expand]').click();
   await page.locator('[data-wiki-path="sources/distant/leaf.md"] a').waitFor();
   await page.locator('[data-wiki-path="sources/distant/leaf.md"] a').click();
-  await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Distant leaf');
+  await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Distant leaf');
   assert.equal(new URL(page.url()).searchParams.get('view'),'all');
-  assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Knowl Index','All pages','Distant leaf']);
+  assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Root','All pages','Distant leaf']);
   await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('link',{name:'All pages',exact:true}).click();
   await page.locator('.wiki-tree').waitFor();
   assert.equal(await page.locator('[data-wiki-path="sources/distant/leaf.md"]').count(),0,'fresh All pages visit starts collapsed');
   await page.locator('[data-wiki-path="concepts"] [data-tree-expand]').click();
   await page.locator('[data-wiki-path="concepts/article.md"] a').click();
-  await page.waitForFunction(()=>document.querySelector('.knowledge-article h2')?.textContent==='Article');
+  await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Article');
   await page.goBack();await page.locator('[data-wiki-path="concepts/article.md"] a').waitFor();
   assert.equal(await page.locator('[data-wiki-path="sources/distant/leaf.md"]').count(),0,'second tree visit retains only its own expansion');
-  await page.goBack();await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Distant leaf');
+  await page.goBack();await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Distant leaf');
   await page.goBack();await page.locator('[data-wiki-path="sources/distant/leaf.md"] a').waitFor();
   assert.equal(await page.locator('[data-wiki-path="sources"] > [data-tree-expand]').getAttribute('aria-expanded'),'true','Back restores expanded path tree');
   assert.equal(await page.locator('[data-wiki-path="concepts/article.md"]').count(),0,'older tree history entry must not receive the newer tree snapshot');
   assert.equal(await page.locator('[data-wiki-path="x059.md"]').count(),1,'older tree pagination remains in its own history entry');
   await page.locator('[data-wiki-path="index.md"] a').click();
-  await page.waitForFunction(()=>document.querySelector('.document h1')?.textContent==='Knowl Index');
+  await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Knowl Index');
   assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Knowl Index'],'the root file must not repeat the root breadcrumb');
   assert.equal(new URL(page.url()).searchParams.get('view'),'all');
   await page.goBack();await page.locator('.wiki-tree').waitFor();
-  const root=page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('link',{name:'Knowl Index',exact:true});
+  const root=page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('link',{name:'Root',exact:true});
   const [popup]=await Promise.all([page.context().waitForEvent('page'),root.click({button:'middle'})]);
   await popup.waitForLoadState();assert.equal(new URL(popup.url()).pathname,'/ui/knowledge');assert.equal(await popup.locator('#connection-status').textContent(),'Disconnected');await popup.close();
   await page.locator('[data-wiki-path="concepts"] [data-tree-expand]').click();
@@ -176,13 +188,12 @@ async function savedSourceOutcomes(page) {
   assert.equal(await page.locator('[data-error-code]').count(),0,await page.locator('#screen').textContent());
   for(const width of [320,390,639,640,768,1024,1366,1920]) {
    await page.setViewportSize({width,height:900});
-   assert.equal(await page.locator('.source-panel').isVisible(),false,'provenance starts closed at '+width);
-   assert.equal(await page.locator('[data-toggle-sources]').getAttribute('aria-expanded'),'false');
-   assert.equal(await page.locator('.page-details').evaluate(e=>e.open),false);
+   assert.equal(await page.locator('#sources-tab').getAttribute('aria-selected'),'false','sources tab starts inactive at '+width);
    assert.equal(await page.getByText('Published article metadata',{exact:true}).isVisible(),false);
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   }
   await page.setViewportSize({width:1366,height:900});
-  await page.locator('[data-toggle-sources]').click();
+  await openSources(page);
   assert.equal(await page.locator('.source-record').count(),7);
   await page.locator('[hx-target="#raw-source"]').first().click();await page.locator('.raw-view').waitFor();
   await visibleDetail(page,'raw-source');
@@ -268,30 +279,29 @@ async function savedSourceOutcomes(page) {
   await page.waitForFunction(()=>JSON.parse(document.getElementById('response-json-data')?.textContent||'null')?.query==='restored-form');
   assert.equal(requests.filter(u=>new URL(u).searchParams.has('query')).length,searchRequests+1,'restored Search form submits only on explicit action');
   await page.locator('.evidence-title').first().click();await page.locator('.knowledge-article').waitFor();
-  await page.waitForFunction(()=>document.activeElement===document.getElementById('screen'),null,{timeout:5000});
+  await page.waitForFunction(()=>document.activeElement===document.getElementById('article-title'),null,{timeout:5000});
   assert.equal(await page.locator('#screen').getAttribute('aria-label'),'Knowledge');
   assert.equal(new URL(page.url()).searchParams.get('page_id'),'concepts/other');
   assert.deepEqual(await page.locator('[aria-label="Breadcrumb"] li').allTextContents(),['Knowl Index','Article']);
-  assert.equal(await page.locator('.source-panel').isVisible(),false);
-  const sourcesToggle=page.locator('[data-toggle-sources]').first();
-  await page.evaluate(()=>scrollTo(0,200));
-  await sourcesToggle.focus();await page.keyboard.press('Enter');assert.equal(await page.locator('.source-panel').isVisible(),true);
-  assert.equal(await sourcesToggle.getAttribute('aria-expanded'),'true');
-  assert.equal(await page.locator('[data-close-sources]').evaluate(e=>e===document.activeElement),true);
-  await page.locator('.page-details summary').click();
+  assert.equal(await page.locator('#sources-tab').getAttribute('aria-selected'),'false');
+  await openSources(page);
+  assert.equal(await page.locator('#page-sources').isVisible(),true);
+  await page.locator('#details-tab').click();
+  await page.waitForFunction(()=>getComputedStyle(document.getElementById('details')).opacity==='1');
   assert.equal(await page.getByText('Published article metadata',{exact:true}).isVisible(),true);
   assert.equal(await page.locator('.page-details dd').filter({hasText:'navigation provenance'}).isVisible(),true);
+  await openSources(page);
   await page.locator('.source-identity summary').last().click();
   await page.locator('[hx-target="#raw-source"]').first().click();await page.locator('.raw-view').waitFor();
   for(const width of [320,390,639,640,768,1024,1366]){
-   await page.setViewportSize({width,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'expanded metadata overflow at '+width);
+   await page.setViewportSize({width,height:844});await openSources(page);
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'expanded metadata overflow at '+width);
   }
-  await page.setViewportSize({width:390,height:844});await artifact('knowledge-expanded-mobile');
-  if(process.env.KNOWL_BROWSER_ARTIFACT_DIR)await page.locator('.source-panel').screenshot({path:require('node:path').join(process.env.KNOWL_BROWSER_ARTIFACT_DIR,'task-012-source-panel-expanded-mobile.png')});
-  await page.locator('[data-close-sources]').click();assert.equal(await sourcesToggle.getAttribute('aria-expanded'),'false');
-  assert.equal(await sourcesToggle.evaluate(e=>e===document.activeElement),true);
-  const returned=await sourcesToggle.evaluate(e=>({top:e.getBoundingClientRect().top,bottom:e.getBoundingClientRect().bottom,header:document.querySelector('.app-header').getBoundingClientRect().bottom,height:innerHeight}));
-  assert.ok(returned.top>=returned.header && returned.bottom<=returned.height,'Page sources close returns to visible opener below the pinned header');
+  await page.setViewportSize({width:390,height:844});await openSources(page);await artifact('knowledge-expanded-mobile');
+  if(process.env.KNOWL_BROWSER_ARTIFACT_DIR)await page.locator('#page-context').screenshot({path:require('node:path').join(process.env.KNOWL_BROWSER_ARTIFACT_DIR,'task-012-source-panel-expanded-mobile.png')});
+  await page.locator('#page-context .btn-close').click();
+  await page.locator('#page-context').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#context-toggle').evaluate(e=>e===document.activeElement),true,'context close restores its opener');
   await page.setViewportSize({width:390,height:844});
   await page.evaluate(()=>document.querySelector('[data-screen="search"]').click());await page.locator('#search-form').waitFor();
   assert.equal(await page.locator('#query').inputValue(),'');assert.equal(await page.locator('.evidence-card').count(),0);

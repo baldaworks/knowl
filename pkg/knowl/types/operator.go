@@ -43,6 +43,15 @@ type OperatorWikiEntry struct {
 	PageID PageID `json:"page_id,omitempty"`
 }
 
+// OperatorWikiPage is one published page in its nearest real parent page's
+// branch. ChildrenDirectory is set for an index page whose branch can be read.
+type OperatorWikiPage struct {
+	Path              string `json:"path"`
+	PageID            PageID `json:"page_id"`
+	Title             string `json:"title"`
+	ChildrenDirectory string `json:"children_directory,omitempty"`
+}
+
 // OperatorPageSummary exposes factual page identity without filesystem paths.
 type OperatorPageSummary struct {
 	ID          PageID    `json:"id"`

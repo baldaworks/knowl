@@ -121,8 +121,6 @@ func TestRenderInvalidIndex(t *testing.T) {
 		name, id, markdown string
 		rule               okf.Rule
 	}{
-		{"empty", renderTestRootID, "", okf.RuleIndexInvalid},
-		{"invalid heading", renderTestRootID, "## Root\n", okf.RuleIndexInvalid},
 		{"malformed root", renderTestRootID, "---\ntitle: Root\n---\n# Root\n", okf.RuleIndexInvalid},
 		{"nested frontmatter", renderTestCatalogID, "---\nokf_version: \"0.2\"\n---\n# Team\n", okf.RuleIndexInvalid},
 		{"invalid UTF8", renderTestRootID, "# Root\n\xff", okf.RuleUTF8Invalid},

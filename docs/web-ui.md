@@ -39,23 +39,58 @@ and [container setup](service.md#optional-browser-access).
 
 ## Knowledge
 
-Knowledge opens the canonical wiki root and renders its actual `index.md` body.
-Follow catalog and page links, or use the breadcrumb to return through verified
-catalogs. Direct links and reload use the root and any verified current catalog;
-deeper catalog ancestry is not inferred from file paths.
+Knowledge opens the published root page. **Home** in the sidebar returns to it.
+The sidebar shows pages in their published path hierarchy: select a title to
+open that page, or use its separate caret to expand or collapse children without
+changing the article. A directory's `index.md` represents one parent page, not a
+folder plus another index row. Technical directories without an index are
+transparent: their pages appear beneath the nearest actual parent page.
 
-**All pages** opens a file tree grouped by wiki directory paths. Expand folders
-to load their children as needed, and use **More files** when a branch has additional
-files. Each `index.md` appears as an ordinary file in this tree. Select a file
-explicitly to open its article. Browser Back restores the loaded, expanded tree
-within the same connected tab while its bounded in-memory view is retained.
-Reload or disconnect clears that view.
+The tree is independent of links in page content. An index can contain an
+authored table of contents, additional prose, or no body at all and still have
+children. Its complete permitted Markdown body renders once in the article;
+only an exact leading title already shown in the article header is omitted.
+The UI does not add another directory or member list to that body. Published
+empty and prose indexes are readable under the existing structural safety
+checks; strict OKF publication and maintenance validation remain unchanged.
+A page readable in the browser can therefore still fail strict publish
+validation.
 
-**Details** starts closed and contains page identity, digest/version, and
-available type, description, tags, status, trust and stale metadata.
-**Page sources** starts closed at every screen width; open it explicitly to
-inspect saved revisions supporting a leaf page. A leaf with no references says
-so. Catalog indexes have no source panel.
+Breadcrumbs link only to actual parent index pages verified along the selected
+page's path. Missing technical-directory indexes are skipped. Direct URLs,
+Search evidence, reload, and browser Back/Forward open the requested page; when
+an ancestor cannot be verified within the read bounds, the breadcrumb remains
+shorter. No whole-wiki parent search is needed.
+
+Branches load lazily. **More** loads another bounded window, **Retry** repeats
+the failed branch read, and a changed continuation restarts that branch without
+replacing the article. Broad or deep branches can reach a read limit. Pending
+windows reserve space within the 1,000-node browser tree limit; reconnect to
+start a new tree if that limit is reached. Completed branches, expansion, and
+tree scroll remain in the connected tab across page and screen navigation.
+Reload, disconnect, or rejected authorization clears protected page/tree state
+and cancels pending reads. Credentials, content, and tree state are not saved in
+browser storage; HTMX retains its existing session URL path/query marker.
+
+The page context has **Contents**, **Sources**, and **Details** tabs, with
+Contents selected initially. Contents lists the displayed second- and third-level headings;
+selecting a heading scrolls and focuses it without reloading the page. Details
+shows identity, digest/version, and available type, description, tags, status,
+trust and stale metadata. Sources lists the page's saved references, or states
+that none are recorded, including for an index page.
+
+At widths of at least 1200px, context stays beside the article in a sticky card.
+Below 1200px, **About this page** opens the same context in a drawer. Below
+992px, the main navigation and page tree use the navigation drawer. Close or
+Escape returns focus to the opener; selecting a page on mobile closes navigation
+and focuses its title. Wide tables and code scroll locally without widening the
+page.
+
+**All pages** remains an optional file inventory for browsing literal directory
+paths. Its folders expand separately, **More files** continues a branch, and
+`index.md` appears as an ordinary file. This compatibility view is separate from
+the primary page tree. Browser Back can restore its bounded loaded view within
+the same connected tab; reload or disconnect clears it.
 
 Select **Read saved source** to read immutable accepted text with its digest
 and media type. This uses Knowl's saved revision and does not fetch upstream.
@@ -234,10 +269,11 @@ Keep the service running and open `http://127.0.0.1:8086/ui/`:
 2. In **Sources**, select `engineering-docs`. Check the accepted revision and
    completed processing for `authentication-service.md`. If processing failed,
    inspect the associated operation before proceeding.
-3. In **Knowledge**, open **All pages**, expand the directory containing a
-   generated authentication page, and select that file. Open **Page sources**,
-   then **Read saved source**. The text is the accepted authentication document;
-   it remains immutable if the source changes.
+3. In **Knowledge**, select a generated authentication page in the sidebar tree,
+   using the separate carets and **More** as needed. Select the **Sources** tab;
+   on a narrow screen, first open **About this page**. Select **Read saved
+   source**. The text is the accepted authentication document; it remains
+   immutable if the source changes.
 4. In **Search**, submit `session revocation JWT` across the wiki. Inspect the
    evidence and **View JSON**. With embeddings disabled, this query is searched
    locally. Follow an evidence title to read its current page, then use browser

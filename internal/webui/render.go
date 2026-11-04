@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -14,19 +15,26 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 	"github.com/microcosm-cc/bluemonday"
+	"github.com/yuin/goldmark/v2/extension"
 	"github.com/yuin/goldmark/v2/parser"
 	markdownhtml "github.com/yuin/goldmark/v2/renderer/html"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
 
-const linkHrefAttribute = "href"
+const (
+	linkHrefAttribute       = "href"
+	articleContainerElement = "div"
+)
 
 // RenderMarkdown is the sole trusted-HTML conversion. Raw HTML is disabled in
 // goldmark; the independent allowlist excludes images and all active attributes.
 // Relative links remain inert until resolved against canonical identities.
 func RenderMarkdown(markdown string) (template.HTML, error) { return renderPageMarkdown(markdown, "") }
 func renderPageMarkdown(markdown, pageID string) (template.HTML, error) {
+	return renderTitledPageMarkdown(markdown, pageID, "")
+}
+func renderTitledPageMarkdown(markdown, pageID, displayedTitle string) (template.HTML, error) {
 	title := ""
 	if pageID != "" {
 		relative := pageID + ".md"
@@ -37,7 +45,7 @@ func renderPageMarkdown(markdown, pageID string) (template.HTML, error) {
 		limits := okf.DefaultLimits()
 		switch kind {
 		case okf.DocumentIndex:
-			index, err := okf.ValidateIndex(relative, []byte(markdown), limits)
+			index, err := okf.ParseIndex(relative, []byte(markdown), limits)
 			if err != nil {
 				return "", fmt.Errorf("read canonical body: %w", err)
 			}
@@ -56,10 +64,13 @@ func renderPageMarkdown(markdown, pageID string) (template.HTML, error) {
 			return "", fmt.Errorf("read canonical body: %w", &okf.Violation{Path: relative, Rule: okf.RulePathInvalid})
 		}
 	}
+	if displayedTitle != "" {
+		title = displayedTitle
+	}
 	source := []byte(markdown)
-	document := parser.New().Parse(source)
+	document := parser.New(parser.WithExtensions(extension.TableParser)).Parse(source)
 	var rendered bytes.Buffer
-	if err := markdownhtml.New().Render(&rendered, source, document); err != nil {
+	if err := markdownhtml.New(markdownhtml.WithExtensions(extension.TableHTMLRenderer)).Render(&rendered, source, document); err != nil {
 		return "", fmt.Errorf("render Markdown: %w", err)
 	}
 	policy := bluemonday.NewPolicy()
@@ -68,21 +79,84 @@ func renderPageMarkdown(markdown, pageID string) (template.HTML, error) {
 	policy.AllowURLSchemes("https", "http")
 	policy.AllowRelativeURLs(true)
 	policy.RequireNoReferrerOnLinks(true)
-	nodes, err := html.ParseFragment(strings.NewReader(policy.Sanitize(rendered.String())), &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div})
+	nodes, err := html.ParseFragment(strings.NewReader(policy.Sanitize(rendered.String())), &html.Node{Type: html.ElementNode, Data: articleContainerElement, DataAtom: atom.Div})
 	if err != nil {
 		return "", fmt.Errorf("parse sanitized Markdown: %w", err)
 	}
 	rendered.Reset()
+	heading := 0
 	for i, node := range nodes {
 		if i == 0 && title != "" && node.Data == "h1" && renderedText(node) == title {
 			continue
 		}
 		sanitizeLinks(node, pageID)
+		decorateArticle(node, displayedTitle != "", &heading)
+		if node.DataAtom == atom.Table {
+			wrapper := tableWrapper()
+			wrapper.AppendChild(node)
+			node = wrapper
+		}
 		if err = html.Render(&rendered, node); err != nil {
 			return "", fmt.Errorf("serialize sanitized Markdown: %w", err)
 		}
 	}
 	return template.HTML(rendered.String()), nil //nolint:gosec // Only allowlisted Markdown and parsed, redacted links reach this conversion.
+}
+
+// Decoration runs only on sanitized nodes. Author attributes never supply IDs
+// or active behavior; numbering reflects the headings actually displayed.
+func decorateArticle(node *html.Node, hasTitle bool, heading *int) {
+	if hasTitle && node.DataAtom == atom.H1 {
+		node.Data, node.DataAtom = "h2", atom.H2
+	}
+	switch node.DataAtom {
+	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
+		*heading++
+		node.Attr = append(node.Attr, html.Attribute{Key: "id", Val: "knowl-heading-" + strconv.Itoa(*heading)}, html.Attribute{Key: "tabindex", Val: "-1"})
+	}
+	for child := node.FirstChild; child != nil; {
+		next := child.NextSibling
+		decorateArticle(child, hasTitle, heading)
+		child = next
+	}
+	if node.DataAtom == atom.Table && node.Parent != nil {
+		wrapper := tableWrapper()
+		parent := node.Parent
+		parent.InsertBefore(wrapper, node)
+		parent.RemoveChild(node)
+		wrapper.AppendChild(node)
+	}
+}
+
+func tableWrapper() *html.Node {
+	return &html.Node{Type: html.ElementNode, Data: articleContainerElement, DataAtom: atom.Div, Attr: []html.Attribute{{Key: "class", Val: "table-responsive"}}}
+}
+
+type articleHeading struct{ ID, Title string }
+
+func articleOutline(markdown template.HTML) ([]articleHeading, error) {
+	nodes, err := html.ParseFragment(strings.NewReader(string(markdown)), &html.Node{Type: html.ElementNode, Data: articleContainerElement, DataAtom: atom.Div})
+	if err != nil {
+		return nil, fmt.Errorf("parse article outline: %w", err)
+	}
+	headings := []articleHeading{}
+	var visit func(*html.Node)
+	visit = func(node *html.Node) {
+		if node.DataAtom == atom.H2 || node.DataAtom == atom.H3 {
+			for _, attr := range node.Attr {
+				if attr.Key == "id" {
+					headings = append(headings, articleHeading{ID: attr.Val, Title: renderedText(node)})
+				}
+			}
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+	}
+	for _, node := range nodes {
+		visit(node)
+	}
+	return headings, nil
 }
 func sanitizeLinks(node *html.Node, pageID string) {
 	if node.Type == html.ElementNode && node.Data == "a" {

@@ -165,8 +165,21 @@ an operator policy change invalidates work planned against older bytes.
 
 ## Reading pages and accepted sources in the browser
 
-The optional [web UI](web-ui.md) reads the current canonical `wiki/` page and
-its saved source references. **Page sources** identifies each immutable accepted
+The optional [web UI](web-ui.md) reads published `wiki/` pages through a sidebar
+page tree. A title opens its page; a separate caret expands children. A directory
+with `index.md` is one parent page, while directories without an index are
+transparent to the nearest real parent. Children come from published paths,
+independently of authored links. Breadcrumbs verify actual parent index pages
+along the selected path within bounded reads.
+
+An index's authored table of contents, prose, or empty body is read as page
+content and rendered once. These browser reads retain structural safety checks;
+they do not relax the strict OKF publication and maintenance contracts described
+below. The tree and its completed branches remain in the connected tab's bounded
+memory, and protected state is cleared on reload, disconnect, or rejected
+authorization.
+
+The page context's **Sources** tab identifies each immutable accepted
 revision; **Read saved source** displays its accepted text and digest from
 `raw/`, without fetching the original source again. If that revision is missing,
 unavailable, too large, or not displayable as text, the UI reports the failure.
