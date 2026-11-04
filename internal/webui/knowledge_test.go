@@ -122,64 +122,43 @@ func hasAttribute(n *html.Node, key, value string) bool {
 	return false
 }
 
-func TestKnowledgeOneCurrentBreadcrumb(t *testing.T) {
-	f := canonicalKnowledgeFixture()
-	r, doc := fragmentDocument(t, screenHandler(t, f), knowledgeFragment+"?view=all")
-	if r.Code != 200 {
-		t.Fatalf("status=%d", r.Code)
-	}
-	count := 0
-	current := ""
-	paths := map[string]string{}
-	walk(doc, func(n *html.Node) {
-		if n.DataAtom == atom.Nav && hasAttribute(n, "aria-label", "Breadcrumb") {
-			walk(n, func(child *html.Node) {
-				if hasAttribute(child, "aria-current", "page") {
-					count++
-					current = nodeText(child)
-				}
-			})
-		}
-		if n.DataAtom == atom.Li {
-			for _, a := range n.Attr {
-				if a.Key == "data-wiki-path" {
-					paths[a.Val] = nodeText(n)
-				}
+func TestKnowledgeLegacyInventoryURLsOpenOrdinaryPages(t *testing.T) {
+	for _, tc := range []struct{ query, id, title string }{
+		{"?view=all", rootCatalogID, renderTestRootTitle},
+		{"?view=all&page_id=" + url.QueryEscape(knowledgeDistantLeaf), knowledgeDistantLeaf, knowledgeDistantTitle},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			f := canonicalKnowledgeFixture()
+			r, doc := fragmentDocument(t, screenHandler(t, f), knowledgeFragment+tc.query)
+			if r.Code != http.StatusOK {
+				t.Fatalf("status=%d", r.Code)
 			}
-		}
-	})
-	if count != 1 || current != allPagesTitle || len(f.pageIDs) != 0 || paths[indexFileName] != indexFileName || !strings.HasSuffix(paths[catalogsDir], catalogsDir) {
-		t.Fatalf("current count=%d title=%q pages=%v paths=%v", count, current, f.pageIDs, paths)
-	}
-}
-
-func TestKnowledgeTreeFileKeepsAllPagesOrigin(t *testing.T) {
-	f := canonicalKnowledgeFixture()
-	r, doc := fragmentDocument(t, screenHandler(t, f), pageFragment+"?view=all&page_id="+url.QueryEscape(knowledgeDistantLeaf))
-	if r.Code != http.StatusOK {
-		t.Fatalf("status=%d", r.Code)
-	}
-	var crumbs []string
-	var allURL string
-	walk(doc, func(n *html.Node) {
-		if n.DataAtom != atom.Nav || !hasAttribute(n, "aria-label", "Breadcrumb") {
-			return
-		}
-		walk(n, func(child *html.Node) {
-			if child.DataAtom == atom.Li {
-				crumbs = append(crumbs, nodeText(child))
-			}
-			if child.DataAtom == atom.A && nodeText(child) == allPagesTitle {
-				for _, a := range child.Attr {
-					if a.Key == linkHrefAttribute {
-						allURL = a.Val
+			var current []string
+			var article string
+			walk(doc, func(n *html.Node) {
+				if hasAttribute(n, "aria-current", "page") {
+					current = append(current, nodeText(n))
+				}
+				if hasAttribute(n, "id", "article") {
+					for _, a := range n.Attr {
+						if a.Key == "data-page-id" {
+							article = a.Val
+						}
 					}
 				}
+				if n.DataAtom == atom.A || n.DataAtom == atom.Button {
+					if compactNodeText(n) == "All pages" {
+						t.Error("legacy URL restored removed inventory control")
+					}
+				}
+				if hasAttribute(n, "aria-label", "All wiki pages") {
+					t.Error("legacy URL restored inventory UI")
+				}
+			})
+			if article != tc.id || !reflect.DeepEqual(current, []string{tc.title}) {
+				t.Fatalf("article=%q current=%v", article, current)
 			}
 		})
-	})
-	if !reflect.DeepEqual(crumbs, []string{"Root", allPagesTitle, knowledgeDistantTitle}) || allURL != "/ui/knowledge?view=all" {
-		t.Fatalf("breadcrumbs=%v all URL=%q", crumbs, allURL)
 	}
 }
 

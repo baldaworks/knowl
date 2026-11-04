@@ -3,9 +3,11 @@ package fs
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
@@ -63,7 +65,11 @@ func (workspace *Workspace) WikiPageChildren(ctx context.Context, scope knowl.Sc
 	versionEntries = append(versionEntries, operatorInventoryEntry{path: directory, identity: operatorFolderKind + ":" + parentIdentity, info: parentInfo})
 	slices.SortFunc(entries, func(a, b operatorInventoryEntry) int { return strings.Compare(a.path, b.path) })
 	slices.SortFunc(versionEntries, func(a, b operatorInventoryEntry) int { return strings.Compare(a.path, b.path) })
-	result.SnapshotVersion = operatorInventoryVersion(scope, "wiki-pages", directory, versionEntries)
+	// The supported publisher fence covers selected child probes without
+	// changing the snapshot between keyset windows. Keep branch metadata too.
+	publication := workspace.publicationFenceLocked()
+	versionParent := directory + "\x00" + publication.epoch + "\x00" + strconv.FormatUint(publication.generation, 10)
+	result.SnapshotVersion = operatorInventoryVersion(scope, "wiki-pages", versionParent, versionEntries)
 	if err := operatorSnapshotValid(options, result.SnapshotVersion); err != nil {
 		return result, err
 	}
@@ -95,6 +101,20 @@ func (workspace *Workspace) WikiPageChildren(ctx context.Context, scope knowl.Sc
 			return result, operatorReadError(err, app.ErrOperatorWorkspaceUnavailable)
 		}
 		remaining -= size
+		if path.Base(entry.path) == okfIndexFilename {
+			before := budget.bytes
+			hasChildren, err := operatorPageHasChildren(ctx, wiki, path.Dir(entry.path), budget)
+			if err != nil {
+				return result, operatorReadError(err, app.ErrOperatorWorkspaceUnavailable)
+			}
+			remaining -= budget.bytes - before
+			if remaining < 0 {
+				return result, app.ErrOperatorReadLimitExceeded
+			}
+			if hasChildren {
+				node.ChildrenDirectory = path.Dir(entry.path)
+			}
+		}
 		result.Items = append(result.Items, node)
 	}
 	if err := contextErr(ctx); err != nil {
@@ -180,7 +200,6 @@ func (workspace *Workspace) operatorWikiPage(wiki *readRoot, entry operatorInven
 			return node, 0, err
 		}
 		node.Title = operatorIndexTitle(entry.path, index.Body)
-		node.ChildrenDirectory = path.Dir(entry.path)
 		return node, len(content), nil
 	}
 	page, info, err := workspace.operatorPage(wiki, entry.path, limits)
@@ -205,4 +224,85 @@ func operatorIndexTitle(relative, body string) string {
 		return path.Base(directory)
 	}
 	return strings.TrimSuffix(path.Base(relative), markdownExt)
+}
+
+// operatorPageHasChildren only probes the returned window's index pages. It
+// stops at the first visible page and never reads page bodies or provenance.
+func operatorPageHasChildren(ctx context.Context, wiki *readRoot, directory string, budget *operatorDirectoryBudget) (bool, error) {
+	branch, err := wiki.open(directory, true)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = branch.Close() }()
+	return operatorBranchHasPage(ctx, wiki, branch, directory, budget)
+}
+
+func operatorBranchHasPage(ctx context.Context, wiki *readRoot, branch *os.File, directory string, budget *operatorDirectoryBudget) (bool, error) {
+	limits := app.DefaultCatalogLimits()
+	for {
+		if err := contextErr(ctx); err != nil {
+			return false, err
+		}
+		entries, err := branch.ReadDir(1)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, err
+		}
+		for _, entry := range entries {
+			relative := path.Join(directory, entry.Name())
+			if err := operatorPageProbeCharge(relative, budget); err != nil {
+				return false, err
+			}
+			if entry.Type()&os.ModeSymlink != 0 || !validReadPath(relative) {
+				continue
+			}
+			if !entry.IsDir() {
+				if entry.Name() == okfIndexFilename || entry.Name() == okfLogFilename || path.Ext(relative) != markdownExt {
+					continue
+				}
+				kind, err := okf.ClassifyPath(relative)
+				if err != nil {
+					return false, err
+				}
+				if kind != okf.DocumentConcept || !app.ValidOperatorReadPath(strings.TrimSuffix(relative, markdownExt)) {
+					continue
+				}
+				_, err = operatorStat(wiki, relative)
+				return err == nil, err
+			}
+			if strings.Count(relative, "/")+1 > limits.MaxDepth {
+				return false, app.ErrOperatorReadLimitExceeded
+			}
+			indexPath := path.Join(relative, okfIndexFilename)
+			if err := operatorPageProbeCharge(indexPath, budget); err != nil {
+				return false, err
+			}
+			if _, err := operatorStat(wiki, indexPath); err == nil {
+				return true, nil
+			} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrPathRejected) {
+				return false, err
+			}
+			child, err := openReadChild(branch, entry.Name(), true)
+			if err != nil {
+				return false, err
+			}
+			hasPage, err := operatorBranchHasPage(ctx, wiki, child, relative, budget)
+			_ = child.Close()
+			if err != nil || hasPage {
+				return hasPage, err
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+	}
+}
+
+func operatorPageProbeCharge(relative string, budget *operatorDirectoryBudget) error {
+	budget.count++
+	budget.bytes += len(relative) + 128
+	limits := app.DefaultCatalogLimits()
+	if budget.count > limits.MaxEdges || budget.bytes > limits.MaxSnapshotBytes || len(relative) > limits.MaxPathBytes {
+		return app.ErrOperatorReadLimitExceeded
+	}
+	return nil
 }

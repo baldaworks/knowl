@@ -52,7 +52,11 @@ func (h *Handler) wikiPages(w http.ResponseWriter, r *http.Request) {
 	}
 	view := wikiPagesView{Directory: directory}
 	for _, page := range branch.Items {
-		item := wikiPageView{OperatorWikiPage: page, URL: pageURL(page.PageID)}
+		parent := domain.PageID(rootCatalogID)
+		if directory != "" {
+			parent = domain.PageID(directory + "/index")
+		}
+		item := wikiPageView{OperatorWikiPage: page, URL: navigationPageURL(page.PageID, []domain.PageID{parent})}
 		if page.ChildrenDirectory != "" {
 			item.ChildrenURL = wikiPagesURL(page.ChildrenDirectory, app.OperatorListOptions{})
 		}

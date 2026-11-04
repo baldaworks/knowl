@@ -24,10 +24,10 @@ const hxGetAttribute = "hx-get"
 const htmlClassAttribute = "class"
 
 type activityReader struct {
-	manyOperations   bool
+	manyOperations    bool
 	similarOperations bool
-	operationOptions []app.OperatorOperationReadOptions
-	documentOptions  []app.OperatorReadOptions
+	operationOptions  []app.OperatorOperationReadOptions
+	documentOptions   []app.OperatorReadOptions
 }
 
 func (f *activityReader) ListOperations(_ context.Context, scope domain.ScopeRef, o app.OperatorOperationReadOptions) (app.OperatorReadPage[domain.OperatorOperationSummary], error) {
@@ -142,7 +142,7 @@ func TestOperationListDistinguishesOpaqueIDsWithSameEdges(t *testing.T) {
 			return
 		}
 		for _, a := range n.Attr {
-			if a.Key == htmlClassAttribute && a.Val == "table-name operation-select" {
+			if a.Key == "hx-target" && a.Val == "#operation-detail" {
 				labels = append(labels, nodeText(n))
 			}
 		}

@@ -38,6 +38,15 @@ const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright'
     assert.equal(await page.locator('#contents-tab').getAttribute('aria-selected'),'true');
     await artifact('root-1440');
     await page.locator('#wiki-tree [data-page-node="AI/index"]').waitFor();
+    const leaf=page.locator('#wiki-tree [data-page-node="releases/index"]');
+    assert.equal(await leaf.count(),1,'index leaf remains a published page');
+    assert.equal(await leaf.locator(':scope > [data-page-toggle]').count(),0,'known empty index has no disclosure');
+    await leaf.locator(':scope > a').click();
+    await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Balda releases');
+    assert.equal(await page.locator('.document').innerText(),'Published release information.');
+    assert.equal(await leaf.locator(':scope > [data-page-branch]').count(),0,'leaf offers no dead empty expansion');
+    await artifact('leaf-index-1440');
+    await page.goBack();await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Knowl Index');
     const ai=page.locator('#wiki-tree [data-page-node="AI/index"]');
     await ai.locator(':scope > [data-page-toggle]').click();
     await page.locator('#wiki-tree [data-page-node="AI/Prism"]').waitFor();

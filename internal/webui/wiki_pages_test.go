@@ -2,7 +2,6 @@ package webui
 
 import (
 	"context"
-	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"net/http"
 	"net/url"
 	"path"
@@ -11,12 +10,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
 
-func TestKnowledgeUsesVerifiedPathAncestors(t *testing.T) {
+func TestKnowledgeInvalidContextDoesNotInventPathAncestors(t *testing.T) {
 	f := canonicalKnowledgeFixture()
 	const id = "AI/Prism/guide"
 	f.pages[id] = domain.OperatorPage{ID: id, Title: "Guide", Markdown: "# Guide\n\nBody."}
@@ -33,7 +33,7 @@ func TestKnowledgeUsesVerifiedPathAncestors(t *testing.T) {
 			})
 		}
 	})
-	if w.Code != http.StatusOK || !reflect.DeepEqual(titles, []string{"Root", "AI", "Prism", "Guide"}) || f.catalogReads != 0 {
+	if w.Code != http.StatusOK || !reflect.DeepEqual(titles, []string{renderTestRootTitle, "Guide"}) || f.catalogReads != 0 {
 		t.Fatalf("status=%d crumbs=%v catalogReads=%d", w.Code, titles, f.catalogReads)
 	}
 }
@@ -72,11 +72,7 @@ func TestKnowledgeAuthoredBodyIndependentOfLegacyCatalog(t *testing.T) {
 
 func (f *screenReader) WikiPageChildren(_ context.Context, _ domain.ScopeRef, directory string, o app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorWikiPage], error) {
 	var items []domain.OperatorWikiPage
-	for id, p := range f.pages {
-		relative := string(id) + ".md"
-		if id == rootCatalogID || relative == path.Join(directory, "index.md") {
-			continue
-		}
+	nearestParent := func(id domain.PageID) string {
 		parent := path.Dir(string(id))
 		if path.Base(string(id)) == rootCatalogID {
 			parent = path.Dir(parent)
@@ -88,14 +84,27 @@ func (f *screenReader) WikiPageChildren(_ context.Context, _ domain.ScopeRef, di
 			parent = path.Dir(parent)
 		}
 		if parent == "." {
-			parent = ""
+			return ""
 		}
+		return parent
+	}
+	for id, p := range f.pages {
+		relative := string(id) + ".md"
+		if id == rootCatalogID || relative == path.Join(directory, "index.md") {
+			continue
+		}
+		parent := nearestParent(id)
 		if parent != directory {
 			continue
 		}
 		item := domain.OperatorWikiPage{PageID: id, Path: relative, Title: p.Title}
 		if path.Base(string(id)) == rootCatalogID {
-			item.ChildrenDirectory = path.Dir(string(id))
+			for childID := range f.pages {
+				if childID != id && childID != rootCatalogID && nearestParent(childID) == path.Dir(string(id)) {
+					item.ChildrenDirectory = path.Dir(string(id))
+					break
+				}
+			}
 		}
 		items = append(items, item)
 	}
@@ -116,6 +125,7 @@ func (f *screenReader) WikiPageChildren(_ context.Context, _ domain.ScopeRef, di
 
 func TestWikiPagesTitlesCaretsContinuationAndTypedFailures(t *testing.T) {
 	f := canonicalKnowledgeFixture()
+	f.pages["catalogs/other/article"] = domain.OperatorPage{ID: "catalogs/other/article", Title: "Actual child", Markdown: "# Actual child"}
 	h := screenHandler(t, f)
 	w, doc := fragmentDocument(t, h, wikiPagesFragment+"?limit=1")
 	var titles, carets []string

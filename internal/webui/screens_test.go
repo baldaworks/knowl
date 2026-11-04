@@ -428,7 +428,7 @@ func TestKnowledgeSnapshotContinuation(t *testing.T) {
 		{Path: "b.md", Name: "b.md", Kind: pageKind, PageID: "b"},
 	}}}
 	h := screenHandler(t, f)
-	r, doc := fragmentDocument(t, h, "/ui/fragments/knowledge?view=all&limit=1")
+	r, doc := fragmentDocument(t, h, "/ui/fragments/wiki-directory?limit=1")
 	if r.Code != 200 {
 		t.Fatalf("status=%d", r.Code)
 	}

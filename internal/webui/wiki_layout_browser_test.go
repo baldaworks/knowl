@@ -30,6 +30,7 @@ func TestBrowserWikiLayout(t *testing.T) {
 	// Add real physical pages independently of the checked-in index links.
 	writeWikiBrowserPage(t, root, "AI/index.md", []byte("AI tools and techniques.\n\n## Authored reading\n\n[Unrelated article](../concepts/knowl-overview.md)\n\nKeep this additional information.\n"))
 	writeWikiBrowserPage(t, root, "concepts/ADRs/index.md", nil)
+	writeWikiBrowserPage(t, root, "releases/index.md", []byte("# Balda releases\n\nPublished release information.\n"))
 	for _, page := range []struct{ relative, title, body string }{
 		{"AI/Prism.md", "Prism", "# Prism\n\n## Workflow\n\nA published workflow page.\n"},
 		{"AI/OpenSpec.md", "OpenSpec", "# OpenSpec\n\nA separate published page.\n"},
