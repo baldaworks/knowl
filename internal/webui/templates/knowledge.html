@@ -1,8 +1,8 @@
 {{define "knowledge"}}
-<div class="knowledge-toolbar">{{if not .All}}<a class="btn btn-outline-secondary btn-sm" href="/ui/knowledge?view=all">All pages</a>{{end}}{{if .Page}}<button id="context-toggle" class="btn btn-outline-secondary btn-sm d-xl-none" data-bs-toggle="offcanvas" data-bs-target="#page-context" aria-controls="page-context">About this page</button>{{end}}</div>
+<div class="knowledge-toolbar">{{if .Page}}<button id="context-toggle" class="btn btn-outline-secondary btn-sm d-xl-none" data-bs-toggle="offcanvas" data-bs-target="#page-context" aria-controls="page-context">About this page</button>{{end}}</div>
 <nav aria-label="Breadcrumb"><ol class="breadcrumb">{{range .Breadcrumbs}}<li class="breadcrumb-item">{{if .URL}}<a href="{{.URL}}">{{.Title}}</a>{{else}}<span aria-current="page">{{.Title}}</span>{{end}}</li>{{end}}</ol></nav>
 <div class="wiki-grid align-items-start">
-{{if and .All (not .Page)}}<section class="card wiki-tree" aria-label="All wiki pages"><div class="card-body"><h1 class="wiki-tree-title">All pages</h1><p class="panel-description">Browse published files by path.</p>{{if .Tree}}<ul class="wiki-tree-list" data-wiki-directory="">{{range .Tree}}{{template "wiki_directory_entry" .}}{{end}}{{if .TreeNext}}{{template "wiki_directory_more" .TreeNext}}{{end}}</ul>{{else}}<p>No published wiki files yet.</p>{{end}}<p class="wiki-tree-limit" role="status" hidden></p></div></section>{{else if .Page}}{{template "article" .}}{{else}}<div class="card"><div class="card-body"><h2 class="card-title">No catalog available</h2><p class="panel-description mt-3">Browse All pages to find published knowledge.</p></div></div>{{end}}
+{{if .Page}}{{template "article" .}}{{else}}<div class="card"><div class="card-body"><h2 class="card-title">No catalog available</h2><p class="panel-description mt-3">Choose a page in the wiki navigation.</p></div></div>{{end}}
 </div>{{end}}
 {{define "article"}}
 <article id="article" class="card knowledge-article" data-page-id="{{.Page.ID}}">

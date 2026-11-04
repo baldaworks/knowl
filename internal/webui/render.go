@@ -222,7 +222,7 @@ func documentLink(raw, pageID string) string {
 func contextualDocumentURL(id, pageID string) string {
 	currentKind, _ := okf.ClassifyPath(pageID + ".md")
 	targetKind, _ := okf.ClassifyPath(id + ".md")
-	if currentKind == okf.DocumentIndex && targetKind == okf.DocumentConcept && canonicalURL(id) != "" {
+	if currentKind == okf.DocumentIndex && (targetKind == okf.DocumentConcept || targetKind == okf.DocumentIndex) && canonicalURL(id) != "" {
 		return contextualPageURL(domain.PageID(id), domain.PageID(pageID))
 	}
 	return canonicalURL(id)

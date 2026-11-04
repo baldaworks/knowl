@@ -66,14 +66,14 @@ func TestRenderIndexBodyAndLinks(t *testing.T) {
 		{
 			name: "root version", id: renderTestRootID, title: renderTestRootTitle,
 			markdown: "---\nokf_version: \"0.2\"\n---\n# Root\n\n* [Team](catalogs/team/index.md)\n* [Article](concepts/article.md)\n* [Log](log.md)\n* [External](https://user:secret@example.com/doc?token=secret#private)\n* [Unsafe](javascript:alert%281%29)\n* [Active](concepts/active.md) <a hx-get='/v1/retrieve' onclick='alert(1)'>bad</a>\n",
-			links:    map[string]string{renderTestCatalogTitle: "/ui/knowledge?parent_id=catalogs%2Fteam%2Findex", "Article": "/ui/knowledge?page_id=concepts%2Farticle&parent_id=index", "External": "https://example.com/doc", "Active": "/ui/knowledge?page_id=concepts%2Factive&parent_id=index"},
+			links:    map[string]string{renderTestCatalogTitle: "/ui/knowledge?page_id=catalogs%2Fteam%2Findex&parent_id=index", "Article": "/ui/knowledge?page_id=concepts%2Farticle&parent_id=index", "External": "https://example.com/doc", "Active": "/ui/knowledge?page_id=concepts%2Factive&parent_id=index"},
 		},
 		{name: "root heading only", id: renderTestRootID, markdown: "# Root\n", title: renderTestRootTitle, links: map[string]string{}},
 		{name: "nested heading only", id: renderTestCatalogID, markdown: "# Team\n", title: renderTestCatalogTitle, links: map[string]string{}},
 		{
 			name: "nested links", id: renderTestCatalogID, title: renderTestCatalogTitle,
 			markdown: "# Team\n\n* [Root](../../index.md)\n* [Other](../other/index.md)\n* [Article](../../concepts/article.md)\n* [Escape](../../../private.md)\n",
-			links:    map[string]string{renderTestRootTitle: "/ui/knowledge?parent_id=index", "Other": "/ui/knowledge?parent_id=catalogs%2Fother%2Findex", "Article": "/ui/knowledge?page_id=concepts%2Farticle&parent_id=catalogs%2Fteam%2Findex"},
+			links:    map[string]string{renderTestRootTitle: "/ui/knowledge?page_id=index&parent_id=catalogs%2Fteam%2Findex", "Other": "/ui/knowledge?page_id=catalogs%2Fother%2Findex&parent_id=catalogs%2Fteam%2Findex", "Article": "/ui/knowledge?page_id=concepts%2Farticle&parent_id=catalogs%2Fteam%2Findex"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

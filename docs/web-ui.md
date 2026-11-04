@@ -5,7 +5,9 @@ sources, search for evidence, follow processing, and inspect current database
 statistics. It shares the Go service's HTTP listener and persistent workspace.
 Five server-rendered screens use
 bundled, pinned local assets; a normal Go build needs no Node runtime or
-frontend tooling.
+frontend tooling. All five screens use the same bundled AdminLTE/Bootstrap
+shell, typography, sidebar, cards and controls; changing sections keeps that
+visual system.
 
 ## Connect
 
@@ -42,7 +44,8 @@ and [container setup](service.md#optional-browser-access).
 Knowledge opens the published root page. **Home** in the sidebar returns to it.
 The sidebar shows pages in their published path hierarchy: select a title to
 open that page, or use its separate caret to expand or collapse children without
-changing the article. A directory's `index.md` represents one parent page, not a
+changing the article. A page without visible children has no disclosure
+caret, including an index page. Its title still opens its content. A directory's `index.md` represents one parent page, not a
 folder plus another index row. Technical directories without an index are
 transparent: their pages appear beneath the nearest actual parent page.
 
@@ -56,11 +59,16 @@ checks; strict OKF publication and maintenance validation remain unchanged.
 A page readable in the browser can therefore still fail strict publish
 validation.
 
-Breadcrumbs link only to actual parent index pages verified along the selected
-page's path. Missing technical-directory indexes are skipped. Direct URLs,
-Search evidence, reload, and browser Back/Forward open the requested page; when
-an ancestor cannot be verified within the read bounds, the breadcrumb remains
-shorter. No whole-wiki parent search is needed.
+Breadcrumbs preserve the verified navigation context selected when following a
+page-tree or authored index-page link. The same article can have different valid
+contexts. A link's `parent_id` and bounded `trail` of page IDs retain that context
+on direct opening, reload and browser Back/Forward. Each supplied relationship
+must be a visible page-tree relationship or an actual safe local link in its
+parent page. Titles come from the saved pages. Selecting an ancestor opens it
+and shortens the trail. Physical filename ancestry does not replace a selected
+context. Without trustworthy context, the article stays readable with a shorter
+root/current breadcrumb; invalid or unavailable context does not hide it. No
+whole-wiki parent search is needed.
 
 Branches load lazily. **More** loads another bounded window, **Retry** repeats
 the failed branch read, and a changed continuation restarts that branch without
@@ -86,11 +94,8 @@ Escape returns focus to the opener; selecting a page on mobile closes navigation
 and focuses its title. Wide tables and code scroll locally without widening the
 page.
 
-**All pages** remains an optional file inventory for browsing literal directory
-paths. Its folders expand separately, **More files** continues a branch, and
-`index.md` appears as an ordinary file. This compatibility view is separate from
-the primary page tree. Browser Back can restore its bounded loaded view within
-the same connected tab; reload or disconnect clears it.
+The sidebar supplies wiki page navigation. Historical `view=all` bookmarks now
+open the ordinary root or requested article rather than a separate file view.
 
 Select **Read saved source** to read immutable accepted text with its digest
 and media type. This uses Knowl's saved revision and does not fetch upstream.

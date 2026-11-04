@@ -120,6 +120,8 @@
     let rect=target.matches('button,a[href]')?target.getBoundingClientRect():range.getBoundingClientRect();
     const errorMessage=target.querySelector('[data-error-code] p');
     if(errorMessage){range.selectNodeContents(errorMessage);const messageRect=range.getBoundingClientRect();rect={top:Math.min(rect.top,messageRect.top),bottom:Math.max(rect.bottom,messageRect.bottom)};}
+    const firstDocument=target.id==='source-detail'?target.querySelector('.source-documents tbody .table-name'):null;
+    if(firstDocument){const documentRect=firstDocument.getBoundingClientRect();rect={top:Math.min(rect.top,documentRect.top),bottom:Math.max(rect.bottom,documentRect.bottom)};}
     const headerBottom=Math.max(0,document.querySelector('.app-header').getBoundingClientRect().bottom);
     if(rect.top<headerBottom || rect.bottom>innerHeight) {
       target.scrollIntoView({block:'start',behavior:'instant'});
@@ -138,7 +140,7 @@
     let path='/ui/fragments/'+selected();
     if(selected()==='knowledge') {
       const query=new URLSearchParams();
-      for(const key of ['page_id','parent_id','view','limit','cursor'])if(params.has(key))query.set(key,params.get(key));
+      for(const key of ['page_id','parent_id','trail','view','limit','cursor'])if(params.has(key))query.set(key,params.get(key));
       if(params.has('page_id'))path='/ui/fragments/page';
       if(query.size)path+='?'+query;
     }
@@ -253,6 +255,16 @@
   function updateWikiSelection() {
     const id=screen.querySelector('#article')?.dataset.pageId;
     for(const link of wikiTree.querySelectorAll('[data-wiki-page]')) {
+      if(link.dataset.wikiPage!=='index') {
+        const ancestors=[];
+        let parent=link.closest('[data-page-node]')?.parentElement.closest('[data-page-node]');
+        while(parent && ancestors.length<16) {ancestors.unshift(parent.dataset.pageNode);parent=parent.parentElement.closest('[data-page-node]');}
+        ancestors.unshift('index');
+        const url=new URL(link.href,location.href);
+        if(ancestors.length<=16) {url.searchParams.set('parent_id',ancestors.at(-1));url.searchParams.set('trail',JSON.stringify(ancestors));}
+        else {url.searchParams.delete('parent_id');url.searchParams.delete('trail');}
+        link.href=url.pathname+url.search;
+      }
       link.classList.toggle('active',link.dataset.wikiPage===id);
       if(link.dataset.wikiPage===id)link.setAttribute('aria-current','page');
       else link.removeAttribute('aria-current');

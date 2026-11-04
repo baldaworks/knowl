@@ -7,7 +7,6 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 
@@ -26,9 +25,7 @@ const (
 	parentIDParameter           = "parent_id"
 	cursorParameter             = "cursor"
 	allPagesView                = "all"
-	allPagesTitle               = "All pages"
 	viewParameter               = "view"
-	rootBreadcrumbTitle         = "Root"
 	pageKind                    = "page"
 	retrievalFailed             = "failed"
 	knowledgeFragment           = "/ui/fragments/knowledge"
@@ -49,13 +46,11 @@ const (
 )
 
 type knowledgeView struct {
-	All         bool
-	Tree        []domain.OperatorWikiEntry
-	TreeNext    string
 	Page        *domain.OperatorPage
 	Markdown    template.HTML
 	Breadcrumbs []knowledgeBreadcrumb
 	Outline     []articleHeading
+	Ancestors   []domain.PageID
 }
 
 type knowledgeBreadcrumb struct {
@@ -111,21 +106,8 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 		h.readError(w, err)
 		return
 	}
-	v := knowledgeView{All: q.Get(viewParameter) == allPagesView}
-	if v.All && !q.Has(pageIDParameter) {
-		branch, readErr := h.dependencies.Operator.WikiDirectoryChildren(ctx, "", options)
-		if readErr != nil {
-			h.readError(w, readErr)
-			return
-		}
-		v.Tree = branch.Items
-		if branch.NextCursor != "" {
-			v.TreeNext = fragmentURL("wiki-directory", url.Values{limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}, cursorParameter: {branch.NextCursor}})
-		}
-		v.Breadcrumbs = []knowledgeBreadcrumb{{Title: rootBreadcrumbTitle, URL: knowledgePath}, {Title: allPagesTitle}}
-		h.render(w, http.StatusOK, "knowledge", v)
-		return
-	}
+	// Historical inventory URLs now open ordinary pages; directory reads remain separate.
+	v := knowledgeView{}
 	if options.Cursor != "" {
 		h.readError(w, app.ErrOperatorCursorInvalid)
 		return
@@ -143,15 +125,18 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.Page = &page
-	v.Breadcrumbs = h.pageBreadcrumbs(ctx, page)
-	if v.All && page.ID != rootCatalogID {
-		v.Breadcrumbs = append([]knowledgeBreadcrumb{{Title: rootBreadcrumbTitle, URL: knowledgePath}, {Title: allPagesTitle, URL: knowledgeURL(url.Values{viewParameter: {allPagesView}})}}, knowledgeBreadcrumb{Title: page.Title})
-	}
+	v.Breadcrumbs, v.Ancestors = h.pageNavigation(ctx, q, page)
 	v.Markdown, err = renderTitledPageMarkdown(page.Markdown, string(page.ID), page.Title)
 	if err != nil {
 		h.readError(w, err)
 		return
 	}
+	contextual, err := navigationArticleLinks(string(v.Markdown), page.ID, v.Ancestors)
+	if err != nil {
+		h.readError(w, err)
+		return
+	}
+	v.Markdown = template.HTML(contextual) //nolint:gosec // Only reparsed sanitized HTML and server-verified navigation IDs.
 	v.Outline, err = articleOutline(v.Markdown)
 	if err != nil {
 		h.readError(w, err)
@@ -161,47 +146,6 @@ func (h *Handler) knowledge(w http.ResponseWriter, r *http.Request) {
 		v.Page.Sources[i].OriginalURI = SafeURI(v.Page.Sources[i].OriginalURI)
 	}
 	h.render(w, http.StatusOK, "knowledge", v)
-}
-
-// Only actual index pages on the selected canonical path become ancestors.
-// Missing technical-container indexes are transparent; a bounded failed read
-// leaves a shorter honest trail without suppressing the selected page.
-func (h *Handler) pageBreadcrumbs(ctx context.Context, page domain.OperatorPage) []knowledgeBreadcrumb {
-	if page.ID == rootCatalogID {
-		return []knowledgeBreadcrumb{{Title: page.Title}}
-	}
-	limits := app.DefaultCatalogLimits()
-	ids := []domain.PageID{rootCatalogID}
-	directory := path.Dir(string(page.ID))
-	parts := strings.Split(directory, "/")
-	if directory != "." && len(parts) <= limits.MaxDepth {
-		for i := range parts {
-			candidate := domain.PageID(strings.Join(parts[:i+1], "/") + "/index")
-			if candidate != page.ID {
-				ids = append(ids, candidate)
-			}
-		}
-	}
-	crumbs := []knowledgeBreadcrumb{}
-	bytes := 0
-	for _, id := range ids {
-		if ctx.Err() != nil {
-			break
-		}
-		parent, err := h.dependencies.Operator.Page(ctx, id)
-		if err != nil {
-			continue
-		}
-		bytes += len(parent.Markdown) + len(parent.Title) + len(parent.ID)
-		if bytes > limits.MaxSnapshotBytes {
-			break
-		}
-		crumbs = append(crumbs, knowledgeBreadcrumb{Title: parent.Title, URL: pageURL(id)})
-		if id == rootCatalogID {
-			crumbs[len(crumbs)-1].URL = knowledgePath
-		}
-	}
-	return append(crumbs, knowledgeBreadcrumb{Title: page.Title})
 }
 
 func normalizedLimit(limit int) int {
@@ -319,7 +263,7 @@ func validFragmentQuery(r *http.Request) bool {
 	allowed := map[string]bool{}
 	switch r.URL.Path {
 	case knowledgeFragment:
-		for _, k := range []string{parentIDParameter, pageIDParameter, viewParameter, limitParameter, cursorParameter} {
+		for _, k := range []string{parentIDParameter, pageIDParameter, trailParameter, viewParameter, limitParameter, cursorParameter} {
 			allowed[k] = true
 		}
 	case wikiDirectoryFragment:
@@ -331,7 +275,7 @@ func validFragmentQuery(r *http.Request) bool {
 			allowed[k] = true
 		}
 	case pageFragment:
-		for _, k := range []string{pageIDParameter, parentIDParameter, viewParameter, limitParameter, cursorParameter} {
+		for _, k := range []string{pageIDParameter, parentIDParameter, trailParameter, viewParameter, limitParameter, cursorParameter} {
 			allowed[k] = true
 		}
 	case sourceRevisionFragment:

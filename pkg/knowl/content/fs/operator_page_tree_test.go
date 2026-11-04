@@ -177,3 +177,122 @@ func TestOperatorWikiPagesSharedTransparentDepthAndEntryBudget(t *testing.T) {
 		t.Fatalf("aggregate entry limit = %v", err)
 	}
 }
+
+func TestOperatorWikiPagesIndexDisclosureRequiresVisibleChild(t *testing.T) {
+	for _, body := range []string{"", "Additional prose.", "# Leaf\n\n* [Other](../elsewhere.md)\n"} {
+		t.Run(fmt.Sprintf("body-%d", len(body)), func(t *testing.T) {
+			workspace := newSourceStageWorkspace(t)
+			writeCanonicalFixture(t, workspace, "wiki/leaf/index.md", []byte(body))
+			writeCanonicalFixture(t, workspace, "wiki/leaf/empty/nested/image.png", nil)
+			writeCanonicalFixture(t, workspace, "wiki/leaf/empty/log.md", nil)
+			writeCanonicalFixture(t, workspace, "wiki/leaf/empty/%2e%2e.md", nil)
+			branch, err := workspace.WikiPageChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTitle := "leaf"
+			if strings.HasPrefix(body, "# Leaf") {
+				wantTitle = "Leaf"
+			}
+			if len(branch.Items) != 1 || branch.Items[0].PageID != "leaf/index" || branch.Items[0].Title != wantTitle || branch.Items[0].ChildrenDirectory != "" {
+				t.Fatalf("leaf disclosure=%#v", branch.Items)
+			}
+			writeCanonicalFixture(t, workspace, "wiki/leaf/empty/deep/page.md", validWorkspacePage("leaf/empty/deep/page", "Child", testWorkspaceSourceRef, "Body"))
+			branch, err = workspace.WikiPageChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(branch.Items) != 1 || branch.Items[0].PageID != "leaf/index" || branch.Items[0].Title != wantTitle || branch.Items[0].ChildrenDirectory != "leaf" {
+				t.Fatalf("parent disclosure=%#v", branch.Items)
+			}
+		})
+	}
+}
+
+func TestOperatorWikiPagesPublicationFenceKeepsWindowAndChildConsistency(t *testing.T) {
+	workspace := newSourceStageWorkspace(t)
+	for _, relative := range []string{"sources/engineering/a/index.md", "sources/engineering/z/index.md"} {
+		writeCanonicalFixture(t, workspace, "wiki/"+relative, []byte("# Parent\n"))
+	}
+	writeCanonicalFixture(t, workspace, "wiki/sources/engineering/a/wrapper/deep/asset.bin", nil)
+	options := app.OperatorReadOptions{Limit: 1}
+	first, err := workspace.WikiPageChildren(t.Context(), testScope, "", options)
+	if err != nil || len(first.Items) != 1 || first.Items[0].ChildrenDirectory != "" {
+		t.Fatalf("initial leaf = %#v, %v", first, err)
+	}
+	continuation := app.OperatorReadOptions{Limit: 1, Continuation: app.OperatorContinuation{Key: first.NextKey, SnapshotVersion: first.SnapshotVersion}}
+	second, err := workspace.WikiPageChildren(t.Context(), testScope, "", continuation)
+	if err != nil || second.SnapshotVersion != first.SnapshotVersion || len(second.Items) != 1 || second.Items[0].PageID != "sources/engineering/z/index" {
+		t.Fatalf("unchanged next window = %#v, %v", second, err)
+	}
+	reopened, err := New(workspace.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.WikiPageChildren(t.Context(), testScope, "", continuation); !errors.Is(err, app.ErrOperatorSnapshotChanged) {
+		t.Fatalf("reopened publisher snapshot = %v", err)
+	}
+	const childID = "sources/engineering/a/wrapper/deep/page"
+	child := sourcePage(childID, "page", "revision-1")
+	publish := func(run knowl.SyncRunID, mutation knowl.SourceMutation) {
+		t.Helper()
+		staged, err := workspace.StageSourcePlan(t.Context(), sourcePlan(run, testSourceID, mutation))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := workspace.CommitSource(t.Context(), staged); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish("tree-child-add", knowl.SourceMutation{Action: knowl.SourceMutationWrite, Path: "wiki/" + childID + ".md", Content: child})
+	if _, err := workspace.WikiPageChildren(t.Context(), testScope, "", continuation); !errors.Is(err, app.ErrOperatorSnapshotChanged) {
+		t.Fatalf("child addition snapshot = %v", err)
+	}
+	current, err := workspace.WikiPageChildren(t.Context(), testScope, "", options)
+	if err != nil || len(current.Items) != 1 || current.Items[0].ChildrenDirectory != "sources/engineering/a" {
+		t.Fatalf("published parent = %#v, %v", current, err)
+	}
+	continuation.Continuation = app.OperatorContinuation{Key: current.NextKey, SnapshotVersion: current.SnapshotVersion}
+	publish("tree-child-remove", knowl.SourceMutation{Action: knowl.SourceMutationDelete, Path: "wiki/" + childID + ".md", ExpectedDigest: digestBytes(child)})
+	if _, err := workspace.WikiPageChildren(t.Context(), testScope, "", continuation); !errors.Is(err, app.ErrOperatorSnapshotChanged) {
+		t.Fatalf("child removal snapshot = %v", err)
+	}
+	current, err = workspace.WikiPageChildren(t.Context(), testScope, "", options)
+	if err != nil || len(current.Items) != 1 || current.Items[0].ChildrenDirectory != "" {
+		t.Fatalf("published leaf = %#v, %v", current, err)
+	}
+}
+
+func TestOperatorWikiPagesOnlySelectedIndexesConsumeProbeBudget(t *testing.T) {
+	workspace := newSourceStageWorkspace(t)
+	writeCanonicalFixture(t, workspace, "wiki/a/index.md", nil)
+	writeCanonicalFixture(t, workspace, "wiki/z/index.md", nil)
+	deep := strings.TrimSuffix(strings.Repeat("nested/", app.DefaultCatalogLimits().MaxDepth+1), "/")
+	writeCanonicalFixture(t, workspace, "wiki/z/"+deep+"/asset.bin", nil)
+	first, err := workspace.WikiPageChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 1})
+	if err != nil || len(first.Items) != 1 || first.Items[0].PageID != "a/index" {
+		t.Fatalf("selected empty index = %#v, %v", first, err)
+	}
+	_, err = workspace.WikiPageChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 1, Continuation: app.OperatorContinuation{Key: first.NextKey, SnapshotVersion: first.SnapshotVersion}})
+	if !errors.Is(err, app.ErrOperatorReadLimitExceeded) {
+		t.Fatalf("selected unknown deep probe = %v", err)
+	}
+}
+
+func TestOperatorWikiPagesProbeSharedEntryBudgetAndNoFollow(t *testing.T) {
+	workspace := newSourceStageWorkspace(t)
+	writeCanonicalFixture(t, workspace, "wiki/leaf/index.md", nil)
+	if err := os.Symlink(filepath.Join(workspace.root, "wiki", "leaf", "index.md"), filepath.Join(workspace.root, "wiki", "leaf", "linked.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	branch, err := workspace.WikiPageChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 1})
+	if err != nil || len(branch.Items) != 1 || branch.Items[0].ChildrenDirectory != "" {
+		t.Fatalf("symlink leaf = %#v, %v", branch, err)
+	}
+	for i := 0; i <= app.DefaultCatalogLimits().MaxEdges; i++ {
+		writeCanonicalFixture(t, workspace, fmt.Sprintf("wiki/leaf/assets/%05d.bin", i), nil)
+	}
+	if _, err := workspace.WikiPageChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 1}); !errors.Is(err, app.ErrOperatorReadLimitExceeded) {
+		t.Fatalf("shared probe budget = %v", err)
+	}
+}
