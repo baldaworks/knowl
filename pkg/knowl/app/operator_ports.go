@@ -48,6 +48,12 @@ type WikiDirectoryReader interface {
 	WikiDirectoryChildren(ctx context.Context, scope knowl.ScopeRef, directory string, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorWikiEntry], error)
 }
 
+// WikiPageTreeReader optionally projects one published page branch, independent
+// of authored links, with technical directories transparent to navigation.
+type WikiPageTreeReader interface {
+	WikiPageChildren(ctx context.Context, scope knowl.ScopeRef, directory string, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorWikiPage], error)
+}
+
 // PageSummaryReader is an optional consistent factual-page inventory capability.
 type PageSummaryReader interface {
 	PageSummaries(ctx context.Context, scope knowl.ScopeRef, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorPageSummary], error)

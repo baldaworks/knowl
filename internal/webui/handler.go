@@ -141,7 +141,7 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
-	case knowledgeFragment, pageFragment, wikiDirectoryFragment, sourceRevisionFragment, searchFragment, operationsFragment, operationFragment, sourcesFragment, sourceFragment, statisticsFragment:
+	case knowledgeFragment, pageFragment, wikiDirectoryFragment, wikiPagesFragment, sourceRevisionFragment, searchFragment, operationsFragment, operationFragment, sourcesFragment, sourceFragment, statisticsFragment:
 		if !validFragmentQuery(r) {
 			h.Error(w, 400, errorInvalidRequest)
 			return
@@ -151,6 +151,8 @@ func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 			h.knowledge(w, r)
 		case wikiDirectoryFragment:
 			h.wikiDirectory(w, r)
+		case wikiPagesFragment:
+			h.wikiPages(w, r)
 		case sourceRevisionFragment:
 			h.sourceRevision(w, r)
 		case searchFragment:

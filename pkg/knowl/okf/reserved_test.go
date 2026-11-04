@@ -7,6 +7,31 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 )
 
+func TestReadIndexPreservesOptionalBodyAndStrictPublishing(t *testing.T) {
+	for _, body := range []string{"", "Introductory prose.\n", "# AI\n\nMore information.\n\n## Contents\n1. [Prism](Prism.md)\n"} {
+		index, err := okf.ParseIndex("AI/index.md", []byte(body), okf.DefaultLimits())
+		if err != nil || index.Body != body {
+			t.Fatalf("read index = %#v, %v", index, err)
+		}
+		_, err = okf.ValidateIndex("AI/index.md", []byte(body), okf.DefaultLimits())
+		assertViolation(t, err, "AI/index.md", okf.RuleIndexInvalid)
+		_, err = okf.ParseRootIndex([]byte(body), okf.DefaultLimits())
+		assertViolation(t, err, "index.md", okf.RuleIndexInvalid)
+	}
+	_, err := okf.ParseIndex("AI/index.md", []byte("---\nokf_version: '0.2'\n---\n"), okf.DefaultLimits())
+	assertViolation(t, err, "AI/index.md", okf.RuleIndexInvalid)
+	_, err = okf.ParseIndex("index.md", []byte{0xff}, okf.DefaultLimits())
+	assertViolation(t, err, "index.md", okf.RuleUTF8Invalid)
+	_, err = okf.ParseIndex("AI.md", nil, okf.DefaultLimits())
+	assertViolation(t, err, "AI.md", okf.RulePathInvalid)
+	for _, relative := range []string{"index.md", "AI/index.md"} {
+		for _, content := range []string{"---\nokf_version: '0.2'\n", "---\nokf_version: [\n---\nArbitrary prose"} {
+			_, err := okf.ParseIndex(relative, []byte(content), okf.DefaultLimits())
+			assertViolation(t, err, relative, okf.RuleIndexInvalid)
+		}
+	}
+}
+
 func TestRootIndexVersionObservationAndRendering(t *testing.T) {
 	t.Parallel()
 

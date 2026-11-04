@@ -30,8 +30,11 @@ func TestUIBoundaryErrorsAreTrustedFragments(t *testing.T) {
 		status            int
 	}{
 		{uiTestKnowledgeRoute, "", uiTestUnauthorizedCode, 401},
+		{"/ui/fragments/wiki-pages", "", uiTestUnauthorizedCode, 401},
 		{"/ui/fragments/knowledge?scope=", uiTestToken, "scope_override_forbidden", 403},
+		{"/ui/fragments/wiki-pages?scope=", uiTestToken, "scope_override_forbidden", 403},
 		{uiTestKnowledgeRoute, uiTestToken, uiTestCapabilityCode, 503},
+		{"/ui/fragments/wiki-pages", uiTestToken, uiTestCapabilityCode, 503},
 		{"/ui/fragments/unknown", uiTestToken, "not_found", 404},
 	} {
 		r := httptest.NewRequest(http.MethodGet, test.path, nil)

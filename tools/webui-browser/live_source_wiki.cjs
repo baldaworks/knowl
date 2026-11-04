@@ -24,18 +24,18 @@ const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright'
     await page.locator('.knowledge-article').waitFor();
     assert.equal(await page.locator('[data-error-code]').count(), 0, 'real root renders after authentication');
 
-    await page.getByRole('link', { name: 'All pages', exact: true }).click();
-    await page.locator('.wiki-tree').waitFor();
-    assert.equal(await page.locator('.knowledge-article').count(), 0, 'tree does not open an article itself');
-    await page.locator('[data-wiki-path="entities"] [data-tree-expand]').click();
-    const article = page.locator('[data-wiki-path="entities/one.md"] a');
+    const article = page.locator('#wiki-tree [data-page-node="entities/one"] > a');
     await article.waitFor();
+    assert.equal(await page.locator('#wiki-tree [data-page-node="entities"]').count(), 0, 'technical directory stays transparent');
     await article.click();
-    await page.locator('.knowledge-article').waitFor();
-    assert.equal(await page.locator('.knowledge-article h2').textContent(), 'One');
+    await page.locator('#article-title').waitFor();
+    assert.equal(await page.locator('#article-title').textContent(), 'One');
+    await page.locator('#details-tab').click();
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('details')).opacity === '1');
     assert.equal(await page.locator('.page-details dd').first().textContent(), 'entities/one');
 
-    await page.locator('[data-toggle-sources]').click();
+    await page.locator('#sources-tab').click();
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('page-sources')).opacity === '1');
     assert.equal(await page.locator('#page-sources .source-record').count(), 1);
     await page.getByRole('button', { name: 'Read saved source' }).click();
     await page.locator('.raw-view pre').waitFor();

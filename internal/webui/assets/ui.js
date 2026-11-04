@@ -12,21 +12,27 @@
   const treeSnapshots = new Map(), treeNodeLimit = 1000, treeSnapshotLimit = 3;
   let detailRead = null;
   const pending = new Map();
-	let knownNavigation = false;
-	let catalogDepth = 16, currentTrail = [];
+  const wikiReads = new Map();
+  let wikiBranchSerial = 0;
+  let wikiAncestors = [], wikiReveal = false;
+  let contextOpener = null, contextRestoreFocus = true;
   let poll = null, issuingPoll = false;
   const screen = document.getElementById('screen');
   const names = {knowledge: 'Knowledge', search: 'Search', operations: 'Operations', sources: 'Sources', statistics: 'Statistics'};
-  const protectedPaths = new Set(['knowledge', 'page', 'wiki-directory', 'source-revision', 'search', 'operations', 'operation', 'sources', 'source', 'statistics'].map(p => '/ui/fragments/' + p));
+  const protectedPaths = new Set(['knowledge', 'page', 'wiki-directory', 'wiki-pages', 'source-revision', 'search', 'operations', 'operation', 'sources', 'source', 'statistics'].map(p => '/ui/fragments/' + p));
   function protectedURL(value) {
     try { const u = new URL(value, location.href); return u.origin === location.origin && !u.username && !u.password && protectedPaths.has(u.pathname) ? u : null; } catch { return null; }
   }
   function selected() { return Object.hasOwn(names, location.pathname.split('/').pop()) ? location.pathname.split('/').pop() : 'knowledge'; }
   function stopPolling() { if (!poll) return; clearTimeout(poll.timer); const xhr=poll.xhr; poll=null; if(xhr) {pending.delete(xhr);xhr.abort();} }
-  function abortRequests() { stopPolling(); generation++; detailRead=null; for (const xhr of pending.keys()) xhr.abort(); pending.clear(); }
+  function abortRequests() { stopPolling(); generation++; detailRead=null; for (const xhr of pending.keys()) xhr.abort(); pending.clear(); for(const read of wikiReads.values())finishWikiRead(read,true); }
   function message(text) { const div = document.createElement('div'); div.className = 'empty-state'; div.textContent = text; screen.replaceChildren(div); }
   const sidebar = document.getElementById('workspace-navigation');
   const navToggle = document.getElementById('navigation-toggle');
+  const wikiNavigation = document.getElementById('wiki-navigation');
+  const wikiTree = document.getElementById('wiki-tree');
+  const wikiStatus = document.getElementById('wiki-tree-status');
+  const contextCompact = matchMedia('(max-width:1199.98px)');
   const mobile = matchMedia('(max-width:991.98px)');
   const compact = matchMedia('(max-width:639px)');
   const pushMenu = adminlte.PushMenu.getOrCreateInstance(sidebar);
@@ -34,11 +40,11 @@
   // Browsers can drop focus to BODY before a breakpoint's change event fires.
   let responsiveFocus = null;
   document.addEventListener('focusin',event=>{
-    responsiveFocus=event.target instanceof HTMLElement && event.target.matches('#navigation-close')?event.target:null;
+    responsiveFocus=event.target instanceof HTMLElement && (event.target.matches('#navigation-close') || screen.querySelector('#page-context')?.contains(event.target))?event.target:null;
   });
   function restoreResponsiveFocus() {
     if(responsiveFocus?.isConnected && !isVisible(responsiveFocus)) {
-      const destination=responsiveFocus.id==='navigation-close'?navToggle:screen;
+      const destination=responsiveFocus.id==='navigation-close'?navToggle:screen.querySelector('#context-toggle') || screen;
       if(isVisible(destination))destination.focus({preventScroll:true});
     }
   }
@@ -56,7 +62,7 @@
     else {sidebar.removeAttribute('role');sidebar.removeAttribute('aria-modal');}
     restoreResponsiveFocus();
   }
-  sidebar.addEventListener('open.lte.push-menu',event=>{if(connectionState!=='connected')event.preventDefault();});
+  sidebar.addEventListener('open.lte.push-menu',event=>{if(connectionState!=='connected')event.preventDefault();else closePageContext(false);});
   sidebar.addEventListener('opened.lte.push-menu',syncNavigation);
   sidebar.addEventListener('collapsed.lte.push-menu',syncNavigation);
   document.getElementById('navigation-close').addEventListener('click',()=>pushMenu.collapse());
@@ -97,7 +103,7 @@
   }
   function disconnect(feedback = '', invalid = false, focus = true) {
     token = ''; abortRequests(); document.getElementById('operator-token').value = '';
-    sourcesOpener=null;rawOpener=null;operationOpener=null;searchSnapshot=null;searchRendered=false;treeSnapshots.clear();renderedTreeEntry=0;knownNavigation=false;currentTrail=[];screen.replaceChildren();
+    disposePageContext();sourcesOpener=null;rawOpener=null;operationOpener=null;searchSnapshot=null;searchRendered=false;treeSnapshots.clear();renderedTreeEntry=0;wikiTree.replaceChildren();wikiBranchSerial=0;wikiAncestors=[];wikiReveal=false;wikiStatus.hidden=true;wikiNavigation.hidden=true;screen.replaceChildren();
     setConnectionState('disconnected',feedback,invalid);
     if(focus)(authMode==='token'?document.getElementById('operator-token'):document.querySelector('#connect-form button')).focus({preventScroll:true});
   }
@@ -111,11 +117,15 @@
     if(!target?.isConnected || !target.getClientRects().length)return;
     const start=target.querySelector('.raw-heading strong,h2,.empty-state') || target;
     const range=document.createRange();range.selectNodeContents(start);
-    let rect=range.getBoundingClientRect();
+    let rect=target.matches('button,a[href]')?target.getBoundingClientRect():range.getBoundingClientRect();
     const errorMessage=target.querySelector('[data-error-code] p');
     if(errorMessage){range.selectNodeContents(errorMessage);const messageRect=range.getBoundingClientRect();rect={top:Math.min(rect.top,messageRect.top),bottom:Math.max(rect.bottom,messageRect.bottom)};}
     const headerBottom=Math.max(0,document.querySelector('.app-header').getBoundingClientRect().bottom);
-    if(rect.top<headerBottom || rect.bottom>innerHeight)target.scrollIntoView({block:'start',behavior:'instant'});
+    if(rect.top<headerBottom || rect.bottom>innerHeight) {
+      target.scrollIntoView({block:'start',behavior:'instant'});
+      const top=target.getBoundingClientRect().top;
+      if(top<headerBottom)scrollBy({top:top-headerBottom-8,behavior:'instant'});
+    }
     target.focus({preventScroll:true});
   }
   function requestFailed(target) {
@@ -149,6 +159,7 @@
     searchSnapshot={entry,view:screen.cloneNode(true),query};
   }
   function navigate(event) {
+    disposePageContext();
     if(screen.querySelector('.wiki-tree') && renderedTreeEntry) {
       const snapshot=document.createElement('div');
       snapshot.replaceChildren(...screen.childNodes);
@@ -157,8 +168,10 @@
       if(treeSnapshots.size>treeSnapshotLimit)treeSnapshots.delete(treeSnapshots.keys().next().value);
     }
     renderedTreeEntry=0;
-    abortRequests(); sourcesOpener=null;rawOpener=null;operationOpener=null;focusScreen=true; const key = selected();
+    abortRequests(); sourcesOpener=null;rawOpener=null;operationOpener=null;focusScreen=true; const key = selected(); document.body.dataset.uiScreen=key;
+    if(key!=='knowledge')wikiReveal=false;
     document.title = names[key] + ' · Knowl'; screen.setAttribute('aria-label', names[key]);
+    wikiNavigation.hidden=connectionState!=='connected' || key!=='knowledge';
     document.getElementById('header-view').textContent = names[key];
     for (const link of document.querySelectorAll('[data-screen]')) {link.classList.toggle('active', link.dataset.screen === key); if(link.dataset.screen === key) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');}
     const params=new URLSearchParams(location.search);
@@ -179,26 +192,12 @@
   function navigationState(url) {
     if(url.pathname!=='/ui/knowledge')return null;
     if(url.searchParams.get('view')==='all' && !url.searchParams.has('page_id'))return {treeEntry:++treeVisitSerial};
-    if(url.searchParams.has('view'))return null;
-    const target=url.searchParams.get('parent_id');
-    if(!target)return {catalogIds:[]};
-    let trail=currentTrail.slice(0,catalogDepth);
-    const existing=trail.indexOf(target);
-    if(existing>=0)trail=trail.slice(0,existing+1);
-    else if(trail.length<catalogDepth)trail.push(target);
-    else trail=[target];
-    return {catalogIds:trail};
+    return null;
   }
   function adoptKnowledge() {
     const nav=screen.querySelector('nav[aria-label="Breadcrumb"]');
     if(!nav)return;
-    catalogDepth=Math.min(16,Number(nav.dataset.maxDepth)||16);
-    try {
-      const ids=JSON.parse(nav.dataset.catalogTrail);
-      currentTrail=Array.isArray(ids) && ids.length<=catalogDepth && ids.every(id=>typeof id==='string')?ids:[];
-    } catch {currentTrail=[];}
-    knownNavigation=true;
-    const state={catalogIds:currentTrail};
+    const state={};
     if(screen.querySelector('.wiki-tree')) {
       const prior=history.state?.treeEntry;
       renderedTreeEntry=Number.isSafeInteger(prior)&&prior>0?prior:++treeVisitSerial;
@@ -206,6 +205,151 @@
       state.treeEntry=renderedTreeEntry;
     } else renderedTreeEntry=0;
     history.replaceState(state,'',location.href);
+    adoptWikiNavigation();
+  }
+  function closePageContext(restoreFocus=true) {
+    const panel=screen.querySelector('#page-context');
+    const instance=panel && bootstrap.Offcanvas.getInstance(panel);
+    contextRestoreFocus=restoreFocus;
+    if(instance) {
+      // Finish the native transition before removing its element. This lets
+      // Bootstrap restore its own scroll lock and focus trap synchronously.
+      instance.hide();
+      panel.dispatchEvent(new Event('transitionend'));
+      for(const backdrop of screen.querySelectorAll('.offcanvas-backdrop'))backdrop.dispatchEvent(new Event('transitionend'));
+      instance.dispose();
+    }
+    if(!restoreFocus)contextOpener=null;
+  }
+  function disposePageContext() {
+    closePageContext(false);
+    for(const element of screen.querySelectorAll('#page-context .tab-pane,#page-context [data-bs-toggle="tab"]'))element.dispatchEvent(new Event('transitionend'));
+    for(const tab of screen.querySelectorAll('#page-context [data-bs-toggle="tab"]'))bootstrap.Tab.getInstance(tab)?.dispose();
+  }
+  document.addEventListener('show.bs.offcanvas',event=>{
+    if(event.target.id!=='page-context')return;
+    contextOpener=event.relatedTarget || screen.querySelector('#context-toggle');contextRestoreFocus=true;
+    if(mobile.matches)pushMenu.collapse();
+  });
+  document.addEventListener('shown.bs.offcanvas',event=>{
+    if(event.target.id==='page-context')screen.querySelector('#context-toggle')?.setAttribute('aria-expanded','true');
+  });
+  document.addEventListener('hidden.bs.offcanvas',event=>{
+    if(event.target.id!=='page-context')return;
+    screen.querySelector('#context-toggle')?.setAttribute('aria-expanded','false');
+    if(contextRestoreFocus && contextOpener?.isConnected && isVisible(contextOpener))contextOpener.focus({preventScroll:true});
+    contextOpener=null;
+  });
+  contextCompact.addEventListener('change',()=>{
+    const panel=screen.querySelector('#page-context');
+    const focused=panel?.contains(document.activeElement)?document.activeElement:responsiveFocus;
+    const inside=panel?.contains(focused);
+    closePageContext(false);
+    if(inside) {
+      const destination=isVisible(focused)?focused:screen.querySelector('#context-toggle');
+      (isVisible(destination)?destination:screen).focus({preventScroll:true});
+    }
+  });
+  function updateWikiSelection() {
+    const id=screen.querySelector('#article')?.dataset.pageId;
+    for(const link of wikiTree.querySelectorAll('[data-wiki-page]')) {
+      link.classList.toggle('active',link.dataset.wikiPage===id);
+      if(link.dataset.wikiPage===id)link.setAttribute('aria-current','page');
+      else link.removeAttribute('aria-current');
+    }
+  }
+  function setWikiExpanded(caret,open) {
+    const branch=caret?.parentElement.querySelector(':scope > [data-page-branch]');
+    if(!branch)return;
+    if(!branch.id)branch.id='wiki-branch-'+(++wikiBranchSerial);
+    caret.setAttribute('aria-controls',branch.id);caret.setAttribute('aria-expanded',String(open));
+    caret.parentElement.classList.toggle('menu-open',open);
+    caret.setAttribute('aria-label',(open?'Collapse ':'Expand ')+(caret.nextElementSibling?.textContent || 'page'));
+    branch.hidden=!open;
+  }
+  function adoptWikiNavigation() {
+    wikiNavigation.hidden=connectionState!=='connected' || selected()!=='knowledge';
+    if(wikiNavigation.hidden)return;
+    wikiAncestors=[...screen.querySelectorAll('nav[aria-label="Breadcrumb"] a[href]')].map(link=>new URL(link.href,location.href).searchParams.get('page_id')).filter(id=>id && id!=='index').slice(0,16);
+    wikiReveal=true;
+    if(!wikiTree.hasChildNodes()) {
+      const home=document.createElement('a');home.href='/ui/knowledge';home.dataset.wikiPage='index';home.className='nav-link';home.textContent='Home';
+      const homeItem=document.createElement('li');homeItem.className='nav-item';homeItem.append(home);
+      const homeList=document.createElement('ul');homeList.className='nav sidebar-menu flex-column';homeList.append(homeItem);
+      const branch=document.createElement('div');branch.dataset.pageBranch='';branch.dataset.pageDirectory='';
+      wikiTree.append(homeList,branch);
+      readWikiBranch(branch,'/ui/fragments/wiki-pages?directory=',false);
+    }
+    updateWikiSelection();
+    revealWikiAncestors();
+  }
+  function revealWikiAncestors() {
+    if(!wikiReveal || !wikiTree.querySelector('[data-wiki-pages]'))return;
+    for(const id of wikiAncestors) {
+      const link=[...wikiTree.querySelectorAll('[data-wiki-page]')].find(node=>node.dataset.wikiPage===id);
+      const caret=link?.previousElementSibling,branch=link?.nextElementSibling;
+      // Do not scan additional sibling windows to discover a missing parent.
+      if(!caret?.matches('[data-page-toggle]') || !branch) {wikiReveal=false;return;}
+      if(branch.dataset.loaded==='true') {setWikiExpanded(caret,true);continue;}
+      if(branch.getAttribute('aria-busy')==='true')return;
+      if(branch.querySelector('[data-page-read-state]')) {wikiReveal=false;return;}
+      setWikiExpanded(caret,true);readWikiBranch(branch,caret.dataset.pageUrl,false,caret);return;
+    }
+    wikiReveal=false;
+  }
+  function wikiCapacityAvailable() {
+    if(wikiTree.querySelectorAll('[data-page-node]').length+screen.querySelectorAll('[data-wiki-path]').length+(wikiReads.size+treePending+1)*100+1<=treeNodeLimit) {wikiStatus.hidden=true;return true;}
+    wikiStatus.hidden=false;wikiStatus.textContent='Wiki tree limit reached. Reconnect to start again.';
+    return false;
+  }
+  function readWikiBranch(branch,value,append,button=null,preserveClosed=false) {
+    const url=protectedURL(value);
+    if(!branch?.isConnected || !wikiTree.contains(branch) || !url || url.pathname!=='/ui/fragments/wiki-pages' || !canRequest() || branch.getAttribute('aria-busy')==='true' || !wikiCapacityAvailable())return;
+    if(!append)branch.hidden=preserveClosed;
+    branch.querySelector(':scope > [data-page-read-state]')?.remove();
+    const note=document.createElement('div');note.dataset.pageReadState='';note.className='small p-1';note.setAttribute('role','status');note.textContent='Loading pages…';
+    const stage=document.createElement('div');stage.dataset.wikiStage='';stage.hidden=true;
+    branch.append(note,stage);branch.setAttribute('aria-busy','true');
+    if(button)button.disabled=true;
+    const read={branch,url,append,button,note,stage,generation,ended:false};wikiReads.set(stage,read);
+    // A queued HTMX request's promise may resolve before it starts. Commit
+    // only from the trusted live stage's afterSwap event below.
+    htmx.ajax('GET',url.pathname+url.search,{source:branch,target:stage,swap:'innerHTML'}).catch(()=>finishWikiRead(read,false));
+  }
+  function finishWikiRead(read,aborted) {
+    if(read.ended)return;
+    read.ended=true;wikiReads.delete(read.stage);
+    const {branch,stage,button,note}=read;
+    branch.removeAttribute('aria-busy');if(button?.isConnected)button.disabled=false;
+    if(!branch.isConnected || !wikiTree.contains(branch)) {stage.remove();return;}
+    const live=!aborted && canRequest() && generation===read.generation;
+    const list=live?stage.querySelector(':scope > [data-wiki-pages]'):null;
+    const addedCarets=list?[...list.querySelectorAll('[data-page-toggle]')]:[];
+    const error=stage.querySelector('[data-error-code]');
+    if(list && list.querySelectorAll('[data-page-node]').length<=100) {
+      if(read.append) {
+        const prior=branch.querySelector(':scope > [data-wiki-pages]');
+        const continuation=button?.closest('[data-page-continuation]');
+        if(!prior || !continuation || continuation.parentElement!==prior) {stage.remove();note.remove();return;}
+        const first=list.firstElementChild;continuation.remove();prior.append(...list.childNodes);
+        const focus=first?.querySelector('a,button');if(isVisible(focus))focus.focus({preventScroll:true});
+      } else branch.replaceChildren(list);
+      branch.dataset.loaded='true';note.remove();stage.remove();
+      const caret=branch.parentElement.querySelector(':scope > [data-page-toggle]');
+      if(caret)setWikiExpanded(caret,!branch.hidden);
+      for(const child of addedCarets)setWikiExpanded(child,false);
+      updateWikiSelection();revealWikiAncestors();return;
+    }
+    stage.remove();
+    if(live && read.append && error?.dataset.errorCode==='snapshot_changed' && read.url.searchParams.has('cursor')) {
+      const fresh=new URL(read.url),closed=branch.hidden;fresh.searchParams.delete('cursor');branch.replaceChildren();delete branch.dataset.loaded;
+      readWikiBranch(branch,fresh.href,false,null,closed);return;
+    }
+    if(!canRequest()) {note.remove();return;}
+    note.replaceChildren();
+    if(error) {note.dataset.errorCode=error.dataset.errorCode;note.append(document.createTextNode(error.textContent+' '));}
+    else note.append(document.createTextNode(aborted?'Page loading stopped. ':'Pages unavailable. '));
+    const retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline-light btn-sm';retry.dataset.pageRetry='';retry.dataset.pageUrl=read.url.pathname+read.url.search;retry.dataset.pageAppend=String(read.append);retry.textContent='Retry';note.append(retry);
   }
   document.getElementById('connect-form').addEventListener('submit', event => {
     event.preventDefault();
@@ -217,7 +361,7 @@
   function treeCapacityAvailable() {
     const tree=screen.querySelector('.wiki-tree');
     if(!tree)return false;
-    if(tree.querySelectorAll('[data-wiki-path]').length+(treePending+1)*100<=treeNodeLimit)return true;
+    if(tree.querySelectorAll('[data-wiki-path]').length+wikiTree.querySelectorAll('[data-page-node]').length+(treePending+wikiReads.size+1)*100+1<=treeNodeLimit)return true;
     const note=tree.querySelector('.wiki-tree-limit');
     if(note){note.hidden=false;note.textContent='Tree limit reached. Open a page or refresh All pages to start again.';}
     return false;
@@ -236,6 +380,33 @@
     });
   }
   document.addEventListener('click', event => {
+    const pageToggle=event.target.closest('[data-page-toggle]');
+    if(pageToggle && wikiTree.contains(pageToggle)) {
+      wikiReveal=false;
+      const branch=pageToggle.parentElement.querySelector(':scope > [data-page-branch]');
+      if(!branch)return;
+      if(branch.dataset.loaded==='true')setWikiExpanded(pageToggle,branch.hidden);
+      else {setWikiExpanded(pageToggle,true);readWikiBranch(branch,pageToggle.dataset.pageUrl,false,pageToggle);}
+      return;
+    }
+    const pageMore=event.target.closest('[data-page-more]'),pageRetry=event.target.closest('[data-page-retry]');
+    if((pageMore || pageRetry) && wikiTree.contains(pageMore || pageRetry)) {
+      const control=pageMore || pageRetry,branch=control.closest('[data-page-branch]');
+      const append=!!pageMore || pageRetry?.dataset.pageAppend==='true';
+      const continuation=append?branch?.querySelector(':scope > [data-wiki-pages] > [data-page-continuation] > [data-page-more]'):null;
+      readWikiBranch(branch,control.dataset.pageUrl,append,continuation || control);return;
+    }
+    const headingLink=event.target.closest('#outline a[href^="#"],.document a[href^="#"]');
+    if(headingLink && event.button===0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+      let id;try {id=decodeURIComponent(new URL(headingLink.href,location.href).hash.slice(1));}catch{return;}
+      const heading=document.getElementById(id);
+      if(heading && screen.querySelector('.document')?.contains(heading)) {
+        event.preventDefault();closePageContext(false);heading.tabIndex=-1;heading.focus({preventScroll:true});heading.scrollIntoView({block:'start',behavior:'instant'});
+        const top=heading.getBoundingClientRect().top,header=document.querySelector('.app-header').getBoundingClientRect().bottom;
+        if(top<header)scrollBy({top:top-header-8,behavior:'instant'});
+        history.replaceState(history.state,'',location.pathname+location.search+'#'+encodeURIComponent(id));return;
+      }
+    }
     const folder=event.target.closest('[data-tree-expand]');
     if(folder){
       const branch=folder.nextElementSibling;
@@ -297,22 +468,16 @@
     if (!canRequest() || !protectedURL(event.detail.path) || event.detail.verb !== 'get') {event.preventDefault(); return;}
     if(authMode==='token')event.detail.headers.Authorization = 'Bearer ' + token;
     const path=protectedURL(event.detail.path).pathname;
-    const ids=history.state?.catalogIds;
-    if(knownNavigation && ['/ui/fragments/knowledge','/ui/fragments/page'].includes(path) && Array.isArray(ids) && ids.length>0 && ids.length<=catalogDepth && ids.every(id=>typeof id==='string' && id.length<=2048)) {
-      // XHR headers use bytes. ASCII JSON escapes preserve every UTF-16 code
-      // unit, including Latin-1 and surrogate pairs, without HTMX URI encoding.
-      const trail=JSON.stringify(ids).replace(/[^\x20-\x7e]/g,character=>'\\u'+character.charCodeAt(0).toString(16).padStart(4,'0'));
-      if(trail.length<=32768)event.detail.headers['X-Knowl-Catalog-Trail']=trail;
-    }
   });
   document.addEventListener('htmx:beforeRequest', event => {
     const url = protectedURL(event.detail.requestConfig.path);
     if (!canRequest() || !url) {event.preventDefault(); return;}
+    if(event.detail.target.hasAttribute('data-wiki-stage') && (!event.detail.target.isConnected || !wikiTree.contains(event.detail.target) || !wikiReads.has(event.detail.target))) {event.preventDefault();return;}
     if(url.pathname==='/ui/fragments/search' && event.detail.target.id==='search-results') {searchRendered=false;searchSnapshot=null;}
     // Whole-screen replacements cancel older reads, including catalog continuation.
     // Advance before aborting so canceled requests cannot display an error.
     if (event.detail.target === screen || event.detail.target.id==='raw-source' || url.pathname==='/ui/fragments/source') {
-      if(event.detail.target===screen)operationOpener=null;
+      if(event.detail.target===screen){operationOpener=null;disposePageContext();}
       abortRequests();
     }
     if(url.pathname==='/ui/fragments/operation') {
@@ -346,6 +511,7 @@
   document.addEventListener('htmx:beforeSwap', event => {
     const xhr = event.detail.xhr;
     if (!canRequest() || pending.get(xhr) !== generation) {event.detail.shouldSwap = false; event.preventDefault(); return;}
+    if(event.detail.target.hasAttribute('data-wiki-stage') && (!event.detail.target.isConnected || !wikiTree.contains(event.detail.target) || !wikiReads.has(event.detail.target))) {event.detail.shouldSwap=false;event.preventDefault();return;}
     const requestedURL=protectedURL(event.detail.requestConfig.path),responseURL=protectedURL(xhr.responseURL);
     const redirected=requestedURL&&responseURL&&(requestedURL.pathname!==responseURL.pathname||requestedURL.search!==responseURL.search);
     if (!requestedURL || !responseURL || (authMode==='proxy' && (xhr.getResponseHeader('Location')!==null || redirected))) {if(authMode==='proxy')disconnect('Your access session expired. Reconnect through the configured identity provider.');event.detail.shouldSwap = false; event.preventDefault(); return;}
@@ -364,6 +530,8 @@
   document.addEventListener('htmx:afterRequest', event => {
     const xhr = event.detail.xhr;
     const current=canRequest() && pending.get(xhr)===generation;
+    const wikiRead=wikiReads.get(event.detail.target);
+    if(current && wikiRead)finishWikiRead(wikiRead,false);
     const wasPoll=poll?.xhr===xhr;
     if(current && wasPoll) {
       poll.xhr=null;
@@ -373,7 +541,7 @@
     } else if(current && xhr.status===200 && protectedURL(event.detail.requestConfig.path)?.pathname==='/ui/fragments/operation') adoptOperation();
     if (current && !wasPoll) {event.detail.target.removeAttribute('aria-busy');if(xhr.status===0)requestFailed(event.detail.target);}
     if(canRequest() && pending.get(xhr)===generation && xhr.getResponseHeader('X-Knowl-Error')==='snapshot_changed') {
-      const url=protectedURL(event.detail.requestConfig.path);if(url && url.searchParams.has('cursor')) {
+      const url=protectedURL(event.detail.requestConfig.path);if(url && url.pathname!=='/ui/fragments/wiki-pages' && url.searchParams.has('cursor')) {
         url.searchParams.delete('cursor');
         if(url.pathname==='/ui/fragments/wiki-directory') {
           const directory=url.searchParams.get('directory')||'';
@@ -388,7 +556,7 @@
     if(current && !wasPoll && ['raw-source','source-detail','operation-detail'].includes(event.detail.target.id))revealDetail(event.detail.target);
     pending.delete(xhr);
   });
-  function isVisible(element) {return !!element && getComputedStyle(element).display!=='none';}
+  function isVisible(element) {return !!element?.isConnected && !!element.getClientRects().length && getComputedStyle(element).display!=='none' && getComputedStyle(element).visibility!=='hidden';}
   function syncDisclosures() {
     for(const [button,panel] of [['[data-toggle-sources]','.source-panel']]) {
       const control=screen.querySelector(button),element=screen.querySelector(panel);
@@ -399,6 +567,8 @@
   }
   compact.addEventListener('change',syncDisclosures);
   document.addEventListener('htmx:afterSwap', event => {
+    const wikiRead=wikiReads.get(event.detail.target);
+    if(wikiRead && canRequest() && pending.get(event.detail.xhr)===generation)finishWikiRead(wikiRead,false);
     if(event.detail.target===screen && selected()==='knowledge')adoptKnowledge();
     if(canRequest() && pending.get(event.detail.xhr)===generation && poll?.xhr!==event.detail.xhr && ['raw-source','source-detail','operation-detail'].includes(event.detail.target.id)) {
       if(event.detail.target.id==='raw-source')addRawClose(event.detail.target);
@@ -409,7 +579,7 @@
     if(canRequest() && selected()==='search' && event.detail.target.id==='search-results' && screen.contains(event.detail.target) && event.detail.xhr.status===200 && event.detail.target.querySelector('#response-json-data'))searchRendered=true;
     syncDisclosures();
     if(canRequest() && detailRead?.xhr===event.detail.xhr && detailRead.generation===generation) {revealDetail(detailRead.target);detailRead=null;}
-    if(focusScreen && connectionState==='connected'){screen.focus({preventScroll:true});focusScreen=false;}
+    if(focusScreen && connectionState==='connected'){(mobile.matches?screen.querySelector('#article-title') || screen:screen).focus({preventScroll:true});focusScreen=false;}
     for(const snippet of screen.querySelectorAll('.evidence-snippet')) {const toggle=snippet.nextElementSibling;if(toggle?.matches('[data-toggle-snippet]')) toggle.hidden=snippet.scrollHeight<=snippet.clientHeight;}
   });
 
