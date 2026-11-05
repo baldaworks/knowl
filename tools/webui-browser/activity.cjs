@@ -9,6 +9,72 @@ async function visibleDetail(page,id) {
  assert.ok(state.top>=state.headerBottom && state.bottom<=state.height,'detail heading outside viewport: '+JSON.stringify(state));
  assert.equal(state.focused,true,'explicit detail read must focus '+id);
 }
+async function sourceCardSelection(page) {
+ const observations=[];
+ for(const viewport of [{width:1440,height:1000},{width:1024,height:900},{width:390,height:844},{width:320,height:844}]) {
+  await page.setViewportSize(viewport);
+  const controls=page.locator('.source-select');
+  for(const control of [controls.first(),controls.last()]) {
+   const id=(await control.textContent()).trim();
+   const card=control.locator('xpath=ancestor::section[contains(@class,"source-summary")]');
+   assert.equal(await card.getByRole('button').count(),1,'one native source action per card');
+   assert.equal(await card.locator('a,input,select,textarea,[tabindex]').count(),0,'no second interactive source action');
+   for(const area of ['blank','status','metadata','title']) {
+    await card.scrollIntoViewIfNeeded();
+    const point=await card.evaluate((e,area)=>{
+     const box=e.getBoundingClientRect(),button=e.querySelector('.source-select').getBoundingClientRect();
+     const target=area==='status'?e.querySelector('.status-badge'):area==='metadata'?e.querySelector('.adapter-type'):e.querySelector('.source-select');
+     const r=target.getBoundingClientRect();
+     const p=area==='blank'?{x:box.x+box.width/2,y:box.bottom-8}:{x:r.x+r.width/2,y:r.y+r.height/2};
+     return {...p,inside:p.x>box.left&&p.x<box.right&&p.y>box.top&&p.y<box.bottom,outsideTitle:!(p.x>=button.left&&p.x<=button.right&&p.y>=button.top&&p.y<=button.bottom)};
+    },area);
+    assert.equal(point.inside,true,'source click must be inside card');
+    if(area!=='title')assert.equal(point.outsideTitle,true,'regression click must not hit title');
+    const response=page.waitForResponse(r=>{const u=new URL(r.url());return u.pathname==='/ui/fragments/source'&&u.searchParams.get('source_id')===id;},{timeout:2000});
+    await page.mouse.click(point.x,point.y);const result=await response;
+    assert.equal(result.status(),200);await page.locator('.source-documents .card-title').filter({hasText:new RegExp('^'+id+'$')}).waitFor();
+    await page.clock.runFor(32);await visibleDetail(page,'source-detail');
+    assert.equal(await page.locator('.source-select[aria-current="true"]').count(),1);
+    assert.equal(await control.getAttribute('aria-current'),'true');
+    observations.push({viewport,id,area,point,status:result.status()});
+   }
+  }
+  const first=controls.first();await first.scrollIntoViewIfNeeded();
+  await page.mouse.move(0,0);
+  const resting=await first.evaluate(e=>getComputedStyle(e,'::after').backgroundColor);
+  await first.hover();
+  assert.notEqual(await first.evaluate(e=>getComputedStyle(e,'::after').backgroundColor),resting,'whole-card hover must be visible');
+  await page.screenshot({path:path.join(artifacts,'source-card-hover-'+viewport.width+'.png')});
+  await page.mouse.move(0,0);
+  for(const index of [0,await controls.count()-1]) {
+   const control=controls.nth(index),id=(await control.textContent()).trim();
+   await page.getByRole('button',{name:'Refresh',exact:true}).focus();
+   for(let step=0;step<=index;step++)await page.keyboard.press('Tab');
+   assert.equal(await control.evaluate(e=>document.activeElement===e),true,'Tab reaches each native card control');
+   const focus=await control.evaluate(e=>{const s=getComputedStyle(e,'::after'),card=e.closest('.source-summary'),r=card.getBoundingClientRect(),c=getComputedStyle(card);return {visible:e.matches(':focus-visible'),outline:s.outlineStyle,outlineWidth:parseFloat(s.outlineWidth),width:parseFloat(s.width),height:parseFloat(s.height),cardWidth:r.width-parseFloat(c.borderLeftWidth)-parseFloat(c.borderRightWidth),cardHeight:r.height-parseFloat(c.borderTopWidth)-parseFloat(c.borderBottomWidth)};});
+   assert.equal(focus.visible,true);assert.notEqual(focus.outline,'none');assert.ok(focus.outlineWidth>=2);
+   assert.ok(Math.abs(focus.width-focus.cardWidth)<.05&&Math.abs(focus.height-focus.cardHeight)<.05,'focus indicator covers whole card: '+JSON.stringify(focus));
+   await page.screenshot({path:path.join(artifacts,'source-card-focus-'+id+'-'+viewport.width+'.png')});
+   for(const key of ['Enter','Space']) {
+    await page.getByRole('button',{name:'Refresh',exact:true}).focus();
+    for(let step=0;step<=index;step++)await page.keyboard.press('Tab');
+    const response=page.waitForResponse(r=>{const u=new URL(r.url());return u.pathname==='/ui/fragments/source'&&u.searchParams.get('source_id')===id;});
+    await page.keyboard.press(key);assert.equal((await response).status(),200);
+    await page.locator('.source-documents .card-title').filter({hasText:new RegExp('^'+id+'$')}).waitFor();await page.clock.runFor(32);
+    assert.equal(await control.getAttribute('aria-current'),'true');assert.equal(await page.locator('.source-select[aria-current="true"]').count(),1);
+    const selected=await control.evaluate(e=>({background:getComputedStyle(e,'::after').backgroundColor,shadow:getComputedStyle(e,'::after').boxShadow}));
+    assert.notEqual(selected.shadow,'none','whole-card selected state must be visible');
+    observations.push({viewport,id,key,focus,selected});
+   }
+  }
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await controls.last().locator('xpath=ancestor::section[contains(@class,"source-summary")]').scrollIntoViewIfNeeded();
+  const selectedCard=await controls.last().evaluate(e=>{const r=e.closest('.source-summary').getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:innerHeight};});
+  assert.ok(selectedCard.top>=0&&selectedCard.bottom<=selectedCard.height,'selected card must be visible in screenshot: '+JSON.stringify(selectedCard));
+  await page.screenshot({path:path.join(artifacts,'source-card-selected-'+viewport.width+'.png')});
+ }
+ fs.writeFileSync(path.join(artifacts,'source-card-actions.json'),JSON.stringify(observations,null,2));
+}
 (async()=>{
  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  try {
@@ -104,6 +170,7 @@ async function visibleDetail(page,id) {
  release();await done();await settle();assert.equal(await selectedOpener.evaluate(e=>document.activeElement===e),true,'poll stole focus after return');
  // Screen exit clears the polling lifecycle.
  await page.locator('[data-screen="sources"]').click();await page.locator('.source-select').first().waitFor();count=requests;await page.clock.runFor(60000);assert.equal(requests,count);
+ await sourceCardSelection(page);
  for(const width of [320,390,640,1024,1366]) {
   await page.setViewportSize({width,height:844});
   const match=url=>url.pathname==='/ui/fragments/source'&&url.searchParams.get('source_id')==='docs';
