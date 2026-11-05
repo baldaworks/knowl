@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"path"
 	"reflect"
 	"sort"
 	"strings"
@@ -14,6 +13,11 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
+)
+
+const (
+	wikiTestHomeTitle    = "Home"
+	wikiTestCustomPageID = "研究/renamed/item"
 )
 
 func TestKnowledgeInvalidContextDoesNotInventPathAncestors(t *testing.T) {
@@ -71,41 +75,42 @@ func TestKnowledgeAuthoredBodyIndependentOfLegacyCatalog(t *testing.T) {
 }
 
 func (f *screenReader) WikiPageChildren(_ context.Context, _ domain.ScopeRef, directory string, o app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorWikiPage], error) {
-	var items []domain.OperatorWikiPage
-	nearestParent := func(id domain.PageID) string {
-		parent := path.Dir(string(id))
-		if path.Base(string(id)) == rootCatalogID {
-			parent = path.Dir(parent)
-		}
-		for parent != "." && parent != "" {
-			if _, ok := f.pages[domain.PageID(parent+"/index")]; ok {
-				break
-			}
-			parent = path.Dir(parent)
-		}
-		if parent == "." {
-			return ""
-		}
-		return parent
+	byPath := map[string]domain.OperatorWikiPage{}
+	prefix := ""
+	if directory != "" {
+		prefix = directory + "/"
 	}
 	for id, p := range f.pages {
 		relative := string(id) + ".md"
-		if id == rootCatalogID || relative == path.Join(directory, "index.md") {
+		if !strings.HasPrefix(relative, prefix) {
 			continue
 		}
-		parent := nearestParent(id)
-		if parent != directory {
+		remainder := strings.TrimPrefix(relative, prefix)
+		if remainder == "index.md" {
 			continue
 		}
-		item := domain.OperatorWikiPage{PageID: id, Path: relative, Title: p.Title}
-		if path.Base(string(id)) == rootCatalogID {
-			for childID := range f.pages {
-				if childID != id && childID != rootCatalogID && nearestParent(childID) == path.Dir(string(id)) {
-					item.ChildrenDirectory = path.Dir(string(id))
-					break
+		if component, _, nested := strings.Cut(remainder, "/"); nested {
+			group := prefix + component
+			item := domain.OperatorWikiPage{Path: group, Title: component, ChildrenDirectory: group}
+			if page, ok := f.pages[domain.PageID(group+"/index")]; ok {
+				item.Path += "/index.md"
+				item.PageID = page.ID
+				item.Title = page.Title
+				item.ChildrenDirectory = ""
+				for child := range f.pages {
+					if child != page.ID && strings.HasPrefix(string(child), group+"/") {
+						item.ChildrenDirectory = group
+						break
+					}
 				}
 			}
+			byPath[item.Path] = item
+			continue
 		}
+		byPath[relative] = domain.OperatorWikiPage{PageID: id, Path: relative, Title: p.Title}
+	}
+	var items []domain.OperatorWikiPage
+	for _, item := range byPath {
 		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Path < items[j].Path })
@@ -127,7 +132,7 @@ func TestWikiPagesTitlesCaretsContinuationAndTypedFailures(t *testing.T) {
 	f := canonicalKnowledgeFixture()
 	f.pages["catalogs/other/article"] = domain.OperatorPage{ID: "catalogs/other/article", Title: "Actual child", Markdown: "# Actual child"}
 	h := screenHandler(t, f)
-	w, doc := fragmentDocument(t, h, wikiPagesFragment+"?limit=1")
+	w, doc := fragmentDocument(t, h, wikiPagesFragment+"?directory=catalogs&limit=1")
 	var titles, carets []string
 	next := ""
 	walk(doc, func(n *html.Node) {
@@ -165,6 +170,57 @@ func TestWikiPagesTitlesCaretsContinuationAndTypedFailures(t *testing.T) {
 	w, _ = fragmentDocument(t, h, next)
 	if w.Code != 409 || w.Header().Get("X-Knowl-Error") != errorSnapshotChanged {
 		t.Fatalf("stale=%d %q", w.Code, w.Header().Get("X-Knowl-Error"))
+	}
+}
+
+func TestWikiPagesGroupsAndSameStemPageKeepDistinctActions(t *testing.T) {
+	f := canonicalKnowledgeFixture()
+	f.pages = map[domain.PageID]domain.OperatorPage{
+		rootCatalogID:        {ID: rootCatalogID, Title: wikiTestHomeTitle},
+		"研究":                 {ID: "研究", Title: "Real article"},
+		wikiTestCustomPageID: {ID: wikiTestCustomPageID, Title: "Nested article"},
+	}
+	wantNodes := 2
+	if app.ValidOperatorReadPath("group:研究") {
+		f.pages["group:研究"] = domain.OperatorPage{ID: "group:研究", Title: "Colon article"}
+		wantNodes++
+	}
+	w, doc := fragmentDocument(t, screenHandler(t, f), wikiPagesFragment)
+	nodes := map[string]*html.Node{}
+	walk(doc, func(n *html.Node) {
+		if key := attribute(n, "data-page-node"); key != "" {
+			nodes[key] = n
+		}
+	})
+	if w.Code != 200 || len(nodes) != wantNodes || nodes["group:研究"] == nil || nodes["page:研究"] == nil {
+		t.Fatalf("status=%d node identities=%v", w.Code, nodes)
+	}
+	var groupLinks, groupLabels, groupCarets, pageLinks, pageCarets int
+	walk(nodes["group:研究"], func(n *html.Node) {
+		if n.DataAtom == atom.A || attribute(n, "data-wiki-page") != "" {
+			groupLinks++
+		}
+		if hasAttribute(n, "data-wiki-group", "") && nodeText(n) == "研究" {
+			groupLabels++
+		}
+		if hasAttribute(n, "data-page-toggle", "") {
+			groupCarets++
+		}
+	})
+	walk(nodes["page:研究"], func(n *html.Node) {
+		if n.DataAtom == atom.A {
+			pageLinks++
+			u, err := url.Parse(attribute(n, "href"))
+			if err != nil || u.Query().Get(pageIDParameter) != "研究" || u.Query().Get(parentIDParameter) != "" {
+				t.Errorf("actual-page URL=%q", attribute(n, "href"))
+			}
+		}
+		if hasAttribute(n, "data-page-toggle", "") {
+			pageCarets++
+		}
+	})
+	if groupLinks != 0 || groupLabels != 1 || groupCarets != 1 || pageLinks != 1 || pageCarets != 0 {
+		t.Fatalf("group actions=(%d,%d,%d), page actions=(%d,%d)", groupLinks, groupLabels, groupCarets, pageLinks, pageCarets)
 	}
 }
 

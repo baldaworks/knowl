@@ -42,12 +42,16 @@ and [container setup](service.md#optional-browser-access).
 ## Knowledge
 
 Knowledge opens the published root page. **Home** in the sidebar returns to it.
-The sidebar shows pages in their published path hierarchy: select a title to
-open that page, or use its separate caret to expand or collapse children without
-changing the article. A page without visible children has no disclosure
-caret, including an index page. Its title still opens its content. A directory's `index.md` represents one parent page, not a
-folder plus another index row. Technical directories without an index are
-transparent: their pages appear beneath the nearest actual parent page.
+The sidebar preserves the permitted published groups, their names and nesting.
+These names follow the workspace's organization; they are not restricted to the
+starter directories or frontmatter types. Select a real page title to open its
+article. A directory without an index remains a labeled group with no article
+action or invented page ID. A readable `index.md` makes that directory one real
+parent page, without a second index row. Empty groups remain visible.
+
+A separate caret appears only when a page or group has actual permitted
+immediate children. Expanding or collapsing it leaves the article selected.
+A leaf, including an index page or empty group, has no disclosure caret.
 
 The tree is independent of links in page content. An index can contain an
 authored table of contents, additional prose, or no body at all and still have
@@ -63,8 +67,9 @@ Breadcrumbs preserve the verified navigation context selected when following a
 page-tree or authored index-page link. The same article can have different valid
 contexts. A link's `parent_id` and bounded `trail` of page IDs retain that context
 on direct opening, reload and browser Back/Forward. Each supplied relationship
-must be a visible page-tree relationship or an actual safe local link in its
-parent page. Titles come from the saved pages. Selecting an ancestor opens it
+must be a verified forward tree relationship through existing groups or an
+actual safe local link in its parent page. Groups never become breadcrumb page
+IDs; a real intervening index page cannot be skipped. Titles come from the saved pages. Selecting an ancestor opens it
 and shortens the trail. Physical filename ancestry does not replace a selected
 context. Without trustworthy context, the article stays readable with a shorter
 root/current breadcrumb; invalid or unavailable context does not hide it. No
@@ -73,7 +78,8 @@ whole-wiki parent search is needed.
 Branches load lazily. **More** loads another bounded window, **Retry** repeats
 the failed branch read, and a changed continuation restarts that branch without
 replacing the article. Broad or deep branches can reach a read limit. Pending
-windows reserve space within the 1,000-node browser tree limit; reconnect to
+windows reserve space within the 1,000-node browser tree limit, counting groups
+and pages alike; reconnect to
 start a new tree if that limit is reached. Completed branches, expansion, and
 tree scroll remain in the connected tab across page and screen navigation.
 Reload, disconnect, or rejected authorization clears protected page/tree state

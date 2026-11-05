@@ -165,12 +165,20 @@ an operator policy change invalidates work planned against older bytes.
 
 ## Reading pages and accepted sources in the browser
 
-The optional [web UI](web-ui.md) reads published `wiki/` pages through a sidebar
-page tree. A title opens its page; a separate caret expands children. A directory
-with `index.md` is one parent page, while directories without an index are
-transparent to the nearest real parent. Children come from published paths,
-independently of authored links. Breadcrumbs verify actual parent index pages
-along the selected path within bounded reads.
+The optional [web UI](web-ui.md) reads permitted published `wiki/` structure
+through a sidebar tree, preserving group names and nesting under the operator's
+organization. Starter directory names and page types do not define a fixed
+browser taxonomy. A real page title opens its article; a separate caret expands
+actual immediate permitted children without changing that article. A readable
+`index.md` represents one parent page with no duplicate index row. A directory
+without an index remains a structural group with no invented page or article
+action; an empty group remains visible without a caret.
+
+Children come from published paths, independently of authored links or schema
+prose. Breadcrumbs retain verified selected context between actual pages,
+through existing groups or safe authored links within bounded reads. Groups do
+not become breadcrumb page IDs, and physical slash ancestry does not replace
+selected context.
 
 An index's authored table of contents, prose, or empty body is read as page
 content and rendered once. These browser reads retain structural safety checks;

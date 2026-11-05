@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
-const {readable}=require('./assertions.cjs');
+const {wikiPageNode,readable}=require('./assertions.cjs');
 const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright');
 async function visibleDetail(page,id) {
  const state=await page.locator('#'+id).evaluate(e=>{const start=e.querySelector('.raw-heading strong,h2,.empty-state') || e;const range=document.createRange();range.selectNodeContents(start);let r=range.getBoundingClientRect();const error=e.querySelector('[data-error-code] p');if(error){range.selectNodeContents(error);const message=range.getBoundingClientRect();r={top:Math.min(r.top,message.top),bottom:Math.max(r.bottom,message.bottom)};}return {top:r.top,bottom:r.bottom,height:innerHeight,headerBottom:Math.max(0,document.querySelector('.app-header').getBoundingClientRect().bottom),focused:document.activeElement===e};});
@@ -120,8 +120,8 @@ async function savedSourceOutcomes(page) {
   await readable(page,'#header-view,#connection-status,.panel-description,.source-kind,.source-meta,.source-note,.technical-details dt');
   await artifact('knowledge-desktop');
   assert.equal(await page.getByRole('link',{name:'All pages',exact:true}).count(),0);
-  const articleLink=page.locator('[data-wiki-page="concepts/article"]');
-  await articleLink.waitFor();await articleLink.click();
+  const articleNode=await wikiPageNode(page,'concepts/article');
+  await articleNode.locator(':scope > a').click();
   await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Article');
   await page.goBack();await page.waitForFunction(()=>document.querySelector('#article-title')?.textContent==='Knowl Index');
   assert.equal(await page.getByRole('link',{name:'All pages',exact:true}).count(),0,'Back must not restore inventory controls');

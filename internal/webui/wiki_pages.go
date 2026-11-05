@@ -14,7 +14,7 @@ const wikiPagesFragment = "/ui/fragments/wiki-pages"
 
 type wikiPageView struct {
 	domain.OperatorWikiPage
-	URL, ChildrenURL string
+	URL, ChildrenURL, NodeKey string
 }
 type wikiPagesView struct {
 	Directory string
@@ -52,11 +52,13 @@ func (h *Handler) wikiPages(w http.ResponseWriter, r *http.Request) {
 	}
 	view := wikiPagesView{Directory: directory}
 	for _, page := range branch.Items {
-		parent := domain.PageID(rootCatalogID)
-		if directory != "" {
-			parent = domain.PageID(directory + "/index")
+		item := wikiPageView{OperatorWikiPage: page, NodeKey: "group:" + page.Path}
+		if page.PageID != "" {
+			// The controller supplies actual visited page ancestors after the
+			// branch is attached. A directory need not have its own index.
+			item.NodeKey = "page:" + string(page.PageID)
+			item.URL = navigationPageURL(page.PageID, nil)
 		}
-		item := wikiPageView{OperatorWikiPage: page, URL: navigationPageURL(page.PageID, []domain.PageID{parent})}
 		if page.ChildrenDirectory != "" {
 			item.ChildrenURL = wikiPagesURL(page.ChildrenDirectory, app.OperatorListOptions{})
 		}

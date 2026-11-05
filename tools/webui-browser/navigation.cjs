@@ -26,7 +26,7 @@ const exact='?page_id=concepts%2Fauto-mode&parent_id=catalogs%2Fbalda%2Fconversa
   assert.deepEqual(await crumbs(),['Root','Balda','Conversations','Balda auto mode']);
   assert.deepEqual(JSON.parse(new URL(page.url()).searchParams.get('trail')),['index','catalogs/balda/index',conversations]);
   await page.reload();await connected();assert.deepEqual(await crumbs(),['Root','Balda','Conversations','Balda auto mode']);
-  const conversationNode=page.locator('#wiki-tree [data-page-node="catalogs/balda/conversations/index"]');
+  const conversationNode=page.locator('#wiki-tree [data-page-node="page:catalogs/balda/conversations/index"]');
   await conversationNode.waitFor();
   assert.equal(await conversationNode.locator(':scope > [data-page-toggle]').count(),0,'context from authored links never invents physical children');
   assert.equal(await conversationNode.locator('[data-page-branch]').count(),0,'leaf offers no dead empty expansion');

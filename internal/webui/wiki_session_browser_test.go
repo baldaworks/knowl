@@ -72,6 +72,7 @@ func TestBrowserWikiSession(t *testing.T) {
 		}
 		fixture.branches[directory] = append(fixture.branches[directory], domain.OperatorWikiPage{PageID: id, Path: string(id) + ".md", Title: title, ChildrenDirectory: children})
 	}
+	fixture.branches[""] = append(fixture.branches[""], domain.OperatorWikiPage{Path: "A-empty", Title: "A-empty"})
 	add(rootCatalogID, "Home", "# Home\n\nPublished root.\n", " ")
 	add("ADRs/index", "ADRs", "", "ADRs")
 	add("AI/index", "AI", "Optional AI information.\n", "AI")

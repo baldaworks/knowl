@@ -42,6 +42,18 @@ func TestBrowserWikiLayout(t *testing.T) {
 		}
 		writeWikiBrowserPage(t, root, page.relative, content)
 	}
+	custom, err := okf.RenderConcept("研究/renamed/item.md", okf.Document{Metadata: okf.Metadata{Type: "operator-custom-type", Title: "Custom article"}, Body: "# Custom article\n\n## Custom heading\n\nActual custom body.\n"}, okf.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWikiBrowserPage(t, root, "研究/renamed/item.md", custom)
+	writeWikiBrowserPage(t, root, "研究/only-assets/image.png", nil)
+	if err := os.Mkdir(filepath.Join(root, "wiki", "研究", "empty"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "wiki", "研究-"+strings.Repeat("long", 20)), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(filepath.Join(root, ".knowl"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -77,17 +89,21 @@ func TestBrowserWikiLayout(t *testing.T) {
 		ui.ServeHTTP(w, r)
 	}))
 	defer host.Close()
-	script, err := filepath.Abs("../../tools/webui-browser/wiki_layout.cjs")
-	if err != nil {
-		t.Fatal(err)
+	for _, filename := range []string{"wiki_layout.cjs", "keyboard_context.cjs"} {
+		t.Run(filename, func(t *testing.T) {
+			script, err := filepath.Abs(filepath.Join("../../tools/webui-browser", filename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), "node", script)
+			cmd.Env = append(os.Environ(), "KNOWL_BROWSER_URL="+host.URL)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("browser: %v\n%s", err, output)
+			}
+			t.Log(string(output))
+		})
 	}
-	cmd := exec.CommandContext(t.Context(), "node", script)
-	cmd.Env = append(os.Environ(), "KNOWL_BROWSER_URL="+host.URL)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("browser: %v\n%s", err, output)
-	}
-	t.Log(string(output))
 }
 
 func writeWikiBrowserPage(t *testing.T, root, relative string, content []byte) {
