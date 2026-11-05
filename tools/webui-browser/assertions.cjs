@@ -23,4 +23,32 @@ async function bounded(promise,label){
  try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label)),5000);})]);}
  finally{clearTimeout(timer);}
 }
-module.exports={readable,bounded};
+// Native drawer classes can settle before inherited visibility transitions on a
+// keyboard target. Focus does not wait for actionability, so observe it first.
+async function keyboardEnter(page,target){
+ await target.waitFor({state:'visible'});
+ await target.focus();
+ assert.equal(await target.evaluate(node=>document.activeElement===node),true,'keyboard target must own focus before Enter');
+ await page.keyboard.press('Enter');
+}
+// Follow only the requested page's known structural path through loaded rows.
+// Groups and real index pages are both navigation ancestors; neither is flattened.
+async function wikiPageNode(page,id,settled){
+ await page.locator('#wiki-tree [data-wiki-pages=""]').waitFor({state:'attached'});
+ const node=page.locator('#wiki-tree [data-page-node='+JSON.stringify('page:'+id)+']');
+ const parts=id.split('/');
+ for(let i=1;i<parts.length && !(await node.isVisible());i++){
+  const directory=parts.slice(0,i).join('/');
+  const ancestor=page.locator('#wiki-tree [data-page-node='+JSON.stringify('group:'+directory)+'],#wiki-tree [data-page-node='+JSON.stringify('page:'+directory+'/index')+']');
+  assert.equal(await ancestor.count(),1,'known structural ancestor must be present: '+directory);
+  const caret=ancestor.locator(':scope > [data-page-toggle]');
+  assert.equal(await caret.count(),1,'known structural ancestor must have actual children: '+directory);
+  if(await caret.getAttribute('aria-expanded')==='false'){
+   await caret.click();
+   if(settled)await settled(page);
+   else await page.waitForFunction(()=>!document.querySelector('#wiki-tree [aria-busy="true"],[data-wiki-stage]'));
+  }
+ }
+ await node.waitFor();return node;
+}
+module.exports={readable,bounded,keyboardEnter,wikiPageNode};

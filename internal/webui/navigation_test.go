@@ -75,7 +75,7 @@ func TestKnowledgeExplicitParentKeepsSelectedContext(t *testing.T) {
 func TestKnowledgeVisitedTrailSurvivesAncestorAndAuthoredURLs(t *testing.T) {
 	f := navigationFixture()
 	f.pages["catalogs/balda/index"] = domain.OperatorPage{ID: "catalogs/balda/index", Title: navigationBaldaTitle, Markdown: "# Balda\n\n[Conversations](conversations/index.md)\n"}
-	ids := []domain.PageID{"index", "catalogs/balda/index", navigationParentID}
+	ids := []domain.PageID{rootCatalogID, "catalogs/balda/index", navigationParentID}
 	target := navigationPageURL(navigationAutoID, ids)
 	parsed, err := url.Parse(target)
 	if err != nil {
@@ -162,6 +162,32 @@ func TestKnowledgeContextRequiresActualSafeLinkOrVisibleChild(t *testing.T) {
 			t.Fatalf("strict catalog calls=%d", f.catalogReads)
 		}
 	})
+}
+
+func TestKnowledgeContextFollowsOnlyExistingGroupsWithoutSkippingPages(t *testing.T) {
+	f := canonicalKnowledgeFixture()
+	f.pages = map[domain.PageID]domain.OperatorPage{
+		rootCatalogID:        {ID: rootCatalogID, Title: wikiTestHomeTitle, Markdown: "# Home"},
+		wikiTestCustomPageID: {ID: wikiTestCustomPageID, Title: screenArticleTitle, Markdown: "# Article\n\nBody."},
+	}
+	target := pageFragment + "?" + url.Values{pageIDParameter: {wikiTestCustomPageID}, parentIDParameter: {rootCatalogID}}.Encode()
+	r, doc := fragmentDocument(t, screenHandler(t, f), target)
+	if r.Code != 200 || !reflect.DeepEqual(breadcrumbTexts(doc), []string{wikiTestHomeTitle, screenArticleTitle}) {
+		t.Fatalf("group route status=%d crumbs=%v", r.Code, breadcrumbTexts(doc))
+	}
+	// A real intervening page is a different visited context and cannot be
+	// silently crossed as though it were another indexless group.
+	f.pages["研究/index"] = domain.OperatorPage{ID: "研究/index", Title: "Research", Markdown: "# Research"}
+	q := url.Values{pageIDParameter: {wikiTestCustomPageID}, trailParameter: {navigationTrailJSON(t, rootCatalogID, "研究/index")}}
+	r, doc = fragmentDocument(t, screenHandler(t, f), pageFragment+"?"+q.Encode())
+	if r.Code != 200 || !reflect.DeepEqual(breadcrumbTexts(doc), []string{wikiTestHomeTitle, "Research", screenArticleTitle}) {
+		t.Fatalf("visited page status=%d crumbs=%v", r.Code, breadcrumbTexts(doc))
+	}
+	budget := &navigationBudget{pages: map[domain.PageID]domain.OperatorPage{}}
+	ok, err := screenHandler(t, f).navigationEdge(t.Context(), f.pages[rootCatalogID], wikiTestCustomPageID, budget)
+	if err != nil || ok {
+		t.Fatalf("skipped actual page edge=%v, %v", ok, err)
+	}
 }
 
 func navigationTrailJSON(t *testing.T, ids ...domain.PageID) string {

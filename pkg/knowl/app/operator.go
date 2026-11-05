@@ -133,7 +133,7 @@ func validOperatorDirectory(directory string) bool {
 	return ValidOperatorReadPath(directory)
 }
 
-// WikiPageChildren reads a bounded branch of published pages. The optional
+// WikiPageChildren reads a bounded branch of pages and groups. The optional
 // capability is discovered on the configured directory reader.
 func (service *OperatorService) WikiPageChildren(ctx context.Context, directory string, options OperatorListOptions) (knowl.OperatorList[knowl.OperatorWikiPage], error) {
 	if !validOperatorDirectory(directory) {

@@ -147,6 +147,8 @@ func (h *Handler) navigationEdge(ctx context.Context, parent domain.OperatorPage
 	options := app.OperatorListOptions{Limit: 100}
 	seen := map[string]bool{}
 	limits := app.DefaultCatalogLimits()
+	target := string(child) + ".md"
+	depth := 0
 	for {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
@@ -168,10 +170,26 @@ func (h *Handler) navigationEdge(ctx context.Context, parent domain.OperatorPage
 		if budget.edges > limits.MaxEdges || budget.bytes > limits.MaxSnapshotBytes {
 			return false, app.ErrOperatorReadLimitExceeded
 		}
+		nextDirectory := ""
 		for _, item := range branch.Items {
 			if item.PageID == child {
 				return true, nil
 			}
+			// A string prefix only selects the known forward route. The
+			// returned non-page row proves that group exists and is readable.
+			if item.PageID == "" && item.ChildrenDirectory == item.Path && strings.HasPrefix(target, item.Path+"/") {
+				nextDirectory = item.Path
+			}
+		}
+		if nextDirectory != "" {
+			depth++
+			if depth > limits.MaxDepth {
+				return false, app.ErrOperatorReadLimitExceeded
+			}
+			directory = nextDirectory
+			options.Cursor = ""
+			seen = map[string]bool{}
+			continue
 		}
 		if branch.NextCursor == "" || seen[branch.NextCursor] {
 			return false, nil

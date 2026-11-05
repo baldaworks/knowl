@@ -1,6 +1,7 @@
 'use strict';
 // Read-only external acceptance. Run against the real public Balda reader.
 const assert=require('node:assert/strict');
+const {keyboardEnter,wikiPageNode}=require('./assertions.cjs');
 const fs=require('node:fs/promises');const path=require('node:path');
 const {createHash}=require('node:crypto');const {execFileSync}=require('node:child_process');
 const {chromium}=require(process.env.KNOWL_PLAYWRIGHT_MODULE||'playwright');
@@ -77,18 +78,7 @@ async function context(page,tab){
 async function closeContext(page){
  if(page.viewportSize().width<1200 && await page.locator('#page-context').evaluate(e=>e.classList.contains('show'))){await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.getElementById('page-context').classList.contains('show'));}
 }
-async function pageNode(page,id){
- const node=()=>page.locator('#wiki-tree [data-page-node='+JSON.stringify(id)+']');
- const parts=id.split('/');
- for(let i=1;i<parts.length-1 && !(await node().count());i++){
-  const ancestor=page.locator('#wiki-tree [data-page-node='+JSON.stringify(parts.slice(0,i).join('/')+'/index')+']');
-  if(await ancestor.count()){
-   const caret=ancestor.locator(':scope > [data-page-toggle]');
-   if(await caret.count() && await caret.getAttribute('aria-expanded')==='false'){await caret.click();await settledTree(page);}
-  }
- }
- await node().waitFor();return node();
-}
+async function pageNode(page,id){return wikiPageNode(page,id,settledTree);}
 async function crumbLink(page,id){
  const links=page.locator('[aria-label="Breadcrumb"] a');
  const hrefs=await links.evaluateAll(nodes=>nodes.map(n=>n.href));
@@ -107,6 +97,19 @@ async function runViewport(viewport){
  page.on('response',response=>{if(response.status()>=400)report.failedReads.push({viewport,url:response.url(),status:response.status(),classification:'unexpected'});});
  const exact='?page_id='+encodeURIComponent(auto)+'&parent_id='+encodeURIComponent(conversations);
  try{
+  await check(page,'published-structure',async()=>{
+   await open(page);
+   const rows=await page.locator('#wiki-tree > [data-page-branch] > [data-wiki-pages=""] > [data-page-node]').evaluateAll(nodes=>nodes.map(node=>({key:node.dataset.pageNode,path:node.dataset.pagePath,pageID:node.querySelector(':scope > [data-wiki-page]')?.dataset.wikiPage||null,group:node.querySelector(':scope > [data-wiki-group]')?.textContent||null,links:node.querySelectorAll(':scope > a').length,caret:!!node.querySelector(':scope > [data-page-toggle]')})));
+   assert.ok(rows.length>0,'real published root has no navigation rows');
+   for(const row of rows){
+    const parts=row.path.split('/');
+    assert.ok(parts.length===1 || (parts.length===2 && parts[1]==='index.md'),'root preserves actual immediate structure');
+    if(row.group!==null){assert.equal(row.key,'group:'+row.path);assert.equal(row.group,parts[0]);assert.equal(row.pageID,null);assert.equal(row.links,0,'structural group has no article action');}
+    else {assert.ok(row.pageID);assert.equal(row.key,'page:'+row.pageID);assert.equal(row.links,1);}
+   }
+   (report.treeObservations||=[]).push({viewport,directory:'',rows});
+   if(!rows.some(row=>row.group!==null))report.unavailable.push({viewport,scenario:'indexless-group',reason:'actual published root has no indexless groups; deterministic filesystem fixture covers them'});
+  });
   await check(page,'exact-context',async()=>{
    await open(page,exact);assert.equal(await page.locator('#article').getAttribute('data-page-id'),auto);await crumbLink(page,conversations);await noInventory(page);
    const before=await page.locator('.document').textContent();await withNavigation(page,async()=>{await page.reload();await settledArticle(page);await settledTree(page);});await crumbLink(page,conversations);assert.equal(await page.locator('.document').textContent(),before);
@@ -148,7 +151,7 @@ async function runViewport(viewport){
   await check(page,'keyboard-context-source',async()=>{
    await open(page,exact);await context(page,'contents');
    const heading=page.locator('#outline a').first();if(await heading.count()){
-    const href=await heading.getAttribute('href');await heading.focus();await page.keyboard.press('Enter');await page.waitForFunction(id=>document.activeElement?.id===id,decodeURIComponent(href.slice(1)));
+    const href=await heading.getAttribute('href');await keyboardEnter(page,heading);await page.waitForFunction(id=>document.activeElement?.id===id,decodeURIComponent(href.slice(1)));assert.equal(new URL(page.url()).hash,href);if(viewport.width<1200)await page.locator('#page-context').waitFor({state:'hidden'});
    } else report.unavailable.push({viewport,scenario:'outline',reason:'real article has no section headings'});
    await context(page,'details');assert.ok((await page.locator('#details').textContent()).trim().length>0);await context(page,'sources');
    const read=page.getByRole('button',{name:'Read saved source',exact:true}).first();
@@ -193,7 +196,7 @@ async function runViewport(viewport){
  }finally{await withNavigation(page,()=>page.close());}
 }
 (async()=>{
- assert.ok(process.env.KNOWL_E2E_METADATA,'KNOWL_E2E_METADATA is required');metadata=JSON.parse(await fs.readFile(process.env.KNOWL_E2E_METADATA,'utf8'));report.runner={filename:path.basename(__filename),sha256:sha(await fs.readFile(__filename))};
+ assert.ok(process.env.KNOWL_E2E_METADATA,'KNOWL_E2E_METADATA is required');metadata=JSON.parse(await fs.readFile(process.env.KNOWL_E2E_METADATA,'utf8'));report.runner={filename:path.basename(__filename),sha256:sha(await fs.readFile(__filename)),helpers:{'assertions.cjs':sha(await fs.readFile(path.join(__dirname,'assertions.cjs')))}};
  assert.ok(['baseline','candidate'].includes(metadata.kind));assert.match(metadata.sourceRevision,/^[a-f0-9]{40}$/);assert.match(metadata.image,/@sha256:[a-f0-9]{64}$/);assert.ok(metadata.configurationRevision && metadata.adaptation && metadata.cluster?.kubeconfig);
  base=new URL(metadata.targetBase);assert.ok(['http:','https:'].includes(base.protocol)&&!base.username&&!base.password&&base.pathname.endsWith('/'));
  directory=process.env.KNOWL_BROWSER_ARTIFACT_DIR||path.resolve('balda-e2e-artifacts');await fs.mkdir(directory,{recursive:true});report.declared=metadata;report.targetBase=base.href;report.kind=metadata.kind;report.observedBefore=runtime();

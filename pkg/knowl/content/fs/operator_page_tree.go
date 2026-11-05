@@ -18,7 +18,7 @@ import (
 var _ app.WikiPageTreeReader = (*Workspace)(nil)
 
 // WikiPageChildren reads one visible page branch under the publication lock.
-// Directories without an index are transparent; an index page stops descent.
+// Immediate groups stay visible; a readable index is the group's actual page.
 // Only selected page bodies are read, without loading source provenance.
 func (workspace *Workspace) WikiPageChildren(ctx context.Context, scope knowl.ScopeRef, directory string, options app.OperatorReadOptions) (app.OperatorReadPage[knowl.OperatorWikiPage], error) {
 	result := app.OperatorReadPage[knowl.OperatorWikiPage]{Items: []knowl.OperatorWikiPage{}}
@@ -101,9 +101,17 @@ func (workspace *Workspace) WikiPageChildren(ctx context.Context, scope knowl.Sc
 			return result, operatorReadError(err, app.ErrOperatorWorkspaceUnavailable)
 		}
 		remaining -= size
-		if path.Base(entry.path) == okfIndexFilename {
+		if entry.info.IsDir() || path.Base(entry.path) == okfIndexFilename {
+			directory := entry.path
+			if !entry.info.IsDir() {
+				directory = path.Dir(entry.path)
+			}
+			var expected os.FileInfo
+			if entry.info.IsDir() {
+				expected = entry.info
+			}
 			before := budget.bytes
-			hasChildren, err := operatorPageHasChildren(ctx, wiki, path.Dir(entry.path), budget)
+			hasChildren, err := operatorPageHasChildren(ctx, wiki, directory, expected, budget)
 			if err != nil {
 				return result, operatorReadError(err, app.ErrOperatorWorkspaceUnavailable)
 			}
@@ -112,7 +120,7 @@ func (workspace *Workspace) WikiPageChildren(ctx context.Context, scope knowl.Sc
 				return result, app.ErrOperatorReadLimitExceeded
 			}
 			if hasChildren {
-				node.ChildrenDirectory = path.Dir(entry.path)
+				node.ChildrenDirectory = directory
 			}
 		}
 		result.Items = append(result.Items, node)
@@ -157,35 +165,22 @@ func operatorPageBranchInventory(ctx context.Context, wiki *readRoot, branch *os
 				pages = append(pages, index)
 				continue
 			}
-			if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrPathRejected) {
+			if !errors.Is(err, os.ErrNotExist) {
 				return nil, nil, err
 			}
-			child, err := openReadChild(branch, path.Base(entry.path), true)
-			if err != nil {
-				return nil, nil, err
-			}
-			childInfo, err := child.Stat()
-			if err != nil || !operatorFileUnchanged(entry.info, childInfo) {
-				_ = child.Close()
-				if err != nil {
-					return nil, nil, err
-				}
-				return nil, nil, app.ErrOperatorSnapshotChanged
-			}
-			childPages, childVersions, err := operatorPageBranchInventory(ctx, wiki, child, entry.path, budget)
-			_ = child.Close()
-			if err != nil {
-				return nil, nil, err
-			}
-			pages = append(pages, childPages...)
-			versions = append(versions, childVersions...)
+			pages = append(pages, entry)
 		}
 	}
 	return pages, versions, nil
 }
 
 func (workspace *Workspace) operatorWikiPage(wiki *readRoot, entry operatorInventoryEntry, limits knowl.ReadLimits) (knowl.OperatorWikiPage, int, error) {
-	node := knowl.OperatorWikiPage{Path: entry.path, PageID: knowl.PageID(strings.TrimSuffix(entry.path, markdownExt))}
+	node := knowl.OperatorWikiPage{Path: entry.path}
+	if entry.info.IsDir() {
+		node.Title = path.Base(entry.path)
+		return node, 0, nil
+	}
+	node.PageID = knowl.PageID(strings.TrimSuffix(entry.path, markdownExt))
 	if path.Base(entry.path) == okfIndexFilename {
 		ceiling := app.DefaultCatalogLimits().MaxCatalogBytes
 		content, info, err := wiki.read(entry.path, limits, min(workspace.maxSourceBytes, ceiling))
@@ -226,14 +221,23 @@ func operatorIndexTitle(relative, body string) string {
 	return strings.TrimSuffix(path.Base(relative), markdownExt)
 }
 
-// operatorPageHasChildren only probes the returned window's index pages. It
-// stops at the first visible page and never reads page bodies or provenance.
-func operatorPageHasChildren(ctx context.Context, wiki *readRoot, directory string, budget *operatorDirectoryBudget) (bool, error) {
+// operatorPageHasChildren probes only returned directory-backed nodes. It
+// stops at the first immediate supported node, without bodies or provenance.
+func operatorPageHasChildren(ctx context.Context, wiki *readRoot, directory string, expected os.FileInfo, budget *operatorDirectoryBudget) (bool, error) {
 	branch, err := wiki.open(directory, true)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = branch.Close() }()
+	if expected != nil {
+		info, err := branch.Stat()
+		if err != nil {
+			return false, err
+		}
+		if !operatorFileUnchanged(expected, info) {
+			return false, app.ErrOperatorSnapshotChanged
+		}
+	}
 	return operatorBranchHasPage(ctx, wiki, branch, directory, budget)
 }
 
@@ -272,24 +276,19 @@ func operatorBranchHasPage(ctx context.Context, wiki *readRoot, branch *os.File,
 			if strings.Count(relative, "/")+1 > limits.MaxDepth {
 				return false, app.ErrOperatorReadLimitExceeded
 			}
-			indexPath := path.Join(relative, okfIndexFilename)
-			if err := operatorPageProbeCharge(indexPath, budget); err != nil {
-				return false, err
-			}
-			if _, err := operatorStat(wiki, indexPath); err == nil {
-				return true, nil
-			} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrPathRejected) {
-				return false, err
-			}
 			child, err := openReadChild(branch, entry.Name(), true)
 			if err != nil {
 				return false, err
 			}
-			hasPage, err := operatorBranchHasPage(ctx, wiki, child, relative, budget)
+			info, err := child.Stat()
 			_ = child.Close()
-			if err != nil || hasPage {
-				return hasPage, err
+			if err != nil {
+				return false, err
 			}
+			if !info.IsDir() {
+				return false, ErrPathRejected
+			}
+			return true, nil
 		}
 		if errors.Is(err, io.EOF) {
 			return false, nil

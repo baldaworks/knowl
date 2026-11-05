@@ -24,7 +24,8 @@ selection, persisted branches and scroll, title/caret independence, More/Retry,
 stale and delayed responses, concurrent window reservations, capacity, history,
 responsive focus, and authorization cleanup. `TestBrowserWikiLayout` uses an
 isolated copy of the checked-in wiki through the filesystem adapter, adding
-physical AI pages and an empty parent index with a child. Its accepted-source
+physical AI pages, an empty parent index with a child, and arbitrary Unicode,
+renamed, nested and empty groups with a custom frontmatter type. Its accepted-source
 fixture keeps a v1 citation readable while a newer v2 also exists. It checks actual page
 rows, authored content, context, headings, tables, and containment at
 1440×1000, 1024×900, 390×844, and 320×844. The broader screen tests cover Search,
@@ -32,6 +33,12 @@ saved revisions and the other screens. `TestBrowserSharedTheme` compares all
 five screens with the bundled vendor theme, including connected/disconnected
 state. `TestBrowserNavigationContext` checks the supplied parent URL shape,
 verified visited context, direct/reload/Back/Forward and invalid-context fallback.
+The shared known-path discovery helper follows visible groups or actual index
+pages without assuming starter names or flattening. The layout test also checks
+that page and group labels keep a readable gap from their separate carets. Its
+keyboard subtest holds the actual native inherited visibility transition on the
+outline link, then resumes it to verify readiness, actual heading focus, hash,
+drawer closure and immutable source reading at 1024/390/320.
 An index leaf is checked through actual filesystem reads and rendered title
 navigation without a disclosure caret.
 The CLI scenario exercises actual source acceptance, SQLite, publication,
@@ -98,7 +105,11 @@ The runner verifies the actual ready pod image/digest, revision file and
 configuration annotation against the expected record before browser actions and
 again afterward. Runtime mismatch is a failure. `report.json` distinguishes
 expected metadata from observed runtime, records URL/scenario/viewport/outcome,
-failed reads, unavailable real-data cases, and screenshot SHA-256 hashes. All
+failed reads, unavailable real-data cases, screenshot SHA-256 hashes, and the
+main runner plus imported helper SHA-256 hashes. The published-structure
+scenario records actual root group/page identities and checks immediate nesting
+without requiring specific group names. Known page paths are reached through
+actual group or index-page disclosure; no production fixtures are created. All
 four required viewport pairs are used. The checks include the exact Auto mode
 URL and Conversations context, direct/reload/Back/Forward and ancestor trimming,
 actual parent title/caret independence, Balda releases without a caret, absence
@@ -112,3 +123,10 @@ nonzero exit status and their screenshots; baseline results never set
 `candidateAccepted`. Deterministic fixtures supplement missing corner cases but
 do not replace acceptance of the actual reviewed candidate running in Balda.
 The Story remains open until that candidate's required live scenarios pass.
+
+Keep failed historical acceptance reports separate from local fixtures and
+diagnostics. The prior source7b79/image8125 full49 run had46PASS and three
+responsive heading-focus failures; it remains failed evidence. A passing local
+regression or a diagnostic against that older runtime cannot accept the revised
+generic structure. Complete corrected-candidate evidence is produced only after
+the reviewed source/image/configuration is actually deployed with authorization.

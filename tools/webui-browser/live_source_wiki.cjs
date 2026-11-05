@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const {wikiPageNode}=require('./assertions.cjs');
 const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright');
 
 (async () => {
@@ -24,10 +25,11 @@ const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright'
     await page.locator('.knowledge-article').waitFor();
     assert.equal(await page.locator('[data-error-code]').count(), 0, 'real root renders after authentication');
 
-    const article = page.locator('#wiki-tree [data-page-node="entities/one"] > a');
-    await article.waitFor();
-    assert.equal(await page.locator('#wiki-tree [data-page-node="entities"]').count(), 0, 'technical directory stays transparent');
-    await article.click();
+    const group=page.locator('#wiki-tree [data-page-node="group:entities"]');
+    assert.equal(await group.locator(':scope > [data-wiki-group]').textContent(),'entities');
+    assert.equal(await group.locator(':scope > a').count(),0,'structural group has no fake article');
+    const article=await wikiPageNode(page,'entities/one');
+    await article.locator(':scope > a').click();
     await page.locator('#article-title').waitFor();
     assert.equal(await page.locator('#article-title').textContent(), 'One');
     await page.locator('#details-tab').click();

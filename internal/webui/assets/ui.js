@@ -258,7 +258,7 @@
       if(link.dataset.wikiPage!=='index') {
         const ancestors=[];
         let parent=link.closest('[data-page-node]')?.parentElement.closest('[data-page-node]');
-        while(parent && ancestors.length<16) {ancestors.unshift(parent.dataset.pageNode);parent=parent.parentElement.closest('[data-page-node]');}
+        while(parent && ancestors.length<16) {const page=parent.querySelector(':scope > [data-wiki-page]');if(page)ancestors.unshift(page.dataset.wikiPage);parent=parent.parentElement.closest('[data-page-node]');}
         ancestors.unshift('index');
         const url=new URL(link.href,location.href);
         if(ancestors.length<=16) {url.searchParams.set('parent_id',ancestors.at(-1));url.searchParams.set('trail',JSON.stringify(ancestors));}
@@ -298,14 +298,25 @@
   function revealWikiAncestors() {
     if(!wikiReveal || !wikiTree.querySelector('[data-wiki-pages]'))return;
     for(const id of wikiAncestors) {
-      const link=[...wikiTree.querySelectorAll('[data-wiki-page]')].find(node=>node.dataset.wikiPage===id);
-      const caret=link?.previousElementSibling,branch=link?.nextElementSibling;
-      // Do not scan additional sibling windows to discover a missing parent.
-      if(!caret?.matches('[data-page-toggle]') || !branch) {wikiReveal=false;return;}
-      if(branch.dataset.loaded==='true') {setWikiExpanded(caret,true);continue;}
-      if(branch.getAttribute('aria-busy')==='true')return;
-      if(branch.querySelector('[data-page-read-state]')) {wikiReveal=false;return;}
-      setWikiExpanded(caret,true);readWikiBranch(branch,caret.dataset.pageUrl,false,caret);return;
+      let container=wikiTree.querySelector(':scope > [data-page-branch]');
+      // Follow only the supplied page's known structural route through rows
+      // actually returned by the bounded reader. Never search sibling windows.
+      const parts=id.split('/');
+      if(parts.at(-1)==='index')parts.pop();
+      for(let depth=1;depth<=parts.length && depth<=16;depth++) {
+        const directory=parts.slice(0,depth).join('/');
+        const row=[...container.querySelectorAll(':scope > [data-wiki-pages] > [data-page-node]')].find(node=>node.dataset.pagePath===directory || node.dataset.pagePath===directory+'/index.md');
+        if(!row) {wikiReveal=false;return;}
+        const page=row.querySelector(':scope > [data-wiki-page]');
+        // Do not silently walk past a real page omitted from the context.
+        if(page && page.dataset.wikiPage!==id && !wikiAncestors.includes(page.dataset.wikiPage)) {wikiReveal=false;return;}
+        const caret=row.querySelector(':scope > [data-page-toggle]'),branch=row.querySelector(':scope > [data-page-branch]');
+        if(!caret || !branch) {wikiReveal=false;return;}
+        if(branch.dataset.loaded==='true') {setWikiExpanded(caret,true);container=branch;continue;}
+        if(branch.getAttribute('aria-busy')==='true')return;
+        if(branch.querySelector('[data-page-read-state]')) {wikiReveal=false;return;}
+        setWikiExpanded(caret,true);readWikiBranch(branch,caret.dataset.pageUrl,false,caret);return;
+      }
     }
     wikiReveal=false;
   }
