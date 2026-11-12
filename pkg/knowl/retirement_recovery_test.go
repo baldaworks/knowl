@@ -17,6 +17,7 @@ const (
 	orphanRecoveryNextWindow = "next-window"
 	orphanRecoveryStale      = "stale"
 	orphanRecoveryUncited    = "uncited"
+	orphanRecoveryUnowned    = "unowned"
 	orphanRecoveryRaw        = "raw"
 )
 
@@ -31,7 +32,7 @@ func (reserver *orphanRecoveryReserver) Reserve(_ context.Context, _ knowl.Scope
 // Normal advancement must discover it from accepted history, not require an
 // adapter alias, synthetic configuration or operator migration flag.
 func TestAutomaticRetirementRecoversHistoricalOwner(t *testing.T) {
-	for _, fault := range []string{"", orphanRecoveryRaw, orphanRecoveryStale, orphanRecoveryUncited, orphanRecoveryNextWindow} {
+	for _, fault := range []string{"", orphanRecoveryRaw, orphanRecoveryStale, orphanRecoveryUncited, orphanRecoveryUnowned, orphanRecoveryNextWindow} {
 		t.Run(fault, func(t *testing.T) { testAutomaticRetirementRecoversHistoricalOwner(t, fault) })
 	}
 }
@@ -58,6 +59,11 @@ func (content *orphanRecoveryContent) ReadPages(ctx context.Context, scope knowl
 func (content *orphanRecoveryContent) PageProvenance(ctx context.Context, scope knowl.ScopeRef, owner knowl.SourceOwner, cursor app.CanonicalProvenanceCursor, limits app.CanonicalProvenanceLimits) (app.CanonicalProvenancePage, error) {
 	if content.fault == orphanRecoveryUncited {
 		return app.CanonicalProvenancePage{EOF: true, Authoritative: true}, nil
+	}
+	if content.fault == orphanRecoveryUnowned {
+		return app.CanonicalProvenancePage{}, &app.CanonicalProvenanceFailure{
+			Code: app.CanonicalProvenanceCodeRefUnowned, Cause: app.ErrSourceLifecycleUnowned,
+		}
 	}
 	return content.CanonicalProvenanceReader.PageProvenance(ctx, scope, owner, cursor, limits)
 }
@@ -150,9 +156,12 @@ func testAutomaticRetirementRecoversHistoricalOwner(t *testing.T, fault string) 
 			}
 		}
 	}
-	if fault == orphanRecoveryRaw || fault == orphanRecoveryStale || fault == orphanRecoveryUncited {
-		if fault != orphanRecoveryUncited && advanceErr == nil {
+	if fault == orphanRecoveryRaw || fault == orphanRecoveryStale || fault == orphanRecoveryUncited || fault == orphanRecoveryUnowned {
+		if fault != orphanRecoveryUncited && fault != orphanRecoveryUnowned && advanceErr == nil {
 			t.Fatal("invalid proof accepted")
+		}
+		if fault == orphanRecoveryUnowned && advanceErr != nil {
+			t.Fatalf("unowned historical ref blocked retirement scheduling: %v", advanceErr)
 		}
 		if _, err := store.SourceLifecycle(t.Context(), testScope, owner); !errors.Is(err, app.ErrSourceLifecycleUnowned) {
 			t.Fatalf("invalid proof created owner: %v", err)

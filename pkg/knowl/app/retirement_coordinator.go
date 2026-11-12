@@ -224,7 +224,7 @@ func (coordinator *SourceRetirementCoordinator) Advance(ctx context.Context) ([]
 	}
 	results := make([]SourceRetirementAdvanceResult, 0, len(states))
 	failures := make([]error, 0)
-	if recoveryErr != nil && !knownRetirementBlocker(recoveryErr) {
+	if recoveryErr != nil && !errors.Is(recoveryErr, ErrSourceLifecycleUnowned) && !knownRetirementBlocker(recoveryErr) {
 		failures = append(failures, recoveryErr)
 	}
 	for _, state := range states {
