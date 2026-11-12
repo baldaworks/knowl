@@ -38,7 +38,7 @@ func NewHandlerWithOptions(registry *knowlmcp.Server, ready func() bool, options
 
 	transport := sdkmcp.NewStreamableHTTPHandler(
 		func(*http.Request) *sdkmcp.Server { return server },
-		&sdkmcp.StreamableHTTPOptions{},
+		&sdkmcp.StreamableHTTPOptions{Stateless: true},
 	)
 	return &handler{
 		next:  transport,
