@@ -85,6 +85,55 @@ func TestPageProvenanceReturnsStableBoundedKeysetWindows(t *testing.T) {
 	}
 }
 
+func TestPageProvenanceAndResolverPreserveAcceptedInlineEvidence(t *testing.T) {
+	workspace := newProvenanceWorkspace(t)
+	owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: provenanceRetiringSourceID}
+	retiringRef := acceptProvenanceSource(t, workspace, owner, "old", "v1")
+	content := []byte("application evidence")
+	digest := sha256.Sum256(content)
+	accepted, err := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+		Scope: testScope, Source: knowl.SourceRef{Adapter: "inline", ID: "application-note"},
+		Version: knowl.SourceVersion{Version: "v1", Digest: hex.EncodeToString(digest[:])}, MediaType: operatorPlainText, Content: content,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inlineRef := app.SourceRefKey(accepted)
+	refs := []string{retiringRef, inlineRef}
+	slices.Sort(refs)
+	resolved, err := workspace.ResolveAcceptedSources(t.Context(), testScope, refs)
+	if err != nil || len(resolved) != 2 {
+		t.Fatalf("resolve mixed provenance = %#v, %v", resolved, err)
+	}
+	writeCanonicalFixture(t, workspace, provenancePathA, validWorkspacePageRefs(provenancePageA, "Mixed", refs, "Mixed facts"))
+	limits := app.CanonicalProvenanceLimits{Returned: 4, Examined: 8, PathBytes: 2048, PageBytes: 1 << 20, TotalBytes: 4 << 20, SourceRefs: 8, RoundPages: 100}
+	result, err := workspace.PageProvenance(t.Context(), testScope, owner, "", limits)
+	if err != nil || len(result.Items) != 1 || !slices.Equal(result.Items[0].SourceRefs, refs) {
+		t.Fatalf("mixed provenance = %#v, %v", result, err)
+	}
+}
+
+func TestAcceptedResolverRejectsConfiguredSourceWithoutDocument(t *testing.T) {
+	for _, adapter := range []string{string(knowl.SourceAdapterFilesystem), string(knowl.SourceAdapterGit)} {
+		t.Run(adapter, func(t *testing.T) {
+			workspace := newProvenanceWorkspace(t)
+			content := []byte("unowned configured source")
+			digest := sha256.Sum256(content)
+			accepted, err := workspace.AcceptSource(t.Context(), knowl.SourceEnvelope{
+				Scope: testScope, Source: knowl.SourceRef{Adapter: adapter, ID: "source/document"},
+				Version: knowl.SourceVersion{Version: "v1", Digest: hex.EncodeToString(digest[:])}, MediaType: operatorPlainText, Content: content,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = workspace.ResolveAcceptedSources(t.Context(), testScope, []string{app.SourceRefKey(accepted)})
+			if !errors.Is(err, app.ErrSourceInvalid) {
+				t.Fatalf("unowned configured descriptor resolved: %v", err)
+			}
+		})
+	}
+}
+
 func TestPageProvenanceFailsClosedWithTypedOutcomes(t *testing.T) {
 	targetOwner := knowl.SourceOwner{Adapter: knowl.SourceAdapterFilesystem, SourceID: provenanceRetiringSourceID}
 	baseLimits := app.CanonicalProvenanceLimits{Returned: 4, Examined: 8, PathBytes: 2_048, PageBytes: 1 << 20, TotalBytes: 4 << 20, SourceRefs: 8, RoundPages: 100}

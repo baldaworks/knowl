@@ -12,9 +12,9 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/normahq/runtime/v2/agentconfig"
-	"github.com/normahq/runtime/v2/agentfactory"
-	"github.com/normahq/runtime/v2/mcpregistry"
+	"github.com/baldaworks/runtime/v2/agentconfig"
+	"github.com/baldaworks/runtime/v2/agentfactory"
+	"github.com/baldaworks/runtime/v2/mcpregistry"
 )
 
 func TestCodexACPIngestProducesValidPlan(t *testing.T) {

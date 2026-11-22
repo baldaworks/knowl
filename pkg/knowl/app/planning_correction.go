@@ -122,9 +122,11 @@ func (service *HierarchyService) generateHierarchyPlan(ctx context.Context, inpu
 	var candidate knowl.HierarchyModelPlan
 	var err error
 	validatedByCallback := false
+	var lastValidation error
 	if maintainer, ok := service.maintainer.(ValidatingHierarchyMaintainer); ok {
 		candidate, report, err = maintainer.PlanHierarchyValidated(bounded, input, service.outputPolicy.Limits, func(plan knowl.HierarchyModelPlan) error {
 			_, err := ValidateHierarchyPlan(bounded, input, plan, options)
+			lastValidation = err
 			if err == nil {
 				validatedByCallback = true
 			}
@@ -135,6 +137,9 @@ func (service *HierarchyService) generateHierarchyPlan(ctx context.Context, inpu
 		}
 	} else {
 		candidate, err = service.maintainer.PlanHierarchy(bounded, input)
+	}
+	if errors.Is(err, ErrOutputCorrectionExhausted) && lastValidation != nil {
+		err = errors.Join(err, lastValidation)
 	}
 	err = planningError(bounded, err)
 	if err != nil {

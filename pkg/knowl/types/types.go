@@ -61,6 +61,7 @@ type PageSnapshot struct {
 	Path            string           `json:"path"`
 	Digest          string           `json:"digest"`
 	Title           string           `json:"title"`
+	WikiPaths       []string         `json:"wiki_paths,omitempty"`
 	Content         string           `json:"content"`
 	Body            string           `json:"body"`
 	OKF             *okf.Metadata    `json:"okf,omitempty"`

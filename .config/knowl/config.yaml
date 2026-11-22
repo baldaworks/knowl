@@ -6,6 +6,9 @@ runtime:
         model: gemini-3.8-flash-medium
 
 knowl:
+  timeouts:
+    projection_rebuild: 15m
+    # Omit hierarchy to include the rebuild budget plus 5m of model planning.
   embeddings:
     enabled: true
     endpoint: http://127.0.0.1:8091/v1/embeddings

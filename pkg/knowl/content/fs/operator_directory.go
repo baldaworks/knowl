@@ -98,11 +98,15 @@ func validWikiDirectory(directory string) bool {
 }
 
 func operatorDirectoryInventory(ctx context.Context, branch *os.File, directory string) ([]operatorInventoryEntry, map[string]knowl.OperatorWikiEntry, error) {
+	return operatorDirectoryInventoryBounded(ctx, branch, directory, &operatorDirectoryBudget{})
+}
+
+type operatorDirectoryBudget struct{ bytes, count int }
+
+func operatorDirectoryInventoryBounded(ctx context.Context, branch *os.File, directory string, budget *operatorDirectoryBudget) ([]operatorInventoryEntry, map[string]knowl.OperatorWikiEntry, error) {
 	entries := []operatorInventoryEntry{}
 	nodes := make(map[string]knowl.OperatorWikiEntry)
 	limits := app.DefaultCatalogLimits()
-	bytes := 0
-	count := 0
 	for {
 		if err := contextErr(ctx); err != nil {
 			return nil, nil, err
@@ -112,9 +116,10 @@ func operatorDirectoryInventory(ctx context.Context, branch *os.File, directory 
 			return nil, nil, err
 		}
 		for _, entry := range batch {
-			count++
-			bytes += len(entry.Name()) + 128 // fixed metadata allowance bounds inventory allocation
-			if count > limits.MaxEdges || bytes > limits.MaxSnapshotBytes {
+			relative := path.Join(directory, entry.Name())
+			budget.count++
+			budget.bytes += len(relative) + 128 // include the full retained snapshot path
+			if budget.count > limits.MaxEdges || budget.bytes > limits.MaxSnapshotBytes || len(relative) > limits.MaxPathBytes {
 				return nil, nil, app.ErrOperatorReadLimitExceeded
 			}
 			// Unrelated assets (including linked assets) are not wiki nodes.
@@ -123,7 +128,6 @@ func operatorDirectoryInventory(ctx context.Context, branch *os.File, directory 
 			if entry.Type()&os.ModeSymlink != 0 {
 				continue
 			}
-			relative := path.Join(directory, entry.Name())
 			kind := ""
 			isDirectory := entry.IsDir()
 			if isDirectory {

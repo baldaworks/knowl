@@ -253,8 +253,11 @@ func (service *RetirementPageService) prepareRequest(ctx context.Context, descri
 	triggerFound := false
 	for _, ref := range page.SourceRefs {
 		source, ok := sources[ref]
-		if !ok || source.SourceDocument.SourceID == "" {
+		if !ok || validateResolvedRetirementSource(scope, ref, source) != nil {
 			return RetirementPlanningRequest{}, false, []knowl.MaintenanceDiagnostic{{Code: RetirementEvidenceUnavailableCode, Path: page.Path, Target: ref}}, ErrRetirementEvidenceUnavailable
+		}
+		if source.Source.Adapter != string(knowl.SourceAdapterFilesystem) && source.Source.Adapter != string(knowl.SourceAdapterGit) {
+			continue
 		}
 		owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterID(source.Source.Adapter), SourceID: source.SourceDocument.SourceID}
 		if owner == payload.Owner {

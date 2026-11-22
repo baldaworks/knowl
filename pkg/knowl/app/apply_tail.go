@@ -60,19 +60,19 @@ func boundMaintenanceSession(content any, staged knowl.StagedChange, hierarchy b
 	}
 }
 
-func saveApplyFailureDiagnostics(ctx context.Context, operations OperationStore, operation knowl.Operation, cause error, planDiagnostics []knowl.MaintenanceDiagnostic) error {
+func saveApplyFailureDiagnostics(ctx context.Context, operations OperationStore, scope knowl.ScopeRef, operation knowl.Operation, cause error, planDiagnostics []knowl.MaintenanceDiagnostic) error {
 	var failure interface {
 		MaintenanceDiagnostics() []knowl.MaintenanceDiagnostic
 	}
 	if !errors.As(cause, &failure) {
 		return nil
 	}
-	return saveFailureDiagnostics(ctx, operations, operation, planDiagnostics, nil, cause)
+	return saveFailureDiagnostics(ctx, operations, scope, operation, planDiagnostics, nil, cause)
 }
 
 // saveFailureDiagnostics saves only current failure evidence. Plan warnings
 // already have their own durable column and must not be copied into it.
-func saveFailureDiagnostics(ctx context.Context, operations OperationStore, operation knowl.Operation, planDiagnostics, diagnostics []knowl.MaintenanceDiagnostic, cause error) error {
+func saveFailureDiagnostics(ctx context.Context, operations OperationStore, scope knowl.ScopeRef, operation knowl.Operation, planDiagnostics, diagnostics []knowl.MaintenanceDiagnostic, cause error) error {
 	store, ok := operations.(OperationDiagnosticStore)
 	if !ok || operation.WorkAttempt <= 0 {
 		return nil
@@ -109,7 +109,7 @@ func saveFailureDiagnostics(ctx context.Context, operations OperationStore, oper
 	if _, err := NormalizeMaintenanceDiagnostics(append(slices.Clone(planDiagnostics), diagnostics...)); err != nil {
 		return err
 	}
-	return store.SaveOperationDiagnostics(ctx, operation.Key.Scope, operation.ID, operation.WorkAttempt, diagnostics)
+	return store.SaveOperationDiagnostics(ctx, scope, operation.ID, operation.WorkAttempt, diagnostics)
 }
 
 // runApplyTail is the single operation-state tail for authenticated staged

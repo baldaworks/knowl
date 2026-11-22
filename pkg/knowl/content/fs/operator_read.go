@@ -46,12 +46,12 @@ func (workspace *Workspace) Page(ctx context.Context, scope knowl.ScopeRef, id k
 		if err != nil {
 			return knowl.OperatorPage{}, operatorReadError(err, app.ErrPageNotFound)
 		}
-		index, err := okf.ValidateIndex(relative, content, okfLimits(ceiling))
+		index, err := okf.ParseIndex(relative, content, okfLimits(ceiling))
 		if err != nil {
 			return knowl.OperatorPage{}, operatorReadError(err, app.ErrOperatorWorkspaceUnavailable)
 		}
 		digest := digestBytes(content)
-		return knowl.OperatorPage{ID: id, Title: markdownTitle([]byte(index.Body)), Markdown: string(content), Digest: digest, Version: digest,
+		return knowl.OperatorPage{ID: id, Title: operatorIndexTitle(relative, index.Body), Markdown: string(content), Digest: digest, Version: digest,
 			RelatedPageIDs: []knowl.PageID{}, Sources: []knowl.OperatorPageSource{},
 		}, nil
 	}
@@ -265,7 +265,7 @@ func (workspace *Workspace) ResolveAcceptedSources(ctx context.Context, scope kn
 			return nil, app.ErrSourceInvalid
 		}
 		source, acceptedErr := manifest.accepted()
-		if acceptedErr != nil || !validSourceManifest(manifest) || app.ValidateAcceptedSourceDescriptor(source) != nil ||
+		if acceptedErr != nil || !validSourceManifest(manifest) || app.ValidateAcceptedProvenanceDescriptor(source) != nil ||
 			source.Scope != scope || source.ManifestRef != workspaceRawDir+"/"+relative {
 			return nil, app.ErrSourceInvalid
 		}

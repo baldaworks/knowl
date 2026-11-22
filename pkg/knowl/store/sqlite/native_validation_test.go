@@ -402,7 +402,7 @@ func (r validationRows) Next(values []driver.Value) error {
 	if err == nil {
 		r.transfer.rows++
 		columns := r.Columns()
-		if slices.Equal(columns, []string{nativeEvidenceDigestColumn, "title", nativeEvidenceTagsColumn, "description", "body", "format", "okf_metadata"}) {
+		if slices.Equal(columns, []string{nativeEvidenceDigestColumn, "title", nativeEvidenceTagsColumn, "description", "body", "format", "okf_metadata", "wiki_paths"}) {
 			r.transfer.evidenceRows++
 		}
 		for i, value := range values {

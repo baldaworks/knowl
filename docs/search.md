@@ -40,6 +40,42 @@ and prefixes with the values required by that deployment. For local TEI, use
 the pinned reference configuration below. See [measurements](testing.md#real-cpu-embedding-quality-gate)
 for evaluated quality and resource use.
 
+## Wiki location in page embeddings
+
+Indexing prepends canonical wiki-location context to the existing page inputs:
+wiki catalog titles, page metadata, local heading ancestry, then source text.
+Membership follows links in `index.md` catalogs, not filesystem directories.
+The root catalog title is included; shared pages include every distinct semantic
+placement in stable order. Legacy pages without a placement have no wiki-path
+prefix. Queries still use the same hybrid retrieval pipeline and query embedding;
+there is no catalog-routing model call or additional vector index.
+
+Catalog titles are indexing context, not source evidence. Returned snippets still
+come from the original page. Renaming or moving a catalog changes the inputs of
+its affected pages even when those page bytes do not change. Normal publication
+recomputes those vectors and reuses unchanged authenticated inputs; explicit
+rebuild recomputes the projection. Reordering catalog links does not change the
+semantic input. SQLite and PostgreSQL persist the path context with the page so
+evidence validation and reuse reconstruct the same input that was embedded.
+
+All distinct placements must fit the existing source/semantic limits and the
+384-rune input prefix budget alongside metadata and local headings. Escaping
+catalog targets, cycles or oversized path context are rejected, rather than
+silently choosing a parent or dropping a path. The existing embedding failure
+policy applies when semantic preparation cannot fit the input. Unresolved catalog links add no
+embedding context and remain visible to the existing lint/publication checks,
+so snapshots used for diagnostics and repair retain their previous behavior. More context
+leaves less room for body text in each chunk and can increase the chunk count.
+
+The wiki-path preprocessing version changes model-space identity. Upgrade with
+writers stopped, apply automatic Goose migration **27** on both backends, and
+let the matching binary rebuild the dense projection once at startup. No new
+configuration or canonical-page rewrite is required. Afterwards normal
+publication can reuse unchanged inputs. For rollback, use the matching schema
+and binary and rebuild derived projections from the canonical workspace; a
+schema downgrade removes the stored path context. Existing benchmark results
+predate this preprocessing change and do not establish its search quality.
+
 ## Configure an embedding API
 
 Embeddings are off by default. Disabled configuration creates no embedding

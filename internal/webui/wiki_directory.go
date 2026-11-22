@@ -20,7 +20,7 @@ func (h *Handler) wikiDirectory(w http.ResponseWriter, r *http.Request) {
 		h.readError(w, err)
 		return
 	}
-	directory := q.Get("directory")
+	directory := q.Get(directoryParameter)
 	result, err := h.dependencies.Operator.WikiDirectoryChildren(r.Context(), directory, options)
 	if err != nil {
 		h.readError(w, err)
@@ -28,7 +28,7 @@ func (h *Handler) wikiDirectory(w http.ResponseWriter, r *http.Request) {
 	}
 	next := ""
 	if result.NextCursor != "" {
-		next = fragmentURL("wiki-directory", url.Values{"directory": {directory}, limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}, cursorParameter: {result.NextCursor}})
+		next = fragmentURL("wiki-directory", url.Values{directoryParameter: {directory}, limitParameter: {strconv.Itoa(normalizedLimit(options.Limit))}, cursorParameter: {result.NextCursor}})
 	}
 	name := "wiki_directory"
 	if options.Cursor != "" {

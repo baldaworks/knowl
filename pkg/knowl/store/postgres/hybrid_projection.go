@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -19,7 +20,7 @@ func (store *Store) project(ctx context.Context, snapshot knowl.WorkspaceSnapsho
 	if store.embedding == nil {
 		return store.Rebuild(ctx, snapshot)
 	}
-	ctx, cancel := context.WithTimeout(ctx, hybrid.RebuildTimeout)
+	ctx, cancel := context.WithTimeout(ctx, store.embedding.RebuildTimeout())
 	defer cancel()
 	prior, err := store.previousProjection(ctx, snapshot.Scope)
 	if err != nil {
@@ -135,7 +136,7 @@ func lexicalProjectionHealthyTx(ctx context.Context, tx *sql.Tx, state Projectio
 }
 
 func previousPagesTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef) ([]knowl.PageSnapshot, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT page_id,path,digest,title,body,format,okf_metadata FROM knowl_pages WHERE scope=$1 ORDER BY page_id LIMIT $2`, scope, hybrid.MaxChunks+1)
+	rows, err := tx.QueryContext(ctx, `SELECT page_id,path,digest,title,body,format,okf_metadata,wiki_paths FROM knowl_pages WHERE scope=$1 ORDER BY page_id LIMIT $2`, scope, hybrid.MaxChunks+1)
 	if err != nil {
 		return nil, err
 	}
@@ -144,9 +145,12 @@ func previousPagesTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef) ([]k
 	for rows.Next() {
 		var page knowl.PageSnapshot
 		var format string
-		var metadata []byte
-		if err := rows.Scan(&page.ID, &page.Path, &page.Digest, &page.Title, &page.Body, &format, &metadata); err != nil {
+		var metadata, encodedPaths []byte
+		if err := rows.Scan(&page.ID, &page.Path, &page.Digest, &page.Title, &page.Body, &format, &metadata, &encodedPaths); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal(encodedPaths, &page.WikiPaths); err != nil {
+			return nil, embeddingFailure(knowl.RetrievalProjectionDrift)
 		}
 		page.OKF, err = projectionmeta.Decode(format, metadata)
 		if err != nil {
@@ -164,7 +168,7 @@ func previousPagesTx(ctx context.Context, tx *sql.Tx, scope knowl.ScopeRef) ([]k
 }
 
 func (store *Store) Rebuild(ctx context.Context, snapshot knowl.WorkspaceSnapshot) error {
-	return store.rebuildWithTimeout(ctx, snapshot, hybrid.RebuildTimeout)
+	return store.rebuildWithTimeout(ctx, snapshot, store.embedding.RebuildTimeout())
 }
 
 func (store *Store) rebuildWithTimeout(ctx context.Context, snapshot knowl.WorkspaceSnapshot, timeout time.Duration) error {
@@ -244,7 +248,7 @@ func (store *Store) MaintenanceRetrievalPolicy() *app.MaintenanceRetrievalPolicy
 func (store *Store) ProjectWithoutInference(ctx context.Context, commit knowl.ContentCommit) error {
 	if store.embedding != nil {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, hybrid.RebuildTimeout)
+		ctx, cancel = context.WithTimeout(ctx, store.embedding.RebuildTimeout())
 		defer cancel()
 	}
 	snapshot := commit.Snapshot

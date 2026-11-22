@@ -13,8 +13,8 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	types "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/baldaworks/knowl/pkg/knowlfx"
-	"github.com/normahq/runtime/v2/agentfactory"
-	"github.com/normahq/runtime/v2/mcpregistry"
+	"github.com/baldaworks/runtime/v2/agentfactory"
+	"github.com/baldaworks/runtime/v2/mcpregistry"
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
 )
@@ -97,6 +97,7 @@ func hostConfig(ctx context.Context) (knowl.Config, error) {
 	config.Web = loaded.Document.Knowl.Web
 	config.Embeddings = loaded.Document.Knowl.Embeddings
 	config.Output = loaded.Document.Knowl.Output
+	config.Timeouts = loaded.Document.Knowl.Timeouts
 	config.Workers = loaded.Document.Knowl.Workers
 	sources := configuredSources(loaded.Document.Knowl.Sources)
 	config.Sources, err = knowl.NormalizeSources(workspace, loaded.WorkingDir, sources)

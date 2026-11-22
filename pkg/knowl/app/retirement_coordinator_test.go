@@ -347,6 +347,17 @@ func TestRetirementCoordinatorStatusAndTargetedRetry(t *testing.T) {
 	}
 }
 
+func TestRetirementCoordinatorStatusCarriesRecoveryIdentity(t *testing.T) {
+	fixture := newRetirementCoordinatorFixture()
+	fixture.lifecycle.state.ConfigDigest = ""
+	fixture.lifecycle.state.RecoveryProofDigest = strings.Repeat("d", 64)
+	fixture.lifecycle.replaceState()
+	status, err := fixture.coordinator().Status(t.Context(), retirementCoordinatorOwner)
+	if err != nil || status.RecoveryProofDigest != fixture.lifecycle.state.RecoveryProofDigest {
+		t.Fatalf("recovery identity missing from status: %#v, %v", status, err)
+	}
+}
+
 type retirementCoordinatorFixture struct {
 	now        time.Time
 	lifecycle  *retirementCoordinatorLifecycleStore

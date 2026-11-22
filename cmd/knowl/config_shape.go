@@ -28,6 +28,7 @@ type AppConfig struct {
 	Sources      []SourceConfig            `mapstructure:"sources"`
 	Embeddings   knowl.EmbeddingsConfig    `mapstructure:"embeddings"`
 	Output       knowltypes.OutputSettings `mapstructure:"output"`
+	Timeouts     knowl.TimeoutsConfig      `mapstructure:"timeouts"`
 }
 
 // WorkspaceConfig controls the workspace root used by Knowl.
@@ -190,6 +191,7 @@ type rawAppConfig struct {
 	Sources      []SourceConfig         `mapstructure:"sources"`
 	Embeddings   knowl.EmbeddingsConfig `mapstructure:"embeddings"`
 	Output       rawOutputSettings      `mapstructure:"output"`
+	Timeouts     knowl.TimeoutsConfig   `mapstructure:"timeouts"`
 	Ingest       map[string]any         `mapstructure:"ingest"`
 	Maintenance  map[string]any         `mapstructure:"maintenance"`
 }
@@ -250,6 +252,10 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 	if err != nil {
 		return AppConfig{}, err
 	}
+	timeouts, err := config.Timeouts.Normalize()
+	if err != nil {
+		return AppConfig{}, err
+	}
 	return AppConfig{
 		Workers:      workers,
 		Output:       output,
@@ -266,6 +272,7 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 		Operator:     config.Operator,
 		Web:          config.Web,
 		Sources:      config.Sources,
+		Timeouts:     timeouts,
 	}, nil
 }
 

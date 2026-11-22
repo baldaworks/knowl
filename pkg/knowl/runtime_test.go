@@ -22,7 +22,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
-	"github.com/normahq/runtime/v2/agentfactory"
+	"github.com/baldaworks/runtime/v2/agentfactory"
 	adkagent "google.golang.org/adk/v2/agent"
 )
 

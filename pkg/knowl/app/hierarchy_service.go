@@ -175,7 +175,7 @@ func (service *HierarchyService) RunToTerminal(ctx context.Context, claim knowl.
 	}
 	schema, err := service.content.Schema(ctx, scope)
 	if err != nil || schema.Digest != descriptor.Schema.Digest {
-		return service.fail(ctx, result, "precondition", errors.Join(ErrHierarchyDigestMismatch, err))
+		return service.fail(ctx, scope, result, "precondition", errors.Join(ErrHierarchyDigestMismatch, err))
 	}
 	staged, loadErr := service.content.LoadHierarchyStage(ctx, scope, id)
 	switch {
@@ -183,18 +183,18 @@ func (service *HierarchyService) RunToTerminal(ctx context.Context, claim knowl.
 		result.Staged = staged
 		if operation.Status == knowl.StatusReceived {
 			if err := service.savePlan(ctx, id, staged.Digest, len(staged.Files)); err != nil {
-				return service.fail(ctx, result, "operation", err)
+				return service.fail(ctx, scope, result, "operation", err)
 			}
 		}
 	case !errors.Is(loadErr, ErrStageNotFound):
-		return service.fail(ctx, result, "staging", loadErr)
+		return service.fail(ctx, scope, result, "staging", loadErr)
 	default:
 		if descriptor.Hierarchy.PlannerVersion != service.planner {
-			return service.fail(ctx, result, "descriptor", ErrExecutionDescriptorUnavailable)
+			return service.fail(ctx, scope, result, "descriptor", ErrExecutionDescriptorUnavailable)
 		}
 		snapshotDigest, snapshotErr := service.content.HierarchySnapshotDigest(ctx, scope)
 		if snapshotErr != nil || snapshotDigest != descriptor.Hierarchy.SnapshotDigest {
-			return service.fail(ctx, result, "precondition", errors.Join(ErrHierarchyDigestMismatch, snapshotErr))
+			return service.fail(ctx, scope, result, "precondition", errors.Join(ErrHierarchyDigestMismatch, snapshotErr))
 		}
 		validated, report, persisted, planErr := service.plan(ctx, scope, descriptor, operation.WorkAttempt)
 		result.Correction = report
@@ -202,22 +202,22 @@ func (service *HierarchyService) RunToTerminal(ctx context.Context, claim knowl.
 			result.Operation.Correction = report
 		}
 		if planErr != nil {
-			return service.fail(ctx, result, failureClass(planErr), planErr)
+			return service.fail(ctx, scope, result, failureClass(planErr), planErr)
 		}
 		planDigest, digestErr := HierarchyPlanDigest(validated)
 		if digestErr != nil {
-			return service.fail(ctx, result, "plan", digestErr)
+			return service.fail(ctx, scope, result, "plan", digestErr)
 		}
 		if len(validated.Mutations) == 0 {
 			return service.commitNoOp(ctx, result, scope, planDigest)
 		}
 		staged, stageErr := service.content.StageHierarchyPlan(ctx, id, validated)
 		if stageErr != nil {
-			return service.fail(ctx, result, "staging", stageErr)
+			return service.fail(ctx, scope, result, "staging", stageErr)
 		}
 		result.Staged = staged
 		if err := service.savePlan(ctx, id, staged.Digest, len(staged.Files)); err != nil {
-			return service.fail(ctx, result, "operation", err)
+			return service.fail(ctx, scope, result, "operation", err)
 		}
 	}
 	return service.apply(ctx, result, scope, id)
@@ -262,7 +262,7 @@ func (service *HierarchyService) commitNoOp(ctx context.Context, result IngestRe
 	id := result.Operation.ID
 	if result.Operation.Status == knowl.StatusReceived {
 		if err := service.savePlan(ctx, id, digest, 0); err != nil {
-			return service.fail(ctx, result, "operation", err)
+			return service.fail(ctx, scope, result, "operation", err)
 		}
 	}
 	lease, err := newLease(time.Now().UTC(), service.leaseDuration)
@@ -299,7 +299,7 @@ func (service *HierarchyService) apply(ctx context.Context, result IngestResult,
 	}
 	switch tail.stage {
 	case applyTailCommit:
-		return service.fail(ctx, result, "commit", err)
+		return service.fail(ctx, scope, result, "commit", err)
 	case applyTailProjection:
 		return result, fmt.Errorf("%w: %w", ErrProjection, err)
 	default:
@@ -307,11 +307,11 @@ func (service *HierarchyService) apply(ctx context.Context, result IngestResult,
 	}
 }
 
-func (service *HierarchyService) fail(ctx context.Context, result IngestResult, class string, cause error) (IngestResult, error) {
+func (service *HierarchyService) fail(ctx context.Context, scope knowl.ScopeRef, result IngestResult, class string, cause error) (IngestResult, error) {
 	if retryableExecutionError(cause) {
 		return result, cause
 	}
-	if err := saveApplyFailureDiagnostics(durableContext(ctx), service.operations, result.Operation, cause, result.Staged.Diagnostics); err != nil {
+	if err := saveApplyFailureDiagnostics(durableContext(ctx), service.operations, scope, result.Operation, cause, result.Staged.Diagnostics); err != nil {
 		return result, errors.Join(cause, err)
 	}
 	failure := executionFailure(class, result.Operation.ID, cause)
