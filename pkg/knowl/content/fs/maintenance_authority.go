@@ -57,7 +57,7 @@ func (workspace *Workspace) InspectMaintenanceStage(ctx context.Context, request
 	}
 	defer unlock()
 	staged := request.Stage()
-	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(staged.OperationID))
+	stageDir := workspace.controlPath("staging", token(staged.OperationID))
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
 	if err != nil {
 		return maintenanceauthority.Inspection{}, err
@@ -66,7 +66,8 @@ func (workspace *Workspace) InspectMaintenanceStage(ctx context.Context, request
 	if request.Hierarchy() {
 		writer = stageWriterHierarchy
 	}
-	if manifestWriter(manifest) != writer || manifest.OperationID != staged.OperationID || !validStageManifest(manifest) {
+	if manifestWriter(manifest) != writer || manifest.OperationID != staged.OperationID || !validStageManifest(manifest) ||
+		(staged.Scope != "" && staged.Scope != manifestScope(manifest)) {
 		return maintenanceauthority.Inspection{}, ErrPlanConflict
 	}
 	authenticated, err := stagedChangeFromManifest(stageDir, manifest)
@@ -184,7 +185,7 @@ func (workspace *Workspace) ordinaryCommitReplayed(manifest stageManifest, gener
 	// receipt authenticates historical publication without requiring that its
 	// page/log bytes are still the current canonical snapshot.
 	path := workspace.commitReceiptPath(stageWriterMaintainer, manifest.Scope, manifest.OperationID)
-	if err := rejectSymlinkPath(workspace.root, path); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, path); err != nil {
 		return false, err
 	}
 	receipt, err := readCommitReceipt(path)

@@ -67,7 +67,7 @@ func TestSharedSDKAdapterMatchesRegistryTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !failure.IsError || failure.StructuredContent.(map[string]any)["error"] != "scope_override_forbidden" {
+	if !failure.IsError || failure.StructuredContent.(map[string]any)["error"] != "scope_forbidden" {
 		t.Fatalf("SDK classified failure = %#v", failure)
 	}
 	if err := session.Close(); err != nil {
@@ -134,7 +134,7 @@ func TestHTTPMCPReadOnlyModesHideWriteTools(t *testing.T) {
 	}
 }
 
-func TestHTTPMCPReadOnlyModeAllowsSessionDelete(t *testing.T) {
+func TestHTTPMCPStatelessCloseDoesNotIssueSessionDelete(t *testing.T) {
 	ctx := context.Background()
 	workspace, err := contentfs.New(t.TempDir())
 	if err != nil {
@@ -173,11 +173,8 @@ func TestHTTPMCPReadOnlyModeAllowsSessionDelete(t *testing.T) {
 	}
 	select {
 	case status := <-deleteStatus:
-		if status != http.StatusNoContent {
-			t.Fatalf("MCP session DELETE status = %d, want %d", status, http.StatusNoContent)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("MCP session close did not issue DELETE")
+		t.Fatalf("stateless MCP session close issued DELETE with status %d", status)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

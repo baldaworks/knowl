@@ -36,6 +36,7 @@ const (
 type Dependencies struct {
 	AuthMode          AuthMode
 	EmbeddingsEnabled bool
+	ScopeName         domain.ScopeName
 	Operator          *app.OperatorService
 	Retrieve          func(context.Context, string, []string) (knowlapi.RetrieveResult, error)
 	OperationStatus   func(domain.OperationStatus) string
@@ -129,10 +130,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.render(w, 200, "shell", struct {
-		Title    string
-		Screens  []string
-		AuthMode AuthMode
-	}{title, []string{"Knowledge", "Search", "Operations", "Sources", "Statistics"}, h.dependencies.AuthMode})
+		Title     string
+		Screens   []string
+		AuthMode  AuthMode
+		ScopeName domain.ScopeName
+	}{title, []string{"Knowledge", "Search", "Operations", "Sources", "Statistics"}, h.dependencies.AuthMode, h.dependencies.ScopeName})
 }
 func (h *Handler) Fragments(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(FragmentHeader, "1")

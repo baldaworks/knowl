@@ -90,6 +90,8 @@ func errorClass(err error) string {
 		return "invalid_arguments"
 	case errors.Is(err, knowlmcp.ErrScopeOverride):
 		return "scope_override_forbidden"
+	case errors.Is(err, knowlmcp.ErrScopeForbidden):
+		return "scope_forbidden"
 	case errors.Is(err, knowlmcp.ErrToolNotFound):
 		return "tool_not_found"
 	default:

@@ -29,7 +29,7 @@ const (
 func (service *Service) finalizeSaga(ctx context.Context, scope knowl.ScopeRef, source knowl.Source, input sagaInput) (Result, error) {
 	sourceID := source.ID
 	if service.applyCoordinator != nil {
-		release, err := service.applyCoordinator.Acquire(ctx)
+		release, err := acquireScopeApply(ctx, service.applyCoordinator, scope)
 		if err != nil {
 			return sagaResult(sourceID, input.run, input), failStage(classCommit, err)
 		}

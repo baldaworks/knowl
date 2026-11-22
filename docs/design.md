@@ -2,6 +2,10 @@
 
 **Durable project knowledge for agents.**
 
+Architecture decisions are recorded under [`docs/adr`](adr/). In particular,
+[ADR 0001](adr/0001-multiple-knowledge-scopes.md) proposes extending the
+existing scope model to multiple isolated OKF knowledge bases.
+
 Knowl is a self-hosted LLM wiki for agentic applications. It turns durable
 sources into an inspectable Markdown wiki with OKF-compatible storage and
 returns bounded, provenance-backed evidence.

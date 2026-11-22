@@ -254,7 +254,7 @@ func (service *HierarchyService) savePlan(ctx context.Context, id knowl.Operatio
 }
 
 func (service *HierarchyService) commitNoOp(ctx context.Context, result IngestResult, scope knowl.ScopeRef, digest string) (IngestResult, error) {
-	release, err := acquireApply(ctx, service.applyCoordinator)
+	release, err := acquireApplyScope(ctx, service.applyCoordinator, scope)
 	if err != nil {
 		return result, err
 	}

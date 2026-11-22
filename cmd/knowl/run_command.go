@@ -9,6 +9,7 @@ import (
 	"time"
 
 	knowlruntime "github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/spf13/cobra"
 )
@@ -96,6 +97,9 @@ func newProductionLocalRunSession(ctx context.Context) (localRunSession, error) 
 func withLocalRunHost(ctx context.Context, operation func(localRunHost) error) (returnErr error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := requireCLIAuthorization(ctx, app.OperationWrite); err != nil {
+		return err
 	}
 	session, err := newLocalRunSession(ctx)
 	if err != nil {

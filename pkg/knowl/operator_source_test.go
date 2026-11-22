@@ -168,7 +168,7 @@ func TestOperatorSourcesConfiguredStatus(t *testing.T) {
 	if _, err := host.SourceStatus(t.Context(), operatorDisabledSourceID); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("existing disabled behavior changed: %v", err)
 	}
-	for _, id := range []domain.SourceID{"missing", "invalid/source"} {
+	for _, id := range []domain.SourceID{testMissingName, "invalid/source"} {
 		_, err := reader.Source(t.Context(), scope, id)
 		want := app.ErrSourceNotFound
 		if id == "invalid/source" {

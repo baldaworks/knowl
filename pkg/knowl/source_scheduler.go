@@ -47,6 +47,7 @@ type sourceScheduler struct {
 	syncSource sourceSyncFunc
 	scope      domain.ScopeRef
 	sources    []domain.Source
+	scheduled  []scopedSource
 	observer   SourceObserver
 	options    sourceSchedulerOptions
 
@@ -60,12 +61,45 @@ type sourceScheduler struct {
 	drainedClosed bool
 }
 
+type scopedSource struct {
+	Scope  domain.ScopeRef
+	Source domain.Source
+}
+
 func newSourceScheduler(syncSource sourceSyncFunc, scope domain.ScopeRef, sources []domain.Source, observer SourceObserver, options sourceSchedulerOptions) (*sourceScheduler, error) {
 	if syncSource == nil || scope == "" {
 		return nil, fmt.Errorf("source scheduler dependencies are invalid: %w", app.ErrSourceInvalid)
 	}
+	scheduled := make([]scopedSource, 0, len(sources))
+	for _, source := range sources {
+		scheduled = append(scheduled, scopedSource{Scope: scope, Source: cloneSource(source)})
+	}
+	if len(scheduled) == 0 {
+		return &sourceScheduler{syncSource: syncSource, scope: scope, observer: observer, options: options.normalized(), drained: make(chan struct{})}, nil
+	}
+	return newMultiScopeSourceScheduler(syncSource, scheduled, observer, options)
+}
+
+func newMultiScopeSourceScheduler(syncSource sourceSyncFunc, scheduled []scopedSource, observer SourceObserver, options sourceSchedulerOptions) (*sourceScheduler, error) {
+	if syncSource == nil || len(scheduled) == 0 {
+		return nil, fmt.Errorf("source scheduler dependencies are invalid: %w", app.ErrSourceInvalid)
+	}
+	cloned := make([]scopedSource, len(scheduled))
+	for index, item := range scheduled {
+		if item.Scope == "" {
+			return nil, fmt.Errorf("source scheduler dependencies are invalid: %w", app.ErrSourceInvalid)
+		}
+		cloned[index] = scopedSource{Scope: item.Scope, Source: cloneSource(item.Source)}
+	}
+	defaultScope := cloned[0].Scope
+	var defaultSources []domain.Source
+	for _, item := range cloned {
+		if item.Scope == defaultScope {
+			defaultSources = append(defaultSources, cloneSource(item.Source))
+		}
+	}
 	return &sourceScheduler{
-		syncSource: syncSource, scope: scope, sources: cloneSources(sources), observer: observer,
+		syncSource: syncSource, scope: defaultScope, sources: defaultSources, scheduled: cloned, observer: observer,
 		options: options.normalized(), drained: make(chan struct{}),
 	}, nil
 }
@@ -85,12 +119,13 @@ func (scheduler *sourceScheduler) start(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	scheduler.cancel = cancel
 	scheduler.started = true
-	for _, source := range scheduler.sources {
+	for _, item := range scheduler.scheduled {
+		source := item.Source
 		if !source.Enabled || (!source.Sync.OnStart && source.Sync.Interval <= 0) {
 			continue
 		}
 		scheduler.workers++
-		go scheduler.worker(ctx, cloneSource(source))
+		go scheduler.worker(ctx, item.Scope, cloneSource(source))
 	}
 	return nil
 }
@@ -118,6 +153,10 @@ func (scheduler *sourceScheduler) stop(ctx context.Context) error {
 }
 
 func (scheduler *sourceScheduler) run(ctx context.Context, source domain.Source, trigger SourceTrigger) (reconcile.Result, error) {
+	return scheduler.runScoped(ctx, scheduler.scope, source, trigger)
+}
+
+func (scheduler *sourceScheduler) runScoped(ctx context.Context, scope domain.ScopeRef, source domain.Source, trigger SourceTrigger) (reconcile.Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -126,7 +165,7 @@ func (scheduler *sourceScheduler) run(ctx context.Context, source domain.Source,
 	}
 	defer scheduler.finishAttempt()
 	startedAt := scheduler.options.now()
-	result, err := scheduler.syncSource(ctx, scheduler.scope, source)
+	result, err := scheduler.syncSource(ctx, scope, source)
 	duration := scheduler.options.now().Sub(startedAt)
 	if duration < 0 {
 		duration = 0
@@ -145,7 +184,7 @@ func (scheduler *sourceScheduler) run(ctx context.Context, source domain.Source,
 	return result, err
 }
 
-func (scheduler *sourceScheduler) worker(ctx context.Context, source domain.Source) {
+func (scheduler *sourceScheduler) worker(ctx context.Context, scope domain.ScopeRef, source domain.Source) {
 	defer scheduler.finishWorker()
 	retryDelay := source.Sync.RetryInitial
 	trigger := SourceTriggerInterval
@@ -155,7 +194,7 @@ func (scheduler *sourceScheduler) worker(ctx context.Context, source domain.Sour
 		return
 	}
 	for {
-		_, err := scheduler.run(ctx, source, trigger)
+		_, err := scheduler.runScoped(ctx, scope, source, trigger)
 		if ctx.Err() != nil {
 			return
 		}

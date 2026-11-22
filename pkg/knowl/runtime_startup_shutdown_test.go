@@ -51,7 +51,7 @@ func TestStopDuringStartupHonorsDeadline(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			config := DefaultConfig()
 			config.Workspace = t.TempDir()
-			config.ListenAddr = "127.0.0.1:0"
+			config.ListenAddr = operatorRuntimeAddress
 			host, err := New(t.Context(), Options{Config: config, Maintainer: schedulerAcceptedMaintainer{}})
 			if err != nil {
 				t.Fatal(err)

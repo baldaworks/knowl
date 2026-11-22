@@ -2,6 +2,7 @@ package knowl
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
+
+const testMissingName = "missing"
 
 func TestNormalizeSourcesAcceptsMaximumAndRejectsOverflow(t *testing.T) {
 	root := t.TempDir()
@@ -154,6 +157,153 @@ func TestConfigValidateKeepsNilSourcesBackwardCompatible(t *testing.T) {
 	config.Sources = nil
 	if err := config.Validate(); err != nil {
 		t.Fatalf("Validate() error: %v", err)
+	}
+}
+
+func TestScopeRegistryNormalizesLegacyDefault(t *testing.T) {
+	const legacyScopeRef = "legacy-team"
+
+	root := t.TempDir()
+	config := DefaultConfig()
+	config.Workspace = filepath.Join(root, "workspace")
+	config.Scope = legacyScopeRef
+	config.Sources = []domain.Source{filesystemSource("docs", filepath.Join(root, "source"), nil)}
+
+	registry, err := config.ScopeRegistry()
+	if err != nil {
+		t.Fatalf("ScopeRegistry() error: %v", err)
+	}
+	context := registry.Default()
+	if context.Name != DefaultPublicScope || context.Ref != legacyScopeRef || len(context.Sources) != 1 {
+		t.Fatalf("default context = %#v", context)
+	}
+	if resolved, err := registry.Resolve(""); err != nil || resolved.Ref != context.Ref {
+		t.Fatalf("Resolve(empty) = %#v, %v", resolved, err)
+	}
+}
+
+func TestScopeRegistryNormalizesExplicitScopesDeterministically(t *testing.T) {
+	const (
+		legacyScopeRef = "legacy-team"
+		sharedSourceID = "shared"
+	)
+
+	root := t.TempDir()
+	config := DefaultConfig()
+	config.Workspace = filepath.Join(root, "workspace")
+	config.Sources = nil
+	config.DefaultScopeName = DefaultPublicScope
+	config.Scopes = []ScopeConfig{
+		{Name: "operations", Sources: []domain.Source{filesystemSource(sharedSourceID, filepath.Join(root, "operations"), nil)}},
+		{Name: DefaultPublicScope, Ref: legacyScopeRef, Sources: []domain.Source{filesystemSource(sharedSourceID, filepath.Join(root, "default"), nil)}},
+	}
+
+	registry, err := config.ScopeRegistry()
+	if err != nil {
+		t.Fatalf("ScopeRegistry() error: %v", err)
+	}
+	contexts := registry.All()
+	if len(contexts) != 2 || contexts[0].Name != DefaultPublicScope || contexts[1].Name != "operations" {
+		t.Fatalf("ordered contexts = %#v", contexts)
+	}
+	if contexts[0].Ref != legacyScopeRef || contexts[1].Ref != "scope:operations" {
+		t.Fatalf("refs = %q, %q", contexts[0].Ref, contexts[1].Ref)
+	}
+	contexts[0].Sources[0].ID = "mutated"
+	if registry.Default().Sources[0].ID != sharedSourceID {
+		t.Fatal("registry context was mutated through All result")
+	}
+	if registry.DefaultName() != DefaultPublicScope {
+		t.Fatalf("default name = %q", registry.DefaultName())
+	}
+
+	first, err := config.normalized()
+	if err != nil {
+		t.Fatalf("normalized() error: %v", err)
+	}
+	second, err := first.normalized()
+	if err != nil {
+		t.Fatalf("normalized() second error: %v", err)
+	}
+	if got := second.scopeRegistry.All(); len(got) != 2 || got[0].Ref != legacyScopeRef || got[1].Ref != "scope:operations" {
+		t.Fatalf("idempotent contexts = %#v", got)
+	}
+}
+
+func TestScopeRegistryRejectsInvalidConfigurations(t *testing.T) {
+	root := t.TempDir()
+	newConfig := func() Config {
+		config := DefaultConfig()
+		config.Workspace = filepath.Join(root, "workspace")
+		config.Sources = nil
+		return config
+	}
+	tests := []struct {
+		name   string
+		change func(*Config)
+	}{
+		{name: "invalid name", change: func(config *Config) {
+			config.Scopes = []ScopeConfig{{Name: "Invalid"}}
+		}},
+		{name: "missing default", change: func(config *Config) {
+			config.Scopes = []ScopeConfig{{Name: "other"}}
+		}},
+		{name: "disabled default", change: func(config *Config) {
+			config.Scopes = []ScopeConfig{{Name: DefaultPublicScope, Disabled: true}}
+		}},
+		{name: "duplicate ref", change: func(config *Config) {
+			config.Scopes = []ScopeConfig{{Name: DefaultPublicScope, Ref: "same"}, {Name: "other", Ref: "same"}}
+		}},
+		{name: "duplicate name", change: func(config *Config) {
+			config.Scopes = []ScopeConfig{{Name: DefaultPublicScope}, {Name: DefaultPublicScope}}
+		}},
+		{name: "legacy sources conflict", change: func(config *Config) {
+			config.Sources = []domain.Source{filesystemSource("legacy", filepath.Join(root, "legacy"), nil)}
+			config.Scopes = []ScopeConfig{{Name: DefaultPublicScope}}
+		}},
+		{name: "legacy ref conflict", change: func(config *Config) {
+			config.Scope = "legacy-team"
+			config.Scopes = []ScopeConfig{{Name: DefaultPublicScope, Ref: "different"}}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := newConfig()
+			test.change(&config)
+			if _, err := config.ScopeRegistry(); !errors.Is(err, ErrScopeConfigInvalid) {
+				t.Fatalf("ScopeRegistry() error = %v, want ErrScopeConfigInvalid", err)
+			}
+		})
+	}
+}
+
+func TestScopeRegistryResolveRejectsInvalidUnknownAndDisabledNames(t *testing.T) {
+	config := DefaultConfig()
+	config.Workspace = t.TempDir()
+	config.Sources = nil
+	config.Scopes = []ScopeConfig{
+		{Name: DefaultPublicScope},
+		{Name: "archive", Disabled: true},
+	}
+	registry, err := config.ScopeRegistry()
+	if err != nil {
+		t.Fatalf("ScopeRegistry() error: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		want error
+	}{
+		{name: "Invalid", want: domain.ErrScopeNameInvalid},
+		{name: testMissingName, want: domain.ErrScopeUnknown},
+		{name: "archive", want: domain.ErrScopeDisabled},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, resolveErr := registry.Resolve(domain.ScopeName(test.name)); !errors.Is(resolveErr, test.want) {
+				t.Fatalf("Resolve(%q) error = %v, want %v", test.name, resolveErr, test.want)
+			}
+		})
 	}
 }
 

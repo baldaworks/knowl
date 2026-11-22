@@ -53,6 +53,13 @@ const (
 // Clock supplies deterministic time to durable transitions.
 type Clock func() time.Time
 
+func acquireScopeApply(ctx context.Context, coordinator app.ApplyCoordinator, scope knowl.ScopeRef) (func(), error) {
+	if scoped, ok := coordinator.(app.ScopedApplyCoordinator); ok {
+		return scoped.AcquireScope(ctx, scope)
+	}
+	return coordinator.Acquire(ctx)
+}
+
 // RunIDGenerator supplies bounded opaque durable run identifiers.
 type RunIDGenerator func() knowl.SyncRunID
 

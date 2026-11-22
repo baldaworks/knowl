@@ -229,6 +229,34 @@ func TestBootstrapPreservesExistingConfig(t *testing.T) {
 	}
 }
 
+func TestBootstrapRejectsNonDefaultScopeBeforeWorkspaceMutation(t *testing.T) {
+	clearKnowlEnv(t)
+	workdir := t.TempDir()
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "Page.md"), []byte("# Page\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(workdir, ".config", appName, "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configured := "knowl:\n  workspace:\n    path: " + workdir + "\n  default_scope: default\n  scopes:\n    default:\n      ref: local\n    infrastructure:\n      ref: scope:infrastructure\n"
+	if err := os.WriteFile(configPath, []byte(configured), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(workdir)
+	_, _, err := executeCLICommand(newRootCommand(), []string{"--scope", infrastructureScopeName, bootstrapCommandName, bootstrapWikiName, sourceDir}, nil)
+	if err == nil || !strings.Contains(err.Error(), "bootstrap only supports the configured default scope") {
+		t.Fatalf("bootstrap error = %v, want non-default scope rejection", err)
+	}
+	for _, path := range []string{schemaFile, rawDir, workspaceWikiDir, ".knowl"} {
+		if _, statErr := os.Stat(filepath.Join(workdir, path)); !os.IsNotExist(statErr) {
+			t.Fatalf("bootstrap scope rejection created %q: %v", path, statErr)
+		}
+	}
+}
+
 func TestBootstrapRejectsMissingProviderBeforeWorkspaceMutation(t *testing.T) {
 	clearKnowlEnv(t)
 	workdir := t.TempDir()

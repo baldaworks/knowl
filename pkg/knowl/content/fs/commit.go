@@ -63,12 +63,13 @@ func (workspace *Workspace) commitMaintainer(ctx context.Context, staged knowl.S
 		return knowl.ContentCommit{}, err
 	}
 	defer unlock()
-	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(staged.OperationID))
+	stageDir := workspace.controlPath("staging", token(staged.OperationID))
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
 	if err != nil {
 		return knowl.ContentCommit{}, fmt.Errorf("read staged plan: %w", err)
 	}
-	if manifestWriter(manifest) != stageWriterMaintainer || manifest.OperationID != staged.OperationID || !validMaintainerStageManifest(manifest) {
+	if manifestWriter(manifest) != stageWriterMaintainer || manifest.OperationID != staged.OperationID || !validMaintainerStageManifest(manifest) ||
+		(staged.Scope != "" && staged.Scope != manifestScope(manifest)) {
 		return knowl.ContentCommit{}, fmt.Errorf("staged operation mismatch: %w", ErrPlanConflict)
 	}
 	if retirementAuthorized != (manifest.Retirement != nil) || !sameRetirementContext(manifest.Retirement, staged.Retirement) {
@@ -183,13 +184,14 @@ func (workspace *Workspace) commitHierarchy(ctx context.Context, staged knowl.St
 		return knowl.ContentCommit{}, err
 	}
 	defer unlock()
-	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(staged.OperationID))
+	stageDir := workspace.controlPath("staging", token(staged.OperationID))
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
 	if err != nil {
 		return knowl.ContentCommit{}, fmt.Errorf("read staged hierarchy plan: %w", err)
 	}
 	generation := stageGeneration(manifest)
 	if manifestWriter(manifest) != stageWriterHierarchy || manifest.OperationID != staged.OperationID || !validHierarchyStageManifest(manifest) ||
+		(staged.Scope != "" && staged.Scope != manifestScope(manifest)) ||
 		(staged.Digest != "" && staged.Digest != generation) || (staged.Files != nil && !slices.Equal(staged.Files, entryTargets(manifest.Entries))) {
 		return knowl.ContentCommit{}, ErrPlanConflict
 	}
@@ -324,7 +326,7 @@ func (workspace *Workspace) validateStageForCommitLocked(stageDir string, manife
 			return err
 		}
 	}
-	if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
+	if err := validateStagedPaths(workspace.controlBoundary, stageDir, manifest.Entries); err != nil {
 		return err
 	}
 	if !stagedFilesMatch(stageDir, manifest.Entries) {
@@ -401,11 +403,11 @@ func (workspace *Workspace) commitLocked(request canonicalCommitRequest) (knowl.
 	if err := workspace.injectCommitFault("before_journal", -1); err != nil {
 		return knowl.ContentCommit{}, err
 	}
-	recoveryRoot := filepath.Join(workspace.root, knowlDir, "recovery")
+	recoveryRoot := workspace.controlPath("recovery")
 	journalToken := token(request.recoveryKey)
 	journalDir := filepath.Join(recoveryRoot, journalToken)
 	journalPath := filepath.Join(recoveryRoot, journalToken+".yaml")
-	if err := rejectSymlinkPath(workspace.root, journalDir); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, journalDir); err != nil {
 		return knowl.ContentCommit{}, err
 	}
 	if err := os.MkdirAll(journalDir, 0o700); err != nil {
@@ -600,7 +602,7 @@ func retirementRecoveryKey(scope, operationID string) string {
 
 func (workspace *Workspace) sourceCommitReplayed(manifest stageManifest, generation string) (bool, error) {
 	path := workspace.sourceCommitReceiptPath(manifest.Scope, manifest.OperationID)
-	if err := rejectSymlinkPath(workspace.root, path); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, path); err != nil {
 		return false, err
 	}
 	receipt, err := readCommitReceipt(path)
@@ -623,7 +625,7 @@ func (workspace *Workspace) sourceCommitReplayed(manifest stageManifest, generat
 
 func (workspace *Workspace) hierarchyCommitReplayed(manifest stageManifest, generation string) (bool, error) {
 	path := workspace.hierarchyCommitReceiptPath(manifest.Scope, manifest.OperationID)
-	if err := rejectSymlinkPath(workspace.root, path); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, path); err != nil {
 		return false, err
 	}
 	receipt, err := readCommitReceipt(path)
@@ -651,7 +653,7 @@ func (workspace *Workspace) retirementCommitReplayed(manifest stageManifest, gen
 		return false, ErrPlanConflict
 	}
 	path := workspace.retirementCommitReceiptPath(manifest.Scope, manifest.OperationID)
-	if err := rejectSymlinkPath(workspace.root, path); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, path); err != nil {
 		return false, err
 	}
 	receipt, err := readCommitReceipt(path)
@@ -689,7 +691,7 @@ func (workspace *Workspace) RetirementCommitReceipt(ctx context.Context, staged 
 		return knowl.ContentCommit{}, false, err
 	}
 	defer unlock()
-	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(staged.OperationID))
+	stageDir := workspace.controlPath("staging", token(staged.OperationID))
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
 	if err != nil {
 		return knowl.ContentCommit{}, false, fmt.Errorf("read staged retirement receipt context: %w", err)
@@ -739,7 +741,7 @@ func (workspace *Workspace) commitReceiptPath(writer, scope, operationID string)
 	case stageWriterRetirement:
 		key = retirementRecoveryKey(scope, operationID)
 	}
-	return filepath.Join(workspace.root, knowlDir, "commits", token(key)+".yaml")
+	return workspace.controlPath("commits", token(key)+".yaml")
 }
 
 func (workspace *Workspace) writeCommitReceipt(receipt commitReceipt) error {
@@ -751,7 +753,7 @@ func (workspace *Workspace) writeCommitReceipt(receipt commitReceipt) error {
 		return ErrPlanConflict
 	}
 	path := workspace.commitReceiptPath(receipt.Writer, receipt.Scope, receipt.OperationID)
-	if err := rejectSymlinkPath(workspace.root, path); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, path); err != nil {
 		return err
 	}
 	if err := writeAtomic(path, content, 0o600); err != nil {

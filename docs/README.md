@@ -15,6 +15,7 @@ retrieve evidence from it:
 - [Web UI](web-ui.md): browse pages, saved sources, search and processing history.
 - [HTTP facade access control](access-control.md): independent API, MCP and Web authentication, read-only defaults, and proxy deployments.
 - [Operations](operations.md): shared configuration, sources, authentication, diagnostics and recovery.
+- [Multiple scopes](multi-scope.md): isolated knowledge bases, selection, compatibility, backup and readiness.
 - [Workspace and export](workspace.md): canonical Markdown, immutable raw sources and OKF portability.
 
 ## See it working

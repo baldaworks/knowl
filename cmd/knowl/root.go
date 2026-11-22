@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -104,12 +106,20 @@ exposes the same KISS contract for retrieve, ingest, operation, and health.`,
 				}
 				return err
 			}
+			if cmd.Flags().Changed("scope") {
+				selected, parseErr := domain.ParseScopeName(cmd.Flags().Lookup("scope").Value.String())
+				if parseErr != nil {
+					return parseErr
+				}
+				loaded = context.WithValue(loaded, cliScopeContextKey{}, selected)
+			}
 			cmd.SetContext(log.Logger.WithContext(loaded))
 			return nil
 		},
 	}
 	root.PersistentFlags().String("config-dir", "", "extra config root directory (highest priority)")
 	root.PersistentFlags().String("profile", "", "config profile name")
+	root.PersistentFlags().String("scope", "", "select one configured public knowledge scope")
 
 	for _, command := range []*cobra.Command{
 		newInitCommand(),

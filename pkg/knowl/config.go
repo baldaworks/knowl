@@ -1,6 +1,7 @@
 package knowl
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,12 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
+
+type allowAllScopeAuthorizer struct{}
+
+func (allowAllScopeAuthorizer) Authorize(context.Context, domain.ScopeRef, app.OperationKind) error {
+	return nil
+}
 
 // ErrWebConfigInvalid identifies an unsupported Web facade policy.
 var ErrWebConfigInvalid = errors.New("invalid web facade configuration")
@@ -60,19 +67,27 @@ const (
 
 // Config controls one local Knowl host. The scope is trusted host context.
 type Config struct {
-	Workspace     string
-	Scope         domain.ScopeRef
-	Sources       []domain.Source
-	StoreDriver   string
-	StorePath     string
-	PostgresDSN   string
-	ListenAddr    string
-	OperatorToken string
-	API           FacadeConfig
-	MCP           FacadeConfig
-	Web           WebConfig
-	ReadLimits    domain.ReadLimits
-	IngestOptions app.IngestOptions
+	Workspace string
+	Scope     domain.ScopeRef
+	Sources   []domain.Source
+	// DefaultScopeName and Scopes are the additive multi-scope configuration.
+	// When Scopes is empty, Scope and Sources describe the legacy default.
+	DefaultScopeName domain.ScopeName
+	// ActiveScopeName selects the compatibility Host facade without changing
+	// the configured public default used by transports and layout identity.
+	ActiveScopeName domain.ScopeName
+	Scopes          []ScopeConfig
+	StoreDriver     string
+	StorePath       string
+	PostgresDSN     string
+	ListenAddr      string
+	OperatorToken   string
+	API             FacadeConfig
+	MCP             FacadeConfig
+	Web             WebConfig
+	ReadLimits      domain.ReadLimits
+	IngestOptions   app.IngestOptions
+	ScopeAuthorizer app.ScopeAuthorizer
 	// Workers bounds simultaneous owned maintenance execution; zero defaults to one.
 	Workers int
 	// WorkerQueueSize bounds only coalesced in-memory wake hints. Accepted work
@@ -81,6 +96,7 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	Embeddings      EmbeddingsConfig
 	Output          domain.OutputSettings
+	scopeRegistry   *ScopeRegistry
 	Timeouts        TimeoutsConfig
 }
 
@@ -88,14 +104,15 @@ type Config struct {
 func DefaultConfig() Config {
 	limits := app.DefaultReadLimits()
 	return Config{
-		Scope:           DefaultScope,
-		StoreDriver:     StoreSQLite,
-		ListenAddr:      DefaultListen,
-		ReadLimits:      limits,
-		IngestOptions:   app.IngestOptions{ReadLimits: limits},
-		Workers:         1,
-		WorkerQueueSize: 16,
-		ShutdownTimeout: 10 * time.Second,
+		Scope:            DefaultScope,
+		DefaultScopeName: DefaultPublicScope,
+		StoreDriver:      StoreSQLite,
+		ListenAddr:       DefaultListen,
+		ReadLimits:       limits,
+		IngestOptions:    app.IngestOptions{ReadLimits: limits},
+		Workers:          1,
+		WorkerQueueSize:  16,
+		ShutdownTimeout:  10 * time.Second,
 	}
 }
 
@@ -106,6 +123,9 @@ func (config Config) Validate() error {
 }
 
 func (config Config) normalized() (Config, error) {
+	if config.ScopeAuthorizer == nil {
+		config.ScopeAuthorizer = allowAllScopeAuthorizer{}
+	}
 	config.OperatorToken = strings.TrimSpace(config.OperatorToken)
 	var err error
 	config.API, err = normalizeFacade("api", config.API, config.OperatorToken, false)
@@ -156,14 +176,19 @@ func (config Config) normalized() (Config, error) {
 	if _, err := app.NormalizeOutputSettings(config.Output); err != nil {
 		return Config{}, err
 	}
-	config.Sources, err = normalizeSources(config.Workspace, "", config.Sources)
+	config, err = normalizeScopeConfiguration(config)
 	if err != nil {
 		return Config{}, err
 	}
-	if strings.TrimSpace(string(config.Scope)) == "" {
-		config.Scope = DefaultScope
+	if strings.TrimSpace(string(config.ActiveScopeName)) != "" {
+		active, resolveErr := config.scopeRegistry.Resolve(config.ActiveScopeName)
+		if resolveErr != nil {
+			return Config{}, resolveErr
+		}
+		config.ActiveScopeName = active.Name
+		config.Scope = active.Ref
+		config.Sources = cloneSources(active.Sources)
 	}
-	config.Scope = domain.ScopeRef(strings.TrimSpace(string(config.Scope)))
 	config.StoreDriver = strings.ToLower(strings.TrimSpace(config.StoreDriver))
 	if config.StoreDriver == "" {
 		config.StoreDriver = StoreSQLite

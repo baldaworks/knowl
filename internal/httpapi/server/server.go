@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,12 +25,23 @@ type Waker interface {
 	Wake(id domain.OperationID)
 }
 
+type ScopeReadiness struct {
+	Name   domain.ScopeName
+	Ready  bool
+	Reason string
+}
+
 type Dependencies struct {
 	EmbeddingsEnabled bool
 	Scope             domain.ScopeRef
+	PublicScope       domain.ScopeName
+	ResolveScope      func(domain.ScopeName) (domain.ScopeRef, error)
+	Authorizer        app.ScopeAuthorizer
+	OperatorFor       func(domain.ScopeRef) *app.OperatorService
 	Ingest            *app.IngestService
 	Query             *app.QueryService
 	Ready             func() bool
+	ScopesReadiness   func() []ScopeReadiness
 	Waker             Waker
 }
 
@@ -55,12 +67,34 @@ type compatHandler struct {
 	next         http.Handler
 }
 
+type authorizedScopeContextKey struct{}
+
+type authorizedScopeContext struct {
+	name string
+	ref  domain.ScopeRef
+	kind app.OperationKind
+}
+
 func (handler *compatHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	if strings.HasPrefix(request.URL.Path, "/v1/") {
 		response.Header().Set("Cache-Control", "no-store")
-		if scope := request.URL.Query().Get("scope"); scope != "" {
-			writeHTTPError(response, http.StatusForbidden, "scope_override_forbidden")
-			return
+		if request.URL.Query().Has("scope") {
+			if request.Method != http.MethodGet {
+				writeHTTPError(response, http.StatusBadRequest, invalidRequestCode)
+				return
+			}
+			if handler.dependencies.ResolveScope == nil {
+				writeHTTPError(response, http.StatusForbidden, "scope_override_forbidden")
+				return
+			}
+			selected, err := handler.dependencies.ResolveScope(domain.ScopeName(strings.TrimSpace(request.URL.Query().Get("scope"))))
+			if err != nil || handler.dependencies.Authorizer == nil || handler.dependencies.Authorizer.Authorize(request.Context(), selected, app.OperationRead) != nil {
+				writeHTTPError(response, http.StatusForbidden, "scope_forbidden")
+				return
+			}
+			request = request.WithContext(context.WithValue(request.Context(), authorizedScopeContextKey{}, authorizedScopeContext{
+				name: strings.TrimSpace(request.URL.Query().Get("scope")), ref: selected, kind: app.OperationRead,
+			}))
 		}
 		if !handler.dependencies.Ready() {
 			writeHTTPError(response, http.StatusServiceUnavailable, "not_ready")

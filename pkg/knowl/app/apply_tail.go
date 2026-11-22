@@ -179,7 +179,7 @@ func runApplyTail(ctx context.Context, request applyTailRequest) (applyTailResul
 	session := request.session
 	if session == nil {
 		session = func(sessionCtx context.Context, prepare func(context.Context) (bool, error), complete func(context.Context, knowl.ContentCommit) error) (knowl.ContentCommit, error) {
-			release, err := acquireApply(sessionCtx, request.coordinator)
+			release, err := acquireApplyScope(sessionCtx, request.coordinator, request.scope)
 			if err != nil {
 				return knowl.ContentCommit{}, err
 			}

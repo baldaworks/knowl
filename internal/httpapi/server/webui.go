@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/internal/webui"
@@ -22,39 +23,77 @@ type WebOptions struct {
 // NewWebHandler mounts no routes itself. Composition mounts its public shell and
 // protected fragments on the same host listener only when web is enabled.
 func NewWebHandler(service *app.OperatorService, dependencies Dependencies, options WebOptions) (http.Handler, error) {
-	ui, err := webui.New(webui.Dependencies{AuthMode: webui.AuthMode(options.AuthMode), Operator: service, OperationStatus: httpOperationStatus, EmbeddingsEnabled: dependencies.EmbeddingsEnabled,
-		Retrieve: func(ctx context.Context, query string, sources []string) (knowlapi.RetrieveResult, error) {
-			if dependencies.Query == nil {
-				return knowlapi.RetrieveResult{}, app.ErrOperatorCapabilityUnavailable
-			}
-			ids := make([]domain.SourceID, len(sources))
-			for i, source := range sources {
-				ids[i] = domain.SourceID(source)
-			}
-			result, readErr := dependencies.Query.Query(ctx, dependencies.Scope, strings.TrimSpace(query), domain.ReadLimits{}, ids)
-			return safeUIRetrieve(result), readErr
-		},
-		Operation: func(ctx context.Context, id string) (knowlapi.OperationResult, error) {
-			if dependencies.Query == nil {
-				return knowlapi.OperationResult{}, app.ErrOperatorCapabilityUnavailable
-			}
-			result, readErr := dependencies.Query.Operation(ctx, dependencies.Scope, domain.OperationID(strings.TrimSpace(id)))
-			if readErr != nil {
-				return knowlapi.OperationResult{}, readErr
-			}
-			return safeUIOperation(result), nil
-		}})
-	if err != nil {
-		return nil, err
+	type scopedUI struct {
+		ui        *webui.Handler
+		fragments http.Handler
 	}
-	fragments := WithOperatorAuth(WithOperatorReadBoundary(http.HandlerFunc(ui.Fragments), dependencies.Ready), options.Token)
+	var mu sync.Mutex
+	cache := make(map[domain.ScopeRef]scopedUI)
+	build := func(scope domain.ScopeRef, name domain.ScopeName, operator *app.OperatorService) (scopedUI, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if existing, ok := cache[scope]; ok {
+			return existing, nil
+		}
+		ui, err := webui.New(webui.Dependencies{AuthMode: webui.AuthMode(options.AuthMode), ScopeName: name, Operator: operator, OperationStatus: httpOperationStatus, EmbeddingsEnabled: dependencies.EmbeddingsEnabled,
+			Retrieve: func(ctx context.Context, query string, sources []string) (knowlapi.RetrieveResult, error) {
+				if dependencies.Query == nil {
+					return knowlapi.RetrieveResult{}, app.ErrOperatorCapabilityUnavailable
+				}
+				ids := make([]domain.SourceID, len(sources))
+				for i, source := range sources {
+					ids[i] = domain.SourceID(source)
+				}
+				result, readErr := dependencies.Query.Query(ctx, scope, strings.TrimSpace(query), domain.ReadLimits{}, ids)
+				return safeUIRetrieve(result), readErr
+			},
+			Operation: func(ctx context.Context, id string) (knowlapi.OperationResult, error) {
+				if dependencies.Query == nil {
+					return knowlapi.OperationResult{}, app.ErrOperatorCapabilityUnavailable
+				}
+				result, readErr := dependencies.Query.Operation(ctx, scope, domain.OperationID(strings.TrimSpace(id)))
+				if readErr != nil {
+					return knowlapi.OperationResult{}, readErr
+				}
+				return safeUIOperation(result), nil
+			}})
+		if err != nil {
+			return scopedUI{}, err
+		}
+		result := scopedUI{ui: ui, fragments: WithOperatorAuth(WithOperatorReadBoundary(http.HandlerFunc(ui.Fragments), dependencies.Ready), options.Token)}
+		cache[scope] = result
+		return result, nil
+	}
+	if dependencies.OperatorFor == nil {
+		dependencies.OperatorFor = func(domain.ScopeRef) *app.OperatorService { return service }
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scope := dependencies.Scope
+		name := dependencies.PublicScope
+		if dependencies.ResolveScope != nil {
+			requested := domain.ScopeName(strings.TrimSpace(r.URL.Query().Get("scope")))
+			selected, err := dependencies.ResolveScope(requested)
+			if err != nil || dependencies.Authorizer == nil || dependencies.Authorizer.Authorize(r.Context(), selected, app.OperationRead) != nil {
+				writeHTTPError(w, http.StatusForbidden, "scope_forbidden")
+				return
+			}
+			scope = selected
+			if requested != "" {
+				name = requested
+			}
+			r = cloneRequestWithoutScope(r)
+		}
+		scoped, err := build(scope, name, dependencies.OperatorFor(scope))
+		if err != nil {
+			writeHTTPError(w, http.StatusInternalServerError, uiInternalErrorCode)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, "/ui/fragments/") {
-			ui.ServeHTTP(w, r)
+			scoped.ui.ServeHTTP(w, r)
 			return
 		}
 		buffer := newBufferedResponseWriter()
-		fragments.ServeHTTP(buffer, r)
+		scoped.fragments.ServeHTTP(buffer, r)
 		if buffer.statusCode >= 400 && buffer.header.Get("Content-Type") == "application/json" {
 			var failure struct {
 				Error string `json:"error"`
@@ -64,11 +103,19 @@ func NewWebHandler(service *app.OperatorService, dependencies Dependencies, opti
 				failure.Error = uiInternalErrorCode
 			}
 			copyHeaders(w.Header(), buffer.header)
-			ui.Error(w, buffer.statusCode, failure.Error)
+			scoped.ui.Error(w, buffer.statusCode, failure.Error)
 			return
 		}
 		buffer.writeTo(w)
 	}), nil
+}
+
+func cloneRequestWithoutScope(request *http.Request) *http.Request {
+	cloned := request.Clone(request.Context())
+	query := cloned.URL.Query()
+	query.Del("scope")
+	cloned.URL.RawQuery = query.Encode()
+	return cloned
 }
 func safeUIRetrieve(result app.QueryResult) knowlapi.RetrieveResult {
 	mapped := httpRetrieveResult(result)

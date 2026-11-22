@@ -63,6 +63,11 @@ curl -fsS --get \
   http://127.0.0.1:8080/v1/retrieve
 ```
 
+On a host with multiple configured knowledge scopes, add a single public
+`scope` query parameter or omit it to use `default_scope`. See the
+[multi-scope operations guide](multi-scope.md) for configuration, MCP, CLI,
+readiness and backup behavior.
+
 Expect a non-empty `evidence` array with page identities, excerpts and source
 references. Read the generated wiki inside the persistent volume, or enable
 [browser access](#optional-browser-access) and open the page named in evidence.

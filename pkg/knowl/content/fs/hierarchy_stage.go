@@ -38,8 +38,8 @@ func (workspace *Workspace) stageHierarchyPlan(ctx context.Context, id knowl.Ope
 		return knowl.StagedChange{}, err
 	}
 	defer unlock()
-	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(string(id)))
-	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
+	stageDir := workspace.controlPath("staging", token(string(id)))
+	if err := rejectSymlinkPath(workspace.controlBoundary, stageDir); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	if _, err := os.Stat(stageDir); err == nil {
@@ -47,7 +47,7 @@ func (workspace *Workspace) stageHierarchyPlan(ctx context.Context, id knowl.Ope
 		if readErr != nil || !validHierarchyStageManifest(manifest) || !sameHierarchyStagePlan(manifest, id, plan) {
 			return knowl.StagedChange{}, ErrPlanConflict
 		}
-		if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
+		if err := validateStagedPaths(workspace.controlBoundary, stageDir, manifest.Entries); err != nil {
 			return knowl.StagedChange{}, err
 		}
 		if err := validateStagedFileBounds(stageDir, manifest.Entries, app.DefaultHierarchyLimits().MaxCatalogBytes); err != nil {
@@ -125,7 +125,7 @@ func (workspace *Workspace) stageHierarchyPlan(ctx context.Context, id knowl.Ope
 		return knowl.StagedChange{}, fmt.Errorf("write hierarchy staging manifest: %w", err)
 	}
 	complete = true
-	return knowl.StagedChange{OperationID: string(id), Digest: stageGeneration(manifest), Files: entryTargets(entries), CreatedAt: workspace.now().UTC()}, nil
+	return knowl.StagedChange{OperationID: string(id), Scope: plan.Scope, Digest: stageGeneration(manifest), Files: entryTargets(entries), CreatedAt: workspace.now().UTC()}, nil
 }
 
 // LoadHierarchyStage loads a complete hierarchy artifact after restart.
@@ -141,8 +141,8 @@ func (workspace *Workspace) LoadHierarchyStage(ctx context.Context, scope knowl.
 		return knowl.StagedChange{}, err
 	}
 	defer unlock()
-	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(string(id)))
-	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
+	stageDir := workspace.controlPath("staging", token(string(id)))
+	if err := rejectSymlinkPath(workspace.controlBoundary, stageDir); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
@@ -153,7 +153,7 @@ func (workspace *Workspace) LoadHierarchyStage(ctx context.Context, scope knowl.
 		manifestScope(manifest) != scope || !validHierarchyStageManifest(manifest) {
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
-	if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
+	if err := validateStagedPaths(workspace.controlBoundary, stageDir, manifest.Entries); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	if err := validateStagedFileBounds(stageDir, manifest.Entries, app.DefaultHierarchyLimits().MaxCatalogBytes); err != nil {

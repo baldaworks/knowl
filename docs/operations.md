@@ -13,7 +13,7 @@ See [agent configuration](agents.md) for maintainers and the
 
 Knowl is a standalone knowledge service with:
 
-- a canonical workspace;
+- one or more isolated canonical scope workspaces;
 - one ingest pipeline;
 - rebuildable operational state and projections;
 - MCP and HTTP transports over the same application services.
@@ -21,6 +21,8 @@ Knowl is a standalone knowledge service with:
 Use the CLI for a project-local workflow or run a persistent MCP/HTTP service.
 Go applications can compose the same runtime in-process; see
 [Go application integration](#go-application-integration).
+For multi-scope configuration, selection, compatibility, backup and readiness,
+see [Multiple knowledge scopes](multi-scope.md).
 
 ## Maintenance workers
 
