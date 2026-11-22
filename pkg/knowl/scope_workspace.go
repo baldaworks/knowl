@@ -492,6 +492,7 @@ var _ app.RetirementContentReader = (*ScopedContentStore)(nil)
 var _ app.CanonicalProvenanceReader = (*ScopedContentStore)(nil)
 var _ app.WorkspaceReader = (*ScopedContentStore)(nil)
 var _ app.WikiDirectoryReader = (*ScopedContentStore)(nil)
+var _ app.WikiPageTreeReader = (*ScopedContentStore)(nil)
 var _ app.RetirementProjectionReader = (*ScopedContentStore)(nil)
 
 func NewScopedContentStore(resolver *ScopeWorkspaceResolver) (*ScopedContentStore, error) {
@@ -687,6 +688,14 @@ func (store *ScopedContentStore) WikiDirectoryChildren(ctx context.Context, ref 
 		return app.OperatorReadPage[domain.OperatorWikiEntry]{}, err
 	}
 	return workspace.WikiDirectoryChildren(ctx, ref, directory, options)
+}
+
+func (store *ScopedContentStore) WikiPageChildren(ctx context.Context, ref domain.ScopeRef, directory string, options app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorWikiPage], error) {
+	workspace, err := store.workspace(ref)
+	if err != nil {
+		return app.OperatorReadPage[domain.OperatorWikiPage]{}, err
+	}
+	return workspace.WikiPageChildren(ctx, ref, directory, options)
 }
 
 func (store *ScopedContentStore) PageSummaries(ctx context.Context, ref domain.ScopeRef, options app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorPageSummary], error) {
