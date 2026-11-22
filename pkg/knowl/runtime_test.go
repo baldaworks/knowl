@@ -142,7 +142,7 @@ func TestHostPublicAPIKISSContractAndRestart(t *testing.T) {
 	if status != http.StatusForbidden {
 		t.Fatalf("pre-start scope override status = %d, body %s", status, body)
 	}
-	assertErrorClass(t, body, "scope_override_forbidden")
+	assertErrorClass(t, body, "scope_forbidden")
 	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/retrieve?query=before-start", nil)
 	if err != nil {
 		t.Fatalf("pre-start query request: %v", err)

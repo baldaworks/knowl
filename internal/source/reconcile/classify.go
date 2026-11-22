@@ -221,7 +221,7 @@ func (service *Service) acceptSourcePublication(ctx context.Context, envelope kn
 	if service.applyCoordinator == nil {
 		return service.content.AcceptSource(ctx, envelope)
 	}
-	release, err := service.applyCoordinator.Acquire(ctx)
+	release, err := acquireScopeApply(ctx, service.applyCoordinator, envelope.Scope)
 	if err != nil {
 		return knowl.AcceptedSource{}, err
 	}

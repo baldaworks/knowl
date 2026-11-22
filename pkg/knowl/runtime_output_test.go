@@ -31,7 +31,7 @@ func (m *outputConfigurationFixture) PlanValidated(ctx context.Context, input do
 
 func (m *outputConfigurationFixture) PlanHierarchyValidated(_ context.Context, input domain.HierarchyInput, limits domain.OutputCorrectionLimits, validate func(domain.HierarchyModelPlan) error) (domain.HierarchyModelPlan, domain.OperationCorrectionReport, error) {
 	m.hierarchy = &limits
-	plan := domain.HierarchyModelPlan{SchemaDigest: input.SchemaDigest, SnapshotDigest: input.SnapshotDigest, Catalogs: []domain.HierarchyCatalogSpec{{Path: "wiki/index.md", Title: "Knowl"}}}
+	plan := domain.HierarchyModelPlan{SchemaDigest: input.SchemaDigest, SnapshotDigest: input.SnapshotDigest, Catalogs: []domain.HierarchyCatalogSpec{{Path: testIndexPath, Title: "Knowl"}}}
 	encoded, _ := json.Marshal(plan)
 	return plan, configurationReport(limits, len(encoded)), validate(plan)
 }

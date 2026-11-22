@@ -13,19 +13,21 @@ import (
 
 // AppConfig is the Knowl section of the Balda-compatible config document.
 type AppConfig struct {
-	Workers    int                       `mapstructure:"workers"`
-	Provider   string                    `mapstructure:"provider"`
-	Workspace  WorkspaceConfig           `mapstructure:"workspace"`
-	Storage    StorageConfig             `mapstructure:"storage"`
-	Scope      knowltypes.ScopeRef       `mapstructure:"scope"`
-	Server     ServerConfig              `mapstructure:"server"`
-	API        knowl.FacadeConfig        `mapstructure:"api"`
-	MCP        knowl.FacadeConfig        `mapstructure:"mcp"`
-	Web        knowl.WebConfig           `mapstructure:"web"`
-	Operator   OperatorConfig            `mapstructure:"operator"`
-	Sources    []SourceConfig            `mapstructure:"sources"`
-	Embeddings knowl.EmbeddingsConfig    `mapstructure:"embeddings"`
-	Output     knowltypes.OutputSettings `mapstructure:"output"`
+	Workers      int                       `mapstructure:"workers"`
+	Provider     string                    `mapstructure:"provider"`
+	Workspace    WorkspaceConfig           `mapstructure:"workspace"`
+	Storage      StorageConfig             `mapstructure:"storage"`
+	Scope        knowltypes.ScopeRef       `mapstructure:"scope"`
+	DefaultScope knowltypes.ScopeName      `mapstructure:"default_scope"`
+	Scopes       map[string]ScopeConfig    `mapstructure:"scopes"`
+	Server       ServerConfig              `mapstructure:"server"`
+	API          knowl.FacadeConfig        `mapstructure:"api"`
+	MCP          knowl.FacadeConfig        `mapstructure:"mcp"`
+	Web          knowl.WebConfig           `mapstructure:"web"`
+	Operator     OperatorConfig            `mapstructure:"operator"`
+	Sources      []SourceConfig            `mapstructure:"sources"`
+	Embeddings   knowl.EmbeddingsConfig    `mapstructure:"embeddings"`
+	Output       knowltypes.OutputSettings `mapstructure:"output"`
 }
 
 // WorkspaceConfig controls the workspace root used by Knowl.
@@ -126,6 +128,13 @@ type SourceConfig struct {
 	Sync       SourceSyncConfig        `mapstructure:"sync"`
 }
 
+// ScopeConfig declares one public knowledge scope and its owned sources.
+type ScopeConfig struct {
+	Ref      knowltypes.ScopeRef `mapstructure:"ref"`
+	Disabled bool                `mapstructure:"disabled"`
+	Sources  []SourceConfig      `mapstructure:"sources"`
+}
+
 // FilesystemSourceConfig configures one local Markdown tree.
 type FilesystemSourceConfig struct {
 	Root    string   `mapstructure:"root"`
@@ -166,21 +175,23 @@ type SourceSyncConfig struct {
 }
 
 type rawAppConfig struct {
-	Workers     any                    `mapstructure:"workers"`
-	Provider    string                 `mapstructure:"provider"`
-	Workspace   WorkspaceConfig        `mapstructure:"workspace"`
-	Storage     StorageConfig          `mapstructure:"storage"`
-	Scope       knowltypes.ScopeRef    `mapstructure:"scope"`
-	Server      ServerConfig           `mapstructure:"server"`
-	API         knowl.FacadeConfig     `mapstructure:"api"`
-	MCP         knowl.FacadeConfig     `mapstructure:"mcp"`
-	Web         knowl.WebConfig        `mapstructure:"web"`
-	Operator    OperatorConfig         `mapstructure:"operator"`
-	Sources     []SourceConfig         `mapstructure:"sources"`
-	Embeddings  knowl.EmbeddingsConfig `mapstructure:"embeddings"`
-	Output      rawOutputSettings      `mapstructure:"output"`
-	Ingest      map[string]any         `mapstructure:"ingest"`
-	Maintenance map[string]any         `mapstructure:"maintenance"`
+	Workers      any                    `mapstructure:"workers"`
+	Provider     string                 `mapstructure:"provider"`
+	Workspace    WorkspaceConfig        `mapstructure:"workspace"`
+	Storage      StorageConfig          `mapstructure:"storage"`
+	Scope        knowltypes.ScopeRef    `mapstructure:"scope"`
+	DefaultScope knowltypes.ScopeName   `mapstructure:"default_scope"`
+	Scopes       map[string]ScopeConfig `mapstructure:"scopes"`
+	Server       ServerConfig           `mapstructure:"server"`
+	API          knowl.FacadeConfig     `mapstructure:"api"`
+	MCP          knowl.FacadeConfig     `mapstructure:"mcp"`
+	Web          knowl.WebConfig        `mapstructure:"web"`
+	Operator     OperatorConfig         `mapstructure:"operator"`
+	Sources      []SourceConfig         `mapstructure:"sources"`
+	Embeddings   knowl.EmbeddingsConfig `mapstructure:"embeddings"`
+	Output       rawOutputSettings      `mapstructure:"output"`
+	Ingest       map[string]any         `mapstructure:"ingest"`
+	Maintenance  map[string]any         `mapstructure:"maintenance"`
 }
 
 type rawOutputSettings struct {
@@ -240,18 +251,32 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 		return AppConfig{}, err
 	}
 	return AppConfig{
-		Workers:    workers,
-		Output:     output,
-		Embeddings: embeddings,
-		Provider:   config.Provider,
-		Workspace:  config.Workspace,
-		Storage:    config.Storage,
-		Scope:      config.Scope,
-		Server:     config.Server,
-		API:        config.API,
-		MCP:        config.MCP,
-		Operator:   config.Operator,
-		Web:        config.Web,
-		Sources:    config.Sources,
+		Workers:      workers,
+		Output:       output,
+		Embeddings:   embeddings,
+		Provider:     config.Provider,
+		Workspace:    config.Workspace,
+		Storage:      config.Storage,
+		Scope:        config.Scope,
+		DefaultScope: config.DefaultScope,
+		Scopes:       cloneScopeConfigs(config.Scopes),
+		Server:       config.Server,
+		API:          config.API,
+		MCP:          config.MCP,
+		Operator:     config.Operator,
+		Web:          config.Web,
+		Sources:      config.Sources,
 	}, nil
+}
+
+func cloneScopeConfigs(configs map[string]ScopeConfig) map[string]ScopeConfig {
+	if len(configs) == 0 {
+		return nil
+	}
+	cloned := make(map[string]ScopeConfig, len(configs))
+	for name, config := range configs {
+		config.Sources = append([]SourceConfig(nil), config.Sources...)
+		cloned[name] = config
+	}
+	return cloned
 }

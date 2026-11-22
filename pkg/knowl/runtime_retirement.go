@@ -11,12 +11,16 @@ type operatorRetirementReader struct{ host *Host }
 
 func (reader operatorRetirementReader) SourceRetirement(ctx context.Context, scope domain.ScopeRef, owner domain.SourceOwner) (domain.SourceRetirementStatus, error) {
 	reader.host.mu.Lock()
-	validScope := !reader.host.closed && !reader.host.resourcesClosed && reader.host.config.Scope == scope
+	if reader.host.closed || reader.host.resourcesClosed {
+		reader.host.mu.Unlock()
+		return domain.SourceRetirementStatus{}, ErrHostClosed
+	}
+	coordinator := reader.host.retirementControls[scope]
 	reader.host.mu.Unlock()
-	if !validScope {
+	if coordinator == nil {
 		return domain.SourceRetirementStatus{}, app.ErrOperatorWorkspaceUnavailable
 	}
-	return reader.host.SourceRetirementStatus(ctx, owner)
+	return coordinator.Status(ctx, owner)
 }
 
 // SourceRetirementStatus returns one exact adapter-qualified lifecycle view.

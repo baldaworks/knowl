@@ -6,11 +6,25 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/mcp"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/metalagman/appkit/lifecycle"
+)
+
+// ScopeReadiness is bounded public host state for one configured scope.
+type ScopeReadiness struct {
+	Name   domain.ScopeName `json:"name"`
+	Ready  bool             `json:"ready"`
+	Reason string           `json:"reason,omitempty"`
+}
+
+const (
+	scopeReadinessDisabled    = "disabled"
+	scopeReadinessUnavailable = "unavailable"
 )
 
 var _ lifecycle.Lifecycle = (*Host)(nil)
@@ -276,6 +290,33 @@ func (host *Host) Close() error {
 
 // Ready reports whether preflight and the selected lifecycle mode completed.
 func (host *Host) Ready() bool { return host.ready.Load() }
+
+// ScopesReadiness reports configured public names without durable references,
+// physical paths, or underlying validation details.
+func (host *Host) ScopesReadiness() []ScopeReadiness {
+	if host == nil || host.config.scopeRegistry == nil {
+		return nil
+	}
+	result := make([]ScopeReadiness, 0, len(host.config.scopeRegistry.ordered))
+	for _, scope := range host.config.scopeRegistry.All() {
+		state := ScopeReadiness{Name: scope.Name}
+		switch {
+		case scope.Disabled:
+			state.Reason = scopeReadinessDisabled
+		case host.workspaces == nil:
+			state.Reason = scopeReadinessUnavailable
+		default:
+			_, err := host.workspaces.Resolve(scope.Ref)
+			state.Ready = err == nil
+			if err != nil {
+				state.Reason = scopeReadinessUnavailable
+			}
+		}
+		result = append(result, state)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
+}
 
 // Addr returns the bound HTTP address, or the configured address before Start.
 func (host *Host) Addr() string {

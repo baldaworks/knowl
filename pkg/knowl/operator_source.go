@@ -29,12 +29,13 @@ func (reader *operatorSourceReader) ListSources(ctx context.Context, scope domai
 	}
 	host := reader.host
 	host.mu.Lock()
-	if err := reader.checkScopeLocked(scope); err != nil {
+	sources, err := operatorScopeSourcesLocked(host, scope)
+	if err != nil {
 		host.mu.Unlock()
 		return result, err
 	}
-	identities := make([]domain.OperatorSourceSummary, 0, len(host.sources))
-	for _, source := range host.sources {
+	identities := make([]domain.OperatorSourceSummary, 0, len(sources))
+	for _, source := range sources {
 		if string(source.ID) > options.Continuation.Key {
 			identities = append(identities, domain.OperatorSourceSummary{ID: source.ID, Type: source.Type, Enabled: source.Enabled})
 		}
@@ -67,11 +68,19 @@ func (reader *operatorSourceReader) Source(ctx context.Context, scope domain.Sco
 	}
 	host := reader.host
 	host.mu.Lock()
-	if err := reader.checkScopeLocked(scope); err != nil {
+	sources, err := operatorScopeSourcesLocked(host, scope)
+	if err != nil {
 		host.mu.Unlock()
 		return domain.OperatorSourceSummary{}, err
 	}
-	source, exists := host.sourceByID[id]
+	var source domain.Source
+	exists := false
+	for _, configured := range sources {
+		if configured.ID == id {
+			source, exists = configured, true
+			break
+		}
+	}
 	state := host.sourceState
 	identity := domain.OperatorSourceSummary{ID: source.ID, Type: source.Type, Enabled: source.Enabled}
 	host.mu.Unlock()
@@ -86,14 +95,25 @@ func (reader *operatorSourceReader) Source(ctx context.Context, scope domain.Sco
 	return identity, nil
 }
 
-func (reader *operatorSourceReader) checkScopeLocked(scope domain.ScopeRef) error {
-	if reader.host.closed || reader.host.resourcesClosed {
-		return ErrHostClosed
+func operatorScopeSourcesLocked(host *Host, scope domain.ScopeRef) ([]domain.Source, error) {
+	if host.closed || host.resourcesClosed {
+		return nil, ErrHostClosed
 	}
-	if scope != reader.host.config.Scope {
-		return app.ErrOperatorWorkspaceUnavailable
+	if host.config.scopeRegistry == nil || host.workspaces == nil {
+		if scope != host.config.Scope {
+			return nil, app.ErrOperatorWorkspaceUnavailable
+		}
+		return cloneSources(host.sources), nil
 	}
-	return nil
+	if _, err := host.workspaces.Resolve(scope); err != nil {
+		return nil, app.ErrOperatorWorkspaceUnavailable
+	}
+	for _, configured := range host.config.scopeRegistry.All() {
+		if configured.Ref == scope && !configured.Disabled {
+			return cloneSources(configured.Sources), nil
+		}
+	}
+	return nil, app.ErrOperatorWorkspaceUnavailable
 }
 
 func operatorSourceStatus(ctx context.Context, state app.SourceStateStore, scope domain.ScopeRef, id domain.SourceID) (*domain.OperatorSourceStatus, error) {

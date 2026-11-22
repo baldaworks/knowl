@@ -21,7 +21,7 @@ func (workspace *Workspace) checkPublishedLocked() error {
 }
 
 func (workspace *Workspace) inspectPublicationLocked() error {
-	root, err := openReadRoot(workspace.root, knowlDir+"/recovery")
+	root, err := openReadRoot(workspace.controlRoot, "recovery")
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}

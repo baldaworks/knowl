@@ -767,45 +767,50 @@ func (store *schedulerStore) DescriptorFailures(context.Context, domain.ScopeRef
 	return append([]domain.OperationID(nil), store.descriptorFailures...), nil
 }
 
-func (store *schedulerStore) ResumeReady(context.Context, domain.ScopeRef, int) ([]domain.OperationID, error) {
+func (store *schedulerStore) ResumeReady(_ context.Context, scope domain.ScopeRef, _ int) ([]domain.OperationID, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	ids := make([]domain.OperationID, 0, len(store.claims))
 	for _, claim := range store.claims {
+		if schedulerClaimScope(claim) != scope {
+			continue
+		}
 		ids = append(ids, claim.Operation.ID)
 	}
 	return ids, nil
 }
 
-func (store *schedulerStore) ClaimReady(_ context.Context, _ domain.ScopeRef, lease domain.WorkLease) (domain.WorkClaim, error) {
+func (store *schedulerStore) ClaimReady(_ context.Context, scope domain.ScopeRef, lease domain.WorkLease) (domain.WorkClaim, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.claimCalls++
-	if len(store.claims) == 0 {
-		return domain.WorkClaim{}, app.ErrNoReadyOperation
+	for index, claim := range store.claims {
+		if schedulerClaimScope(claim) != scope {
+			continue
+		}
+		store.claims = append(store.claims[:index], store.claims[index+1:]...)
+		claim.Lease = lease
+		return claim, nil
 	}
-	claim := store.claims[0]
-	store.claims = store.claims[1:]
-	claim.Lease = lease
-	return claim, nil
+	return domain.WorkClaim{}, app.ErrNoReadyOperation
 }
 
-func (store *schedulerStore) Execution(_ context.Context, _ domain.ScopeRef, id domain.OperationID) (domain.ExecutionDescriptor, error) {
+func (store *schedulerStore) Execution(_ context.Context, scope domain.ScopeRef, id domain.OperationID) (domain.ExecutionDescriptor, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	for _, claim := range store.claims {
-		if claim.Operation.ID == id {
+		if claim.Operation.ID == id && schedulerClaimScope(claim) == scope {
 			return claim.Descriptor, nil
 		}
 	}
 	return domain.ExecutionDescriptor{}, app.ErrExecutionDescriptorUnavailable
 }
 
-func (store *schedulerStore) ClaimOperation(_ context.Context, _ domain.ScopeRef, id domain.OperationID, lease domain.WorkLease) (domain.WorkClaim, error) {
+func (store *schedulerStore) ClaimOperation(_ context.Context, scope domain.ScopeRef, id domain.OperationID, lease domain.WorkLease) (domain.WorkClaim, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	for index, claim := range store.claims {
-		if claim.Operation.ID == id {
+		if claim.Operation.ID == id && schedulerClaimScope(claim) == scope {
 			store.claims = append(store.claims[:index], store.claims[index+1:]...)
 			claim.Lease = lease
 			store.claimCalls++
@@ -909,6 +914,20 @@ func schedulerClaim(id domain.OperationID) domain.WorkClaim {
 	return domain.WorkClaim{Operation: domain.Operation{ID: id, Key: domain.OperationKey{Scope: DefaultScope}, Status: domain.StatusReceived}}
 }
 
+func scopedSchedulerClaim(scope domain.ScopeRef, id domain.OperationID) domain.WorkClaim {
+	claim := schedulerClaim(id)
+	claim.Operation.Key.Scope = scope
+	claim.Descriptor.Schema.Scope = scope
+	return claim
+}
+
+func schedulerClaimScope(claim domain.WorkClaim) domain.ScopeRef {
+	if claim.Descriptor.Schema.Scope != "" {
+		return claim.Descriptor.Schema.Scope
+	}
+	return claim.Operation.Key.Scope
+}
+
 func retirementSchedulerClaim(id domain.OperationID) domain.WorkClaim {
 	claim := schedulerClaim(id)
 	claim.Descriptor.Kind = domain.WorkSourceRetirementPage
@@ -1003,13 +1022,43 @@ func TestSchedulerDrain(t *testing.T) {
 	}
 }
 
+func TestSchedulerDrainRotatesAcrossScopes(t *testing.T) {
+	const scopeA domain.ScopeRef = "scope-a"
+	const scopeB domain.ScopeRef = "scope-b"
+	store := &schedulerStore{claims: []domain.WorkClaim{
+		scopedSchedulerClaim(scopeA, "a-1"), scopedSchedulerClaim(scopeA, "a-2"),
+		scopedSchedulerClaim(scopeA, "a-3"), scopedSchedulerClaim(scopeB, "b-1"),
+	}}
+	var executed []domain.OperationID
+	runner := runnerFunc(func(_ context.Context, claim domain.WorkClaim) (app.IngestResult, error) {
+		executed = append(executed, claim.Operation.ID)
+		claim.Operation.Status = domain.StatusCommitted
+		return app.IngestResult{Operation: claim.Operation}, nil
+	})
+	scheduler, err := newMultiScopeOperationScheduler(store, runner, []domain.ScopeRef{scopeA, scopeB}, schedulerOptions{
+		claimBatch: 4, slots: newExecutionSlots([]*executionSlot{{}}),
+		now:      func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+		newToken: func() (string, error) { return "fair-token", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := scheduler.Drain(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Completed != 4 || !slices.Equal(executed, []domain.OperationID{"a-1", "b-1", "a-2", "a-3"}) {
+		t.Fatalf("fair drain result=%+v order=%v", result, executed)
+	}
+}
+
 func TestSchedulerDrainLogsMaintenanceDiagnostics(t *testing.T) {
 	var output bytes.Buffer
 	logger := zerolog.New(&output)
 
 	want := []domain.MaintenanceDiagnostic{
 		{Code: domain.DiagnosticCitationUnknownSource, Path: "wiki/entities/rejected.md"},
-		{Code: domain.DiagnosticCatalogDependencyReject, Path: "wiki/index.md", Target: "entities/rejected.md"},
+		{Code: domain.DiagnosticCatalogDependencyReject, Path: testIndexPath, Target: "entities/rejected.md"},
 	}
 	claim := schedulerClaim("drain-diagnostic-failure")
 	store := &schedulerStore{claims: []domain.WorkClaim{claim}}

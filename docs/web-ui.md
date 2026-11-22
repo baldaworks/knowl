@@ -140,7 +140,10 @@ state from one consistent, read-only database view. It does not save a copy,
 record history, draw time-series charts, or poll in the background. Select
 **Refresh snapshot**, reload, or open the page again to take another reading.
 
-The knowledge section is limited to the configured scope. It reports pages,
+The knowledge section is limited to the selected authorized scope. A
+multi-scope host preserves a public `?scope=<name>` selector through UI
+navigation and shows the current name in the shell; it does not expose a scope
+directory. It reports pages,
 links, configured sources, accepted source documents, operations grouped by
 lifecycle status, projection cursors, and embedding coverage. Embedding
 statistics validate the configured model identity and dimensions without
@@ -149,7 +152,7 @@ loading vector values.
 The storage section is deployment-wide rather than scope-bound. It identifies
 the backend, reports the database size when the backend exposes it, and gives
 exact row counts and available size facts for a fixed allowlist of Knowl tables.
-There is no table-name or scope selector. SQLite reports the main database
+There is no table-name selector or scope directory. SQLite reports the main database
 allocation; optional `dbstat` details are shown only when the SQLite build
 provides them. PostgreSQL reports database and relation sizes when its catalog
 permissions allow those reads. An unavailable optional metric is labeled with

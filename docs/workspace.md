@@ -4,6 +4,13 @@ The workspace is the canonical Knowl artifact. `wiki/` is directly portable as
 an Open Knowledge Format (OKF) v0.2 bundle, alongside immutable source files in
 `raw/`; the SQL adapter is only an operational index and projection.
 
+One host may resolve several isolated canonical workspaces. Existing installs
+keep the default scope at the host root, while named scopes use
+`scopes/<name>/`; clean explicit multi-scope installs may also place default at
+`scopes/default/`. Use the trusted resolver through `--scope` rather than
+constructing these paths yourself. See [Multiple knowledge scopes](multi-scope.md)
+for layout compatibility, export, backup and downgrade rules.
+
 ## Ownership and layout
 
 ```text

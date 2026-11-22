@@ -15,7 +15,7 @@ import (
 
 func TestNativeRetrievalDocumentationLinks(t *testing.T) {
 	repo := testRepoRoot(t)
-	for _, relative := range []string{"README.md", "docs/search.md", "docs/postgres.md", "docs/local.md", "docs/design.md"} {
+	for _, relative := range []string{"README.md", "docs/README.md", "docs/search.md", "docs/postgres.md", "docs/local.md", "docs/design.md", "docs/multi-scope.md", "docs/operations.md", "docs/service.md", "docs/web-ui.md", "docs/workspace.md"} {
 		filename := filepath.Join(repo, relative)
 		source, err := os.ReadFile(filename)
 		if err != nil {
@@ -37,6 +37,57 @@ func TestNativeRetrievalDocumentationLinks(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("parsed links in%s:%v", relative, err)
 		}
+	}
+}
+
+func TestMultiScopeDocumentationConfigExampleLoads(t *testing.T) {
+	repo := testRepoRoot(t)
+	source, err := os.ReadFile(filepath.Join(repo, "docs", "multi-scope.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var examples [][]byte
+	if err := ast.Walk(parser.New().Parse(source), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if block, ok := node.(*ast.CodeBlock); ok && entering {
+			if language, _ := block.Language(source); language == "yaml" {
+				examples = append(examples, block.Value.Bytes(source))
+			}
+		}
+		return ast.WalkContinue, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(examples) != 1 {
+		t.Fatalf("multi-scope config examples=%d want1", len(examples))
+	}
+	working := t.TempDir()
+	t.Chdir(working)
+	clearKnowlEnv(t)
+	t.Setenv("OPENAI_API_KEY", "documentation-test-key")
+	t.Setenv("OPENAI_MODEL", "documentation-test-model")
+	t.Setenv("KNOWL_OPERATOR_TOKEN", "documentation-test-token")
+	directory := filepath.Join(working, ".config", appName)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "config.yaml"), examples[0], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := loadConfig(context.Background(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := config.ScopeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contexts := registry.All()
+	if registry.DefaultName() != defaultScopeName || len(contexts) != 2 || contexts[1].Name != infrastructureScopeName || len(contexts[0].Sources) != 1 || len(contexts[1].Sources) != 1 {
+		t.Fatalf("documented scope config=%+v", contexts)
 	}
 }
 

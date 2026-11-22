@@ -95,7 +95,7 @@ type operationScheduler struct {
 	slots      *executionSlots
 	work       chan struct{}
 	drainGate  chan struct{}
-	scope      domain.ScopeRef
+	scopes     []domain.ScopeRef
 	options    schedulerOptions
 	wake       chan struct{}
 	stopClaims chan struct{}
@@ -109,27 +109,45 @@ type operationScheduler struct {
 	stopOnce              sync.Once
 	wg                    sync.WaitGroup
 	claimMu               sync.Mutex
-	consecutiveRetirement int
+	nextScope             int
+	consecutiveRetirement map[domain.ScopeRef]int
 }
 
 func newOperationScheduler(operations app.OperationStore, runner terminalRunner, scope domain.ScopeRef, options schedulerOptions) (*operationScheduler, error) {
-	if operations == nil || runner == nil || scope == "" {
+	return newMultiScopeOperationScheduler(operations, runner, []domain.ScopeRef{scope}, options)
+}
+
+func newMultiScopeOperationScheduler(operations app.OperationStore, runner terminalRunner, scopes []domain.ScopeRef, options schedulerOptions) (*operationScheduler, error) {
+	if operations == nil || runner == nil || len(scopes) == 0 {
 		return nil, fmt.Errorf("scheduler operations, runner, and scope are required")
+	}
+	seen := make(map[domain.ScopeRef]struct{}, len(scopes))
+	configured := make([]domain.ScopeRef, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope == "" {
+			return nil, fmt.Errorf("scheduler operations, runner, and scope are required")
+		}
+		if _, duplicate := seen[scope]; duplicate {
+			continue
+		}
+		seen[scope] = struct{}{}
+		configured = append(configured, scope)
 	}
 	options = normalizeSchedulerOptions(options)
 	if options.slots == nil {
 		options.slots = newExecutionSlots([]*executionSlot{{}})
 	}
 	return &operationScheduler{
-		operations: operations,
-		runner:     runner,
-		slots:      options.slots,
-		work:       make(chan struct{}, len(options.slots.all)),
-		drainGate:  make(chan struct{}, 1),
-		scope:      scope,
-		options:    options,
-		wake:       make(chan struct{}, options.wakeSize),
-		stopClaims: make(chan struct{}),
+		operations:            operations,
+		runner:                runner,
+		slots:                 options.slots,
+		work:                  make(chan struct{}, len(options.slots.all)),
+		drainGate:             make(chan struct{}, 1),
+		scopes:                configured,
+		options:               options,
+		wake:                  make(chan struct{}, options.wakeSize),
+		stopClaims:            make(chan struct{}),
+		consecutiveRetirement: make(map[domain.ScopeRef]int, len(configured)),
 	}, nil
 }
 
@@ -498,20 +516,26 @@ func (scheduler *operationScheduler) inspect(ctx context.Context) (bool, error) 
 			return false, err
 		}
 	}
-	failures, err := scheduler.operations.DescriptorFailures(ctx, scheduler.scope, scheduler.options.descriptorFailureBatch)
-	if err != nil {
-		return false, err
-	}
-	for _, id := range failures {
-		if err := scheduler.operations.Fail(ctx, id, domain.Failure{Class: descriptorUnavailableClass, OperationID: string(id)}); err != nil {
+	readyFound := false
+	for _, scope := range scheduler.scopes {
+		failures, err := scheduler.operations.DescriptorFailures(ctx, scope, scheduler.options.descriptorFailureBatch)
+		if err != nil {
 			return false, err
 		}
+		for _, id := range failures {
+			if err := scheduler.operations.Fail(ctx, id, domain.Failure{Class: descriptorUnavailableClass, OperationID: string(id)}); err != nil {
+				return false, err
+			}
+		}
+		ready, err := scheduler.operations.ResumeReady(ctx, scope, scheduler.options.claimBatch)
+		if err != nil {
+			return false, err
+		}
+		if len(ready) > 0 {
+			readyFound = true
+		}
 	}
-	ready, err := scheduler.operations.ResumeReady(ctx, scheduler.scope, scheduler.options.claimBatch)
-	if err != nil {
-		return false, err
-	}
-	return len(ready) > 0, nil
+	return readyFound, nil
 }
 
 func (scheduler *operationScheduler) cycle(ctx context.Context) {
@@ -640,6 +664,22 @@ func (scheduler *operationScheduler) isStopping() bool {
 func (scheduler *operationScheduler) claim(ctx context.Context) (domain.WorkClaim, error) {
 	scheduler.claimMu.Lock()
 	defer scheduler.claimMu.Unlock()
+	for offset := range len(scheduler.scopes) {
+		index := (scheduler.nextScope + offset) % len(scheduler.scopes)
+		claim, err := scheduler.claimScope(ctx, scheduler.scopes[index])
+		if errors.Is(err, app.ErrNoReadyOperation) {
+			continue
+		}
+		if err != nil {
+			return domain.WorkClaim{}, err
+		}
+		scheduler.nextScope = (index + 1) % len(scheduler.scopes)
+		return claim, nil
+	}
+	return domain.WorkClaim{}, app.ErrNoReadyOperation
+}
+
+func (scheduler *operationScheduler) claimScope(ctx context.Context, scope domain.ScopeRef) (domain.WorkClaim, error) {
 	token, err := scheduler.options.newToken()
 	if err != nil {
 		return domain.WorkClaim{}, fmt.Errorf("create work lease: %w", err)
@@ -648,13 +688,13 @@ func (scheduler *operationScheduler) claim(ctx context.Context) (domain.WorkClai
 	lease := domain.WorkLease{
 		Token: token, ExpiresAt: now.Add(scheduler.options.workLeaseDuration),
 	}
-	if scheduler.consecutiveRetirement >= scheduler.options.maxConsecutiveRetirement {
-		ready, readyErr := scheduler.operations.ResumeReady(ctx, scheduler.scope, scheduler.options.claimBatch)
+	if scheduler.consecutiveRetirement[scope] >= scheduler.options.maxConsecutiveRetirement {
+		ready, readyErr := scheduler.operations.ResumeReady(ctx, scope, scheduler.options.claimBatch)
 		if readyErr != nil {
 			return domain.WorkClaim{}, readyErr
 		}
 		for _, id := range ready {
-			descriptor, descriptorErr := scheduler.operations.Execution(ctx, scheduler.scope, id)
+			descriptor, descriptorErr := scheduler.operations.Execution(ctx, scope, id)
 			if descriptorErr != nil {
 				if errors.Is(descriptorErr, app.ErrExecutionDescriptorUnavailable) {
 					continue
@@ -664,25 +704,25 @@ func (scheduler *operationScheduler) claim(ctx context.Context) (domain.WorkClai
 			if descriptor.Kind == domain.WorkSourceRetirementPage {
 				continue
 			}
-			claim, claimErr := scheduler.operations.ClaimOperation(ctx, scheduler.scope, id, lease)
+			claim, claimErr := scheduler.operations.ClaimOperation(ctx, scope, id, lease)
 			if errors.Is(claimErr, app.ErrNoReadyOperation) || errors.Is(claimErr, app.ErrWorkLeaseConflict) {
 				continue
 			}
 			if claimErr != nil {
 				return domain.WorkClaim{}, claimErr
 			}
-			scheduler.consecutiveRetirement = 0
+			scheduler.consecutiveRetirement[scope] = 0
 			return claim, nil
 		}
 	}
-	claim, err := scheduler.operations.ClaimReady(ctx, scheduler.scope, lease)
+	claim, err := scheduler.operations.ClaimReady(ctx, scope, lease)
 	if err != nil {
 		return domain.WorkClaim{}, err
 	}
 	if claim.Descriptor.Kind == domain.WorkSourceRetirementPage {
-		scheduler.consecutiveRetirement++
+		scheduler.consecutiveRetirement[scope]++
 	} else {
-		scheduler.consecutiveRetirement = 0
+		scheduler.consecutiveRetirement[scope] = 0
 	}
 	return claim, nil
 }
@@ -723,7 +763,7 @@ func (scheduler *operationScheduler) renew(ctx context.Context, stop <-chan stru
 			}
 			now := scheduler.options.now().UTC()
 			next := domain.WorkLease{Token: token, ExpiresAt: now.Add(scheduler.options.workLeaseDuration)}
-			if err := scheduler.operations.RenewClaim(ctx, scheduler.scope, claim.Operation.ID, currentToken, next); err != nil {
+			if err := scheduler.operations.RenewClaim(ctx, claimScopeRef(claim), claim.Operation.ID, currentToken, next); err != nil {
 				cancelExecution()
 				return ""
 			}
@@ -749,18 +789,25 @@ func (scheduler *operationScheduler) handleTransientFailure(
 	result.Operation = claim.Operation
 	result.Operation.Failure = &failure
 	if claim.Operation.RetryAttempt >= scheduler.options.retryAttempts {
-		if err := scheduler.operations.FailClaim(ctx, scheduler.scope, claim.Operation.ID, leaseToken, failure); err != nil {
+		if err := scheduler.operations.FailClaim(ctx, claimScopeRef(claim), claim.Operation.ID, leaseToken, failure); err != nil {
 			return time.Time{}, err
 		}
 		result.Operation.Status = domain.StatusFailed
 		return time.Time{}, nil
 	}
 	readyAt := scheduler.options.now().UTC().Add(scheduler.retryDelay(claim.Operation.ID, claim.Operation.RetryAttempt))
-	if err := scheduler.operations.ScheduleRetry(ctx, scheduler.scope, claim.Operation.ID, leaseToken, failure, readyAt); err != nil {
+	if err := scheduler.operations.ScheduleRetry(ctx, claimScopeRef(claim), claim.Operation.ID, leaseToken, failure, readyAt); err != nil {
 		return time.Time{}, err
 	}
 	result.Operation.ReadyAt = readyAt
 	return readyAt, nil
+}
+
+func claimScopeRef(claim domain.WorkClaim) domain.ScopeRef {
+	if claim.Descriptor.Schema.Scope != "" {
+		return claim.Descriptor.Schema.Scope
+	}
+	return claim.Operation.Key.Scope
 }
 
 func (scheduler *operationScheduler) retryDelay(id domain.OperationID, attempt int) time.Duration {

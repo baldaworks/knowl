@@ -91,7 +91,7 @@ func newSourceRetryCommand() *cobra.Command {
 					Owner:  domain.SourceOwner{Adapter: domain.SourceAdapterID(retirementAdapter), SourceID: id},
 					PageID: domain.PageID(pageID), DryRun: dryRun,
 				}
-				return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+				return withLocalSourceHost(cmd.Context(), app.OperationWrite, func(host localSourceHost) error {
 					result, retryErr := host.RetrySourceRetirement(cmd.Context(), request)
 					if err := writeSourceResult(cmd, result); err != nil {
 						return err
@@ -103,7 +103,7 @@ func newSourceRetryCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+			return withLocalSourceHost(cmd.Context(), app.OperationWrite, func(host localSourceHost) error {
 				result, retryErr := host.RetrySourceMaintenance(cmd.Context(), id, classes, dryRun)
 				if err := writeSourceResult(cmd, result); err != nil {
 					return err
@@ -127,7 +127,7 @@ func newSourceListCommand() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+			return withLocalSourceHost(cmd.Context(), app.OperationRead, func(host localSourceHost) error {
 				sources := host.Sources()
 				result := sourceListResult{Sources: make([]sourceListItem, len(sources))}
 				for index, source := range sources {
@@ -159,7 +159,7 @@ func newSourceSyncCommand() *cobra.Command {
 			}
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+			return withLocalSourceHost(cmd.Context(), app.OperationWrite, func(host localSourceHost) error {
 				if all {
 					result, syncErr := host.SyncAll(cmd.Context())
 					if err := writeSourceResult(cmd, result); err != nil {
@@ -197,7 +197,7 @@ func newSourceStatusCommand() *cobra.Command {
 				if err := app.ValidateSourceOwner(owner); err != nil {
 					return err
 				}
-				return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+				return withLocalSourceHost(cmd.Context(), app.OperationRead, func(host localSourceHost) error {
 					status, err := host.SourceRetirementStatus(cmd.Context(), owner)
 					if err != nil {
 						return err
@@ -205,7 +205,7 @@ func newSourceStatusCommand() *cobra.Command {
 					return writeSourceResult(cmd, status)
 				})
 			}
-			return withLocalSourceHost(cmd.Context(), func(host localSourceHost) error {
+			return withLocalSourceHost(cmd.Context(), app.OperationRead, func(host localSourceHost) error {
 				status, err := host.SourceStatus(cmd.Context(), id)
 				if err != nil {
 					return err
@@ -234,9 +234,12 @@ func newProductionLocalSourceSession(ctx context.Context) (localSourceSession, e
 	return localSourceSession{Host: host, ShutdownTimeout: config.ShutdownTimeout}, nil
 }
 
-func withLocalSourceHost(ctx context.Context, operation func(localSourceHost) error) (returnErr error) {
+func withLocalSourceHost(ctx context.Context, kind app.OperationKind, operation func(localSourceHost) error) (returnErr error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := requireCLIAuthorization(ctx, kind); err != nil {
+		return err
 	}
 	session, err := newLocalSourceSession(ctx)
 	if err != nil {

@@ -16,12 +16,15 @@ import (
 const (
 	uiTestKnowledgeRoute   = "/ui/fragments/knowledge"
 	uiTestToken            = "test-token"
+	uiTestAuthMode         = "token"
 	uiTestCapabilityCode   = "capability_unavailable"
 	uiTestUnauthorizedCode = "unauthorized"
+	uiTestDefaultScopeRef  = domain.ScopeRef("default-ref")
+	uiTestOtherScopeRef    = domain.ScopeRef("other-ref")
 )
 
 func TestUIBoundaryErrorsAreTrustedFragments(t *testing.T) {
-	h, err := NewWebHandler(nil, Dependencies{Ready: func() bool { return true }}, WebOptions{AuthMode: "token", Token: uiTestToken})
+	h, err := NewWebHandler(nil, Dependencies{Ready: func() bool { return true }}, WebOptions{AuthMode: uiTestAuthMode, Token: uiTestToken})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +100,71 @@ type uiReadOnlyOperations struct {
 	calls     int
 }
 
+type uiScopedOperations struct {
+	app.OperationStore
+	operations map[domain.ScopeRef]domain.Operation
+	calls      int
+}
+
+func (store *uiScopedOperations) Operation(_ context.Context, scope domain.ScopeRef, id domain.OperationID) (domain.Operation, error) {
+	store.calls++
+	operation, ok := store.operations[scope]
+	if !ok || operation.ID != id {
+		return domain.Operation{}, app.ErrOperationNotFound
+	}
+	return operation, nil
+}
+
+type uiScopeAuthorizer struct{ deny domain.ScopeRef }
+
+func (authorizer uiScopeAuthorizer) Authorize(_ context.Context, scope domain.ScopeRef, _ app.OperationKind) error {
+	if scope == authorizer.deny {
+		return app.ErrOperatorCapabilityUnavailable
+	}
+	return nil
+}
+
+func TestUIScopeSelectionAuthorizesBeforeScopedRead(t *testing.T) {
+	store := &uiScopedOperations{operations: map[domain.ScopeRef]domain.Operation{
+		uiTestDefaultScopeRef: {ID: "shared-op", Key: domain.OperationKey{Scope: uiTestDefaultScopeRef}, Status: domain.StatusReceived},
+		uiTestOtherScopeRef:   {ID: "shared-op", Key: domain.OperationKey{Scope: uiTestOtherScopeRef}, Status: domain.StatusCommitted},
+	}}
+	query, err := app.NewQueryService(uiReadOnlyContent{}, store, detailsReadOnlyIndex{}, nil, app.QueryOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolve := func(name domain.ScopeName) (domain.ScopeRef, error) {
+		switch name {
+		case "", "default":
+			return uiTestDefaultScopeRef, nil
+		case "other":
+			return uiTestOtherScopeRef, nil
+		case "denied":
+			return "denied-ref", nil
+		default:
+			return "", domain.ErrScopeUnknown
+		}
+	}
+	handler, err := NewWebHandler(nil, Dependencies{Query: query, Scope: uiTestDefaultScopeRef, ResolveScope: resolve, Authorizer: uiScopeAuthorizer{deny: "denied-ref"}, Ready: func() bool { return true }}, WebOptions{AuthMode: uiTestAuthMode, Token: uiTestToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/ui/fragments/operation?operation_id=shared-op&scope=other", nil)
+	request.Header.Set("Authorization", "Bearer "+uiTestToken)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || store.calls != 1 || !strings.Contains(response.Body.String(), `data-operation-status="completed"`) {
+		t.Fatalf("selected response status=%d calls=%d body=%s", response.Code, store.calls, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/ui/fragments/operation?operation_id=shared-op&scope=denied", nil)
+	request.Header.Set("Authorization", "Bearer "+uiTestToken)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || store.calls != 1 {
+		t.Fatalf("denied response status=%d calls=%d", response.Code, store.calls)
+	}
+}
+
 func (s *uiReadOnlyOperations) Operation(_ context.Context, scope domain.ScopeRef, id domain.OperationID) (domain.Operation, error) {
 	s.calls++
 	if scope != s.operation.Key.Scope || id != s.operation.ID {
@@ -115,7 +183,7 @@ func TestUIOperationReadUsesSafePublicStatusAndNoWriters(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h, err := NewWebHandler(nil, Dependencies{Query: query, Scope: "ui-scope", Ready: func() bool { return true }}, WebOptions{AuthMode: "token", Token: uiTestToken})
+			h, err := NewWebHandler(nil, Dependencies{Query: query, Scope: "ui-scope", Ready: func() bool { return true }}, WebOptions{AuthMode: uiTestAuthMode, Token: uiTestToken})
 			if err != nil {
 				t.Fatal(err)
 			}

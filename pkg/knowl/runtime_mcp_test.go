@@ -67,7 +67,7 @@ func TestSharedSDKAdapterMatchesRegistryTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !failure.IsError || failure.StructuredContent.(map[string]any)["error"] != "scope_override_forbidden" {
+	if !failure.IsError || failure.StructuredContent.(map[string]any)["error"] != "scope_forbidden" {
 		t.Fatalf("SDK classified failure = %#v", failure)
 	}
 	if err := session.Close(); err != nil {

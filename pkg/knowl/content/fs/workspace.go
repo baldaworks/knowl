@@ -38,13 +38,15 @@ const (
 
 // Workspace owns canonical filesystem content for one local Knowl workspace.
 type Workspace struct {
-	root           string
-	maxSourceBytes int
-	commitFault    func(point string, index int) error
-	exportFault    func(point string) error
-	now            func() time.Time
-	mu             sync.Mutex
-	processLock    *flock.Flock
+	root            string
+	controlRoot     string
+	controlBoundary string
+	maxSourceBytes  int
+	commitFault     func(point string, index int) error
+	exportFault     func(point string) error
+	now             func() time.Time
+	mu              sync.Mutex
+	processLock     *flock.Flock
 
 	publicationEpoch      string
 	publicationGeneration uint64
@@ -53,6 +55,19 @@ type Workspace struct {
 
 // Option configures a Workspace.
 type Option func(*Workspace)
+
+// WithControlRoot places workspace-private staging, recovery, receipts, and
+// locking below a trusted host control directory. boundary must contain the
+// control root and is used for symlink-safe path validation.
+func WithControlRoot(root, boundary string) Option {
+	return func(workspace *Workspace) {
+		if strings.TrimSpace(root) == "" || strings.TrimSpace(boundary) == "" {
+			return
+		}
+		workspace.controlRoot = filepath.Clean(root)
+		workspace.controlBoundary = filepath.Clean(boundary)
+	}
+}
 
 // WithMaxSourceBytes bounds accepted source content.
 func WithMaxSourceBytes(maxBytes int) Option {
@@ -90,9 +105,10 @@ func New(root string, options ...Option) (*Workspace, error) {
 	}
 	workspace := &Workspace{
 		root:             cleanRoot,
+		controlRoot:      filepath.Join(cleanRoot, knowlDir),
+		controlBoundary:  cleanRoot,
 		maxSourceBytes:   defaultMaxBytes,
 		now:              time.Now,
-		processLock:      flock.New(filepath.Join(cleanRoot, knowlDir, workspaceLockFile)),
 		publicationEpoch: publicationEpoch,
 	}
 	for _, option := range options {
@@ -100,6 +116,20 @@ func New(root string, options ...Option) (*Workspace, error) {
 			option(workspace)
 		}
 	}
+	controlRoot, err := filepath.Abs(workspace.controlRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace control root: %w", err)
+	}
+	controlBoundary, err := filepath.Abs(workspace.controlBoundary)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace control boundary: %w", err)
+	}
+	workspace.controlRoot = filepath.Clean(controlRoot)
+	workspace.controlBoundary = filepath.Clean(controlBoundary)
+	if !pathWithin(workspace.controlBoundary, workspace.controlRoot) {
+		return nil, fmt.Errorf("workspace control root escapes boundary: %w", ErrPathRejected)
+	}
+	workspace.processLock = flock.New(workspace.controlPath(workspaceLockFile))
 	return workspace, nil
 }
 
@@ -110,7 +140,7 @@ func (workspace *Workspace) lock(ctx context.Context) (func(), error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	controlDir := filepath.Join(workspace.root, knowlDir)
+	controlDir := workspace.controlRoot
 	info, err := os.Stat(controlDir)
 	if err != nil {
 		return nil, fmt.Errorf("inspect workspace control directory: %w", err)
@@ -118,7 +148,7 @@ func (workspace *Workspace) lock(ctx context.Context) (func(), error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace control path is not a directory: %w", ErrWorkspaceInvalid)
 	}
-	if err := rejectSymlinkPath(workspace.root, controlDir); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, controlDir); err != nil {
 		return nil, err
 	}
 	workspace.mu.Lock()
@@ -154,12 +184,25 @@ func (workspace *Workspace) lockBounded() (func(), error) {
 }
 
 func (workspace *Workspace) prepareLockDirectory() error {
-	controlDir := filepath.Join(workspace.root, knowlDir)
+	controlDir := workspace.controlRoot
+	if err := rejectSymlinkPath(workspace.controlBoundary, controlDir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(controlDir, 0o700); err != nil {
 		return fmt.Errorf("create workspace control directory: %w", err)
 	}
-	if err := rejectSymlinkPath(workspace.root, controlDir); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, controlDir); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (workspace *Workspace) controlPath(parts ...string) string {
+	all := append([]string{workspace.controlRoot}, parts...)
+	return filepath.Join(all...)
+}
+
+func pathWithin(root, target string) bool {
+	relative, err := filepath.Rel(root, target)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }

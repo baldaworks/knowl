@@ -80,6 +80,19 @@ func newBootstrapSourceCommand(flavor bootstrapFlavor) *cobra.Command {
 }
 
 func runBootstrap(cmd *cobra.Command, flavor bootstrapFlavor, sourceArg string) (returnErr error) {
+	canonicalConfig, selectedScope, err := authorizeCanonicalCLI(cmd.Context(), app.OperationWrite)
+	if err != nil {
+		return err
+	}
+	if cliScopeName(cmd.Context()) != "" {
+		registry, registryErr := canonicalConfig.ScopeRegistry()
+		if registryErr != nil {
+			return registryErr
+		}
+		if selectedScope.Name != registry.DefaultName() {
+			return fmt.Errorf("bootstrap only supports the configured default scope %q; add sources to scope %q in configuration instead", registry.DefaultName(), selectedScope.Name)
+		}
+	}
 	config, err := configFromContext(cmd.Context())
 	if err != nil {
 		return err

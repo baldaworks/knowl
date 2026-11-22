@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	knowlmcp "github.com/baldaworks/knowl/pkg/knowl/mcp"
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -90,6 +91,10 @@ func errorClass(err error) string {
 		return "invalid_arguments"
 	case errors.Is(err, knowlmcp.ErrScopeOverride):
 		return "scope_override_forbidden"
+	case errors.Is(err, knowlmcp.ErrScopeForbidden):
+		return "scope_forbidden"
+	case errors.Is(err, knowl.ErrScopeNameInvalid), errors.Is(err, knowl.ErrScopeUnknown), errors.Is(err, knowl.ErrScopeDisabled):
+		return "scope_forbidden"
 	case errors.Is(err, knowlmcp.ErrToolNotFound):
 		return "tool_not_found"
 	default:

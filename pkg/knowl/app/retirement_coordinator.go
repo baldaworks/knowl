@@ -310,7 +310,7 @@ func (coordinator *SourceRetirementCoordinator) advanceOwner(ctx context.Context
 }
 
 func (coordinator *SourceRetirementCoordinator) finalizeZero(ctx context.Context, state knowl.SourceLifecycle, result SourceRetirementAdvanceResult) (SourceRetirementAdvanceResult, error) {
-	release, err := coordinator.applyCoordinator.Acquire(ctx)
+	release, err := acquireApplyScope(ctx, coordinator.applyCoordinator, coordinator.scope)
 	if err != nil {
 		return result, err
 	}
