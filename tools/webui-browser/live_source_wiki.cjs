@@ -23,7 +23,10 @@ const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright'
     await page.locator('#operator-token').fill(token);
     await page.locator('#connect-form button').click();
     await page.locator('.knowledge-article').waitFor();
-    assert.equal(await page.locator('[data-error-code]').count(), 0, 'real root renders after authentication');
+    const rootError = page.locator('[data-error-code]');
+    const rootErrorCount = await rootError.count();
+    const rootErrorCode = rootErrorCount ? await rootError.first().getAttribute('data-error-code') : '';
+    assert.equal(rootErrorCount, 0, `real root renders after authentication: ${rootErrorCode || 'unknown error'}`);
 
     const group=page.locator('#wiki-tree [data-page-node="group:entities"]');
     assert.equal(await group.locator(':scope > [data-wiki-group]').textContent(),'entities');

@@ -75,6 +75,48 @@ func (content *scopedMaintenanceContent) ReadPages(ctx context.Context, ref doma
 	}
 	return workspace.ReadPages(ctx, ref, ids, limits)
 }
+func (content *scopedMaintenanceContent) CatalogChildren(ctx context.Context, ref domain.ScopeRef, parent domain.PageID, options app.OperatorReadOptions) (app.OperatorCatalogRead, error) {
+	workspace, err := content.scope(ref)
+	if err != nil {
+		return app.OperatorCatalogRead{}, err
+	}
+	return workspace.CatalogChildren(ctx, ref, parent, options)
+}
+func (content *scopedMaintenanceContent) WikiDirectoryChildren(ctx context.Context, ref domain.ScopeRef, directory string, options app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorWikiEntry], error) {
+	workspace, err := content.scope(ref)
+	if err != nil {
+		return app.OperatorReadPage[domain.OperatorWikiEntry]{}, err
+	}
+	return workspace.WikiDirectoryChildren(ctx, ref, directory, options)
+}
+func (content *scopedMaintenanceContent) WikiPageChildren(ctx context.Context, ref domain.ScopeRef, directory string, options app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorWikiPage], error) {
+	workspace, err := content.scope(ref)
+	if err != nil {
+		return app.OperatorReadPage[domain.OperatorWikiPage]{}, err
+	}
+	return workspace.WikiPageChildren(ctx, ref, directory, options)
+}
+func (content *scopedMaintenanceContent) PageSummaries(ctx context.Context, ref domain.ScopeRef, options app.OperatorReadOptions) (app.OperatorReadPage[domain.OperatorPageSummary], error) {
+	workspace, err := content.scope(ref)
+	if err != nil {
+		return app.OperatorReadPage[domain.OperatorPageSummary]{}, err
+	}
+	return workspace.PageSummaries(ctx, ref, options)
+}
+func (content *scopedMaintenanceContent) Page(ctx context.Context, ref domain.ScopeRef, id domain.PageID, limits domain.ReadLimits) (domain.OperatorPage, error) {
+	workspace, err := content.scope(ref)
+	if err != nil {
+		return domain.OperatorPage{}, err
+	}
+	return workspace.Page(ctx, ref, id, limits)
+}
+func (content *scopedMaintenanceContent) SourceRevision(ctx context.Context, ref domain.ScopeRef, sourceRef string, limits domain.ReadLimits) (domain.OperatorSourceRevision, error) {
+	workspace, err := content.scope(ref)
+	if err != nil {
+		return domain.OperatorSourceRevision{}, err
+	}
+	return workspace.SourceRevision(ctx, ref, sourceRef, limits)
+}
 func (content *scopedMaintenanceContent) HierarchySnapshotDigest(ctx context.Context, ref domain.ScopeRef) (string, error) {
 	workspace, err := content.scope(ref)
 	if err != nil {
