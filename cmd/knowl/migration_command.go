@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	knowlruntime "github.com/baldaworks/knowl/pkg/knowl"
-	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/spf13/cobra"
 )
@@ -67,14 +67,19 @@ func newMigrateOKFV02Command() *cobra.Command {
 		Short: "Migrate a legacy canonical workspace to OKF v0.2",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			workspacePath, err := workspacePath(cmd.Context())
+			config, selected, err := authorizeCanonicalCLI(cmd.Context(), app.OperationWrite)
 			if err != nil {
 				return err
 			}
-			workspace, err := contentfs.New(workspacePath)
+			resolver, err := knowlruntime.ResolveScopeWorkspaces(config)
 			if err != nil {
 				return err
 			}
+			resolved, err := resolver.Resolve(selected.Ref)
+			if err != nil {
+				return err
+			}
+			workspace := resolved.Workspace
 			result, err := workspace.MigrateOKFV02(cmd.Context())
 			if err != nil {
 				return err
@@ -82,15 +87,15 @@ func newMigrateOKFV02Command() *cobra.Command {
 			if err := workspace.Validate(); err != nil {
 				return fmt.Errorf("validate migrated workspace: %w", err)
 			}
-			config, err := hostConfig(cmd.Context())
-			if err != nil {
-				return err
-			}
-			snapshot, err := workspace.Snapshot(cmd.Context(), config.Scope)
+			snapshot, err := workspace.Snapshot(cmd.Context(), selected.Ref)
 			if err != nil {
 				return fmt.Errorf("snapshot migrated workspace: %w", err)
 			}
-			if err := knowlruntime.RebuildProjection(cmd.Context(), config, snapshot); err != nil {
+			runtimeConfig, err := hostConfig(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if err := knowlruntime.RebuildProjection(cmd.Context(), runtimeConfig, snapshot); err != nil {
 				return fmt.Errorf("rebuild migrated projection: %w", err)
 			}
 			if err := json.NewEncoder(cmd.OutOrStdout()).Encode(result); err != nil {

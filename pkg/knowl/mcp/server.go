@@ -10,9 +10,12 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+const ingestToolName = "knowl_ingest"
+
 var (
 	ErrInvalidArguments = errors.New("invalid Knowl MCP arguments")
 	ErrScopeOverride    = errors.New("MCP arguments cannot override the server scope")
+	ErrScopeForbidden   = errors.New("MCP scope selection is forbidden")
 	ErrToolNotFound     = errors.New("knowl MCP tool not found")
 )
 
@@ -31,12 +34,29 @@ type Waker interface {
 
 // Server is a transport-neutral MCP tool registry with a trusted scope.
 type Server struct {
-	query  *app.QueryService
-	ingest *app.IngestService
-	scope  knowl.ScopeRef
-	limits knowl.ReadLimits
-	waker  Waker
-	tools  []Tool
+	query      *app.QueryService
+	ingest     *app.IngestService
+	scope      knowl.ScopeRef
+	resolve    func(knowl.ScopeName) (knowl.ScopeRef, error)
+	authorizer app.ScopeAuthorizer
+	limits     knowl.ReadLimits
+	waker      Waker
+	tools      []Tool
+}
+
+// NewMultiScopeServer constructs a server that resolves and authorizes an
+// optional public scope selector on every call.
+func NewMultiScopeServer(query *app.QueryService, ingest *app.IngestService, waker Waker, defaultScope knowl.ScopeRef, resolve func(knowl.ScopeName) (knowl.ScopeRef, error), authorizer app.ScopeAuthorizer, limits knowl.ReadLimits) (*Server, error) {
+	if resolve == nil || authorizer == nil {
+		return nil, fmt.Errorf("MCP scope registry and authorizer are required")
+	}
+	server, err := NewServer(query, ingest, waker, defaultScope, limits)
+	if err != nil {
+		return nil, err
+	}
+	server.resolve = resolve
+	server.authorizer = authorizer
+	return server, nil
 }
 
 // NewServer constructs the supported KISS MCP tool surface.
@@ -56,7 +76,7 @@ func NewServer(query *app.QueryService, ingest *app.IngestService, waker Waker, 
 	server := &Server{query: query, ingest: ingest, waker: waker, scope: scope, limits: limits}
 	server.tools = []Tool{
 		{Name: "knowl_retrieve", Description: "Retrieve bounded evidence from the trusted Knowl scope", ReadOnly: true, InputSchema: retrieveSchema()},
-		{Name: "knowl_ingest", Description: "Submit supplied text or store a URI reference in the trusted Knowl scope. Supply exactly one non-empty content or uri; URI and origin addresses are not downloaded. Use content for document text already obtained by the caller. Returns a durable operation ID and current status for polling with knowl_operation.", ReadOnly: false, InputSchema: ingestSchema()},
+		{Name: ingestToolName, Description: "Submit supplied text or store a URI reference in the trusted Knowl scope. Supply exactly one non-empty content or uri; URI and origin addresses are not downloaded. Use content for document text already obtained by the caller. Returns a durable operation ID and current status for polling with knowl_operation.", ReadOnly: false, InputSchema: ingestSchema()},
 		{Name: "knowl_operation", Description: "Read one durable Knowl operation status and bounded context, retrieval, plan and execution details from its original attempts. Unavailable evidence stays absent.", ReadOnly: true, InputSchema: objectSchema("id")},
 	}
 	return server, nil
@@ -83,8 +103,9 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 	if arguments == nil {
 		arguments = map[string]any{}
 	}
-	if _, present := arguments["scope"]; present {
-		return nil, ErrScopeOverride
+	scope, err := server.resolveScope(ctx, arguments, name)
+	if err != nil {
+		return nil, err
 	}
 	switch name {
 	case "knowl_retrieve":
@@ -96,13 +117,13 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 		if err != nil {
 			return nil, err
 		}
-		result, err := server.query.Query(ctx, server.scope, query, server.limits, sources)
+		result, err := server.query.Query(ctx, scope, query, server.limits, sources)
 		if err != nil {
 			return nil, err
 		}
 		return retrieveResult(result), nil
-	case "knowl_ingest":
-		request, err := ingestEnvelope(server.scope, arguments)
+	case ingestToolName:
+		request, err := ingestEnvelope(scope, arguments)
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +141,7 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 		if err != nil {
 			return nil, err
 		}
-		result, err := server.query.Operation(ctx, server.scope, knowl.OperationID(id))
+		result, err := server.query.Operation(ctx, scope, knowl.OperationID(id))
 		if err != nil {
 			return nil, err
 		}
@@ -128,6 +149,36 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 	default:
 		return nil, fmt.Errorf("%q: %w", name, ErrToolNotFound)
 	}
+}
+
+func (server *Server) resolveScope(ctx context.Context, arguments map[string]any, tool string) (knowl.ScopeRef, error) {
+	value, present := arguments["scope"]
+	if server.resolve == nil {
+		if present {
+			return "", ErrScopeOverride
+		}
+		return server.scope, nil
+	}
+	name := ""
+	if present {
+		var ok bool
+		name, ok = value.(string)
+		if !ok {
+			return "", fmt.Errorf("scope must be a string: %w", ErrInvalidArguments)
+		}
+	}
+	selected, err := server.resolve(knowl.ScopeName(strings.TrimSpace(name)))
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrScopeForbidden, err)
+	}
+	kind := app.OperationRead
+	if tool == ingestToolName {
+		kind = app.OperationWrite
+	}
+	if err := server.authorizer.Authorize(ctx, selected, kind); err != nil {
+		return "", fmt.Errorf("%w: authorization denied", ErrScopeForbidden)
+	}
+	return selected, nil
 }
 
 // CallTool is an alias suitable for transports that use the MCP term directly.

@@ -92,7 +92,7 @@ func insertPostgresStatisticsScope(t testing.TB, store *Store, scope knowl.Scope
 	if _, err := store.db.ExecContext(t.Context(), `INSERT INTO knowl_projection_state(scope,schema_digest,snapshot_digest,page_count,link_count,ready_at) VALUES($1,$2,$3,$4,$5,$6)`, scope, "schema", "snapshot", pages, links, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(t.Context(), `INSERT INTO knowl_sources(scope,source_id,source_type,config_digest,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6)`, scope, "source", "filesystem", "digest", now, now); err != nil {
+	if _, err := store.db.ExecContext(t.Context(), `INSERT INTO knowl_sources(scope,source_id,source_type,config_digest,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6)`, scope, "source", "filesystem", strings.Repeat("d", 64), now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(t.Context(), `INSERT INTO knowl_source_documents(scope,source_id,document_id,revision,accepted_source,last_seen_run_id,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, scope, "source", "document", "revision", "accepted", "run", now, now); err != nil {

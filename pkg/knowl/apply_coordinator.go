@@ -2,6 +2,7 @@ package knowl
 
 import (
 	"context"
+	"sync"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
@@ -9,25 +10,51 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-type hostApplyCoordinator struct{ gate chan struct{} }
+type hostApplyCoordinator struct {
+	mu    sync.Mutex
+	gates map[knowl.ScopeRef]chan struct{}
+}
 
 func newHostApplyCoordinator() *hostApplyCoordinator {
-	return &hostApplyCoordinator{gate: make(chan struct{}, 1)}
+	return &hostApplyCoordinator{gates: make(map[knowl.ScopeRef]chan struct{})}
 }
 func (coordinator *hostApplyCoordinator) Acquire(ctx context.Context) (func(), error) {
+	return coordinator.AcquireScope(ctx, "")
+}
+
+func (coordinator *hostApplyCoordinator) AcquireScope(ctx context.Context, scope knowl.ScopeRef) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	coordinator.mu.Lock()
+	gate := coordinator.gates[scope]
+	if gate == nil {
+		gate = make(chan struct{}, 1)
+		coordinator.gates[scope] = gate
+	}
+	coordinator.mu.Unlock()
 	select {
-	case coordinator.gate <- struct{}{}:
+	case gate <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 	if err := ctx.Err(); err != nil {
-		<-coordinator.gate
+		<-gate
 		return nil, err
 	}
-	return func() { <-coordinator.gate }, nil
+	return func() { <-gate }, nil
+}
+
+type boundApplyCoordinator struct {
+	coordinator app.ApplyCoordinator
+	scope       knowl.ScopeRef
+}
+
+func (coordinator boundApplyCoordinator) Acquire(ctx context.Context) (func(), error) {
+	if scoped, ok := coordinator.coordinator.(app.ScopedApplyCoordinator); ok {
+		return scoped.AcquireScope(ctx, coordinator.scope)
+	}
+	return coordinator.coordinator.Acquire(ctx)
 }
 
 // hostRetirementCommitter privately binds the exact host coordinator,

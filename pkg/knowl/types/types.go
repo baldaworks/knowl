@@ -119,6 +119,7 @@ type ValidatedEditPlan struct {
 // StagedChange identifies a plan staged for review or apply.
 type StagedChange struct {
 	OperationID string                  `json:"operation_id"`
+	Scope       ScopeRef                `json:"-"`
 	Digest      string                  `json:"digest"`
 	Files       []string                `json:"files"`
 	CreatedAt   time.Time               `json:"created_at"`

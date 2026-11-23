@@ -44,7 +44,7 @@ func (content *hostMaintenanceContent) StagePlan(ctx context.Context, plan domai
 		if normalizeErr != nil {
 			return domain.StagedChange{}, errors.Join(err, normalizeErr)
 		}
-		return domain.StagedChange{OperationID: plan.OperationID, Diagnostics: combined}, errors.Join(contentfs.ErrContentInvalid, err)
+		return domain.StagedChange{OperationID: plan.OperationID, Scope: plan.Scope, Diagnostics: combined}, errors.Join(contentfs.ErrContentInvalid, err)
 	}
 	return content.StageMaintenanceBound(ctx, maintenanceauthority.NewStageRequest(plan, stamp))
 }
@@ -56,7 +56,7 @@ func (content *hostMaintenanceContent) StageHierarchyPlan(ctx context.Context, i
 	}
 	stamp, diagnostics, err := app.ValidateMaintenanceAuthority(ctx, content.lifecycles, content.Workspace, plan.Scope, edits, nil, nil)
 	if err != nil {
-		return domain.StagedChange{OperationID: string(id), Diagnostics: diagnostics}, errors.Join(contentfs.ErrContentInvalid, err)
+		return domain.StagedChange{OperationID: string(id), Scope: plan.Scope, Diagnostics: diagnostics}, errors.Join(contentfs.ErrContentInvalid, err)
 	}
 	return content.StageHierarchyMaintenanceBound(ctx, maintenanceauthority.NewHierarchyStageRequest(id, plan, stamp))
 }

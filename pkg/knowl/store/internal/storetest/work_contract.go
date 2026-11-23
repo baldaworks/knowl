@@ -547,6 +547,15 @@ func RunWorkContract(t *testing.T, harness WorkHarness) {
 		if err != nil {
 			t.Fatalf("reserve other scope: %v", err)
 		}
+		if other.ID == reserved.ID {
+			t.Fatalf("scope-bound operation IDs collided: %q", other.ID)
+		}
+		if _, err := harness.Store.Operation(ctx, otherScope, reserved.ID); !errors.Is(err, app.ErrOperationNotFound) {
+			t.Fatalf("cross-scope operation read error = %v", err)
+		}
+		if _, err := harness.Store.Operation(ctx, scope, other.ID); !errors.Is(err, app.ErrOperationNotFound) {
+			t.Fatalf("reverse cross-scope operation read error = %v", err)
+		}
 		otherReady, err := harness.Store.ResumeReady(ctx, otherScope, 10)
 		if err != nil || len(otherReady) != 1 || otherReady[0] != other.ID {
 			t.Fatalf("other-scope ready set = %v, err = %v", otherReady, err)

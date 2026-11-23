@@ -37,7 +37,7 @@ func (workspace *Workspace) StageSourcePlan(ctx context.Context, plan knowl.Sour
 	}
 	defer unlock()
 	stageDir := workspace.sourceStageDir(normalized.Scope, normalized.SourceID, normalized.RunID)
-	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, stageDir); err != nil {
 		return knowl.StagedSourceMutation{}, err
 	}
 	if _, err := os.Stat(stageDir); err == nil {
@@ -45,7 +45,7 @@ func (workspace *Workspace) StageSourcePlan(ctx context.Context, plan knowl.Sour
 		if readErr != nil || !validSourceStageManifest(manifest) || !sameSourceStagePlan(manifest, normalized) {
 			return knowl.StagedSourceMutation{}, ErrPlanConflict
 		}
-		if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
+		if err := validateStagedPaths(workspace.controlBoundary, stageDir, manifest.Entries); err != nil {
 			return knowl.StagedSourceMutation{}, err
 		}
 		if err := validateSourceStagedBounds(stageDir, manifest.Entries); err != nil {
@@ -135,7 +135,7 @@ func (workspace *Workspace) LoadSourceStage(ctx context.Context, scope knowl.Sco
 	}
 	defer unlock()
 	stageDir := workspace.sourceStageDir(scope, sourceID, runID)
-	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, stageDir); err != nil {
 		return knowl.StagedSourceMutation{}, err
 	}
 	manifest, err := readStageManifest(filepath.Join(stageDir, "manifest.yaml"))
@@ -148,7 +148,7 @@ func (workspace *Workspace) LoadSourceStage(ctx context.Context, scope knowl.Sco
 	if manifestWriter(manifest) != stageWriterSource || manifest.OperationID != string(runID) || manifest.Scope != string(scope) || manifest.SourceID != string(sourceID) || !validSourceStageManifest(manifest) {
 		return knowl.StagedSourceMutation{}, ErrPlanConflict
 	}
-	if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
+	if err := validateStagedPaths(workspace.controlBoundary, stageDir, manifest.Entries); err != nil {
 		return knowl.StagedSourceMutation{}, err
 	}
 	if err := validateSourceStagedBounds(stageDir, manifest.Entries); err != nil {
@@ -162,7 +162,7 @@ func (workspace *Workspace) LoadSourceStage(ctx context.Context, scope knowl.Sco
 
 func (workspace *Workspace) sourceStageDir(scope knowl.ScopeRef, _ knowl.SourceID, runID knowl.SyncRunID) string {
 	identity := stageWriterSource + "\x00" + string(scope) + "\x00" + string(runID)
-	return filepath.Join(workspace.root, knowlDir, "staging", token(identity))
+	return workspace.controlPath("staging", token(identity))
 }
 
 func stagedSourceFromManifest(manifest stageManifest) knowl.StagedSourceMutation {

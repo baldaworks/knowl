@@ -1393,12 +1393,20 @@ func TestWorkspaceStagePlanPreservesUnresolvedOriginalLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage original links: %v", err)
 	}
+	if staged.Scope != plan.Scope {
+		t.Fatalf("staged scope = %q, want %q", staged.Scope, plan.Scope)
+	}
 	if !slices.Equal(staged.Diagnostics, want) {
 		t.Fatalf("staged diagnostics = %#v, want %#v", staged.Diagnostics, want)
 	}
 	replayed, err := workspace.StagePlan(context.Background(), plan)
 	if err != nil || !slices.Equal(replayed.Diagnostics, want) || replayed.Digest != staged.Digest {
 		t.Fatalf("replayed stage = %#v, error = %v", replayed, err)
+	}
+	tampered := staged
+	tampered.Scope = "other"
+	if _, err := workspace.Commit(context.Background(), tampered); !errors.Is(err, ErrPlanConflict) {
+		t.Fatalf("commit with changed scope error = %v, want ErrPlanConflict", err)
 	}
 	commit, err := workspace.Commit(context.Background(), staged)
 	if err != nil || !slices.Equal(commit.Diagnostics, want) {

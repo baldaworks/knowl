@@ -54,8 +54,8 @@ func (workspace *Workspace) stagePlan(ctx context.Context, plan knowl.ValidatedE
 		return knowl.StagedChange{}, err
 	}
 	defer unlock()
-	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(plan.OperationID))
-	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
+	stageDir := workspace.controlPath("staging", token(plan.OperationID))
+	if err := rejectSymlinkPath(workspace.controlBoundary, stageDir); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	if _, err := os.Stat(stageDir); err == nil {
@@ -63,7 +63,7 @@ func (workspace *Workspace) stagePlan(ctx context.Context, plan knowl.ValidatedE
 		if readErr != nil {
 			return knowl.StagedChange{}, fmt.Errorf("read existing staging manifest: %w", ErrPlanConflict)
 		}
-		if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
+		if err := validateStagedPaths(workspace.controlBoundary, stageDir, manifest.Entries); err != nil {
 			return knowl.StagedChange{}, err
 		}
 		stagedEdits, stagedErr := readStagedPlanEdits(stageDir, manifest.Entries)
@@ -76,7 +76,7 @@ func (workspace *Workspace) stagePlan(ctx context.Context, plan knowl.ValidatedE
 			if combineErr != nil {
 				return knowl.StagedChange{}, ErrPlanConflict
 			}
-			return knowl.StagedChange{OperationID: plan.OperationID, Diagnostics: combinedDiagnostics}, validateErr
+			return knowl.StagedChange{OperationID: plan.OperationID, Scope: plan.Scope, Diagnostics: combinedDiagnostics}, validateErr
 		}
 		plan.Edits = retainedFileEdits(plan.Edits, acceptedEdits)
 		combinedDiagnostics, combineErr := app.NormalizeMaintenanceDiagnostics(append(append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), derivedDiagnostics...))
@@ -158,7 +158,7 @@ func (workspace *Workspace) stagePlan(ctx context.Context, plan knowl.ValidatedE
 		if combineErr != nil {
 			return knowl.StagedChange{}, ErrPlanConflict
 		}
-		return knowl.StagedChange{OperationID: plan.OperationID, Diagnostics: combinedDiagnostics}, err
+		return knowl.StagedChange{OperationID: plan.OperationID, Scope: plan.Scope, Diagnostics: combinedDiagnostics}, err
 	}
 	acceptedTargets := make(map[string]struct{}, len(acceptedEdits))
 	for _, edit := range acceptedEdits {
@@ -215,7 +215,7 @@ func (workspace *Workspace) stagePlan(ctx context.Context, plan knowl.ValidatedE
 		return knowl.StagedChange{}, fmt.Errorf("write staging manifest: %w", err)
 	}
 	complete = true
-	return knowl.StagedChange{OperationID: plan.OperationID, Digest: generation, Files: entryTargets(entries), CreatedAt: time.Now().UTC(), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), Retirement: cloneRetirementContext(plan.Retirement)}, nil
+	return knowl.StagedChange{OperationID: plan.OperationID, Scope: plan.Scope, Digest: generation, Files: entryTargets(entries), CreatedAt: time.Now().UTC(), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), plan.Diagnostics...), Retirement: cloneRetirementContext(plan.Retirement)}, nil
 }
 
 func entryTargets(entries []stageEntry) []string {
@@ -240,8 +240,8 @@ func (workspace *Workspace) LoadStage(ctx context.Context, scope knowl.ScopeRef,
 		return knowl.StagedChange{}, err
 	}
 	defer unlock()
-	stageDir := filepath.Join(workspace.root, knowlDir, "staging", token(string(id)))
-	if err := rejectSymlinkPath(workspace.root, stageDir); err != nil {
+	stageDir := workspace.controlPath("staging", token(string(id)))
+	if err := rejectSymlinkPath(workspace.controlBoundary, stageDir); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	info, err := os.Stat(stageDir)
@@ -255,7 +255,7 @@ func (workspace *Workspace) LoadStage(ctx context.Context, scope knowl.ScopeRef,
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
 	manifestPath := filepath.Join(stageDir, "manifest.yaml")
-	if err := rejectSymlinkPath(workspace.root, manifestPath); err != nil {
+	if err := rejectSymlinkPath(workspace.controlBoundary, manifestPath); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	manifest, err := readStageManifest(manifestPath)
@@ -265,7 +265,7 @@ func (workspace *Workspace) LoadStage(ctx context.Context, scope knowl.ScopeRef,
 	if manifestWriter(manifest) != stageWriterMaintainer || manifest.OperationID != string(id) || manifestScope(manifest) != scope || !validStageManifest(manifest) {
 		return knowl.StagedChange{}, ErrPlanConflict
 	}
-	if err := validateStagedPaths(workspace.root, stageDir, manifest.Entries); err != nil {
+	if err := validateStagedPaths(workspace.controlBoundary, stageDir, manifest.Entries); err != nil {
 		return knowl.StagedChange{}, err
 	}
 	if err := validateStagedFileBounds(stageDir, manifest.Entries, app.DefaultPlanLimits().MaxFileBytes); err != nil {
@@ -426,7 +426,7 @@ func stagedChangeFromManifest(stageDir string, manifest stageManifest) (knowl.St
 	if !stagedFilesMatch(stageDir, manifest.Entries) {
 		return knowl.StagedChange{}, fmt.Errorf("staged file content changed: %w", ErrPlanConflict)
 	}
-	return knowl.StagedChange{OperationID: manifest.OperationID, Digest: stageGeneration(manifest), Files: entryTargets(manifest.Entries), CreatedAt: time.Now().UTC(), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), manifest.Diagnostics...), Retirement: cloneRetirementContext(manifest.Retirement)}, nil
+	return knowl.StagedChange{OperationID: manifest.OperationID, Scope: knowl.ScopeRef(manifest.Scope), Digest: stageGeneration(manifest), Files: entryTargets(manifest.Entries), CreatedAt: time.Now().UTC(), Diagnostics: append([]knowl.MaintenanceDiagnostic(nil), manifest.Diagnostics...), Retirement: cloneRetirementContext(manifest.Retirement)}, nil
 }
 
 func sameStagePlan(manifest stageManifest, plan knowl.ValidatedEditPlan) bool {

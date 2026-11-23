@@ -3,6 +3,7 @@
   'use strict';
   let token = '', generation = 0, connectionState = 'disconnected', focusScreen = false;
   const authMode = document.body.dataset.authMode;
+  const scopeName = new URLSearchParams(location.search).get('scope') || '';
   const canRequest = () => connectionState === 'connecting' || connectionState === 'connected';
   let sourcesOpener = null, sourcesScroll = 0, rawOpener = null;
   let operationOpener = null, operationScroll = 0;
@@ -463,7 +464,7 @@
       return;
     }
     const operationButton=event.target.closest('[data-open-operation]');
-    if(operationButton){history.pushState(null,'','/ui/operations?operation_id='+encodeURIComponent(operationButton.dataset.openOperation));navigate();return;}
+    if(operationButton){const u=new URL('/ui/operations',location.origin);u.searchParams.set('operation_id',operationButton.dataset.openOperation);if(scopeName)u.searchParams.set('scope',scopeName);history.pushState(null,'',u.pathname+u.search);navigate();return;}
     const snippetButton=event.target.closest('[data-toggle-snippet]');
     if(snippetButton) {const expanded=snippetButton.closest('.evidence-card').classList.toggle('snippet-expanded');snippetButton.setAttribute('aria-expanded',String(expanded));snippetButton.textContent=expanded?'Collapse snippet':'Show full snippet';return;}
     const toggleSources = event.target.closest('[data-toggle-sources]');
@@ -483,12 +484,13 @@
     if(jsonToggle) {const json=document.getElementById('response-json');if(json){json.hidden=!json.hidden;jsonToggle.setAttribute('aria-expanded',String(!json.hidden));}return;}
     if(event.target.closest('[data-export-json]')) {const data=document.getElementById('response-json-data');if(data){const url=URL.createObjectURL(new Blob([data.textContent],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='knowl-search.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}return;}
     const page = event.target.closest('a[href]');
-    if(page && event.button===0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !page.target && !page.hasAttribute('download')) {const u=new URL(page.href,location.href);if(u.origin===location.origin && u.pathname==='/ui/knowledge') {event.preventDefault();if(connectionState!=='connected')return;if(selected()==='search')rememberSearch();if(mobile.matches)pushMenu.collapse();history.pushState(navigationState(u),'',u.pathname+u.search);navigate();return;}}
+    if(page && event.button===0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !page.target && !page.hasAttribute('download')) {const u=new URL(page.href,location.href);if(u.origin===location.origin && u.pathname==='/ui/knowledge') {event.preventDefault();if(connectionState!=='connected')return;if(scopeName)u.searchParams.set('scope',scopeName);if(selected()==='search')rememberSearch();if(mobile.matches)pushMenu.collapse();history.pushState(navigationState(u),'',u.pathname+u.search);navigate();return;}}
     const link = event.target.closest('[data-screen]'); if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault(); if(connectionState!=='connected')return;if(mobile.matches)pushMenu.collapse();history.pushState(null, '', '/ui/' + link.dataset.screen); navigate();
+    event.preventDefault(); if(connectionState!=='connected')return;if(mobile.matches)pushMenu.collapse();const u=new URL('/ui/'+link.dataset.screen,location.origin);if(scopeName)u.searchParams.set('scope',scopeName);history.pushState(null, '', u.pathname+u.search); navigate();
   });
   document.addEventListener('htmx:configRequest', event => {
     if (!canRequest() || !protectedURL(event.detail.path) || event.detail.verb !== 'get') {event.preventDefault(); return;}
+    if(scopeName)event.detail.parameters.scope=scopeName;
     if(authMode==='token')event.detail.headers.Authorization = 'Bearer ' + token;
     const path=protectedURL(event.detail.path).pathname;
   });

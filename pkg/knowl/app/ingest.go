@@ -237,7 +237,7 @@ func (service *IngestService) Submit(ctx context.Context, envelope knowl.SourceE
 // acceptSource owns the coordinator boundary for standalone raw-source
 // publication. Callers must invoke it before entering any later apply section.
 func (service *IngestService) acceptSource(ctx context.Context, envelope knowl.SourceEnvelope) (knowl.AcceptedSource, error) {
-	release, err := acquireApply(ctx, service.applyCoordinator)
+	release, err := acquireApplyScope(ctx, service.applyCoordinator, envelope.Scope)
 	if err != nil {
 		return knowl.AcceptedSource{}, err
 	}

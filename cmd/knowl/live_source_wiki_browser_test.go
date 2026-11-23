@@ -93,6 +93,14 @@ func TestBrowserLiveSourceWiki(t *testing.T) {
 	if _, err := os.Stat(fixture.pagePath(smokePagePath)); err != nil {
 		t.Fatal(err)
 	}
+	body, status = liveBrowserRequest(t, client, baseURL, http.MethodGet, "/ui/fragments/knowledge", nil)
+	if status != http.StatusOK {
+		t.Fatalf("knowledge fragment status = %d, body = %s", status, body)
+	}
+	body, status = liveBrowserRequest(t, client, baseURL, http.MethodGet, "/ui/fragments/wiki-pages", nil)
+	if status != http.StatusOK {
+		t.Fatalf("wiki pages fragment status = %d, body = %s", status, body)
+	}
 	script := filepath.Join(testRepoRoot(t), "tools", "webui-browser", "live_source_wiki.cjs")
 	command := exec.CommandContext(t.Context(), "node", script)
 	command.Env = append(os.Environ(), "KNOWL_BROWSER_URL="+baseURL, "KNOWL_BROWSER_TOKEN="+liveBrowserToken, "KNOWL_BROWSER_OPERATION_ID="+ingested.OperationId)

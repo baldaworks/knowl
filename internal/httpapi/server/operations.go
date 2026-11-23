@@ -29,17 +29,42 @@ func (handler *handler) GetHealth(response http.ResponseWriter, _ *http.Request)
 }
 
 func (handler *handler) GetReady(response http.ResponseWriter, _ *http.Request) {
+	scopes := handler.publicScopesReadiness()
 	if !handler.dependencies.Ready() {
-		ready := knowlapi.GetReady503JSONResponse{Service: serviceName, Status: knowlapi.NotReady}
+		ready := knowlapi.GetReady503JSONResponse{Service: serviceName, Status: knowlapi.NotReady, Scopes: scopes}
 		_ = ready.VisitGetReadyResponse(response)
 		return
 	}
-	scope := string(handler.dependencies.Scope)
-	ready := knowlapi.GetReady200JSONResponse{Service: serviceName, Status: knowlapi.Ready, Scope: &scope}
+	scope := string(handler.dependencies.PublicScope)
+	if scope == "" {
+		scope = string(handler.dependencies.Scope)
+	}
+	ready := knowlapi.GetReady200JSONResponse{Service: serviceName, Status: knowlapi.Ready, Scope: &scope, Scopes: scopes}
 	_ = ready.VisitGetReadyResponse(response)
 }
 
+func (handler *handler) publicScopesReadiness() *[]knowlapi.ScopeReadiness {
+	if handler.dependencies.ScopesReadiness == nil {
+		return nil
+	}
+	states := handler.dependencies.ScopesReadiness()
+	result := make([]knowlapi.ScopeReadiness, len(states))
+	for index, state := range states {
+		result[index] = knowlapi.ScopeReadiness{Name: string(state.Name), Ready: state.Ready}
+		if state.Reason != "" {
+			reason := state.Reason
+			result[index].Reason = &reason
+		}
+	}
+	return &result
+}
+
 func (handler *handler) RetrieveKnowledge(response http.ResponseWriter, request *http.Request, params knowlapi.RetrieveKnowledgeParams) {
+	scope, err := handler.requestScope(request, scopeValue(params.Scope), app.OperationRead)
+	if err != nil {
+		writeScopeError(response)
+		return
+	}
 	var sources []domain.SourceID
 	if params.Source != nil {
 		sources = make([]domain.SourceID, len(*params.Source))
@@ -49,7 +74,7 @@ func (handler *handler) RetrieveKnowledge(response http.ResponseWriter, request 
 	}
 	result, err := handler.dependencies.Query.Query(
 		request.Context(),
-		handler.dependencies.Scope,
+		scope,
 		strings.TrimSpace(params.Query),
 		domain.ReadLimits{},
 		sources,
@@ -67,7 +92,12 @@ func (handler *handler) IngestKnowledge(response http.ResponseWriter, request *h
 	if err := decodeJSON(response, request, &ingestRequest); err != nil {
 		return
 	}
-	envelope, err := httpIngestEnvelope(handler.dependencies.Scope, ingestRequest)
+	scope, err := handler.requestScope(request, valueOrEmpty(ingestRequest.Scope), app.OperationWrite)
+	if err != nil {
+		writeScopeError(response)
+		return
+	}
+	envelope, err := httpIngestEnvelope(scope, ingestRequest)
 	if err != nil {
 		writeServiceError(response, err)
 		return
@@ -84,19 +114,59 @@ func (handler *handler) IngestKnowledge(response http.ResponseWriter, request *h
 	_ = knowlapi.IngestKnowledge200JSONResponse(transport).VisitIngestKnowledgeResponse(response)
 }
 
-func (handler *handler) GetOperation(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID) {
+func (handler *handler) GetOperation(response http.ResponseWriter, request *http.Request, operationID knowlapi.OperationID, params knowlapi.GetOperationParams) {
+	scope, err := handler.requestScope(request, scopeValue(params.Scope), app.OperationRead)
+	if err != nil {
+		writeScopeError(response)
+		return
+	}
 	id := strings.TrimSpace(operationID)
 	if id == "" {
 		writeHTTPError(response, http.StatusBadRequest, "operation_id_invalid")
 		return
 	}
-	result, err := handler.dependencies.Query.Operation(request.Context(), handler.dependencies.Scope, domain.OperationID(id))
+	result, err := handler.dependencies.Query.Operation(request.Context(), scope, domain.OperationID(id))
 	if err != nil {
 		writeServiceError(response, err)
 		return
 	}
 	transport := mustConvertJSON[knowlapi.OperationResult](httpOperationResult(result))
 	_ = knowlapi.GetOperation200JSONResponse(transport).VisitGetOperationResponse(response)
+}
+
+func scopeValue(scope *knowlapi.Scope) string {
+	if scope == nil {
+		return ""
+	}
+	return *scope
+}
+
+func (handler *handler) requestScope(request *http.Request, name string, operation app.OperationKind) (domain.ScopeRef, error) {
+	trimmed := strings.TrimSpace(name)
+	if authorized, ok := request.Context().Value(authorizedScopeContextKey{}).(authorizedScopeContext); ok && authorized.name == trimmed && authorized.kind == operation {
+		return authorized.ref, nil
+	}
+	if handler.dependencies.ResolveScope == nil {
+		if trimmed != "" {
+			return "", domain.ErrScopeUnknown
+		}
+		return handler.dependencies.Scope, nil
+	}
+	selected, err := handler.dependencies.ResolveScope(domain.ScopeName(trimmed))
+	if err != nil {
+		return "", err
+	}
+	if handler.dependencies.Authorizer == nil {
+		return "", domain.ErrScopeUnknown
+	}
+	if err := handler.dependencies.Authorizer.Authorize(request.Context(), selected, operation); err != nil {
+		return "", err
+	}
+	return selected, nil
+}
+
+func writeScopeError(response http.ResponseWriter) {
+	writeHTTPError(response, http.StatusForbidden, "scope_forbidden")
 }
 
 type httpEvidenceItem struct {

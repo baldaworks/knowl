@@ -122,6 +122,9 @@ func withLocalHierarchyHost(ctx context.Context, operation func(localHierarchyHo
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := requireCLIAuthorization(ctx, app.OperationWrite); err != nil {
+		return err
+	}
 	session, err := newLocalHierarchySession(ctx)
 	if err != nil {
 		return err

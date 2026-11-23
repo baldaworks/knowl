@@ -223,7 +223,7 @@ scope: local`, strconvQuote(workspaceRoot))})
 func writeLegacyCommandWorkspace(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, relative := range []string{"raw", "wiki/entities", ".knowl/staging", ".knowl/recovery", ".knowl/commits"} {
+	for _, relative := range []string{rawDir, "wiki/entities", ".knowl/staging", ".knowl/recovery", ".knowl/commits"} {
 		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(relative)), 0o700); err != nil {
 			t.Fatal(err)
 		}

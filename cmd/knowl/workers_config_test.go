@@ -13,7 +13,7 @@ func TestWorkersConfigReachesHost(t *testing.T) {
 		name, setting string
 		want          int
 	}{
-		{"default", "", 1}, {"one", "workers: 1\n", 1}, {"two", "workers: 2\n", 2},
+		{defaultScopeName, "", 1}, {"one", "workers: 1\n", 1}, {"two", "workers: 2\n", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, err := tryLoadTestConfig(t, testConfigOptions{knowl: "provider: codex\n" + tc.setting})
