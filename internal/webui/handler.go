@@ -4,6 +4,7 @@ package webui
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
@@ -45,7 +47,13 @@ type Dependencies struct {
 type Handler struct {
 	templates    *template.Template
 	assets       fs.FS
+	ownAssets    map[string]ownAsset
 	dependencies Dependencies
+}
+
+type ownAsset struct {
+	body        []byte
+	contentType string
 }
 
 func New(dependencies Dependencies) (*Handler, error) { return newHandler(embedded, dependencies) }
@@ -56,7 +64,23 @@ func newHandler(files fs.FS, dependencies Dependencies) (*Handler, error) {
 	if err := validateAssets(files); err != nil {
 		return nil, err
 	}
+	ownAssets := make(map[string]ownAsset, 2)
+	assetURLs := make(map[string]string, 2)
+	for _, asset := range []struct{ extension, contentType string }{
+		{"js", "text/javascript; charset=utf-8"},
+		{"css", "text/css; charset=utf-8"},
+	} {
+		name := "ui." + asset.extension
+		body, err := fs.ReadFile(files, "assets/"+name)
+		if err != nil {
+			return nil, fmt.Errorf("read UI asset %s: %w", name, err)
+		}
+		alias := fmt.Sprintf("ui.%x.%s", sha256.Sum256(body), asset.extension)
+		ownAssets[alias] = ownAsset{body: body, contentType: asset.contentType}
+		assetURLs[name] = "/ui/assets/" + alias
+	}
 	t, err := template.New("ui").Funcs(template.FuncMap{
+		"ownAssetURL":     func(name string) string { return assetURLs[name] },
 		"lower":           strings.ToLower,
 		"pageURL":         pageURL,
 		"treePageURL":     treePageURL,
@@ -88,7 +112,7 @@ func newHandler(files fs.FS, dependencies Dependencies) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open UI assets: %w", err)
 	}
-	return &Handler{templates: t, assets: a, dependencies: dependencies}, nil
+	return &Handler{templates: t, assets: a, ownAssets: ownAssets, dependencies: dependencies}, nil
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", CSP)
@@ -101,6 +125,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/ui/assets/") {
 		name := strings.TrimPrefix(r.URL.Path, "/ui/assets/")
 		if !fs.ValidPath(name) {
+			http.NotFound(w, r)
+			return
+		}
+		if asset, ok := h.ownAssets[name]; ok {
+			w.Header().Set("Content-Type", asset.contentType)
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(asset.body))
+			return
+		}
+		if name == "ui.js" || name == "ui.css" {
+			w.Header().Set("Cache-Control", "no-store")
+		} else if strings.HasPrefix(name, "ui.") {
 			http.NotFound(w, r)
 			return
 		}

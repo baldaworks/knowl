@@ -94,6 +94,11 @@ nav[aria-label="Breadcrumb"], .breadcrumb, .breadcrumb-item { min-width: 0; max-
 .diagnostic-row, .context-list > div { display: flex; flex-wrap: wrap; gap: .5rem; }
 .plan-facts, .source-card-facts { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: .5rem; }
 .source-summary-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1.5rem; }
+.source-summary .source-select { outline: 0; box-shadow: none; }
+.source-summary .source-select::after { border-radius: var(--bs-card-border-radius); }
+.source-summary .source-select:hover::after { background-color: rgba(var(--bs-primary-rgb), .04); }
+.source-summary .source-select[aria-current="true"]::after { box-shadow: inset 0 0 0 2px var(--bs-primary); background-color: rgba(var(--bs-primary-rgb), .07); }
+.source-summary .source-select:focus-visible::after { outline: 2px solid var(--bs-primary); outline-offset: 2px; }
 .source-history { border-top: 1px solid var(--bs-border-color); }
 .diagnostic-details, .revision-details, .section-label, .source-card-facts { margin-top: 1rem; }
 .detail-selected { outline: 2px solid var(--bs-primary); outline-offset: 2px; }

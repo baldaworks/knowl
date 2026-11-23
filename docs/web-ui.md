@@ -9,6 +9,12 @@ frontend tooling. All five screens use the same bundled AdminLTE/Bootstrap
 shell, typography, sidebar, cards and controls; changing sections keeps that
 visual system.
 
+The shell references Knowl's own CSS and JavaScript through content-derived
+URLs. After an application update, opening or reloading the page requests the
+matching resources even when a proxy still caches the previous stable URLs.
+These matching assets can be cached immutably; HTML and authenticated fragments
+remain uncached. The bundled vendor assets and theme are unchanged.
+
 ## Connect
 
 Web access is disabled by default. Merge this overlay into an existing valid

@@ -19,10 +19,43 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+const wikiBrowserToken = "browser-secret-token"
+
 // TestBrowserWikiLayout reads the checked-in canonical wiki through the real
 // filesystem adapter. Its isolated copy keeps browser reads off local state.
 func TestBrowserWikiLayout(t *testing.T) {
-	const browserToken = "browser-secret-token"
+	ui := wikiLayoutBrowserUI(t)
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/ui/fragments/") {
+			if r.Header.Get("Authorization") != "Bearer "+wikiBrowserToken {
+				ui.Error(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			ui.Fragments(w, r)
+			return
+		}
+		ui.ServeHTTP(w, r)
+	}))
+	defer host.Close()
+	for _, filename := range []string{"wiki_layout.cjs", "keyboard_context.cjs"} {
+		t.Run(filename, func(t *testing.T) {
+			script, err := filepath.Abs(filepath.Join("../../tools/webui-browser", filename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), "node", script)
+			cmd.Env = append(os.Environ(), "KNOWL_BROWSER_URL="+host.URL)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("browser: %v\n%s", err, output)
+			}
+			t.Log(string(output))
+		})
+	}
+}
+
+func wikiLayoutBrowserUI(t *testing.T, extendWorkspace ...func(string)) *Handler {
+	t.Helper()
 	root := t.TempDir()
 	if err := os.CopyFS(filepath.Join(root, "wiki"), os.DirFS("../../knowledge/wiki")); err != nil {
 		t.Fatal(err)
@@ -57,6 +90,9 @@ func TestBrowserWikiLayout(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, ".knowl"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	for _, extend := range extendWorkspace {
+		extend(root)
+	}
 	workspace, err := workspacefs.New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -77,33 +113,7 @@ func TestBrowserWikiLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/ui/fragments/") {
-			if r.Header.Get("Authorization") != "Bearer "+browserToken {
-				ui.Error(w, http.StatusUnauthorized, "unauthorized")
-				return
-			}
-			ui.Fragments(w, r)
-			return
-		}
-		ui.ServeHTTP(w, r)
-	}))
-	defer host.Close()
-	for _, filename := range []string{"wiki_layout.cjs", "keyboard_context.cjs"} {
-		t.Run(filename, func(t *testing.T) {
-			script, err := filepath.Abs(filepath.Join("../../tools/webui-browser", filename))
-			if err != nil {
-				t.Fatal(err)
-			}
-			cmd := exec.CommandContext(t.Context(), "node", script)
-			cmd.Env = append(os.Environ(), "KNOWL_BROWSER_URL="+host.URL)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("browser: %v\n%s", err, output)
-			}
-			t.Log(string(output))
-		})
-	}
+	return ui
 }
 
 func writeWikiBrowserPage(t *testing.T, root, relative string, content []byte) {

@@ -9,7 +9,7 @@ go test -tags browser ./internal/webui \
 go test -tags browser ./internal/webui \
   -run 'TestBrowserKnowledgeSearch|TestBrowserOperationsSources' -count=1
 go test -tags browser ./internal/webui \
-  -run 'TestBrowserWikiSession|TestBrowserWikiLayout|TestBrowserSharedTheme|TestBrowserNavigationContext' -count=1
+  -run 'TestBrowserWikiSession|TestBrowserWikiLayout|TestBrowserSharedTheme|TestBrowserNavigationContext|TestBrowserCacheUpgrade' -count=1
 go test -tags browser ./cmd/knowl -run '^TestBrowserLiveSourceWiki$' -count=1
 ```
 
@@ -56,6 +56,71 @@ root, expanded tree, article, context, and table scenarios. These are generated
 test artifacts; the command does not update the approved design reference or
 publish a site. `KNOWL_PLAYWRIGHT_MODULE` can select an existing Playwright module
 when it is installed outside this development directory.
+
+## Cached-asset upgrade QA
+
+`TestBrowserCacheUpgrade` uses the same production Handler and filesystem wiki
+fixture behind a test-only loopback cache. Chromium first loads the exact pinned
+historical CSS/JS, then loads the candidate at the same origin in the same browser
+context, without clearing or disabling the cache. The old stable paths remain
+cache hits. The candidate's content-derived paths must load the actual candidate
+bytes and remain correct on reload. A control with the historical stable-path
+shell must fail with `asset_identity_mismatch`; that expected rejection is not a
+passing candidate. Historical compressed inputs and their source revisions and
+digests live in `internal/webui/testdata/cache-upgrade/`.
+
+```sh
+KNOWL_BROWSER_ARTIFACT_DIR=/tmp/knowl-cache-upgrade \
+  go test -tags browser ./internal/webui -run '^TestBrowserCacheUpgrade$' -count=1 -v
+```
+
+Each subdirectory contains `cache-upgrade.json` and screenshots. The report keeps
+expected and observed HTML/CSS/JS hashes, HTTP/cache responses and counters,
+runner/helper hashes, canonical page-context checks, rendered caret/text geometry
+and screenshot hashes. The candidate checks root and nested rows, Unicode and
+wrapped labels, the supplied Auto mode/Conversations context, and navigation at
+all four viewport sizes. A process revision or readiness response alone does not
+prove that the browser received matching UI assets.
+
+## Local prefix compatibility
+
+Test the deployment's existing `/balda/knowl/` adaptation in an isolated copy,
+including current tracked and new candidate files. This requires the sibling
+repository only to read its existing adaptation script; it does not run Balda,
+publish an image or contact Kubernetes. From the Knowl repository root:
+
+```sh
+qa_copy=$(mktemp -d /tmp/knowl-prefix-qa.XXXXXX)
+prefix_script=$(realpath ../balda-assistant/docker/knowl-ui-prefix.sh)
+playwright_module=$(realpath tools/webui-browser/node_modules/playwright)
+git ls-files -z --cached --others --exclude-standard -- . \
+  ':!.beads' ':!.beads.gate.lock' ':!.config/knowl/*.local.yaml' |
+  tar --null -T - -cf - | tar -xf - -C "$qa_copy"
+git -C "$qa_copy" init -q
+git -C "$qa_copy" add .
+(cd "$qa_copy" && bash "$prefix_script")
+# The deployment script adapts Go/embedded UI, not the development-only runners.
+find "$qa_copy/tools/webui-browser" -name '*.cjs' -exec \
+  sed -i 's|/ui/|/balda/knowl/|g' {} +
+(cd "$qa_copy" && KNOWL_PLAYWRIGHT_MODULE="$playwright_module" \
+  KNOWL_BROWSER_ARTIFACT_DIR=/tmp/knowl-prefix-browser \
+  go test -tags browser ./internal/webui \
+    -run 'TestBrowserWikiLayout|TestBrowserNavigationContext|TestBrowserCacheUpgrade|TestBrowserSharedTheme' \
+    -count=1 -v)
+```
+
+Record candidate input hashes, adaptation-script hash and adapted output hashes
+with the results. Historical gzip fixtures retain their canonical bytes and
+provenance; their helper verifies those hashes before adapting decoded content.
+Own-asset identities are calculated from the adapted embedded bytes, which
+therefore differ from the ordinary `/ui/` build. Keep prefix artifacts separate
+from ordinary local results.
+
+These commands establish a **local QA** milestone. They do not establish a
+production result, repair another application's state or close the Story. Image
+publication and deployment require the applicable user authorization; the live
+runner below is a separate check after deployment. Preserve failed historical
+reports, including the rejected raw53PASS report with stale public assets.
 
 
 ## Real Balda acceptance
