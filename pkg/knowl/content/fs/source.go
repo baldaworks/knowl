@@ -121,7 +121,7 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 	manifestPath := filepath.Join(keyDir, "manifest.yaml")
 	if existing, err := readManifest(manifestPath); err == nil {
 		if existing.Digest != digest ||
-			(existing.SourceDocument != (knowl.SourceDocument{}) && existing.SourceDocument != envelope.SourceDocument) {
+			(existing.SourceDocument != (knowl.SourceDocument{}) && !sameSourceDocumentIdentity(existing.SourceDocument, envelope.SourceDocument)) {
 			return knowl.AcceptedSource{}, ErrSourceConflict
 		}
 		if existing.SourceDocument == (knowl.SourceDocument{}) && envelope.SourceDocument != (knowl.SourceDocument{}) {
@@ -180,6 +180,12 @@ func (workspace *Workspace) AcceptSource(ctx context.Context, envelope knowl.Sou
 		return knowl.AcceptedSource{}, ErrInvalidSource
 	}
 	return accepted, nil
+}
+
+func sameSourceDocumentIdentity(left, right knowl.SourceDocument) bool {
+	return left.SourceID == right.SourceID &&
+		left.DocumentID == right.DocumentID &&
+		left.Revision == right.Revision
 }
 
 // ReadSource returns the immutable source bytes previously accepted by the workspace.
