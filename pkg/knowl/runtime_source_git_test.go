@@ -2,6 +2,8 @@ package knowl_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -32,6 +34,9 @@ const (
 	gitTestDocGuide  = "docs/guide.md"
 	gitTestDocNew    = "docs/new.md"
 	gitTestBranchRef = "refs/heads/main"
+	gitTestBranch    = "main"
+	gitTestDocsDir   = "docs"
+	gitTestIntroFile = "intro.md"
 	gitTestMarkdown  = "**/*.md"
 )
 
@@ -170,12 +175,12 @@ func TestGitSourceRuntime_EndToEndReconciliation(t *testing.T) {
 	docsTreeV1Hash := storeMemTree(t, storer, &object.Tree{
 		Entries: []object.TreeEntry{
 			{Name: "guide.md", Mode: filemode.Regular, Hash: blobGuideV1},
-			{Name: "intro.md", Mode: filemode.Regular, Hash: blobIntroV1},
+			{Name: gitTestIntroFile, Mode: filemode.Regular, Hash: blobIntroV1},
 		},
 	})
 	rootTreeV1Hash := storeMemTree(t, storer, &object.Tree{
 		Entries: []object.TreeEntry{
-			{Name: "docs", Mode: filemode.Dir, Hash: docsTreeV1Hash},
+			{Name: gitTestDocsDir, Mode: filemode.Dir, Hash: docsTreeV1Hash},
 		},
 	})
 	commit1Hash := storeMemCommit(t, storer, rootTreeV1Hash)
@@ -201,7 +206,7 @@ func TestGitSourceRuntime_EndToEndReconciliation(t *testing.T) {
 		Config: domain.SourceConfig{
 			Git: &domain.GitSourceConfig{
 				Remote:  gitTestRemoteURL,
-				Ref:     "main",
+				Ref:     gitTestBranch,
 				RefKind: domain.GitRefKindBranch,
 				Include: []string{gitTestMarkdown},
 			},
@@ -298,13 +303,13 @@ func TestGitSourceRuntime_EndToEndReconciliation(t *testing.T) {
 	blobNewV1 := storeMemBlob(t, storer, []byte("# New Feature\n\nNewly added document."))
 	docsTreeV2Hash := storeMemTree(t, storer, &object.Tree{
 		Entries: []object.TreeEntry{
-			{Name: "intro.md", Mode: filemode.Regular, Hash: blobIntroV2},
+			{Name: gitTestIntroFile, Mode: filemode.Regular, Hash: blobIntroV2},
 			{Name: "new.md", Mode: filemode.Regular, Hash: blobNewV1},
 		},
 	})
 	rootTreeV2Hash := storeMemTree(t, storer, &object.Tree{
 		Entries: []object.TreeEntry{
-			{Name: "docs", Mode: filemode.Dir, Hash: docsTreeV2Hash},
+			{Name: gitTestDocsDir, Mode: filemode.Dir, Hash: docsTreeV2Hash},
 		},
 	})
 	commit2Hash := storeMemCommit(t, storer, rootTreeV2Hash, commit1Hash)
@@ -443,6 +448,150 @@ func TestGitSourceRuntime_EndToEndReconciliation(t *testing.T) {
 	}
 }
 
+func TestGitSourceRuntime_RecoversRawReplayAcrossCommitURIDrift(t *testing.T) {
+	ctx := context.Background()
+	workspace, err := contentfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	storer := memory.NewStorage()
+	repo, err := gogit.Init(storer, nil)
+	if err != nil {
+		t.Fatalf("gogit init: %v", err)
+	}
+	content := []byte("# Stable document\n\nThe blob survives a branch advance.\n")
+	blobHash := storeMemBlob(t, storer, content)
+	docsTreeHash := storeMemTree(t, storer, &object.Tree{Entries: []object.TreeEntry{
+		{Name: gitTestIntroFile, Mode: filemode.Regular, Hash: blobHash},
+	}})
+	rootTreeHash := storeMemTree(t, storer, &object.Tree{Entries: []object.TreeEntry{
+		{Name: gitTestDocsDir, Mode: filemode.Dir, Hash: docsTreeHash},
+	}})
+	commit1Hash := storeMemCommit(t, storer, rootTreeHash)
+	commit2Hash := storeMemCommit(t, storer, rootTreeHash, commit1Hash)
+
+	lister := &stubGitRemoteLister{}
+	lister.setRef(gitTestBranchRef, commit1Hash)
+	opener := &stubGitRepoOpener{repo: repo}
+	resolver := sourcegit.NewRefResolver(lister)
+	adapter, err := sourcegit.NewAdapter(sourcegit.DefaultLimits(), resolver, opener)
+	if err != nil {
+		t.Fatalf("NewAdapter: %v", err)
+	}
+
+	sourceID := domain.SourceID("git-raw-replay")
+	uriBase := "https://github.com/org/integration-repo/blob"
+	gitSource := domain.Source{
+		ID: sourceID, Type: domain.SourceTypeGit, Enabled: true,
+		Config: domain.SourceConfig{Git: &domain.GitSourceConfig{
+			Remote: gitTestRemoteURL, Ref: gitTestBranch, RefKind: domain.GitRefKindBranch,
+			Include: []string{gitTestMarkdown}, URIBase: uriBase,
+		}},
+		Sync: domain.SourceSyncPolicy{OnStart: false},
+	}
+	config := knowl.DefaultConfig()
+	config.Workspace = workspace.Root()
+	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
+	config.Sources = []domain.Source{gitSource}
+
+	digest := sha256.Sum256(content)
+	uri1 := sourcegit.DocumentURI(sourceID, uriBase, commit1Hash.String(), gitTestDocIntro)
+	uri2 := sourcegit.DocumentURI(sourceID, uriBase, commit2Hash.String(), gitTestDocIntro)
+	if uri1 == uri2 {
+		t.Fatalf("commit-specific document URIs are equal: %q", uri1)
+	}
+	preseeded, err := workspace.AcceptSource(ctx, domain.SourceEnvelope{
+		Scope:  config.Scope,
+		Source: domain.SourceRef{Adapter: "git", ID: string(sourceID) + "/" + gitTestDocIntro},
+		Version: domain.SourceVersion{
+			Version: blobHash.String(), Digest: hex.EncodeToString(digest[:]),
+		},
+		MediaType: sourcegit.DocumentMediaType(gitTestDocIntro),
+		SourceDocument: domain.SourceDocument{
+			SourceID: sourceID, DocumentID: gitTestDocIntro, Revision: blobHash.String(), URI: uri1,
+		},
+		Content: content,
+	})
+	if err != nil {
+		t.Fatalf("preseed accepted raw source: %v", err)
+	}
+
+	host, err := knowl.New(ctx, knowl.Options{
+		Config: config, Maintainer: provider.Fixture{},
+		SourceAdapters: map[domain.SourceType]app.SourceAdapter{domain.SourceTypeGit: adapter},
+	})
+	if err != nil {
+		t.Fatalf("knowl.New: %v", err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = host.Stop(stopCtx)
+	}()
+	stateStore, err := sqlitestore.Open(ctx, config.StorePath)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	defer func() { _ = stateStore.Close() }()
+	if _, err := stateStore.DocumentState(ctx, config.Scope, sourceID, gitTestDocIntro); !errors.Is(err, app.ErrSourceNotFound) {
+		t.Fatalf("document state before recovery sync = %v, want source not found", err)
+	}
+
+	lister.setRef(gitTestBranchRef, commit2Hash)
+	result, err := host.SyncSource(ctx, sourceID)
+	if err != nil {
+		t.Fatalf("SyncSource after raw-only interruption: %v", err)
+	}
+	if result.Run.Status != domain.SyncStatusSucceeded || result.Run.FailureClass != "" {
+		t.Fatalf("recovered sync run = %#v, want succeeded without failure", result.Run)
+	}
+	if result.Run.Checkpoint != commit2Hash.String() || result.Run.Counts.Added != 1 {
+		t.Fatalf("recovered sync run = %#v, want commit 2 with one added document", result.Run)
+	}
+
+	state, err := stateStore.DocumentState(ctx, config.Scope, sourceID, gitTestDocIntro)
+	if err != nil {
+		t.Fatalf("read recovered document state: %v", err)
+	}
+	if state.AcceptedSource != preseeded {
+		t.Fatalf("recovered accepted source = %#v, want preseeded %#v", state.AcceptedSource, preseeded)
+	}
+	if state.AcceptedSource.SourceDocument.URI != uri1 || state.AcceptedSource.SourceDocument.URI == uri2 {
+		t.Fatalf("recovered original URI = %q, want %q and not %q", state.AcceptedSource.SourceDocument.URI, uri1, uri2)
+	}
+	if state.MaintenanceOperationID == "" {
+		t.Fatal("recovered maintenance operation ID is empty")
+	}
+	descriptor, err := stateStore.Execution(ctx, config.Scope, state.MaintenanceOperationID)
+	if err != nil {
+		t.Fatalf("load recovered maintenance execution descriptor: %v", err)
+	}
+	if descriptor.Source != preseeded {
+		t.Fatalf("maintenance execution source = %#v, want preseeded %#v", descriptor.Source, preseeded)
+	}
+
+	inspection, err := workspace.Inspect(ctx, config.Scope)
+	if err != nil {
+		t.Fatalf("inspect recovered workspace: %v", err)
+	}
+	matchingRaw := 0
+	for _, raw := range inspection.RawSources {
+		if raw.Source.Source == preseeded.Source && raw.Source.Version.Version == preseeded.Version.Version {
+			matchingRaw++
+			if raw.Source != preseeded {
+				t.Fatalf("inspected raw source = %#v, want preseeded %#v", raw.Source, preseeded)
+			}
+		}
+	}
+	if matchingRaw != 1 {
+		t.Fatalf("matching raw revisions = %d, want 1", matchingRaw)
+	}
+}
+
 func TestGitSourceRuntime_CacheRecovery(t *testing.T) {
 	// Verify that deleting the bare repository cache directory recovers transparently
 	originDir := t.TempDir()
@@ -478,7 +627,7 @@ func TestGitSourceRuntime_CacheRecovery(t *testing.T) {
 		Config: domain.SourceConfig{
 			Git: &domain.GitSourceConfig{
 				Remote:  originDir,
-				Ref:     "main",
+				Ref:     gitTestBranch,
 				RefKind: domain.GitRefKindBranch,
 			},
 		},

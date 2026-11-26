@@ -444,15 +444,57 @@ func TestWorkspacePersistsConfiguredSourceProvenance(t *testing.T) {
 	if accepted.SourceDocument != document || accepted.MediaType != envelope.MediaType || accepted.Version.Digest != envelope.Version.Digest {
 		t.Fatalf("accepted source = %#v, want provenance %#v", accepted, document)
 	}
-	replayed, err := workspace.AcceptSource(context.Background(), envelope)
+	manifestPath := filepath.Join(workspace.Root(), filepath.FromSlash(accepted.ManifestRef))
+	manifestBefore, err := readManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("read source manifest before replay: %v", err)
+	}
+	rawBefore, err := workspace.ReadSource(context.Background(), accepted, knowl.ReadLimits{})
+	if err != nil {
+		t.Fatalf("read raw source before replay: %v", err)
+	}
+
+	replay := envelope
+	replay.SourceDocument.URI = "https://wiki.example.test/commits/new/%D0%90%D1%80%D1%85%D0%B8%D1%82%D0%B5%D0%BA%D1%82%D1%83%D1%80%D0%B0.md"
+	replayed, err := workspace.AcceptSource(context.Background(), replay)
 	if err != nil || replayed != accepted {
 		t.Fatalf("replayed source = %#v, %v; want %#v", replayed, err, accepted)
 	}
+	manifestAfter, err := readManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("read source manifest after replay: %v", err)
+	}
+	if manifestAfter != manifestBefore {
+		t.Fatalf("replay changed source manifest: before=%#v after=%#v", manifestBefore, manifestAfter)
+	}
+	rawAfter, err := workspace.ReadSource(context.Background(), replayed, knowl.ReadLimits{})
+	if err != nil {
+		t.Fatalf("read raw source after replay: %v", err)
+	}
+	if !slices.Equal(rawAfter, rawBefore) {
+		t.Fatalf("replay changed raw source: before=%q after=%q", rawBefore, rawAfter)
+	}
 
-	conflict := envelope
-	conflict.SourceDocument.DocumentID = testOtherDocumentID
-	if _, err := workspace.AcceptSource(context.Background(), conflict); !errors.Is(err, ErrSourceConflict) {
-		t.Fatalf("provenance conflict error = %v", err)
+	for _, test := range []struct {
+		name   string
+		mutate func(*knowl.SourceDocument)
+	}{
+		{name: "source ID", mutate: func(document *knowl.SourceDocument) { document.SourceID = "operations" }},
+		{name: "document ID", mutate: func(document *knowl.SourceDocument) { document.DocumentID = testOtherDocumentID }},
+	} {
+		t.Run(test.name+" conflict", func(t *testing.T) {
+			conflict := envelope
+			test.mutate(&conflict.SourceDocument)
+			if _, err := workspace.AcceptSource(context.Background(), conflict); !errors.Is(err, ErrSourceConflict) {
+				t.Fatalf("provenance conflict error = %v", err)
+			}
+		})
+	}
+
+	invalidRevision := envelope
+	invalidRevision.SourceDocument.Revision = "other-revision"
+	if _, err := workspace.AcceptSource(context.Background(), invalidRevision); !errors.Is(err, ErrInvalidSource) {
+		t.Fatalf("revision mismatch error = %v, want invalid source", err)
 	}
 }
 
