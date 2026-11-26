@@ -167,6 +167,7 @@ knowl:
         interval: 5m
         retry_initial: 1s
         retry_maximum: 1m
+        max_documents: 10000
     - id: operations
       type: filesystem
       filesystem:
@@ -219,6 +220,31 @@ Notes:
   to `public` otherwise. Empty `access_mode` always resolves to `read_only`.
   Health and readiness probes remain unauthenticated. See
   [HTTP facade access control](access-control.md).
+
+### Source inventory limits
+
+`sources[].sync.max_documents` sets the complete-inventory limit independently
+for each configured source. It defaults to `1000` when omitted and accepts
+integers from `1` through `50000`, inclusive. Zero, negative values, values over
+`50000`, and non-integer values fail configuration validation before source
+synchronization starts.
+
+The setting bounds the total number of unique document descriptors accumulated
+across every page in one complete source scan. It does not change the descriptor
+page ceiling: each page remains limited to `1000` descriptors. For example, a
+source containing 5,835 matching documents can use `max_documents: 10000` and
+will still be read as multiple bounded pages.
+
+Choose the smallest limit that covers the expected source inventory. Higher
+limits can increase synchronization memory, database work, and recovery time;
+Knowl always retains the absolute `50000`-document durable-state ceiling. The
+normalized effective limit participates in the source configuration digest. A
+scan created under the previous digest is not resumed after the limit changes;
+the last successful state remains authoritative if the new scan fails.
+
+No database migration is required. Before rolling back to a Knowl version that
+does not support this setting, remove `max_documents` from every source
+configuration and validate the old configuration before restarting writers.
 
 Git sources use the same `source list`, `source sync`, `source status`,
 scheduling, retry, and maintenance lifecycle as filesystem sources. They only

@@ -98,7 +98,6 @@ func TestNewServiceValidatesDependenciesAndOptions(t *testing.T) {
 		{"negative sources", func(o *Options) { o.MaxSyncAllSources = -1 }},
 		{"over ceiling sources", func(o *Options) { o.MaxSyncAllSources = 1001 }},
 		{"over ceiling pages", func(o *Options) { o.MaxScanPages = 1001 }},
-		{"over ceiling documents", func(o *Options) { o.MaxScanDocuments = 1001 }},
 		{"over ceiling mutations", func(o *Options) { o.MaxMutations = 2049 }},
 		{"over ceiling raw bytes", func(o *Options) { o.MaxRawBytes = 64<<20 + 1 }},
 		{"over ceiling recovery", func(o *Options) { o.MaxRecoveryRuns = 1001 }},
@@ -113,7 +112,7 @@ func TestNewServiceValidatesDependenciesAndOptions(t *testing.T) {
 	}
 	service := newTestService(t, nil)
 	if service.options.MaxSyncAllSources != maxSyncAllSources || service.options.MaxScanPages != maxScanPages ||
-		service.options.MaxScanDocuments != maxScanDocuments || service.options.MaxMutations != maxPlanMutations ||
+		service.options.MaxMutations != maxPlanMutations ||
 		service.options.MaxRawBytes != maxRawBytes || service.options.MaxRecoveryRuns != maxRecoveryRuns {
 		t.Fatalf("defaults not applied: %#v", service.options)
 	}

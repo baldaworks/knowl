@@ -173,27 +173,51 @@ type SourceSyncConfig struct {
 	Interval     time.Duration `mapstructure:"interval"`
 	RetryInitial time.Duration `mapstructure:"retry_initial"`
 	RetryMaximum time.Duration `mapstructure:"retry_maximum"`
+	MaxDocuments *int          `mapstructure:"max_documents"`
+}
+
+type rawSourceConfig struct {
+	ID         knowltypes.SourceID     `mapstructure:"id"`
+	Type       knowltypes.SourceType   `mapstructure:"type"`
+	Enabled    *bool                   `mapstructure:"enabled"`
+	Filesystem *FilesystemSourceConfig `mapstructure:"filesystem"`
+	Git        *GitSourceConfig        `mapstructure:"git"`
+	Sync       rawSourceSyncConfig     `mapstructure:"sync"`
+}
+
+type rawScopeConfig struct {
+	Ref      knowltypes.ScopeRef `mapstructure:"ref"`
+	Disabled bool                `mapstructure:"disabled"`
+	Sources  []rawSourceConfig   `mapstructure:"sources"`
+}
+
+type rawSourceSyncConfig struct {
+	OnStart      bool          `mapstructure:"on_start"`
+	Interval     time.Duration `mapstructure:"interval"`
+	RetryInitial time.Duration `mapstructure:"retry_initial"`
+	RetryMaximum time.Duration `mapstructure:"retry_maximum"`
+	MaxDocuments any           `mapstructure:"max_documents"`
 }
 
 type rawAppConfig struct {
-	Workers      any                    `mapstructure:"workers"`
-	Provider     string                 `mapstructure:"provider"`
-	Workspace    WorkspaceConfig        `mapstructure:"workspace"`
-	Storage      StorageConfig          `mapstructure:"storage"`
-	Scope        knowltypes.ScopeRef    `mapstructure:"scope"`
-	DefaultScope knowltypes.ScopeName   `mapstructure:"default_scope"`
-	Scopes       map[string]ScopeConfig `mapstructure:"scopes"`
-	Server       ServerConfig           `mapstructure:"server"`
-	API          knowl.FacadeConfig     `mapstructure:"api"`
-	MCP          knowl.FacadeConfig     `mapstructure:"mcp"`
-	Web          knowl.WebConfig        `mapstructure:"web"`
-	Operator     OperatorConfig         `mapstructure:"operator"`
-	Sources      []SourceConfig         `mapstructure:"sources"`
-	Embeddings   knowl.EmbeddingsConfig `mapstructure:"embeddings"`
-	Output       rawOutputSettings      `mapstructure:"output"`
-	Timeouts     knowl.TimeoutsConfig   `mapstructure:"timeouts"`
-	Ingest       map[string]any         `mapstructure:"ingest"`
-	Maintenance  map[string]any         `mapstructure:"maintenance"`
+	Workers      any                       `mapstructure:"workers"`
+	Provider     string                    `mapstructure:"provider"`
+	Workspace    WorkspaceConfig           `mapstructure:"workspace"`
+	Storage      StorageConfig             `mapstructure:"storage"`
+	Scope        knowltypes.ScopeRef       `mapstructure:"scope"`
+	DefaultScope knowltypes.ScopeName      `mapstructure:"default_scope"`
+	Scopes       map[string]rawScopeConfig `mapstructure:"scopes"`
+	Server       ServerConfig              `mapstructure:"server"`
+	API          knowl.FacadeConfig        `mapstructure:"api"`
+	MCP          knowl.FacadeConfig        `mapstructure:"mcp"`
+	Web          knowl.WebConfig           `mapstructure:"web"`
+	Operator     OperatorConfig            `mapstructure:"operator"`
+	Sources      []rawSourceConfig         `mapstructure:"sources"`
+	Embeddings   knowl.EmbeddingsConfig    `mapstructure:"embeddings"`
+	Output       rawOutputSettings         `mapstructure:"output"`
+	Timeouts     knowl.TimeoutsConfig      `mapstructure:"timeouts"`
+	Ingest       map[string]any            `mapstructure:"ingest"`
+	Maintenance  map[string]any            `mapstructure:"maintenance"`
 }
 
 type rawOutputSettings struct {
@@ -256,6 +280,14 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 	if err != nil {
 		return AppConfig{}, err
 	}
+	sources, err := normalizeSourceConfigs(config.Sources)
+	if err != nil {
+		return AppConfig{}, err
+	}
+	scopes, err := normalizeScopeConfigs(config.Scopes)
+	if err != nil {
+		return AppConfig{}, err
+	}
 	return AppConfig{
 		Workers:      workers,
 		Output:       output,
@@ -265,25 +297,65 @@ func (config rawAppConfig) Normalize() (AppConfig, error) {
 		Storage:      config.Storage,
 		Scope:        config.Scope,
 		DefaultScope: config.DefaultScope,
-		Scopes:       cloneScopeConfigs(config.Scopes),
+		Scopes:       scopes,
 		Server:       config.Server,
 		API:          config.API,
 		MCP:          config.MCP,
 		Operator:     config.Operator,
 		Web:          config.Web,
-		Sources:      config.Sources,
+		Sources:      sources,
 		Timeouts:     timeouts,
 	}, nil
 }
 
-func cloneScopeConfigs(configs map[string]ScopeConfig) map[string]ScopeConfig {
+func normalizeSourceConfigs(configs []rawSourceConfig) ([]SourceConfig, error) {
 	if len(configs) == 0 {
-		return nil
+		return nil, nil
 	}
-	cloned := make(map[string]ScopeConfig, len(configs))
+	normalized := make([]SourceConfig, 0, len(configs))
+	for _, config := range configs {
+		maxDocuments, err := normalizeConfiguredMaxDocuments(config.Sync.MaxDocuments)
+		if err != nil {
+			return nil, fmt.Errorf("source %q sync.max_documents: %w", config.ID, err)
+		}
+		normalized = append(normalized, SourceConfig{
+			ID: config.ID, Type: config.Type, Enabled: config.Enabled,
+			Filesystem: config.Filesystem, Git: config.Git,
+			Sync: SourceSyncConfig{
+				OnStart: config.Sync.OnStart, Interval: config.Sync.Interval,
+				RetryInitial: config.Sync.RetryInitial, RetryMaximum: config.Sync.RetryMaximum,
+				MaxDocuments: maxDocuments,
+			},
+		})
+	}
+	return normalized, nil
+}
+
+func normalizeConfiguredMaxDocuments(value any) (*int, error) {
+	if value == nil {
+		return nil, nil
+	}
+	maxDocuments, ok := value.(int)
+	if !ok {
+		return nil, app.ErrSourceInvalid
+	}
+	if err := app.ValidateSourceMaxDocuments(maxDocuments); err != nil {
+		return nil, err
+	}
+	return &maxDocuments, nil
+}
+
+func normalizeScopeConfigs(configs map[string]rawScopeConfig) (map[string]ScopeConfig, error) {
+	if len(configs) == 0 {
+		return nil, nil
+	}
+	normalized := make(map[string]ScopeConfig, len(configs))
 	for name, config := range configs {
-		config.Sources = append([]SourceConfig(nil), config.Sources...)
-		cloned[name] = config
+		sources, err := normalizeSourceConfigs(config.Sources)
+		if err != nil {
+			return nil, fmt.Errorf("scope %q: %w", name, err)
+		}
+		normalized[name] = ScopeConfig{Ref: config.Ref, Disabled: config.Disabled, Sources: sources}
 	}
-	return cloned
+	return normalized, nil
 }

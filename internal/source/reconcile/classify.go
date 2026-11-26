@@ -49,7 +49,7 @@ func (service *Service) reconstructPrepared(ctx context.Context, scope knowl.Sco
 // configured-source bytes into the semantic wiki.
 func (service *Service) classifyAndPrepare(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, refs []knowl.DocumentRef, snapshotCheckpoint string) (sagaInput, error) {
 	heads, err := service.state.DocumentStates(ctx, scope, source.ID, app.DocumentListOptions{
-		IncludeDeleted: true, Limit: service.options.MaxScanDocuments,
+		IncludeDeleted: true, Limit: app.MaximumSourceDocuments,
 	})
 	if err != nil {
 		return sagaInput{}, failStage(classState, err)

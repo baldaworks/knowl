@@ -74,6 +74,7 @@ type SourceSyncPolicy struct {
 	Interval     time.Duration `json:"interval,omitempty"`
 	RetryInitial time.Duration `json:"retry_initial,omitempty"`
 	RetryMaximum time.Duration `json:"retry_maximum,omitempty"`
+	MaxDocuments int           `json:"max_documents"`
 }
 
 // Source describes one configured authoritative source.

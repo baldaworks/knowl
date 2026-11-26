@@ -256,6 +256,17 @@ func (harness *stageHarness) descriptor(path, body string) knowl.DocumentRef {
 	}
 }
 
+func (harness *stageHarness) descriptors(count int) []knowl.DocumentRef {
+	documents := make([]knowl.DocumentRef, count)
+	for index := range documents {
+		path := fmt.Sprintf("docs/%04d.md", index)
+		body := fmt.Sprintf("# Document %d\n", index)
+		harness.adapter.script(knowl.DocumentID(path), body)
+		documents[index] = harness.descriptor(path, body)
+	}
+	return documents
+}
+
 func (harness *stageHarness) sync(t *testing.T) (Result, error) {
 	t.Helper()
 	result, err := harness.service.SyncSource(context.Background(), harness.scope, harness.source(knowl.SourceFlavorMarkdown))
@@ -752,11 +763,13 @@ func TestStageFailuresNeverPrepareUnsafeDeletions(t *testing.T) {
 		harness.assertFailedRun(t, result.Run.ID, "scan_invalid")
 	})
 	t.Run("document overflow rejected", func(t *testing.T) {
-		harness := newStageHarness(t, func(options *Options) { options.MaxScanDocuments = 1 })
+		harness := newStageHarness(t, nil)
 		first := harness.descriptor("docs/a.md", "# A\n")
 		second := harness.descriptor("docs/b.md", "# B\n")
 		harness.adapter.enqueue(harness.adapter.page([]knowl.DocumentRef{first, second}, ""))
-		result, err := harness.sync(t)
+		source := harness.source(knowl.SourceFlavorMarkdown)
+		source.Sync.MaxDocuments = 1
+		result, err := harness.service.SyncSource(context.Background(), harness.scope, source)
 		if !strings.Contains(classOf(err), "scan_invalid") {
 			t.Fatalf("overflow error = %v, want scan class", err)
 		}
@@ -816,6 +829,106 @@ func TestStageFailuresNeverPrepareUnsafeDeletions(t *testing.T) {
 			t.Fatalf("legacy orphan still exists: %v", statErr)
 		}
 	})
+}
+
+func TestStageUsesPerSourceDocumentLimitWithoutChangingPageCeiling(t *testing.T) {
+	t.Run("multi-page scan succeeds at configured limit", func(t *testing.T) {
+		harness := newStageHarness(t, nil)
+		documents := harness.descriptors(1001)
+		harness.adapter.enqueue(
+			harness.adapter.page(documents[:1000], "page-2"),
+			harness.adapter.page(documents[1000:], ""),
+		)
+		source := harness.source(knowl.SourceFlavorMarkdown)
+		source.Sync.MaxDocuments = len(documents)
+
+		result, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+		requireSyncSuccess(t, result, err)
+		if harness.adapter.fetches != len(documents) {
+			t.Fatalf("fetches = %d, want %d", harness.adapter.fetches, len(documents))
+		}
+	})
+
+	t.Run("default aggregate limit rejects next page", func(t *testing.T) {
+		harness := newStageHarness(t, nil)
+		documents := harness.descriptors(app.DefaultSourceMaxDocuments + 1)
+		harness.adapter.enqueue(
+			harness.adapter.page(documents[:app.DefaultSourceMaxDocuments], "page-2"),
+			harness.adapter.page(documents[app.DefaultSourceMaxDocuments:], ""),
+		)
+
+		result, err := harness.sync(t)
+		if !errors.As(err, new(*stageError)) || classOf(err) != classScan {
+			t.Fatalf("overflow error = %v, want typed %s", err, classScan)
+		}
+		harness.assertFailedRun(t, result.Run.ID, classScan)
+	})
+
+	t.Run("single page remains capped", func(t *testing.T) {
+		harness := newStageHarness(t, nil)
+		documents := harness.descriptors(pageDocumentCeiling + 1)
+		harness.adapter.enqueue(harness.adapter.page(documents, ""))
+		source := harness.source(knowl.SourceFlavorMarkdown)
+		source.Sync.MaxDocuments = len(documents)
+
+		result, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+		if !errors.As(err, new(*stageError)) || classOf(err) != classScan {
+			t.Fatalf("page overflow error = %v, want typed %s", err, classScan)
+		}
+		harness.assertFailedRun(t, result.Run.ID, classScan)
+	})
+
+	t.Run("one-over keeps prior successful state authoritative", func(t *testing.T) {
+		harness := newStageHarness(t, nil)
+		documents := harness.descriptors(2)
+		source := harness.source(knowl.SourceFlavorMarkdown)
+		source.Sync.MaxDocuments = 1
+		harness.adapter.enqueue(harness.adapter.page(documents[:1], ""))
+		seeded, seedErr := harness.service.SyncSource(context.Background(), harness.scope, source)
+		requireSyncSuccess(t, seeded, seedErr)
+		before, statusErr := harness.state.SourceStatus(context.Background(), harness.scope, harness.sourceID)
+		if statusErr != nil {
+			t.Fatalf("SourceStatus() before overflow error = %v", statusErr)
+		}
+
+		harness.adapter.enqueue(harness.adapter.page(documents, ""))
+		failed, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+		if !errors.As(err, new(*stageError)) || classOf(err) != classScan {
+			t.Fatalf("overflow error = %v, want typed %s", err, classScan)
+		}
+		harness.assertFailedRun(t, failed.Run.ID, classScan)
+		after, statusErr := harness.state.SourceStatus(context.Background(), harness.scope, harness.sourceID)
+		if statusErr != nil {
+			t.Fatalf("SourceStatus() after overflow error = %v", statusErr)
+		}
+		if after.LastSuccessfulRunID != before.LastSuccessfulRunID || after.Checkpoint != before.Checkpoint {
+			t.Fatalf("successful state changed after overflow: before=%#v after=%#v", before, after)
+		}
+		if _, stateErr := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, documents[1].ExternalID); !errors.Is(stateErr, app.ErrSourceNotFound) {
+			t.Fatalf("overflow descriptor state error = %v, want ErrSourceNotFound", stateErr)
+		}
+	})
+}
+
+func TestStageLoweredLimitStillTombstonesAllPriorHeads(t *testing.T) {
+	harness := newStageHarness(t, nil)
+	documents := []seededDoc{
+		{path: "docs/first.md", body: "# First\n"},
+		{path: "docs/second.md", body: "# Second\n"},
+	}
+	harness.seedFinalized(t, documents)
+	harness.adapter.enqueue(harness.adapter.page(nil, ""))
+	source := harness.source(knowl.SourceFlavorMarkdown)
+	source.Sync.MaxDocuments = 1
+
+	result, err := harness.service.SyncSource(context.Background(), harness.scope, source)
+	requireSyncSuccess(t, result, err)
+	for _, document := range documents {
+		head, readErr := harness.state.DocumentState(context.Background(), harness.scope, harness.sourceID, knowl.DocumentID(document.path))
+		if readErr != nil || !head.Deleted {
+			t.Fatalf("head %q = %#v, %v; want tombstone after limit decrease", document.path, head, readErr)
+		}
+	}
 }
 
 func TestStageTwoSourcesWithEqualPathsStayIsolated(t *testing.T) {

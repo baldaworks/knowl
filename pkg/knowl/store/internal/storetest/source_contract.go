@@ -202,6 +202,7 @@ func RunSourceContract(t *testing.T, harness SourceHarness) {
 	}
 
 	runRecoveryReadsContract(t, ctx, harness, scope, base.Add(26*time.Second))
+	runLargeSourceStateContract(t, ctx, harness, scope, base.Add(27*time.Second))
 
 	failureRun := newContractRun(scope, sourceID, "run-failure", base.Add(30*time.Second))
 	if _, _, err := harness.Store.BeginSync(ctx, app.BeginSyncRequest{Run: failureRun, Type: knowl.SourceTypeFilesystem}); err != nil {
@@ -580,7 +581,7 @@ func runRecoveryReadsContract(t *testing.T, ctx context.Context, harness SourceH
 	if _, err := harness.Store.ScanDocuments(ctx, scope, run.ID, 0); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("ScanDocuments() zero limit error = %v", err)
 	}
-	if _, err := harness.Store.ScanDocuments(ctx, scope, run.ID, 1001); !errors.Is(err, app.ErrSourceInvalid) {
+	if _, err := harness.Store.ScanDocuments(ctx, scope, run.ID, app.MaximumSourceDocuments+1); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("ScanDocuments() over-limit error = %v", err)
 	}
 	if _, err := harness.Store.ScanDocuments(ctx, scope, "missing-run", 10); !errors.Is(err, app.ErrSyncRunNotFound) {
@@ -647,6 +648,110 @@ func runRecoveryReadsContract(t *testing.T, ctx context.Context, harness SourceH
 	if _, err := harness.Store.PreparedSync(ctx, scope, run.ID); !errors.Is(err, app.ErrSyncStateTransition) {
 		t.Fatalf("PreparedSync() after failure error = %v, want state transition", err)
 	}
+}
+
+func runLargeSourceStateContract(t *testing.T, ctx context.Context, harness SourceHarness, scope knowl.ScopeRef, at time.Time) {
+	t.Helper()
+	const (
+		sourceID      = knowl.SourceID("large-source-state")
+		runID         = knowl.SyncRunID("run-large-source-state")
+		rejectedRunID = knowl.SyncRunID("run-large-source-state-rejected")
+		documentCount = 1001
+	)
+
+	rejectedRun := newContractRun(scope, sourceID, rejectedRunID, at)
+	if _, _, err := harness.Store.BeginSync(ctx, app.BeginSyncRequest{Run: rejectedRun, Type: knowl.SourceTypeFilesystem}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.Store.ScanDocuments(ctx, scope, rejectedRun.ID, app.MaximumSourceDocuments+1); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("ScanDocuments() limit %d error = %v", app.MaximumSourceDocuments+1, err)
+	}
+	oversizedPrepared := app.PreparedSyncState{
+		RunID: rejectedRun.ID, Scope: scope, SourceID: sourceID, CompleteScan: true, MaintenanceReady: true,
+		CandidateDigest: strings.Repeat("a", 64), Documents: make([]app.PreparedDocumentState, app.MaximumSourceDocuments+1), PreparedAt: at.Add(time.Second),
+	}
+	if _, err := harness.Store.PrepareSync(ctx, oversizedPrepared); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("PrepareSync() with %d documents error = %v", len(oversizedPrepared.Documents), err)
+	}
+	afterRejected, err := harness.Store.SyncRun(ctx, scope, rejectedRun.ID)
+	if err != nil || afterRejected.Status != knowl.SyncStatusScanning || afterRejected.CompleteScan || afterRejected.Counts != (knowl.SyncCounts{}) || afterRejected.Checkpoint != "" {
+		t.Fatalf("run after oversized prepare = %#v, %v", afterRejected, err)
+	}
+	if _, err := harness.Store.PreparedSync(ctx, scope, rejectedRun.ID); !errors.Is(err, app.ErrSyncStateTransition) {
+		t.Fatalf("PreparedSync() after oversized prepare error = %v", err)
+	}
+	if _, err := harness.Store.FailSync(ctx, scope, rejectedRun.ID, "contract_cleanup", at.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	run := newContractRun(scope, sourceID, runID, at.Add(3*time.Second))
+	if _, _, err := harness.Store.BeginSync(ctx, app.BeginSyncRequest{Run: run, Type: knowl.SourceTypeFilesystem}); err != nil {
+		t.Fatal(err)
+	}
+	documents := make([]knowl.DocumentRef, documentCount)
+	for index := range documents {
+		documentID := knowl.DocumentID(fmt.Sprintf("large/%04d.md", index))
+		documents[index] = knowl.DocumentRef{ExternalID: documentID, Revision: fmt.Sprintf("revision-%04d", index), Path: string(documentID)}
+	}
+	if _, err := harness.Store.RecordScanPage(ctx, app.ScanPageRecord{
+		RunID: run.ID, Scope: scope, SourceID: sourceID, Documents: documents[:1000], NextPageToken: "large-page-2", RecordedAt: at.Add(4 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.Store.RecordScanPage(ctx, app.ScanPageRecord{
+		RunID: run.ID, Scope: scope, SourceID: sourceID, ExpectedPageToken: "large-page-2", Documents: documents[1000:], RecordedAt: at.Add(5 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bounded, err := harness.Store.ScanDocuments(ctx, scope, run.ID, 1000)
+	if err != nil || len(bounded) != 1000 {
+		t.Fatalf("ScanDocuments() limit 1000 count = %d, %v", len(bounded), err)
+	}
+	if !sameDocumentRef(bounded[0], documents[0]) || !sameDocumentRef(bounded[999], documents[999]) {
+		t.Fatalf("ScanDocuments() limit 1000 boundaries = %#v/%#v", bounded[0], bounded[999])
+	}
+	scanned, err := harness.Store.ScanDocuments(ctx, scope, run.ID, documentCount)
+	if err != nil || len(scanned) != documentCount {
+		t.Fatalf("ScanDocuments() limit %d count = %d, %v", documentCount, len(scanned), err)
+	}
+	if !sameDocumentRef(scanned[0], documents[0]) || !sameDocumentRef(scanned[documentCount-1], documents[documentCount-1]) {
+		t.Fatalf("ScanDocuments() limit %d boundaries = %#v/%#v", documentCount, scanned[0], scanned[documentCount-1])
+	}
+	maximumBounded, err := harness.Store.ScanDocuments(ctx, scope, run.ID, app.MaximumSourceDocuments)
+	if err != nil || len(maximumBounded) != documentCount {
+		t.Fatalf("ScanDocuments() limit %d count = %d, %v", app.MaximumSourceDocuments, len(maximumBounded), err)
+	}
+
+	states := make([]app.PreparedDocumentState, len(scanned))
+	for index, ref := range scanned {
+		states[index] = app.PreparedDocumentState{
+			Action: app.SyncDocumentActive,
+			State:  contractDocumentState(scope, sourceID, ref.ExternalID, run.ID, ref.Revision, at.Add(6*time.Second)),
+		}
+	}
+	prepared := contractPreparedState(t, run.ID, scope, sourceID, "large-checkpoint", knowl.SyncCounts{Added: documentCount}, states, at.Add(6*time.Second))
+	if _, err := harness.Store.PrepareSync(ctx, prepared); err != nil {
+		t.Fatal(err)
+	}
+	assertPreparedRead(t, harness.Store, prepared)
+	if harness.OpenPeer != nil {
+		reopened := harness.OpenPeer(t)
+		reopenedScan, scanErr := reopened.ScanDocuments(ctx, scope, run.ID, documentCount)
+		if scanErr != nil || len(reopenedScan) != documentCount {
+			t.Fatalf("reopened ScanDocuments() count = %d, %v", len(reopenedScan), scanErr)
+		}
+		if !sameDocumentRef(reopenedScan[0], documents[0]) || !sameDocumentRef(reopenedScan[documentCount-1], documents[documentCount-1]) {
+			t.Fatalf("reopened ScanDocuments() boundaries = %#v/%#v", reopenedScan[0], reopenedScan[documentCount-1])
+		}
+		assertPreparedRead(t, reopened, prepared)
+	}
+	if _, err := harness.Store.FailSync(ctx, scope, run.ID, "contract_cleanup", at.Add(7*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func sameDocumentRef(left, right knowl.DocumentRef) bool {
+	return left.ExternalID == right.ExternalID && left.Revision == right.Revision && left.Path == right.Path
 }
 
 func assertPreparedRead(t *testing.T, store app.SourceStateStore, prepared app.PreparedSyncState) {

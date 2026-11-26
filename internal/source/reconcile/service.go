@@ -36,7 +36,6 @@ var (
 const (
 	maxSyncAllSources  = 1000
 	maxScanPages       = 1000
-	maxScanDocuments   = 1000
 	maxPlanMutations   = 2048
 	maxRawBytes        = 64 << 20
 	maxRecoveryRuns    = 1000
@@ -67,7 +66,6 @@ type RunIDGenerator func() knowl.SyncRunID
 type Options struct {
 	MaxSyncAllSources int
 	MaxScanPages      int
-	MaxScanDocuments  int
 	MaxMutations      int
 	MaxRawBytes       int
 	MaxRecoveryRuns   int
@@ -84,7 +82,6 @@ func (options Options) normalize() (Options, error) {
 	}{
 		{name: "max_sync_all_sources", value: options.MaxSyncAllSources, ceiling: maxSyncAllSources},
 		{name: "max_scan_pages", value: options.MaxScanPages, ceiling: maxScanPages},
-		{name: "max_scan_documents", value: options.MaxScanDocuments, ceiling: maxScanDocuments},
 		{name: "max_mutations", value: options.MaxMutations, ceiling: maxPlanMutations},
 		{name: "max_raw_bytes", value: options.MaxRawBytes, ceiling: maxRawBytes},
 		{name: "max_recovery_runs", value: options.MaxRecoveryRuns, ceiling: maxRecoveryRuns},
@@ -100,8 +97,6 @@ func (options Options) normalize() (Options, error) {
 				options.MaxSyncAllSources = maxSyncAllSources
 			case "max_scan_pages":
 				options.MaxScanPages = maxScanPages
-			case "max_scan_documents":
-				options.MaxScanDocuments = maxScanDocuments
 			case "max_mutations":
 				options.MaxMutations = maxPlanMutations
 			case "max_raw_bytes":
