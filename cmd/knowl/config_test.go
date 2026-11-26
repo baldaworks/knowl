@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +94,92 @@ sources:
 	}
 	if engineering.ConfigDigest == "" || operations.ConfigDigest == "" {
 		t.Fatal("source config digests must be populated")
+	}
+}
+
+func TestHostConfigNormalizesSourceMaxDocuments(t *testing.T) {
+	ctx := loadTestConfig(t, testConfigOptions{knowl: `provider: codex
+workspace:
+  path: knowledge
+sources:
+  - id: default-limit
+    type: filesystem
+    filesystem:
+      root: wiki-default
+  - id: minimum-limit
+    type: filesystem
+    filesystem:
+      root: wiki-minimum
+    sync:
+      max_documents: 1
+`})
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatalf("hostConfig() error: %v", err)
+	}
+	if got := config.Sources[0].Sync.MaxDocuments; got != app.DefaultSourceMaxDocuments {
+		t.Fatalf("omitted MaxDocuments = %d, want %d", got, app.DefaultSourceMaxDocuments)
+	}
+	if got := config.Sources[1].Sync.MaxDocuments; got != 1 {
+		t.Fatalf("minimum MaxDocuments = %d, want 1", got)
+	}
+
+	scopedCtx := loadTestConfig(t, testConfigOptions{knowl: `provider: codex
+workspace:
+  path: knowledge
+default_scope: large
+scopes:
+  large:
+    sources:
+      - id: maximum-limit
+        type: filesystem
+        filesystem:
+          root: wiki-maximum
+        sync:
+          max_documents: 50000
+`})
+	scopedConfig, err := hostConfig(scopedCtx)
+	if err != nil {
+		t.Fatalf("scoped hostConfig() error: %v", err)
+	}
+	registry, err := scopedConfig.ScopeRegistry()
+	if err != nil {
+		t.Fatalf("ScopeRegistry() error: %v", err)
+	}
+	large, err := registry.Resolve("large")
+	if err != nil {
+		t.Fatalf("Resolve(large) error: %v", err)
+	}
+	if got := large.Sources[0].Sync.MaxDocuments; got != app.MaximumSourceDocuments {
+		t.Fatalf("maximum MaxDocuments = %d, want %d", got, app.MaximumSourceDocuments)
+	}
+}
+
+func TestLoadConfigRejectsInvalidSourceMaxDocuments(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "zero", value: "0"},
+		{name: "negative", value: "-1"},
+		{name: "above maximum", value: "50001"},
+		{name: "float", value: strconv.FormatFloat(1.5, 'f', 1, 64)},
+		{name: "boolean", value: strconv.FormatBool(true)},
+		{name: "string", value: `"1000"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := tryLoadTestConfig(t, testConfigOptions{knowl: `provider: codex
+sources:
+  - id: wiki
+    type: filesystem
+    filesystem:
+      root: wiki
+    sync:
+      max_documents: ` + test.value})
+			if !errors.Is(err, app.ErrSourceInvalid) {
+				t.Fatalf("loadConfig(max_documents=%s) error = %v, want ErrSourceInvalid", test.value, err)
+			}
+		})
 	}
 }
 

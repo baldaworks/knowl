@@ -185,6 +185,11 @@ func normalizeURIBase(value string) (string, error) {
 }
 
 func normalizeSyncPolicy(policy *domain.SourceSyncPolicy) error {
+	maxDocuments, err := app.NormalizeSourceMaxDocuments(policy.MaxDocuments)
+	if err != nil {
+		return fmt.Errorf("max_documents: %w", err)
+	}
+	policy.MaxDocuments = maxDocuments
 	if policy.Interval < 0 || policy.Interval > maximumSourceInterval {
 		return fmt.Errorf("interval must be between zero and %s", maximumSourceInterval)
 	}

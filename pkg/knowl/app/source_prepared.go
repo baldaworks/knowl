@@ -12,9 +12,6 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-// maxPreparedDocuments is the durable candidate ceiling shared by both stores.
-const maxPreparedDocuments = 1000
-
 // PreparedSyncDigestVersion identifies the canonical prepared-payload encoding.
 type PreparedSyncDigestVersion uint8
 
@@ -39,7 +36,7 @@ type PreparedSyncRead struct {
 
 // ValidateScanDocumentLimit validates one bounded descriptor read limit.
 func ValidateScanDocumentLimit(limit int) error {
-	if limit <= 0 || limit > maxSourceStatePage {
+	if limit <= 0 || limit > MaximumSourceDocuments {
 		return ErrSourceInvalid
 	}
 	return nil
@@ -56,7 +53,7 @@ func ValidateSourceDigestLimit(limit int) error {
 // NormalizePreparedDocuments copies, deterministically orders, and validates the
 // candidate set of one complete-scan prepared state against its owning run.
 func NormalizePreparedDocuments(scope knowl.ScopeRef, sourceID knowl.SourceID, runID knowl.SyncRunID, documents []PreparedDocumentState) ([]PreparedDocumentState, error) {
-	if strings.TrimSpace(string(scope)) == "" || ValidateSourceID(sourceID) != nil || ValidateSyncRunID(runID) != nil || len(documents) > maxPreparedDocuments {
+	if strings.TrimSpace(string(scope)) == "" || ValidateSourceID(sourceID) != nil || ValidateSyncRunID(runID) != nil || len(documents) > MaximumSourceDocuments {
 		return nil, ErrSourceInvalid
 	}
 	normalized := make([]PreparedDocumentState, len(documents))

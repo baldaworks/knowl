@@ -1,5 +1,25 @@
 # Unreleased
 
+## Configurable source inventory limits
+
+The v0.9.0 feature release adds the optional per-source
+`sources[].sync.max_documents` setting. It defaults to `1000` and accepts
+integers from `1` through `50000`, inclusive, allowing one configured source to
+synchronize an inventory larger than the previous `1000`-document complete-scan
+limit without raising limits for other sources.
+
+The descriptor page ceiling remains `1000`; larger inventories are accumulated
+across multiple bounded pages. The normalized effective limit participates in
+the source configuration digest, and SQLite and PostgreSQL retain the same
+absolute `50000`-document durable-state ceiling. No database migration is
+required.
+
+Higher limits can increase synchronization memory, database work, and recovery
+time. Before rolling back to a binary that predates this setting, remove
+`max_documents` from source configuration. See
+[operations and configuration](../operations.md#source-inventory-limits) for
+the complete contract and a `max_documents: 10000` example.
+
 ## HTTP facade policy migration
 
 API, Streamable HTTP MCP, and the optional Web UI now have independent

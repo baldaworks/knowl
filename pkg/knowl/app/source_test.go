@@ -79,6 +79,40 @@ func TestSourceConfigDigestIsDeterministicAndOneWay(t *testing.T) {
 	}
 }
 
+func TestSourceConfigDigestCanonicalizesMaxDocuments(t *testing.T) {
+	t.Parallel()
+	omitted := fixtureSource()
+	explicitDefault := fixtureSource()
+	explicitDefault.Sync.MaxDocuments = app.DefaultSourceMaxDocuments
+	raised := fixtureSource()
+	raised.Sync.MaxDocuments = 10000
+
+	omittedDigest, err := app.SourceConfigDigest(omitted)
+	if err != nil {
+		t.Fatalf("omitted digest: %v", err)
+	}
+	defaultDigest, err := app.SourceConfigDigest(explicitDefault)
+	if err != nil {
+		t.Fatalf("explicit default digest: %v", err)
+	}
+	raisedDigest, err := app.SourceConfigDigest(raised)
+	if err != nil {
+		t.Fatalf("raised digest: %v", err)
+	}
+	if omittedDigest != defaultDigest {
+		t.Fatalf("omitted digest %q differs from explicit default %q", omittedDigest, defaultDigest)
+	}
+	if omittedDigest == raisedDigest {
+		t.Fatalf("default digest %q equals raised-limit digest", omittedDigest)
+	}
+
+	invalid := fixtureSource()
+	invalid.Sync.MaxDocuments = app.MaximumSourceDocuments + 1
+	if _, err := app.SourceConfigDigest(invalid); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("invalid max_documents error = %v, want ErrSourceInvalid", err)
+	}
+}
+
 func TestValidateSourceGitAndFilesystem(t *testing.T) {
 	t.Parallel()
 	validFs := fixtureSource()
@@ -233,10 +267,10 @@ func TestSourceValidationBounds(t *testing.T) {
 	if _, err := app.AddSyncCounts(knowl.SyncCounts{Added: 1<<63 - 1}, knowl.SyncCounts{Added: 1}); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("overflow counts error = %v", err)
 	}
-	if _, err := app.ValidateDocumentListOptions(app.DocumentListOptions{Limit: 1000}); err != nil {
+	if _, err := app.ValidateDocumentListOptions(app.DocumentListOptions{Limit: app.MaximumSourceDocuments}); err != nil {
 		t.Fatalf("boundary list error = %v", err)
 	}
-	if _, err := app.ValidateDocumentListOptions(app.DocumentListOptions{Limit: 1001}); !errors.Is(err, app.ErrSourceInvalid) {
+	if _, err := app.ValidateDocumentListOptions(app.DocumentListOptions{Limit: app.MaximumSourceDocuments + 1}); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("oversized list error = %v", err)
 	}
 	run := knowl.SyncRun{
@@ -778,11 +812,7 @@ func TestPreparedSyncDigestRejectsInvalidPayloads(t *testing.T) {
 			return in
 		}},
 		{"over limit documents", func(in app.PreparedSyncState) app.PreparedSyncState {
-			documents := make([]app.PreparedDocumentState, 1001)
-			for index := range documents {
-				documents[index] = app.PreparedDocumentState{Action: app.SyncDocumentActive, State: preparedDigestState(fmt.Sprintf("docs/%04d.md", index), false)}
-			}
-			in.Documents = documents
+			in.Documents = make([]app.PreparedDocumentState, app.MaximumSourceDocuments+1)
 			return in
 		}},
 	} {
@@ -826,10 +856,27 @@ func TestNormalizePreparedDocumentsOrdersAndValidates(t *testing.T) {
 	if err := app.ValidateScanDocumentLimit(0); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("zero limit error = %v", err)
 	}
-	if err := app.ValidateScanDocumentLimit(1001); !errors.Is(err, app.ErrSourceInvalid) {
+	if err := app.ValidateScanDocumentLimit(app.MaximumSourceDocuments + 1); !errors.Is(err, app.ErrSourceInvalid) {
 		t.Fatalf("over-limit error = %v", err)
 	}
-	if err := app.ValidateScanDocumentLimit(1000); err != nil {
+	if err := app.ValidateScanDocumentLimit(app.MaximumSourceDocuments); err != nil {
 		t.Fatalf("boundary limit error = %v", err)
+	}
+}
+
+func TestNormalizePreparedDocumentsAcceptsAbsoluteBoundary(t *testing.T) {
+	documents := make([]app.PreparedDocumentState, app.MaximumSourceDocuments)
+	for index := range documents {
+		documents[index] = app.PreparedDocumentState{
+			Action: app.SyncDocumentActive,
+			State:  preparedDigestState(fmt.Sprintf("docs/%05d.md", index), false),
+		}
+	}
+	normalized, err := app.NormalizePreparedDocuments(testSourceScope, testSourceID, testSyncRunID, documents)
+	if err != nil {
+		t.Fatalf("NormalizePreparedDocuments() boundary error = %v", err)
+	}
+	if len(normalized) != app.MaximumSourceDocuments {
+		t.Fatalf("normalized count = %d, want %d", len(normalized), app.MaximumSourceDocuments)
 	}
 }

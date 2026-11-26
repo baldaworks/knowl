@@ -26,7 +26,6 @@ const (
 	maxMetadataEntries     = 64
 	maxMetadataKeyBytes    = 256
 	maxMetadataValueBytes  = 4096
-	maxSourceStatePage     = 1000
 	maxSyncRunIDBytes      = 255
 	maxFailureClassBytes   = 128
 	maxDocumentTitleBytes  = 1024
@@ -40,6 +39,12 @@ const (
 	maxSourceMutationPlan  = 512 << 20
 	maxRetryFailureClasses = 16
 	maxRetryResultIDs      = 100
+
+	// DefaultSourceMaxDocuments preserves the source inventory ceiling used
+	// when max_documents is omitted.
+	DefaultSourceMaxDocuments = 1000
+	// MaximumSourceDocuments is the absolute supported source inventory bound.
+	MaximumSourceDocuments = 50000
 )
 
 var (
@@ -337,6 +342,26 @@ func ValidateSource(source knowl.Source) error {
 	return nil
 }
 
+// NormalizeSourceMaxDocuments validates and defaults the complete-scan bound.
+// A zero value represents an omitted programmatic setting.
+func NormalizeSourceMaxDocuments(value int) (int, error) {
+	if value == 0 {
+		return DefaultSourceMaxDocuments, nil
+	}
+	if value < 1 || value > MaximumSourceDocuments {
+		return 0, ErrSourceInvalid
+	}
+	return value, nil
+}
+
+// ValidateSourceMaxDocuments validates an explicitly configured scan bound.
+func ValidateSourceMaxDocuments(value int) error {
+	if value < 1 || value > MaximumSourceDocuments {
+		return ErrSourceInvalid
+	}
+	return nil
+}
+
 // ValidateDocumentRef validates one untrusted source descriptor.
 func ValidateDocumentRef(ref knowl.DocumentRef) error {
 	if err := ValidateDocumentID(ref.ExternalID); err != nil {
@@ -535,7 +560,7 @@ func addSyncCount(left, right int64) (int64, bool) {
 
 // ValidateDocumentListOptions validates and defaults a bounded state read.
 func ValidateDocumentListOptions(options DocumentListOptions) (DocumentListOptions, error) {
-	if options.Limit < 0 || options.Limit > maxSourceStatePage {
+	if options.Limit < 0 || options.Limit > MaximumSourceDocuments {
 		return DocumentListOptions{}, ErrSourceInvalid
 	}
 	if options.Limit == 0 {
@@ -548,6 +573,11 @@ func ValidateDocumentListOptions(options DocumentListOptions) (DocumentListOptio
 func SourceConfigDigest(source knowl.Source) (string, error) {
 	clone := source
 	clone.ConfigDigest = ""
+	maxDocuments, err := NormalizeSourceMaxDocuments(clone.Sync.MaxDocuments)
+	if err != nil {
+		return "", err
+	}
+	clone.Sync.MaxDocuments = maxDocuments
 	if err := ValidateSource(clone); err != nil {
 		return "", err
 	}

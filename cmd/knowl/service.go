@@ -202,12 +202,17 @@ func configuredSources(configuredSources []SourceConfig) []types.Source {
 				MaxCacheBytes:    configured.Git.MaxCacheBytes,
 			}
 		}
+		maxDocuments := 0
+		if configured.Sync.MaxDocuments != nil {
+			maxDocuments = *configured.Sync.MaxDocuments
+		}
 		sources = append(sources, types.Source{
 			ID: configured.ID, Type: configured.Type, Enabled: enabled,
 			Config: types.SourceConfig{Filesystem: filesystem, Git: git},
 			Sync: types.SourceSyncPolicy{
 				OnStart: configured.Sync.OnStart, Interval: configured.Sync.Interval,
 				RetryInitial: configured.Sync.RetryInitial, RetryMaximum: configured.Sync.RetryMaximum,
+				MaxDocuments: maxDocuments,
 			},
 		})
 	}

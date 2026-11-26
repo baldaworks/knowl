@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -78,6 +79,71 @@ func TestNormalizeSourcesIsDeterministicForTwoNamedSources(t *testing.T) {
 	}
 	if first[0].Config.Filesystem.Flavor != domain.SourceFlavorMarkdown {
 		t.Fatalf("default flavor = %q", first[0].Config.Filesystem.Flavor)
+	}
+}
+
+func TestNormalizeSourcesDefaultsAndValidatesMaxDocuments(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+
+	for _, test := range []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{name: "omitted", want: app.DefaultSourceMaxDocuments},
+		{name: "minimum", value: 1, want: 1},
+		{name: "maximum", value: app.MaximumSourceDocuments, want: app.MaximumSourceDocuments},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := filesystemSource("wiki", filepath.Join(root, test.name), nil)
+			source.Sync.MaxDocuments = test.value
+			normalized, err := NormalizeSources(workspace, root, []domain.Source{source})
+			if err != nil {
+				t.Fatalf("NormalizeSources() error: %v", err)
+			}
+			if got := normalized[0].Sync.MaxDocuments; got != test.want {
+				t.Fatalf("MaxDocuments = %d, want %d", got, test.want)
+			}
+		})
+	}
+
+	for _, value := range []int{-1, app.MaximumSourceDocuments + 1} {
+		source := filesystemSource("wiki", filepath.Join(root, fmt.Sprintf("invalid-%d", value)), nil)
+		source.Sync.MaxDocuments = value
+		if _, err := NormalizeSources(workspace, root, []domain.Source{source}); !errors.Is(err, app.ErrSourceInvalid) {
+			t.Fatalf("NormalizeSources(MaxDocuments=%d) error = %v, want ErrSourceInvalid", value, err)
+		}
+	}
+}
+
+func TestNormalizeSourcesMaxDocumentsParticipatesInDigest(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	base := filesystemSource("wiki", filepath.Join(root, "source"), nil)
+	explicitDefault := base
+	explicitDefault.Sync.MaxDocuments = app.DefaultSourceMaxDocuments
+	raised := base
+	raised.Sync.MaxDocuments = 10000
+
+	normalizeOne := func(source domain.Source) domain.Source {
+		t.Helper()
+		result, normalizeErr := NormalizeSources(workspace, root, []domain.Source{source})
+		if normalizeErr != nil {
+			t.Fatalf("NormalizeSources() error: %v", normalizeErr)
+		}
+		return result[0]
+	}
+	omitted := normalizeOne(base)
+	defaulted := normalizeOne(explicitDefault)
+	changed := normalizeOne(raised)
+	if omitted.ConfigDigest != defaulted.ConfigDigest {
+		t.Fatalf("omitted digest %q differs from explicit default %q", omitted.ConfigDigest, defaulted.ConfigDigest)
+	}
+	if omitted.ConfigDigest == changed.ConfigDigest {
+		t.Fatalf("default digest %q equals raised-limit digest", omitted.ConfigDigest)
 	}
 }
 

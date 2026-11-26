@@ -70,6 +70,10 @@ func composeStages(service *Service) {
 }
 
 func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source) (Result, error) {
+	maxDocuments, err := app.NormalizeSourceMaxDocuments(source.Sync.MaxDocuments)
+	if err != nil {
+		return Result{}, failStage(classScan, err)
+	}
 	configDigest, err := effectiveConfigDigest(source)
 	if err != nil {
 		return Result{}, err
@@ -85,7 +89,7 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 	if previousRepositoryIdentity != sourceRepositoryIdentity(source) {
 		previousCheckpoint = ""
 	}
-	resumed, err := service.beginOrResumeScan(ctx, scope, source, configDigest)
+	resumed, err := service.beginOrResumeScan(ctx, scope, source, configDigest, maxDocuments)
 	if err != nil {
 		return Result{}, err
 	}
@@ -119,7 +123,7 @@ func (service *Service) runStages(ctx context.Context, scope knowl.ScopeRef, ada
 		}
 		initialToken = prepared.PageToken
 	}
-	catalog, err := service.listCatalog(ctx, scope, adapter, source, resumed.run, resumed.refs, initialToken, checkpoint)
+	catalog, err := service.listCatalog(ctx, scope, adapter, source, resumed.run, resumed.refs, initialToken, checkpoint, maxDocuments)
 	if err != nil {
 		failure := service.failScanSafe(ctx, resumed.run, err)
 		return Result{Run: service.refreshRun(ctx, scope, resumed.run)}, failure
@@ -155,7 +159,7 @@ type scanResume struct {
 // beginOrResumeScan fails incompatible abandoned scans safely, resumes a
 // compatible scanning run with its persisted ordinal descriptors, hands
 // prepared-or-later runs to the saga tail, or begins a fresh durable run.
-func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.ScopeRef, source knowl.Source, configDigest string) (scanResume, error) {
+func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.ScopeRef, source knowl.Source, configDigest string, maxDocuments int) (scanResume, error) {
 	resumable, err := service.state.ResumableSyncRuns(ctx, scope, service.options.MaxRecoveryRuns)
 	if err != nil {
 		return scanResume{}, fmt.Errorf("resume inspection: %w", ErrRecoveryFailed)
@@ -167,7 +171,7 @@ func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.Scope
 		}
 		switch run.Status {
 		case knowl.SyncStatusScanning:
-			refs, err := service.state.ScanDocuments(ctx, scope, run.ID, service.options.MaxScanDocuments)
+			refs, err := service.state.ScanDocuments(ctx, scope, run.ID, maxDocuments)
 			if err != nil {
 				return scanResume{}, failStage(classState, err)
 			}
@@ -203,7 +207,7 @@ func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.Scope
 		return scanResume{}, failStage(classState, err)
 	}
 	if replay {
-		refs, err := service.state.ScanDocuments(ctx, scope, created.ID, service.options.MaxScanDocuments)
+		refs, err := service.state.ScanDocuments(ctx, scope, created.ID, maxDocuments)
 		if err != nil {
 			return scanResume{}, failStage(classState, err)
 		}
@@ -217,7 +221,7 @@ func (service *Service) beginOrResumeScan(ctx context.Context, scope knowl.Scope
 
 // listCatalog performs the bounded paged listing with atomic ordinal progress;
 // absence is only authorized after the terminal page is durably recorded.
-func (service *Service) listCatalog(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, refs []knowl.DocumentRef, initialToken, checkpoint string) (catalogState, error) {
+func (service *Service) listCatalog(ctx context.Context, scope knowl.ScopeRef, adapter app.SourceAdapter, source knowl.Source, run knowl.SyncRun, refs []knowl.DocumentRef, initialToken, checkpoint string, maxDocuments int) (catalogState, error) {
 	state := catalogState{refs: refs, checkpoint: checkpoint}
 	token := initialToken
 	expectedToken := run.NextPageToken
@@ -246,7 +250,7 @@ func (service *Service) listCatalog(ctx context.Context, scope knowl.ScopeRef, a
 			if _, duplicate := seen[ref.ExternalID]; duplicate {
 				return catalogState{}, failStage(classScan, errors.New("duplicate descriptor"))
 			}
-			if len(seen) >= service.options.MaxScanDocuments {
+			if len(seen) >= maxDocuments {
 				return catalogState{}, failStage(classScan, errors.New("document bound exceeded"))
 			}
 			seen[ref.ExternalID] = struct{}{}
