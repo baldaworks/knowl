@@ -13,7 +13,7 @@ See [agent configuration](agents.md) for maintainers and the
 
 Knowl is a standalone knowledge service with:
 
-- a canonical workspace;
+- one or more isolated canonical scope workspaces;
 - one ingest pipeline;
 - rebuildable operational state and projections;
 - MCP and HTTP transports over the same application services.
@@ -21,6 +21,8 @@ Knowl is a standalone knowledge service with:
 Use the CLI for a project-local workflow or run a persistent MCP/HTTP service.
 Go applications can compose the same runtime in-process; see
 [Go application integration](#go-application-integration).
+For multi-scope configuration, selection, compatibility, backup and readiness,
+see [Multiple knowledge scopes](multi-scope.md).
 
 ## Maintenance workers
 
@@ -212,10 +214,11 @@ Notes:
 - when storage is omitted, Knowl defaults to SQLite.
 - default local listen address is `127.0.0.1:8080`; container deployments
   may override it with `0.0.0.0:8080` or another literal IP bind.
-- when `knowl.operator.token` is non-empty, `/v1/*` and `/mcp` require an
-  `Authorization: Bearer <token>` header. Health and readiness probes remain
-  unauthenticated. Keep tokenless deployments on a trusted, loopback-only
-  network boundary.
+- API, MCP and Web authentication are configured independently. Empty
+  `auth_mode` resolves to `token` when `knowl.operator.token` is nonempty and
+  to `public` otherwise. Empty `access_mode` always resolves to `read_only`.
+  Health and readiness probes remain unauthenticated. See
+  [HTTP facade access control](access-control.md).
 
 Git sources use the same `source list`, `source sync`, `source status`,
 scheduling, retry, and maintenance lifecycle as filesystem sources. They only
@@ -269,6 +272,8 @@ an existing valid provider/workspace configuration to enable them:
 knowl:
   web:
     enabled: true
+    auth_mode: token
+    access_mode: read_only
   server:
     listen_addr: 127.0.0.1:8080
   operator:
@@ -277,7 +282,8 @@ knowl:
 
 Set `KNOWL_OPERATOR_TOKEN` to a local secret before starting the service. Keep
 secret overrides in `.config/knowl/*.local.yaml` or the process environment;
-do not commit them. Startup rejects enabled web access with an empty token.
+do not commit them. Token and proxy Web modes reject an empty operator token;
+public mode does not require one.
 For embedded Go applications the corresponding fields are `Config.Web.Enabled`
 and `Config.OperatorToken`. MCP stdio disables web access.
 
@@ -289,9 +295,11 @@ header. Disabled web routes return 404. Health probes remain public.
 The browser keeps the token in memory for the current document. Reload,
 **Disconnect**, or an authorization failure clears the connection. It is not
 saved in cookies, local/session storage, browser URLs, or exported search JSON.
-Data responses use `Cache-Control: no-store`. Treat the operator token as a
-write-capable credential: it also authorizes `POST /v1/ingest` and the existing
-MCP tools. The read-only UI does not narrow the token's authority.
+Data responses use `Cache-Control: no-store`. The operator token is accepted
+only by facades configured for token authentication. Write capability is
+separate: API/MCP must explicitly select `access_mode: read_write`; otherwise
+ingest is denied and the MCP write tool is not registered. The read-only UI
+does not change another facade's authority.
 
 Keep local access on loopback. For remote access, terminate HTTPS at a trusted
 reverse proxy and restrict direct access to the Go listener. Knowl serves HTTP
@@ -339,6 +347,79 @@ reports mean unavailable, rather than failed retrieval or zero work.
 Search configuration, full-page coverage, external APIs, local TEI and rebuild
 recovery are documented in the [search guide](search.md). Embeddings are optional
 and independent of the maintainer and deployment method.
+
+## Database schema migrations
+
+SQLite and PostgreSQL apply all required pending Goose migrations automatically
+during ordinary startup, before listeners or workers start. A required migration
+or schema-validation error stops startup; lexical fallback does not bypass it.
+New migrations are SQL Goose; the released historical Go migration 19 remains
+part of the embedded Knowl migration set. Routine installs/upgrades do not need
+a separate Goose executable or manual history-table selection.
+
+For optional database-only administration, stop all writers/hosts and take
+database plus canonical/raw backups first. Use the same configuration as the
+application:
+
+```bash
+knowl migrate up
+```
+
+Up applies all pending required migrations; an up-to-date database is a no-op.
+`--config-dir` and `--profile` select configuration as usual, for example:
+
+```bash
+knowl --config-dir /path/to/config-root --profile production migrate up
+```
+
+Storage selection uses `knowl.storage`; relative SQLite paths resolve against
+the configured workspace. PostgreSQL with embeddings enabled requires
+operator-provisioned pgvector; lexical-only PostgreSQL does not. See
+[PostgreSQL permissions and recovery](postgres.md).
+
+The commands only migrate the database and exit. They do not start HTTP/MCP,
+workers or source synchronization, inspect canonical wiki content, resolve
+model/embedding credentials, call those providers or rebuild projections.
+Ordinary configuration parsing and shape validation still apply. Migrations
+may invalidate derived projections; normal application startup subsequently
+prepares those projections.
+
+Success prints JSON containing `backend`, `direction` and executed `steps`,
+each with `stream` and `version`. For example, repeated Up on current SQLite:
+
+```json
+{"backend":"sqlite","direction":"up","steps":[]}
+```
+
+For deliberate rollback, stop all writers/hosts, back up canonical/raw data and
+the database, and select a compatible binary/configuration before running:
+
+```bash
+knowl migrate down
+```
+
+Down reverses one last migration, not the whole upgrade. PostgreSQL reverses
+one optional-vector migration first when applied, otherwise one base migration,
+even if embeddings are now disabled. At zero applied migrations it is a no-op;
+it never implicitly runs Up. Down can discard schema/data. Migration locks do
+not make live application writes safe. Starting the current binary afterward
+automatically reapplies pending required Up migrations; do not restart it in
+the middle of an intended downgrade.
+
+Schema 28 adds recovery-only retirement identity and its bounded private audit
+payload. Stop all writers and back up the operational database and matching
+workspace before upgrading; ordinary startup applies the migration. Its Down
+refuses to discard any recorded recovery proof, including proof retained after
+that owner was genuinely reactivated. Keep the upgraded database and roll
+forward, or restore the matching backup with a compatible binary while writers
+remain stopped. A binary downgrade alone is not a coherent rollback.
+
+Failures return a nonzero exit and no success JSON. Earlier Up steps may already
+have committed before a later failure; correct the cause and retry using real
+Goose history. Unknown or corrupt history is not automatically repaired. Keep
+database credentials in protected config/environment, not command arguments.
+The separate `migrate okf-v0.2` command below changes canonical content, not
+just database schema.
 
 ## Supported operator workflow
 
@@ -413,6 +494,29 @@ checkpoint before cleanup starts. This is readiness ordering, not a replacement
 mapping: no config field aliases owners or declares provenance equivalence.
 Removing an owner without an addition is a pure deletion and needs no such gate.
 
+A historical owner can be absent from lifecycle state, for example after an
+adapter change predating lifecycle bootstrap. The regular retirement worker
+also scans durable accepted source operations in bounded operation-ID windows.
+It creates a missing exact owner as `retiring` only when that operation matches
+an accepted descriptor cited by a current canonical page and the original
+immutable raw bytes still match their digest. The worker rechecks the page
+under the shared apply fence and inserts against the current authority. It
+preserves existing active, retiring and deleted rows. No alias, additional
+configuration, recovery command or externally supplied proof is involved.
+
+Historical configuration identity remains unknown: the recovered row has an
+empty `ConfigDigest` and a separate `RecoveryProofDigest`; status exposes the
+optional `recovery_proof_digest`. That proof authorizes retirement only. Its
+bounded canonical preimage remains private durable audit metadata even if the
+page later disappears or a genuine configured activation clears the live proof
+binding. Raw revisions and accepted operation history remain intact.
+
+Recovery conservatively waits for all current active owners' accepted-sync
+readiness. Readiness means sync acceptance and durable maintenance reservation
+(or replay/convergence), not that every maintenance operation has committed.
+Queued or failed maintenance may still need the retirement to finish first.
+This recovery gate does not change the normal replacement ordering above.
+
 Retirement is deliberately gradual. Status may show unchanged canonical pages
 that still cite the retiring owner at the same time as committed pages that no
 longer cite it. `operations.pending`, `planned`, `applying`,
@@ -439,6 +543,32 @@ activation rejects the old stage with `citation.source_authority_changed`.
 Unrelated source configuration changes do not invalidate an otherwise current
 stage. Once canonical publication has committed, journal and projection replay
 complete even if source authority subsequently changes.
+
+For a missing historical owner, leave the normal worker running and inspect
+adapter-qualified status again after discovery. Before discovery it can still
+report `retirement.unowned_ref`; this does not create a lifecycle row. Missing
+or mismatched manifests/raw bytes, malformed provenance and stale page
+preimages block recovery without scheduling cleanup. The coordinator returns
+typed errors such as `ErrSourceLifecycleInvalid`, `ErrRetirementPageStale` or a
+`CanonicalProvenanceFailure`; these are not proof fields to supply through the
+CLI. Inspect the reported failure and restore authentic missing evidence from
+a coherent backup when appropriate. Do not manufacture configuration digests,
+relabel adapters or insert lifecycle rows manually. Once the owner exists,
+use ordinary retirement status and page retry:
+
+```bash
+./knowl source status legacy-docs --retirement-adapter wiki-filesystem
+./knowl source retry legacy-docs --retirement-adapter wiki-filesystem --page-id concepts/example --dry-run
+./knowl source retry legacy-docs --retirement-adapter wiki-filesystem --page-id concepts/example
+```
+
+Keep the normal worker (`./knowl start`) running to execute queued work. Mixed
+pages are rewritten from current configured active evidence and valid accepted
+application/inline evidence, which needs no configured owner. Old-only pages
+are deleted through ordinary retirement. Neither outcome deletes immutable raw
+history. A failed ordinary source operation can then be inspected and retried
+with its existing `source status` / `source retry` workflow; retry does not
+substitute for retirement discovery.
 
 Preview a page-specific retry first, then requeue it through the same command
 without `--dry-run`. Omitting `--page-id` targets all failed page operations for
@@ -484,13 +614,64 @@ catalogs, stop other writers and run:
 ./knowl validate
 ```
 
-This is the only hierarchy-specific mutation command. It constructs the normal
+This command constructs the normal
 provider, workspace, and selected store in process, claims exactly its reserved
 hierarchy operation, and does not start HTTP, the general operation scheduler,
 source jobs, or configured `on_start` synchronization. Output is structured
 JSON. A changed result includes its generation and affected catalog/log files;
 a converged replay returns `"changed":false` and leaves the canonical digest
 unchanged.
+
+If planning failed before a plan was staged (for example,
+`provider_output_exhausted` with `hierarchy_plan_invalid`), preview and retry that
+operation explicitly:
+
+```bash
+./knowl hierarchy retry <operation-id> --dry-run
+./knowl hierarchy retry <operation-id>
+./knowl hierarchy reconcile
+./knowl validate
+```
+
+The preview returns JSON without changing state or invoking the provider. The
+retry atomically archives the failed attempt and requeues the same operation;
+`reconcile` claims it and invokes planning again. The schema, snapshot, and
+planner/output policy must still match. Active, committed, wrong-kind, stale,
+and already staged operations are rejected. Existing staged work follows the
+normal replay path rather than replacing its plan. No database edits or catalog
+changes are required to reset a failed planning attempt.
+
+Migration 29 adds durable hierarchy retry history to SQLite and PostgreSQL.
+Work-attempt and manual-retry counters remain cumulative. Previous failures,
+correction summaries, and structured graph diagnostics survive later attempts;
+stores expose the latest 100 records through `HierarchyRetryHistory`. Graph
+failures include bounded diagnostic codes, paths, and targets, such as
+`hierarchy.missing_child`, without storing provider candidate text.
+
+Operational execution budgets are configured independently from model planning:
+
+```yaml
+knowl:
+  timeouts:
+    projection_rebuild: 60m
+    hierarchy: 65m
+```
+
+`projection_rebuild` bounds a complete dense build, including startup repair and
+SQLite/PostgreSQL projection publication. Its default is 15 minutes.
+`hierarchy` bounds the complete explicit reconciliation, including slot admission,
+planning, canonical commit and publication. When omitted or zero, it defaults to
+the projection budget plus five minutes (20 minutes with default settings).
+An explicit positive hierarchy duration overrides this derived value; choose it
+large enough for both planning and publication. Negative durations and overflow
+of the derived budget are rejected. A shorter caller deadline still wins.
+
+The model's existing five-minute correction deadline is unchanged. Operational
+timeouts do not change model-space or maintenance-generation identity and do not
+requeue already committed documents. Match startup probes and deployment rollout
+budgets to the configured full-build time. Builds remain atomic and restartable,
+but currently do not checkpoint individual embedding batches: inspect the saved
+operation and use native recovery after a timeout instead of editing the database.
 
 Planner identity includes `hierarchy-v3` and the effective output policy in the
 durable operation identity. Planning uses deterministically ordered,
@@ -1147,14 +1328,17 @@ MCP is the primary agent-facing interface.
 The running service exposes MCP Streamable HTTP on its existing listener at
 `http://127.0.0.1:8080/mcp`.
 
-When an operator token is configured, MCP clients must send the same bearer
-token in the HTTP `Authorization` header.
+MCP authentication follows `knowl.mcp.auth_mode`. Token mode requires the
+operator bearer in the HTTP `Authorization` header; public mode does not.
 
-The baseline server exposes exactly:
+The read-only default exposes exactly:
 
 - `knowl_retrieve`
-- `knowl_ingest`
 - `knowl_operation`
+
+Explicit token-authenticated `access_mode: read_write` additionally exposes
+`knowl_ingest`. See [HTTP facade access control](access-control.md) for native
+tool omission and gateway call-denial behavior.
 
 MCP and HTTP call the same underlying application services.
 

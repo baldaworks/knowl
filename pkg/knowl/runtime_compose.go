@@ -27,6 +27,8 @@ import (
 type composedRuntime struct {
 	config              Config
 	workspace           *contentfs.Workspace
+	workspaces          *ScopeWorkspaceResolver
+	content             *ScopedContentStore
 	closer              io.Closer
 	maintainerCloser    io.Closer
 	slots               *executionSlots
@@ -43,6 +45,7 @@ type composedRuntime struct {
 	hierarchy           *app.HierarchyService
 	retirement          *app.RetirementPageService
 	retirementControl   *app.SourceRetirementCoordinator
+	retirementControls  map[domain.ScopeRef]*app.SourceRetirementCoordinator
 	query               *app.QueryService
 	lint                *app.LintService
 	mcp                 *mcp.Server
@@ -104,10 +107,19 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 		}
 	}()
 
-	runtime.workspace, err = openWorkspace(config.Workspace)
+	runtime.workspaces, err = OpenScopeWorkspaces(config)
 	if err != nil {
 		return composedRuntime{}, err
 	}
+	runtime.content, err = NewScopedContentStore(runtime.workspaces)
+	if err != nil {
+		return composedRuntime{}, err
+	}
+	defaultWorkspace, err := runtime.workspaces.Resolve(config.Scope)
+	if err != nil {
+		return composedRuntime{}, err
+	}
+	runtime.workspace = defaultWorkspace.Workspace
 	store, err := openStore(ctx, config)
 	if err != nil {
 		return composedRuntime{}, err
@@ -116,23 +128,33 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 	runtime.index = store.index
 	runtime.sourceState = store.sources
 	runtime.sourceLifecycle = store.lifecycle
-	maintenance, err := newHostMaintenanceContent(runtime.workspace, runtime.sourceLifecycle, config.IngestOptions.ApplyCoordinator)
+	maintenance, err := newScopedMaintenanceContent(runtime.workspaces, runtime.sourceLifecycle, config.IngestOptions.ApplyCoordinator)
 	if err != nil {
 		return composedRuntime{}, err
 	}
-	runtime.retirementCommitter, err = newHostRetirementCommitter(config.IngestOptions.ApplyCoordinator, runtime.sourceLifecycle, runtime.workspace, maintenance)
-	if err != nil {
-		return composedRuntime{}, fmt.Errorf("compose retirement committer: %w", err)
+	retirementCommitter := &scopedRetirementCommitter{byScope: make(map[domain.ScopeRef]*hostRetirementCommitter, len(runtime.workspaces.ordered))}
+	for _, resolved := range runtime.workspaces.ordered {
+		bound := maintenance.byScope[resolved.Ref]
+		committer, commitErr := newHostRetirementCommitter(bound.coordinator, runtime.sourceLifecycle, resolved.Workspace, bound)
+		if commitErr != nil {
+			return composedRuntime{}, fmt.Errorf("compose scope %q retirement committer: %w", resolved.Name, commitErr)
+		}
+		retirementCommitter.byScope[resolved.Ref] = committer
 	}
+	runtime.retirementCommitter = retirementCommitter
 	runtime.closer = store.closer
-	if err = reconcileConfiguredSourceLifecycles(
-		ctx,
-		runtime.sourceLifecycle,
-		config.Scope,
-		config.Sources,
-		time.Now().UTC().Truncate(time.Microsecond),
-	); err != nil {
-		return composedRuntime{}, fmt.Errorf("prepare configured source lifecycles: %w", err)
+	for _, scope := range config.scopeRegistry.All() {
+		if scope.Disabled {
+			continue
+		}
+		if _, resolveErr := runtime.workspaces.Resolve(scope.Ref); errors.Is(resolveErr, ErrScopeUnavailable) {
+			continue
+		} else if resolveErr != nil {
+			return composedRuntime{}, resolveErr
+		}
+		if err = reconcileConfiguredSourceLifecycles(ctx, runtime.sourceLifecycle, scope.Ref, scope.Sources, time.Now().UTC().Truncate(time.Microsecond)); err != nil {
+			return composedRuntime{}, fmt.Errorf("prepare scope %q source lifecycles: %w", scope.Name, err)
+		}
 	}
 	maintainer := slots.all[0].maintainer
 	runtime.service, runtime.query, runtime.lint, err = composeServices(ctx, config, maintenance, runtime.operations, runtime.index, store.checker, maintainer, slots)
@@ -176,24 +198,49 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 		return composedRuntime{}, fmt.Errorf("compose retirement operation store: %w", app.ErrSourceLifecycleInvalid)
 	}
 	var scheduler *operationScheduler
-	runtime.retirementControl, err = app.NewSourceRetirementCoordinator(app.SourceRetirementCoordinatorDependencies{
-		Scope: config.Scope, Lifecycles: runtime.sourceLifecycle, Provenance: runtime.workspace,
-		Pages: runtime.retirement, Operations: retirementOperations, Projection: runtime.workspace,
-		ApplyCoordinator: config.IngestOptions.ApplyCoordinator,
-		Wake: func(id domain.OperationID) {
-			if scheduler != nil {
-				scheduler.Wake(id)
-			}
-		},
-	})
-	if err != nil {
-		return composedRuntime{}, fmt.Errorf("compose source retirement coordinator: %w", err)
+	runtime.retirementControls = make(map[domain.ScopeRef]*app.SourceRetirementCoordinator, len(config.scopeRegistry.ordered))
+	for _, scope := range config.scopeRegistry.All() {
+		if scope.Disabled {
+			continue
+		}
+		if _, resolveErr := runtime.workspaces.Resolve(scope.Ref); errors.Is(resolveErr, ErrScopeUnavailable) {
+			continue
+		} else if resolveErr != nil {
+			return composedRuntime{}, resolveErr
+		}
+		control, controlErr := app.NewSourceRetirementCoordinator(app.SourceRetirementCoordinatorDependencies{
+			Scope: scope.Ref, Lifecycles: runtime.sourceLifecycle, Provenance: runtime.content,
+			Pages: runtime.retirement, Operations: retirementOperations, Projection: runtime.content,
+			ApplyCoordinator: config.IngestOptions.ApplyCoordinator,
+			Wake: func(id domain.OperationID) {
+				if scheduler != nil {
+					scheduler.Wake(id)
+				}
+			},
+		})
+		if controlErr != nil {
+			return composedRuntime{}, fmt.Errorf("compose scope %q source retirement coordinator: %w", scope.Name, controlErr)
+		}
+		runtime.retirementControls[scope.Ref] = control
 	}
-	scheduler, err = newOperationScheduler(runtime.operations, runner, config.Scope, schedulerOptions{
+	runtime.retirementControl = runtime.retirementControls[config.Scope]
+	schedulerScopes := make([]domain.ScopeRef, 0, len(runtime.workspaces.ordered))
+	for _, resolved := range runtime.workspaces.ordered {
+		schedulerScopes = append(schedulerScopes, resolved.Ref)
+	}
+	scheduler, err = newMultiScopeOperationScheduler(runtime.operations, runner, schedulerScopes, schedulerOptions{
 		wakeSize: config.WorkerQueueSize, slots: slots,
 		discover: func(ctx context.Context) error {
-			_, discoverErr := runtime.retirementControl.Advance(ctx)
-			return discoverErr
+			for _, scope := range config.scopeRegistry.All() {
+				control := runtime.retirementControls[scope.Ref]
+				if control == nil {
+					continue
+				}
+				if _, discoverErr := control.Advance(ctx); discoverErr != nil {
+					return discoverErr
+				}
+			}
+			return nil
 		},
 	})
 	runtime.scheduler = scheduler
@@ -202,27 +249,45 @@ func composeRuntime(ctx context.Context, config Config, slots *executionSlots, a
 	}
 	runtime.sourceSync, err = reconcile.NewService(reconcile.Dependencies{
 		ApplyCoordinator: config.IngestOptions.ApplyCoordinator,
-		Adapters:         adapters, State: runtime.sourceState, Content: runtime.workspace,
-		SourceContent: runtime.workspace, Search: runtime.index,
+		Adapters:         adapters, State: runtime.sourceState, Content: runtime.content,
+		SourceContent: runtime.content, Search: runtime.index,
 		Maintenance: sourceMaintenanceQueue{service: runtime.service, waker: runtime.scheduler},
 		Lifecycle:   runtime.sourceLifecycle,
 	}, reconcile.Options{})
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose source reconciliation: %w", err)
 	}
-	if _, err = runtime.sourceSync.Recover(ctx, config.Scope, runtime.sources); err != nil && !errors.Is(err, reconcile.ErrSyncPartial) {
-		return composedRuntime{}, fmt.Errorf("recover Knowl sources: %w", err)
+	for _, scope := range config.scopeRegistry.All() {
+		if scope.Disabled {
+			continue
+		}
+		if _, resolveErr := runtime.workspaces.Resolve(scope.Ref); errors.Is(resolveErr, ErrScopeUnavailable) {
+			continue
+		} else if resolveErr != nil {
+			return composedRuntime{}, resolveErr
+		}
+		if _, err = runtime.sourceSync.Recover(ctx, scope.Ref, scope.Sources); err != nil && !errors.Is(err, reconcile.ErrSyncPartial) {
+			return composedRuntime{}, fmt.Errorf("recover scope %q sources: %w", scope.Name, err)
+		}
 	}
-	runtime.mcp, err = mcp.NewServer(runtime.query, runtime.service, runtime.scheduler, config.Scope, config.ReadLimits)
+	resolveScope := func(name domain.ScopeName) (domain.ScopeRef, error) {
+		selected, resolveErr := config.scopeRegistry.Resolve(name)
+		return selected.Ref, resolveErr
+	}
+	publicDefault := config.scopeRegistry.Default()
+	runtime.mcp, err = mcp.NewMultiScopeServer(runtime.query, runtime.service, runtime.scheduler, publicDefault.Ref, resolveScope, config.ScopeAuthorizer, config.ReadLimits)
 	if err != nil {
 		return composedRuntime{}, fmt.Errorf("compose MCP service: %w", err)
 	}
 	runtime.handler = httpserver.NewHandler(httpserver.Dependencies{
-		Scope:  config.Scope,
-		Ingest: runtime.service,
-		Query:  runtime.query,
-		Waker:  runtime.scheduler,
-		Ready:  func() bool { return false },
+		Scope:        publicDefault.Ref,
+		PublicScope:  config.scopeRegistry.DefaultName(),
+		ResolveScope: resolveScope,
+		Authorizer:   config.ScopeAuthorizer,
+		Ingest:       runtime.service,
+		Query:        runtime.query,
+		Waker:        runtime.scheduler,
+		Ready:        func() bool { return false },
 	})
 	return runtime, nil
 }
@@ -239,20 +304,6 @@ func (queue sourceMaintenanceQueue) ReserveAccepted(ctx context.Context, request
 	}
 	queue.waker.Wake(reservation.OperationID)
 	return reservation, nil
-}
-
-func openWorkspace(path string) (*contentfs.Workspace, error) {
-	workspace, err := contentfs.New(path)
-	if err != nil {
-		return nil, err
-	}
-	if err := workspace.Init(); err != nil {
-		return nil, fmt.Errorf("initialize Knowl workspace: %w", err)
-	}
-	if err := workspace.Validate(); err != nil {
-		return nil, fmt.Errorf("validate Knowl workspace: %w", err)
-	}
-	return workspace, nil
 }
 
 func composeServices(
@@ -273,12 +324,24 @@ func composeServices(
 	if _, err := service.Recover(ctx); err != nil {
 		return nil, nil, nil, fmt.Errorf("recover Knowl workspace: %w", err)
 	}
-	snapshot, err := workspace.Snapshot(ctx, config.Scope)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("snapshot Knowl workspace: %w", err)
-	}
-	if err := ensureProjection(ctx, index, checker, snapshot); err != nil {
-		return nil, nil, nil, fmt.Errorf("prepare Knowl projection: %w", err)
+	for _, scope := range config.scopeRegistry.All() {
+		if scope.Disabled {
+			continue
+		}
+		if resolver, ok := workspace.(*scopedMaintenanceContent); ok {
+			if _, resolveErr := resolver.scope(scope.Ref); errors.Is(resolveErr, domain.ErrScopeUnknown) {
+				continue
+			} else if resolveErr != nil {
+				return nil, nil, nil, resolveErr
+			}
+		}
+		snapshot, snapshotErr := workspace.Snapshot(ctx, scope.Ref)
+		if snapshotErr != nil {
+			return nil, nil, nil, fmt.Errorf("snapshot scope %q workspace: %w", scope.Name, snapshotErr)
+		}
+		if projectionErr := ensureProjection(ctx, index, checker, snapshot); projectionErr != nil {
+			return nil, nil, nil, fmt.Errorf("prepare scope %q projection: %w", scope.Name, projectionErr)
+		}
 	}
 	query, err := app.NewQueryService(workspace, operations, index, service, app.QueryOptions{ReadLimits: config.ReadLimits})
 	if err != nil {
@@ -296,13 +359,30 @@ func composeServices(
 }
 
 func newHost(runtime composedRuntime) (*Host, error) {
-	sourceJobs, err := newSourceScheduler(runtime.sourceSync.SyncSource, runtime.config.Scope, runtime.sources, runtime.sourceObserver, sourceSchedulerOptions{})
+	var scheduled []scopedSource
+	for _, scope := range runtime.config.scopeRegistry.All() {
+		if _, resolveErr := runtime.workspaces.Resolve(scope.Ref); resolveErr != nil {
+			continue
+		}
+		for _, source := range scope.Sources {
+			scheduled = append(scheduled, scopedSource{Scope: scope.Ref, Source: source})
+		}
+	}
+	var sourceJobs *sourceScheduler
+	var err error
+	if len(scheduled) == 0 {
+		sourceJobs, err = newSourceScheduler(runtime.sourceSync.SyncSource, runtime.config.Scope, nil, runtime.sourceObserver, sourceSchedulerOptions{})
+	} else {
+		sourceJobs, err = newMultiScopeSourceScheduler(runtime.sourceSync.SyncSource, scheduled, runtime.sourceObserver, sourceSchedulerOptions{})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("compose source scheduler: %w", err)
 	}
 	host := &Host{
 		config:              runtime.config,
 		workspace:           runtime.workspace,
+		workspaces:          runtime.workspaces,
+		content:             runtime.content,
 		closer:              runtime.closer,
 		maintainerCloser:    runtime.maintainerCloser,
 		slots:               runtime.slots,
@@ -312,6 +392,7 @@ func newHost(runtime composedRuntime) (*Host, error) {
 		sourceLifecycle:     runtime.sourceLifecycle,
 		retirementCommitter: runtime.retirementCommitter,
 		retirementControl:   runtime.retirementControl,
+		retirementControls:  runtime.retirementControls,
 		sourceSync:          runtime.sourceSync,
 		sources:             cloneSources(runtime.sources),
 		sourceByID:          sourceIndex(runtime.sources),
@@ -331,43 +412,85 @@ func newHost(runtime composedRuntime) (*Host, error) {
 	if runtime.retirementControl != nil {
 		readers.Retirements = operatorRetirementReader{host: host}
 	}
-	if runtime.workspace != nil {
-		readers.Catalogs = runtime.workspace
-		readers.Directories = runtime.workspace
-		readers.Pages = runtime.workspace
-		readers.Page = runtime.workspace
-		readers.Revisions = runtime.workspace
+	if runtime.content != nil {
+		readers.Catalogs = runtime.content
+		readers.Directories = runtime.content
+		readers.Pages = runtime.content
+		readers.Page = runtime.content
+		readers.Revisions = runtime.content
 	}
 	readers.Operations, _ = runtime.operations.(app.OperationLister)
 	readers.Documents, _ = runtime.sourceState.(app.SourceDocumentLister)
-	host.operator, err = app.NewOperatorService(runtime.config.Scope, readers, app.OperatorOptions{ReadLimits: runtime.config.ReadLimits})
-	if err != nil {
-		return nil, fmt.Errorf("compose operator reads: %w", err)
+	statistics, _ := runtime.operations.(app.StatisticsReader)
+	readers.Statistics = &operatorStatisticsReader{host: host, reader: statistics}
+	operators := make(map[domain.ScopeRef]*app.OperatorService, len(runtime.config.scopeRegistry.ordered))
+	for _, scope := range runtime.config.scopeRegistry.All() {
+		if _, resolveErr := runtime.workspaces.Resolve(scope.Ref); resolveErr != nil {
+			continue
+		}
+		operator, operatorErr := app.NewOperatorService(scope.Ref, readers, app.OperatorOptions{ReadLimits: runtime.config.ReadLimits})
+		if operatorErr != nil {
+			return nil, fmt.Errorf("compose scope %q operator reads: %w", scope.Name, operatorErr)
+		}
+		operators[scope.Ref] = operator
 	}
+	host.operator = operators[runtime.config.Scope]
 	httpHandler := httpserver.NewHandler(httpserver.Dependencies{
-		Scope:  runtime.config.Scope,
-		Ingest: runtime.service,
-		Query:  runtime.query,
-		Waker:  runtime.scheduler,
-		Ready:  host.Ready,
+		Scope:       runtime.config.scopeRegistry.Default().Ref,
+		PublicScope: runtime.config.scopeRegistry.DefaultName(),
+		ResolveScope: func(name domain.ScopeName) (domain.ScopeRef, error) {
+			selected, resolveErr := runtime.config.scopeRegistry.Resolve(name)
+			return selected.Ref, resolveErr
+		},
+		Authorizer: runtime.config.ScopeAuthorizer,
+		Ingest:     runtime.service,
+		Query:      runtime.query,
+		Waker:      runtime.scheduler,
+		Ready:      host.Ready,
+		ScopesReadiness: func() []httpserver.ScopeReadiness {
+			states := host.ScopesReadiness()
+			result := make([]httpserver.ScopeReadiness, len(states))
+			for index, state := range states {
+				result[index] = httpserver.ScopeReadiness{Name: state.Name, Ready: state.Ready, Reason: state.Reason}
+			}
+			return result
+		},
 	})
-	mcpHandler, err := mcphttp.NewHandler(runtime.mcp, host.Ready)
+	mcpHandler, err := mcphttp.NewHandlerWithOptions(runtime.mcp, host.Ready, mcphttp.HandlerOptions{
+		ReadOnly: runtime.config.MCP.AccessMode == AccessModeReadOnly,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("compose Knowl MCP HTTP handler: %w", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", httpserver.WithOperatorAuth(mcpHandler, runtime.config.OperatorToken))
-	mux.Handle("/mcp/", httpserver.WithOperatorAuth(httpHandler, runtime.config.OperatorToken))
-	mux.Handle("/v1", httpHandler)
-	mux.Handle("/v1/", httpserver.WithOperatorAuth(httpHandler, runtime.config.OperatorToken))
+	mcpPolicy := httpserver.FacadePolicy{RequireToken: runtime.config.MCP.AuthMode == AuthModeToken, ReadOnly: runtime.config.MCP.AccessMode == AccessModeReadOnly, ProtocolHTTP: true}
+	mcpFallbackPolicy := mcpPolicy
+	mcpFallbackPolicy.ReadOnly = true
+	mcpFallbackPolicy.ProtocolHTTP = false
+	apiPolicy := httpserver.FacadePolicy{RequireToken: runtime.config.API.AuthMode == AuthModeToken, ReadOnly: runtime.config.API.AccessMode == AccessModeReadOnly}
+	mux.Handle("/mcp", httpserver.WithFacadePolicy(mcpHandler, runtime.config.OperatorToken, mcpPolicy))
+	mux.Handle("/mcp/", httpserver.WithFacadePolicy(httpHandler, runtime.config.OperatorToken, mcpFallbackPolicy))
+	mux.Handle("/v1", httpserver.WithFacadePolicy(httpHandler, runtime.config.OperatorToken, apiPolicy))
+	mux.Handle("/v1/", httpserver.WithFacadePolicy(httpHandler, runtime.config.OperatorToken, apiPolicy))
 	mux.Handle("/", httpHandler)
 	if runtime.config.Web.Enabled {
-		ui, uiErr := httpserver.NewWebHandler(host.operator, httpserver.Dependencies{EmbeddingsEnabled: runtime.config.Embeddings.Enabled, Scope: runtime.config.Scope, Query: runtime.query, Ready: host.Ready}, runtime.config.OperatorToken)
+		webToken := ""
+		if runtime.config.Web.AuthMode != AuthModePublic {
+			webToken = runtime.config.OperatorToken
+		}
+		ui, uiErr := httpserver.NewWebHandler(host.operator, httpserver.Dependencies{EmbeddingsEnabled: runtime.config.Embeddings.Enabled, Scope: runtime.config.scopeRegistry.Default().Ref, PublicScope: runtime.config.scopeRegistry.DefaultName(),
+			ResolveScope: func(name domain.ScopeName) (domain.ScopeRef, error) {
+				selected, resolveErr := runtime.config.scopeRegistry.Resolve(name)
+				return selected.Ref, resolveErr
+			}, Authorizer: runtime.config.ScopeAuthorizer, OperatorFor: func(ref domain.ScopeRef) *app.OperatorService { return operators[ref] }, Query: runtime.query, Ready: host.Ready}, httpserver.WebOptions{
+			AuthMode: string(runtime.config.Web.AuthMode),
+			Token:    webToken,
+		})
 		if uiErr != nil {
 			return nil, fmt.Errorf("compose web UI: %w", uiErr)
 		}
 		mux.Handle("/ui/", ui)
-		mux.Handle("/operator/v1/", httpserver.WithOperatorAuth(httpserver.NewOperatorHandler(host.operator, host.Ready), runtime.config.OperatorToken))
+		mux.Handle("/operator/v1/", httpserver.WithFacadePolicy(httpserver.NewOperatorHandler(host.operator, host.Ready), runtime.config.OperatorToken, httpserver.FacadePolicy{RequireToken: runtime.config.Web.AuthMode != AuthModePublic, ReadOnly: true}))
 	}
 	host.handler = mux
 	return host, nil

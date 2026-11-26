@@ -13,7 +13,10 @@ import (
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-const operatorTestWindowsOS = "windows"
+const (
+	operatorTestWindowsOS         = "windows"
+	operatorTestEntitiesDirectory = "entities"
+)
 
 func TestOperatorWikiDirectoryChildren(t *testing.T) {
 	workspace := newSourceStageWorkspace(t)
@@ -22,22 +25,22 @@ func TestOperatorWikiDirectoryChildren(t *testing.T) {
 	writeCanonicalFixture(t, workspace, "wiki/entities/log.md", []byte("# Log\n"))
 	writeCanonicalFixture(t, workspace, "wiki/entities/image.png", []byte("image"))
 	root, err := workspace.WikiDirectoryChildren(t.Context(), testScope, "", app.OperatorReadOptions{Limit: 10})
-	if err != nil || len(root.Items) != 4 || root.Items[1].Path != "entities" || root.Items[1].Kind != operatorFolderKind || root.Items[2].Path != okfIndexFilename || root.Items[2].PageID != operatorRootID {
+	if err != nil || len(root.Items) != 4 || root.Items[1].Path != operatorTestEntitiesDirectory || root.Items[1].Kind != operatorFolderKind || root.Items[2].Path != okfIndexFilename || root.Items[2].PageID != operatorRootID {
 		t.Fatalf("root directory = %#v, %v", root, err)
 	}
-	first, err := workspace.WikiDirectoryChildren(t.Context(), testScope, "entities", app.OperatorReadOptions{Limit: 1})
+	first, err := workspace.WikiDirectoryChildren(t.Context(), testScope, operatorTestEntitiesDirectory, app.OperatorReadOptions{Limit: 1})
 	if err != nil || len(first.Items) != 1 || first.Items[0].Path != "entities/"+okfIndexFilename || first.Items[0].PageID != "entities/index" || first.NextKey != "entities/"+okfIndexFilename {
 		t.Fatalf("first nested page = %#v, %v", first, err)
 	}
-	second, err := workspace.WikiDirectoryChildren(t.Context(), testScope, "entities", app.OperatorReadOptions{Limit: 1, Continuation: app.OperatorContinuation{Key: first.NextKey, SnapshotVersion: first.SnapshotVersion}})
+	second, err := workspace.WikiDirectoryChildren(t.Context(), testScope, operatorTestEntitiesDirectory, app.OperatorReadOptions{Limit: 1, Continuation: app.OperatorContinuation{Key: first.NextKey, SnapshotVersion: first.SnapshotVersion}})
 	if err != nil || len(second.Items) != 1 || second.Items[0].Path != "entities/orphan.md" || second.Items[0].PageID != "entities/orphan" || second.NextKey != "" {
 		t.Fatalf("second nested page = %#v, %v", second, err)
 	}
 	writeCanonicalFixture(t, workspace, "wiki/entities/new.md", validWorkspacePage("entities/new", "New", testWorkspaceSourceRef, "Body"))
-	if _, err := workspace.WikiDirectoryChildren(t.Context(), testScope, "entities", app.OperatorReadOptions{Limit: 1, Continuation: app.OperatorContinuation{Key: first.NextKey, SnapshotVersion: first.SnapshotVersion}}); !errors.Is(err, app.ErrOperatorSnapshotChanged) {
+	if _, err := workspace.WikiDirectoryChildren(t.Context(), testScope, operatorTestEntitiesDirectory, app.OperatorReadOptions{Limit: 1, Continuation: app.OperatorContinuation{Key: first.NextKey, SnapshotVersion: first.SnapshotVersion}}); !errors.Is(err, app.ErrOperatorSnapshotChanged) {
 		t.Fatalf("changed branch = %v", err)
 	}
-	other, err := workspace.WikiDirectoryChildren(t.Context(), knowl.ScopeRef("other"), "entities", app.OperatorReadOptions{Limit: 10})
+	other, err := workspace.WikiDirectoryChildren(t.Context(), knowl.ScopeRef("other"), operatorTestEntitiesDirectory, app.OperatorReadOptions{Limit: 10})
 	if err != nil || other.SnapshotVersion == first.SnapshotVersion {
 		t.Fatalf("scope-bound snapshot = %#v, %v", other, err)
 	}
@@ -83,10 +86,10 @@ func TestOperatorWikiDirectoryOmitsUnrelatedAssets(t *testing.T) {
 	workspace := newSourceStageWorkspace(t)
 	writeCanonicalFixture(t, workspace, "wiki/entities/article.md", validWorkspacePage("entities/article", "Article", testWorkspaceSourceRef, "Body"))
 	writeCanonicalFixture(t, workspace, "wiki/entities/diagram%20v2.png", []byte("asset"))
-	if err := os.Symlink(filepath.Join(workspace.root, "raw"), filepath.Join(workspace.root, "wiki", "entities", "asset-link.png")); err != nil {
+	if err := os.Symlink(filepath.Join(workspace.root, "raw"), filepath.Join(workspace.root, "wiki", operatorTestEntitiesDirectory, "asset-link.png")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	branch, err := workspace.WikiDirectoryChildren(t.Context(), testScope, "entities", app.OperatorReadOptions{Limit: 10})
+	branch, err := workspace.WikiDirectoryChildren(t.Context(), testScope, operatorTestEntitiesDirectory, app.OperatorReadOptions{Limit: 10})
 	if err != nil || len(branch.Items) != 1 || branch.Items[0].Path != "entities/article.md" {
 		t.Fatalf("branch with unrelated assets = %#v, %v", branch, err)
 	}
@@ -145,7 +148,7 @@ func TestOperatorWikiDirectoryOmitsEncodedAliasPage(t *testing.T) {
 	workspace := newSourceStageWorkspace(t)
 	writeCanonicalFixture(t, workspace, "wiki/entities/good.md", validWorkspacePage("entities/good", "Good", testWorkspaceSourceRef, "Body"))
 	writeCanonicalFixture(t, workspace, "wiki/entities/%2e%2e.md", validWorkspacePage("entities/%2e%2e", "Alias", testWorkspaceSourceRef, "Body"))
-	branch, err := workspace.WikiDirectoryChildren(t.Context(), testScope, "entities", app.OperatorReadOptions{Limit: 10})
+	branch, err := workspace.WikiDirectoryChildren(t.Context(), testScope, operatorTestEntitiesDirectory, app.OperatorReadOptions{Limit: 10})
 	if err != nil || len(branch.Items) != 2 || len(branch.SnapshotVersion) != 64 || branch.Items[0].Kind != operatorUnsupportedKind || branch.Items[0].PageID != "" || branch.Items[1].PageID != "entities/good" {
 		t.Fatalf("encoded alias alongside valid page = %#v, %v", branch, err)
 	}
@@ -156,7 +159,7 @@ func TestOperatorWikiDirectoryOmitsEncodedAliasPage(t *testing.T) {
 
 func TestOperatorWikiDirectoryDoesNotOpenUnsupportedFile(t *testing.T) {
 	workspace := newSourceStageWorkspace(t)
-	target := filepath.Join(workspace.root, "wiki", "entities", "%2e%2e.md")
+	target := filepath.Join(workspace.root, "wiki", operatorTestEntitiesDirectory, "%2e%2e.md")
 	writeCanonicalFixture(t, workspace, "wiki/entities/%2e%2e.md", validWorkspacePage("entities/%2e%2e", "Alias", testWorkspaceSourceRef, "Body"))
 	if err := os.Chmod(target, 0); err != nil {
 		t.Skipf("cannot restrict file: %v", err)
@@ -166,7 +169,7 @@ func TestOperatorWikiDirectoryDoesNotOpenUnsupportedFile(t *testing.T) {
 		_ = file.Close()
 		t.Skip("runtime can read zero-permission files")
 	}
-	branch, err := workspace.WikiDirectoryChildren(t.Context(), testScope, "entities", app.OperatorReadOptions{Limit: 10})
+	branch, err := workspace.WikiDirectoryChildren(t.Context(), testScope, operatorTestEntitiesDirectory, app.OperatorReadOptions{Limit: 10})
 	if err != nil || len(branch.Items) != 1 || branch.Items[0].Kind != operatorUnsupportedKind {
 		t.Fatalf("unreadable unsupported file = %#v, %v", branch, err)
 	}

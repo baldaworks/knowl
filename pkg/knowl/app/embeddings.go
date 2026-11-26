@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -19,7 +20,12 @@ type EmbeddingOptions struct {
 	Provider      EmbeddingProvider
 	Space         EmbeddingSpace
 	FailurePolicy EmbeddingFailurePolicy
+	// RebuildTimeout is an operational budget, not part of model-space identity.
+	RebuildTimeout time.Duration
 }
+
+// DefaultProjectionRebuildTimeout bounds a complete dense build when omitted.
+const DefaultProjectionRebuildTimeout = 15 * time.Minute
 
 // EmbeddingSpace identifies the operator-declared immutable model contract.
 // It intentionally cannot carry endpoints, credentials or runtime settings.

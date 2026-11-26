@@ -106,6 +106,50 @@ func TestSourceSchedulerRunsSourcesIndependentlyAndSkipsInertSources(t *testing.
 	}
 }
 
+func TestSourceSchedulerKeepsEqualIDsScoped(t *testing.T) {
+	type startedSource struct {
+		scope domain.ScopeRef
+		id    domain.SourceID
+	}
+	started := make(chan startedSource, 2)
+	release := make(chan struct{})
+	source := domain.Source{ID: schedulerTestSourceID, Enabled: true, Sync: domain.SourceSyncPolicy{OnStart: true, RetryInitial: time.Second, RetryMaximum: time.Second}}
+	scheduler, err := newMultiScopeSourceScheduler(func(ctx context.Context, scope domain.ScopeRef, source domain.Source) (reconcile.Result, error) {
+		started <- startedSource{scope: scope, id: source.ID}
+		select {
+		case <-release:
+			return reconcile.Result{SourceID: source.ID}, nil
+		case <-ctx.Done():
+			return reconcile.Result{SourceID: source.ID}, ctx.Err()
+		}
+	}, []scopedSource{{Scope: "scope-a", Source: source}, {Scope: "scope-b", Source: source}}, nil, sourceSchedulerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = scheduler.start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[domain.ScopeRef]bool{}
+	for range 2 {
+		select {
+		case item := <-started:
+			if item.id != schedulerTestSourceID {
+				t.Fatalf("source id=%q", item.id)
+			}
+			seen[item.scope] = true
+		case <-time.After(time.Second):
+			t.Fatal("scoped source did not start")
+		}
+	}
+	if !seen["scope-a"] || !seen["scope-b"] {
+		t.Fatalf("started scopes=%v", seen)
+	}
+	close(release)
+	if err = scheduler.stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSourceSchedulerStopBoundsActiveManualAttemptAndObserverPanic(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

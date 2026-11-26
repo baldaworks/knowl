@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	knowlruntime "github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/llmstxt"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -25,7 +26,7 @@ func newExportOKFCommand() *cobra.Command {
 		Short: "Copy wiki/ as an OKF directory",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			workspace, err := exportWorkspace(cmd)
+			workspace, _, err := exportWorkspace(cmd)
 			if err != nil {
 				return err
 			}
@@ -45,17 +46,9 @@ func newExportLLMsTxtCommand() *cobra.Command {
 		Short: "Render an llms.txt navigation file",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			workspace, err := exportWorkspace(cmd)
+			workspace, scope, err := exportWorkspace(cmd)
 			if err != nil {
 				return err
-			}
-			config, err := configFromContext(cmd.Context())
-			if err != nil {
-				return err
-			}
-			scope := config.Document.Knowl.Scope
-			if scope == "" {
-				scope = knowlruntime.DefaultScope
 			}
 			inspection, err := workspace.Inspect(cmd.Context(), scope)
 			if err != nil {
@@ -87,12 +80,20 @@ func newExportLLMsTxtCommand() *cobra.Command {
 	return command
 }
 
-func exportWorkspace(cmd *cobra.Command) (*contentfs.Workspace, error) {
-	path, err := workspacePath(cmd.Context())
+func exportWorkspace(cmd *cobra.Command) (*contentfs.Workspace, knowl.ScopeRef, error) {
+	config, selected, err := authorizeCanonicalCLI(cmd.Context(), app.OperationRead)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return contentfs.New(path)
+	resolver, err := knowlruntime.ResolveScopeWorkspaces(config)
+	if err != nil {
+		return nil, "", err
+	}
+	resolved, err := resolver.Resolve(selected.Ref)
+	if err != nil {
+		return nil, "", err
+	}
+	return resolved.Workspace, selected.Ref, nil
 }
 
 func writeExportFile(path string, data []byte) error {

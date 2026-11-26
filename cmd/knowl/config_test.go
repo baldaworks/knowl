@@ -10,10 +10,28 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
+	"github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
+
+const (
+	defaultScopeName        = "default"
+	infrastructureScopeName = "infrastructure"
+)
+
+func TestHostConfigDecodesOperationalTimeouts(t *testing.T) {
+	ctx := loadTestConfig(t, testConfigOptions{knowl: "provider: codex\ntimeouts:\n  projection_rebuild: 1h\n  hierarchy: 65m\n"})
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Timeouts != (knowl.TimeoutsConfig{ProjectionRebuild: time.Hour, Hierarchy: 65 * time.Minute}) {
+		t.Fatalf("operational timeouts were not decoded: %+v", config.Timeouts)
+	}
+}
 
 func TestLoadConfigUsesDefaultInternalIngestPolicyWhenConfigOmitsIt(t *testing.T) {
 	ctx := loadTestConfig(t, testConfigOptions{knowl: "provider: codex\n"})
@@ -74,6 +92,78 @@ sources:
 	}
 	if engineering.ConfigDigest == "" || operations.ConfigDigest == "" {
 		t.Fatal("source config digests must be populated")
+	}
+}
+
+func TestHostConfigDecodesMultipleScopes(t *testing.T) {
+	const sharedScopeSourceID = "shared"
+
+	ctx := loadTestConfig(t, testConfigOptions{knowl: `provider: codex
+workspace:
+  path: knowledge
+default_scope: default
+scopes:
+  default:
+    ref: legacy-team
+    sources:
+      - id: shared
+        type: filesystem
+        filesystem:
+          root: wiki-default
+  infrastructure:
+    sources:
+      - id: shared
+        type: filesystem
+        filesystem:
+          root: wiki-infrastructure
+`})
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatalf("hostConfig() error: %v", err)
+	}
+	registry, err := config.ScopeRegistry()
+	if err != nil {
+		t.Fatalf("ScopeRegistry() error: %v", err)
+	}
+	contexts := registry.All()
+	if len(contexts) != 2 || contexts[0].Name != defaultScopeName || contexts[1].Name != infrastructureScopeName {
+		t.Fatalf("scope contexts = %#v", contexts)
+	}
+	if contexts[0].Ref != "legacy-team" || contexts[1].Ref != "scope:infrastructure" {
+		t.Fatalf("scope refs = %q, %q", contexts[0].Ref, contexts[1].Ref)
+	}
+	if len(contexts[0].Sources) != 1 || len(contexts[1].Sources) != 1 ||
+		contexts[0].Sources[0].ID != sharedScopeSourceID || contexts[1].Sources[0].ID != sharedScopeSourceID {
+		t.Fatalf("scope sources = %#v", contexts)
+	}
+}
+
+func TestHostConfigCLIActiveScopeDoesNotChangeConfiguredDefault(t *testing.T) {
+	ctx := loadTestConfig(t, testConfigOptions{knowl: `provider: codex
+workspace:
+  path: knowledge
+default_scope: default
+scopes:
+  default:
+    ref: legacy-team
+  infrastructure:
+    ref: infrastructure-team
+`})
+	ctx = context.WithValue(ctx, cliScopeContextKey{}, domain.ScopeName(infrastructureScopeName))
+	config, err := hostConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := config.ResolveAuthorizedScope(ctx, config.ActiveScopeName, app.OperationRead)
+	if err != nil || selected.Name != infrastructureScopeName || selected.Ref != "infrastructure-team" {
+		t.Fatalf("selected scope=%+v err=%v", selected, err)
+	}
+	registry, err := config.ScopeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registry.DefaultName() != defaultScopeName || registry.Default().Ref != "legacy-team" {
+		t.Fatalf("configured default changed: %+v", registry.Default())
 	}
 }
 

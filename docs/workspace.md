@@ -4,6 +4,13 @@ The workspace is the canonical Knowl artifact. `wiki/` is directly portable as
 an Open Knowledge Format (OKF) v0.2 bundle, alongside immutable source files in
 `raw/`; the SQL adapter is only an operational index and projection.
 
+One host may resolve several isolated canonical workspaces. Existing installs
+keep the default scope at the host root, while named scopes use
+`scopes/<name>/`; clean explicit multi-scope installs may also place default at
+`scopes/default/`. Use the trusted resolver through `--scope` rather than
+constructing these paths yourself. See [Multiple knowledge scopes](multi-scope.md)
+for layout compatibility, export, backup and downgrade rules.
+
 ## Ownership and layout
 
 ```text
@@ -165,8 +172,29 @@ an operator policy change invalidates work planned against older bytes.
 
 ## Reading pages and accepted sources in the browser
 
-The optional [web UI](web-ui.md) reads the current canonical `wiki/` page and
-its saved source references. **Page sources** identifies each immutable accepted
+The optional [web UI](web-ui.md) reads permitted published `wiki/` structure
+through a sidebar tree, preserving group names and nesting under the operator's
+organization. Starter directory names and page types do not define a fixed
+browser taxonomy. A real page title opens its article; a separate caret expands
+actual immediate permitted children without changing that article. A readable
+`index.md` represents one parent page with no duplicate index row. A directory
+without an index remains a structural group with no invented page or article
+action; an empty group remains visible without a caret.
+
+Children come from published paths, independently of authored links or schema
+prose. Breadcrumbs retain verified selected context between actual pages,
+through existing groups or safe authored links within bounded reads. Groups do
+not become breadcrumb page IDs, and physical slash ancestry does not replace
+selected context.
+
+An index's authored table of contents, prose, or empty body is read as page
+content and rendered once. These browser reads retain structural safety checks;
+they do not relax the strict OKF publication and maintenance contracts described
+below. The tree and its completed branches remain in the connected tab's bounded
+memory, and protected state is cleared on reload, disconnect, or rejected
+authorization.
+
+The page context's **Sources** tab identifies each immutable accepted
 revision; **Read saved source** displays its accepted text and digest from
 `raw/`, without fetching the original source again. If that revision is missing,
 unavailable, too large, or not displayable as text, the UI reports the failure.
@@ -277,6 +305,11 @@ reads, source list, and source status do not invoke hierarchy reconciliation.
 
 ## Explicit OKF migration
 
+Database schema migrations run automatically during startup. Optional
+[`knowl migrate up/down`](operations.md#database-schema-migrations) only administer
+the configured database; they do not migrate canonical content or rebuild its
+projection. They are distinct from the command below.
+
 Startup and read-only commands never migrate content. To upgrade a legacy
 canonical workspace, stop writers, take a backup, and run:
 
@@ -299,12 +332,24 @@ operation per affected page. A `wiki-filesystem:fastronome-wiki` owner and a
 `git:fastronome-wiki` owner are independent even when their IDs and documents
 match; the workspace never rewrites one ref into the other.
 
+When the historical exact owner has no lifecycle row, normal retirement
+advancement can recover it from a durable accepted source operation, a current
+canonical citation of that exact accepted descriptor, and matching immutable
+raw bytes. Recovery creates retirement authority only; it never infers the
+unknown historical configuration digest or aliases an old adapter to a current
+one. `RecoveryProofDigest` is separate from `ConfigDigest`, and the private
+bounded proof metadata survives later cleanup and genuine reactivation.
+Existing lifecycle rows, including deleted tombstones, are preserved. Until
+proof is discovered, the absent owner can still be reported as unowned.
+
 An unchanged page may retain its pre-transition retiring ref while it awaits its
 turn. A newly staged page may not introduce or retain that ref. An old-only page
 is deleted together with the smallest catalog closure required to keep the OKF
-graph valid. A mixed page is replaced using only active accepted evidence; its
-catalog membership can remain unchanged. Exact page and catalog digests are
-checked again at commit. Failure preserves that complete page unit and its
+graph valid. A mixed page is replaced using configured active accepted evidence
+and valid accepted application/inline evidence; inline evidence needs no
+configured source lifecycle. Its catalog membership can remain unchanged. Exact
+page and catalog digests are checked again at commit. Failure preserves that
+complete page unit and its
 path/target diagnostics, including all reasons that led to
 `plan.empty_safe_subset`, while unrelated page units may continue.
 
@@ -318,6 +363,12 @@ retiring its still-configured owner or deleting curated pages.
 Retirement uses the same page-local recovery journal as other canonical writes;
 there is no full-wiki snapshot, global rollback, or filesystem/search joint
 transaction. Keep one Host/coordinator in charge of a workspace writer set.
+
+Schema 28 is applied by ordinary startup after writers have stopped and a
+matching database/workspace backup has been taken. Downgrading that migration
+refuses to erase used recovery proof even after genuine reactivation; roll
+forward or restore a coherent backup with a compatible binary.
+
 For operational rollback, restore the exact removed source in configuration and
 let normal synchronization rebuild what remains necessary. Stop writers during
 a binary downgrade after retirement has begun and roll forward with the

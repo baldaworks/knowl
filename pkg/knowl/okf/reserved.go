@@ -16,6 +16,20 @@ func ParseRootIndex(content []byte, limits Limits) (Index, error) {
 
 // ValidateIndex validates one reserved index.md at any bundle depth.
 func ValidateIndex(relative string, content []byte, limits Limits) (Index, error) {
+	index, err := ParseIndex(relative, content, limits)
+	if err != nil {
+		return Index{}, err
+	}
+	if !validIndexBody(index.Body) {
+		return Index{}, violation(relative, RuleIndexInvalid)
+	}
+	return index, nil
+}
+
+// ParseIndex reads a published index's optional Markdown body. Structural
+// restrictions remain the same as publishing; only the body grammar differs.
+// Publishers must continue using ValidateIndex.
+func ParseIndex(relative string, content []byte, limits Limits) (Index, error) {
 	if !limits.valid() {
 		return Index{}, violation(relative, RuleLimitsInvalid)
 	}
@@ -50,10 +64,6 @@ func ValidateIndex(relative string, content []byte, limits Limits) (Index, error
 		index.ObservedVersion = version
 		index.Body = body
 	}
-	if !validIndexBody(index.Body) {
-		return Index{}, violation(relative, RuleIndexInvalid)
-	}
-
 	return index, nil
 }
 

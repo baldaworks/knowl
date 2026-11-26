@@ -10,7 +10,7 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowlfx"
-	"github.com/normahq/runtime/v2/agentfactory"
+	"github.com/baldaworks/runtime/v2/agentfactory"
 	"go.uber.org/fx"
 	adkagent "google.golang.org/adk/v2/agent"
 )

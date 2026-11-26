@@ -1,6 +1,7 @@
 package knowl
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -12,12 +13,46 @@ import (
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-// ErrWebConfigInvalid identifies enabled web access without an operator token.
-var ErrWebConfigInvalid = errors.New("web requires an operator token")
+type allowAllScopeAuthorizer struct{}
+
+func (allowAllScopeAuthorizer) Authorize(context.Context, domain.ScopeRef, app.OperationKind) error {
+	return nil
+}
+
+// ErrWebConfigInvalid identifies an unsupported Web facade policy.
+var ErrWebConfigInvalid = errors.New("invalid web facade configuration")
+
+// ErrFacadeConfigInvalid identifies an unsupported API or MCP facade policy.
+var ErrFacadeConfigInvalid = errors.New("invalid facade configuration")
+
+// AuthMode controls how an HTTP facade authenticates requests.
+type AuthMode string
+
+const (
+	AuthModePublic AuthMode = "public"
+	AuthModeToken  AuthMode = "token"
+	AuthModeProxy  AuthMode = "proxy"
+)
+
+// AccessMode controls the capabilities exposed by an HTTP facade.
+type AccessMode string
+
+const (
+	AccessModeReadOnly  AccessMode = "read_only"
+	AccessModeReadWrite AccessMode = "read_write"
+)
+
+// FacadeConfig controls authentication and capability independently.
+type FacadeConfig struct {
+	AuthMode   AuthMode   `mapstructure:"auth_mode"`
+	AccessMode AccessMode `mapstructure:"access_mode"`
+}
 
 // WebConfig controls opt-in operator HTTP and UI access.
 type WebConfig struct {
-	Enabled bool `mapstructure:"enabled"`
+	Enabled    bool       `mapstructure:"enabled"`
+	AuthMode   AuthMode   `mapstructure:"auth_mode"`
+	AccessMode AccessMode `mapstructure:"access_mode"`
 }
 
 // ErrWorkerConfigInvalid identifies unsupported maintenance capacity or ownership.
@@ -32,17 +67,27 @@ const (
 
 // Config controls one local Knowl host. The scope is trusted host context.
 type Config struct {
-	Workspace     string
-	Scope         domain.ScopeRef
-	Sources       []domain.Source
-	StoreDriver   string
-	StorePath     string
-	PostgresDSN   string
-	ListenAddr    string
-	OperatorToken string
-	Web           WebConfig
-	ReadLimits    domain.ReadLimits
-	IngestOptions app.IngestOptions
+	Workspace string
+	Scope     domain.ScopeRef
+	Sources   []domain.Source
+	// DefaultScopeName and Scopes are the additive multi-scope configuration.
+	// When Scopes is empty, Scope and Sources describe the legacy default.
+	DefaultScopeName domain.ScopeName
+	// ActiveScopeName selects the compatibility Host facade without changing
+	// the configured public default used by transports and layout identity.
+	ActiveScopeName domain.ScopeName
+	Scopes          []ScopeConfig
+	StoreDriver     string
+	StorePath       string
+	PostgresDSN     string
+	ListenAddr      string
+	OperatorToken   string
+	API             FacadeConfig
+	MCP             FacadeConfig
+	Web             WebConfig
+	ReadLimits      domain.ReadLimits
+	IngestOptions   app.IngestOptions
+	ScopeAuthorizer app.ScopeAuthorizer
 	// Workers bounds simultaneous owned maintenance execution; zero defaults to one.
 	Workers int
 	// WorkerQueueSize bounds only coalesced in-memory wake hints. Accepted work
@@ -51,20 +96,23 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	Embeddings      EmbeddingsConfig
 	Output          domain.OutputSettings
+	scopeRegistry   *ScopeRegistry
+	Timeouts        TimeoutsConfig
 }
 
 // DefaultConfig returns conservative local defaults.
 func DefaultConfig() Config {
 	limits := app.DefaultReadLimits()
 	return Config{
-		Scope:           DefaultScope,
-		StoreDriver:     StoreSQLite,
-		ListenAddr:      DefaultListen,
-		ReadLimits:      limits,
-		IngestOptions:   app.IngestOptions{ReadLimits: limits},
-		Workers:         1,
-		WorkerQueueSize: 16,
-		ShutdownTimeout: 10 * time.Second,
+		Scope:            DefaultScope,
+		DefaultScopeName: DefaultPublicScope,
+		StoreDriver:      StoreSQLite,
+		ListenAddr:       DefaultListen,
+		ReadLimits:       limits,
+		IngestOptions:    app.IngestOptions{ReadLimits: limits},
+		Workers:          1,
+		WorkerQueueSize:  16,
+		ShutdownTimeout:  10 * time.Second,
 	}
 }
 
@@ -75,8 +123,33 @@ func (config Config) Validate() error {
 }
 
 func (config Config) normalized() (Config, error) {
-	if config.Web.Enabled && strings.TrimSpace(config.OperatorToken) == "" {
-		return Config{}, ErrWebConfigInvalid
+	if config.ScopeAuthorizer == nil {
+		config.ScopeAuthorizer = allowAllScopeAuthorizer{}
+	}
+	config.OperatorToken = strings.TrimSpace(config.OperatorToken)
+	var err error
+	config.API, err = normalizeFacade("api", config.API, config.OperatorToken, false)
+	if err != nil {
+		return Config{}, err
+	}
+	if config.API.AuthMode == AuthModeToken && config.OperatorToken == "" {
+		return Config{}, fmt.Errorf("%w: api token auth requires operator.token", ErrFacadeConfigInvalid)
+	}
+	config.MCP, err = normalizeFacade("mcp", config.MCP, config.OperatorToken, false)
+	if err != nil {
+		return Config{}, err
+	}
+	if config.MCP.AuthMode == AuthModeToken && config.OperatorToken == "" {
+		return Config{}, fmt.Errorf("%w: mcp token auth requires operator.token", ErrFacadeConfigInvalid)
+	}
+	webPolicy, err := normalizeFacade("web", FacadeConfig{AuthMode: config.Web.AuthMode, AccessMode: config.Web.AccessMode}, config.OperatorToken, true)
+	if err != nil {
+		return Config{}, fmt.Errorf("%w: %v", ErrWebConfigInvalid, err)
+	}
+	config.Web.AuthMode = webPolicy.AuthMode
+	config.Web.AccessMode = webPolicy.AccessMode
+	if config.Web.Enabled && (config.Web.AuthMode == AuthModeToken || config.Web.AuthMode == AuthModeProxy) && config.OperatorToken == "" {
+		return Config{}, fmt.Errorf("%w: enabled %s mode requires operator.token", ErrWebConfigInvalid, config.Web.AuthMode)
 	}
 	if config.Workers == 0 {
 		config.Workers = 1
@@ -92,6 +165,10 @@ func (config Config) normalized() (Config, error) {
 		return Config{}, fmt.Errorf("resolve workspace: %w", err)
 	}
 	config.Workspace = filepath.Clean(workspace)
+	config.Timeouts, err = config.Timeouts.Normalize()
+	if err != nil {
+		return Config{}, err
+	}
 	config.Embeddings, err = config.Embeddings.Normalize()
 	if err != nil {
 		return Config{}, err
@@ -99,14 +176,19 @@ func (config Config) normalized() (Config, error) {
 	if _, err := app.NormalizeOutputSettings(config.Output); err != nil {
 		return Config{}, err
 	}
-	config.Sources, err = normalizeSources(config.Workspace, "", config.Sources)
+	config, err = normalizeScopeConfiguration(config)
 	if err != nil {
 		return Config{}, err
 	}
-	if strings.TrimSpace(string(config.Scope)) == "" {
-		config.Scope = DefaultScope
+	if strings.TrimSpace(string(config.ActiveScopeName)) != "" {
+		active, resolveErr := config.scopeRegistry.Resolve(config.ActiveScopeName)
+		if resolveErr != nil {
+			return Config{}, resolveErr
+		}
+		config.ActiveScopeName = active.Name
+		config.Scope = active.Ref
+		config.Sources = cloneSources(active.Sources)
 	}
-	config.Scope = domain.ScopeRef(strings.TrimSpace(string(config.Scope)))
 	config.StoreDriver = strings.ToLower(strings.TrimSpace(config.StoreDriver))
 	if config.StoreDriver == "" {
 		config.StoreDriver = StoreSQLite
@@ -130,7 +212,6 @@ func (config Config) normalized() (Config, error) {
 	if err := validateListenAddr(config.ListenAddr); err != nil {
 		return Config{}, err
 	}
-	config.OperatorToken = strings.TrimSpace(config.OperatorToken)
 	if config.ReadLimits == (domain.ReadLimits{}) {
 		config.ReadLimits = app.DefaultReadLimits()
 	}
@@ -144,6 +225,43 @@ func (config Config) normalized() (Config, error) {
 		config.ShutdownTimeout = 10 * time.Second
 	}
 	return config, nil
+}
+
+func normalizeFacade(name string, facade FacadeConfig, token string, allowProxy bool) (FacadeConfig, error) {
+	facade.AuthMode = AuthMode(strings.ToLower(strings.TrimSpace(string(facade.AuthMode))))
+	if facade.AuthMode == "" {
+		facade.AuthMode = AuthModePublic
+		if token != "" {
+			facade.AuthMode = AuthModeToken
+		}
+	}
+	switch facade.AuthMode {
+	case AuthModePublic, AuthModeToken:
+	case AuthModeProxy:
+		if !allowProxy {
+			return FacadeConfig{}, fmt.Errorf("%w: %s auth_mode %q is unsupported", ErrFacadeConfigInvalid, name, facade.AuthMode)
+		}
+	default:
+		return FacadeConfig{}, fmt.Errorf("%w: %s auth_mode %q is unsupported", ErrFacadeConfigInvalid, name, facade.AuthMode)
+	}
+
+	facade.AccessMode = AccessMode(strings.ToLower(strings.TrimSpace(string(facade.AccessMode))))
+	if facade.AccessMode == "" {
+		facade.AccessMode = AccessModeReadOnly
+	}
+	switch facade.AccessMode {
+	case AccessModeReadOnly:
+	case AccessModeReadWrite:
+		if allowProxy {
+			return FacadeConfig{}, fmt.Errorf("%w: %s access_mode %q is unsupported", ErrFacadeConfigInvalid, name, facade.AccessMode)
+		}
+		if facade.AuthMode != AuthModeToken {
+			return FacadeConfig{}, fmt.Errorf("%w: %s read_write requires token auth", ErrFacadeConfigInvalid, name)
+		}
+	default:
+		return FacadeConfig{}, fmt.Errorf("%w: %s access_mode %q is unsupported", ErrFacadeConfigInvalid, name, facade.AccessMode)
+	}
+	return facade, nil
 }
 
 func validateListenAddr(address string) error {

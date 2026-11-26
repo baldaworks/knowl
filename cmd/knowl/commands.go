@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
+	knowlruntime "github.com/baldaworks/knowl/pkg/knowl"
+	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/spf13/cobra"
@@ -15,6 +17,7 @@ const (
 	schemaFile = "schema.md"
 	indexFile  = "wiki/index.md"
 	logFile    = "wiki/log.md"
+	rawDir     = "raw"
 
 	loopbackHTTPAPIText = "loopback HTTP API"
 	startCommandUsage   = "knowl start"
@@ -27,22 +30,30 @@ func newInitCommand() *cobra.Command {
 		Use:   initCommandName,
 		Short: "Initialize the supported local Knowl workspace and config",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			config, err := configFromContext(cmd.Context())
+			runtimeConfig, selected, err := authorizeCanonicalCLI(cmd.Context(), app.OperationWrite)
 			if err != nil {
 				return err
 			}
-			workspace, err := workspacePath(cmd.Context())
+			loaded, err := configFromContext(cmd.Context())
 			if err != nil {
 				return err
 			}
-			if err := initWorkspace(workspace); err != nil {
+			resolver, err := knowlruntime.ResolveScopeWorkspaces(runtimeConfig)
+			if err != nil {
 				return err
 			}
-			if err := writeConfig(configOutputPath(config), workspace); err != nil {
+			workspace, err := resolver.Resolve(selected.Ref)
+			if err != nil {
+				return err
+			}
+			if err := workspace.Workspace.Init(); err != nil {
+				return err
+			}
+			if err := writeConfig(configOutputPath(loaded), runtimeConfig.Workspace); err != nil {
 				return err
 			}
 			commandLogger(cmd).Info().
-				Str("workspace", workspace).
+				Str("scope", string(selected.Name)).
 				Msg("initialized Knowl workspace")
 			return nil
 		},
@@ -57,11 +68,19 @@ func newValidateCommand() *cobra.Command {
 			if _, _, err := selectedRuntimeProvider(cmd.Context()); err != nil {
 				return err
 			}
-			workspace, err := workspacePath(cmd.Context())
+			config, selected, err := authorizeCanonicalCLI(cmd.Context(), app.OperationRead)
 			if err != nil {
 				return err
 			}
-			if err := validateWorkspace(workspace); err != nil {
+			resolver, err := knowlruntime.ResolveScopeWorkspaces(config)
+			if err != nil {
+				return err
+			}
+			workspace, err := resolver.Resolve(selected.Ref)
+			if err != nil {
+				return err
+			}
+			if err := workspace.Workspace.Validate(); err != nil {
 				return err
 			}
 			driver, err := storeDriver(cmd.Context())
@@ -69,7 +88,7 @@ func newValidateCommand() *cobra.Command {
 				return err
 			}
 			commandLogger(cmd).Info().
-				Str("workspace", workspace).
+				Str("scope", string(selected.Name)).
 				Str("store", driver).
 				Msg("validated Knowl workspace")
 			return nil
@@ -136,7 +155,7 @@ func validateWorkspace(workspace string) error {
 			return fmt.Errorf("workspace root log is not valid OKF")
 		}
 	}
-	for _, relative := range []string{"raw", workspaceWikiDir, ".knowl"} {
+	for _, relative := range []string{rawDir, workspaceWikiDir, ".knowl"} {
 		path := filepath.Join(workspace, relative)
 		info, err := os.Stat(path)
 		if err != nil {

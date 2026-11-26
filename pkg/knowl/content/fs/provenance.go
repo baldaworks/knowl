@@ -205,8 +205,11 @@ func exactCanonicalProvenance(page knowl.PageSnapshot, sources map[string]knowl.
 			return nil, provenanceFailure(app.CanonicalProvenanceCodeRefMalformed, page.Path, ref, app.ErrCanonicalProvenanceMalformed)
 		}
 		source, exists := sources[ref]
-		if !exists || source.SourceDocument == (knowl.SourceDocument{}) {
+		if !exists || app.ValidateAcceptedProvenanceDescriptor(source) != nil {
 			return nil, provenanceFailure(app.CanonicalProvenanceCodeRefUnowned, page.Path, ref, app.ErrSourceLifecycleUnowned)
+		}
+		if source.Source.Adapter != string(knowl.SourceAdapterFilesystem) && source.Source.Adapter != string(knowl.SourceAdapterGit) {
+			continue
 		}
 		owner := knowl.SourceOwner{Adapter: knowl.SourceAdapterID(source.Source.Adapter), SourceID: source.SourceDocument.SourceID}
 		if app.ValidateSourceOwner(owner) != nil {

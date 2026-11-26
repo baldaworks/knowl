@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const {wikiPageNode}=require('./assertions.cjs');
 const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright');
 
 (async () => {
@@ -22,20 +23,24 @@ const { chromium } = require(process.env.KNOWL_PLAYWRIGHT_MODULE || 'playwright'
     await page.locator('#operator-token').fill(token);
     await page.locator('#connect-form button').click();
     await page.locator('.knowledge-article').waitFor();
-    assert.equal(await page.locator('[data-error-code]').count(), 0, 'real root renders after authentication');
+    const rootError = page.locator('[data-error-code]');
+    const rootErrorCount = await rootError.count();
+    const rootErrorCode = rootErrorCount ? await rootError.first().getAttribute('data-error-code') : '';
+    assert.equal(rootErrorCount, 0, `real root renders after authentication: ${rootErrorCode || 'unknown error'}`);
 
-    await page.getByRole('link', { name: 'All pages', exact: true }).click();
-    await page.locator('.wiki-tree').waitFor();
-    assert.equal(await page.locator('.knowledge-article').count(), 0, 'tree does not open an article itself');
-    await page.locator('[data-wiki-path="entities"] [data-tree-expand]').click();
-    const article = page.locator('[data-wiki-path="entities/one.md"] a');
-    await article.waitFor();
-    await article.click();
-    await page.locator('.knowledge-article').waitFor();
-    assert.equal(await page.locator('.knowledge-article h2').textContent(), 'One');
+    const group=page.locator('#wiki-tree [data-page-node="group:entities"]');
+    assert.equal(await group.locator(':scope > [data-wiki-group]').textContent(),'entities');
+    assert.equal(await group.locator(':scope > a').count(),0,'structural group has no fake article');
+    const article=await wikiPageNode(page,'entities/one');
+    await article.locator(':scope > a').click();
+    await page.locator('#article-title').waitFor();
+    assert.equal(await page.locator('#article-title').textContent(), 'One');
+    await page.locator('#details-tab').click();
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('details')).opacity === '1');
     assert.equal(await page.locator('.page-details dd').first().textContent(), 'entities/one');
 
-    await page.locator('[data-toggle-sources]').click();
+    await page.locator('#sources-tab').click();
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('page-sources')).opacity === '1');
     assert.equal(await page.locator('#page-sources .source-record').count(), 1);
     await page.getByRole('button', { name: 'Read saved source' }).click();
     await page.locator('.raw-view pre').waitFor();

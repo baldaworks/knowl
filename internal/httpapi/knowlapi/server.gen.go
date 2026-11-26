@@ -287,6 +287,9 @@ type IngestRequest struct {
 	// Origin Source identity hint for supplied content, such as its original URL. Not fetched.
 	Origin *string `json:"origin,omitempty"`
 
+	// Scope Configured public scope name. Omission selects the default scope.
+	Scope *string `json:"scope,omitempty"`
+
 	// Uri URI string stored as reference text, without downloading the document. Use content for document text; supply exactly one of content or uri.
 	Uri *string `json:"uri,omitempty"`
 }
@@ -505,8 +508,11 @@ type OperationResultStatus string
 
 // ReadyResponse defines model for ReadyResponse.
 type ReadyResponse struct {
-	// Scope Trusted scope reported only when the host is ready.
-	Scope   *string             `json:"scope,omitempty"`
+	// Scope Public default scope name reported only when the host is ready.
+	Scope *string `json:"scope,omitempty"`
+
+	// Scopes Bounded public per-scope readiness without durable identities or paths.
+	Scopes  *[]ScopeReadiness   `json:"scopes,omitempty"`
 	Service string              `json:"service"`
 	Status  ReadyResponseStatus `json:"status"`
 }
@@ -560,6 +566,13 @@ type RetrieveResult struct {
 	Retrieval *RetrievalStatus `json:"retrieval,omitempty"`
 }
 
+// ScopeReadiness defines model for ScopeReadiness.
+type ScopeReadiness struct {
+	Name   string  `json:"name"`
+	Ready  bool    `json:"ready"`
+	Reason *string `json:"reason,omitempty"`
+}
+
 // SourceDocument defines model for SourceDocument.
 type SourceDocument struct {
 	DocumentId string `json:"document_id"`
@@ -586,6 +599,12 @@ type RetrieveQuery = string
 // RetrieveSource defines model for RetrieveSource.
 type RetrieveSource = []string
 
+// Scope defines model for Scope.
+type Scope = string
+
+// IngestForbidden defines model for IngestForbidden.
+type IngestForbidden = ErrorResponse
+
 // JSONBodyBadRequest defines model for JSONBodyBadRequest.
 type JSONBodyBadRequest = ErrorResponse
 
@@ -601,14 +620,20 @@ type OperationIDBadRequest = ErrorResponse
 // QueryStringBadRequest defines model for QueryStringBadRequest.
 type QueryStringBadRequest = ErrorResponse
 
-// ScopeOverrideForbidden defines model for ScopeOverrideForbidden.
-type ScopeOverrideForbidden = ErrorResponse
+// ScopeForbidden defines model for ScopeForbidden.
+type ScopeForbidden = ErrorResponse
 
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = ErrorResponse
 
 // UnavailableError defines model for UnavailableError.
 type UnavailableError = ErrorResponse
+
+// GetOperationParams defines parameters for GetOperation.
+type GetOperationParams struct {
+	// Scope Configured public scope name. Omission selects the default scope.
+	Scope *Scope `form:"scope,omitempty" json:"scope,omitempty"`
+}
 
 // RetrieveKnowledgeParams defines parameters for RetrieveKnowledge.
 type RetrieveKnowledgeParams struct {
@@ -617,6 +642,9 @@ type RetrieveKnowledgeParams struct {
 
 	// Source Optional repeatable source identity filter. Empty means all sources and curated pages.
 	Source *RetrieveSource `form:"source,omitempty" json:"source,omitempty"`
+
+	// Scope Configured public scope name. Omission selects the default scope.
+	Scope *Scope `form:"scope,omitempty" json:"scope,omitempty"`
 }
 
 // IngestKnowledgeJSONRequestBody defines body for IngestKnowledge for application/json ContentType.
@@ -635,7 +663,7 @@ type ServerInterface interface {
 	IngestKnowledge(w http.ResponseWriter, r *http.Request)
 	// Read one durable Knowl operation status
 	// (GET /v1/operations/{operation_id})
-	GetOperation(w http.ResponseWriter, r *http.Request, operationId OperationID)
+	GetOperation(w http.ResponseWriter, r *http.Request, operationId OperationID, params GetOperationParams)
 	// Retrieve bounded evidence from the trusted Knowl scope
 	// (GET /v1/retrieve)
 	RetrieveKnowledge(w http.ResponseWriter, r *http.Request, params RetrieveKnowledgeParams)
@@ -718,8 +746,19 @@ func (siw *ServerInterfaceWrapper) GetOperation(w http.ResponseWriter, r *http.R
 
 	r = r.WithContext(ctx)
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetOperationParams
+
+	// ------------- Optional query parameter "scope" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "scope", r.URL.Query(), &params.Scope)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "scope", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetOperation(w, r, operationId)
+		siw.Handler.GetOperation(w, r, operationId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -763,6 +802,14 @@ func (siw *ServerInterfaceWrapper) RetrieveKnowledge(w http.ResponseWriter, r *h
 	err = runtime.BindQueryParameter("form", true, false, "source", r.URL.Query(), &params.Source)
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "source", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "scope" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "scope", r.URL.Query(), &params.Scope)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "scope", Err: err})
 		return
 	}
 
@@ -906,6 +953,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	return m
 }
 
+type IngestForbiddenJSONResponse ErrorResponse
+
 type JSONBodyBadRequestJSONResponse ErrorResponse
 
 type NotFoundJSONResponse ErrorResponse
@@ -916,7 +965,7 @@ type OperationIDBadRequestJSONResponse ErrorResponse
 
 type QueryStringBadRequestJSONResponse ErrorResponse
 
-type ScopeOverrideForbiddenJSONResponse ErrorResponse
+type ScopeForbiddenJSONResponse ErrorResponse
 
 type UnauthorizedResponseHeaders struct {
 	WWWAuthenticate string
@@ -1006,9 +1055,7 @@ func (response IngestKnowledge401JSONResponse) VisitIngestKnowledgeResponse(w ht
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
-type IngestKnowledge403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
+type IngestKnowledge403JSONResponse struct{ IngestForbiddenJSONResponse }
 
 func (response IngestKnowledge403JSONResponse) VisitIngestKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
@@ -1037,6 +1084,7 @@ func (response IngestKnowledge503JSONResponse) VisitIngestKnowledgeResponse(w ht
 
 type GetOperationRequestObject struct {
 	OperationId OperationID `json:"operation_id"`
+	Params      GetOperationParams
 }
 
 type GetOperationResponseObject interface {
@@ -1073,9 +1121,7 @@ func (response GetOperation401JSONResponse) VisitGetOperationResponse(w http.Res
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
-type GetOperation403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
+type GetOperation403JSONResponse struct{ ScopeForbiddenJSONResponse }
 
 func (response GetOperation403JSONResponse) VisitGetOperationResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
@@ -1149,9 +1195,7 @@ func (response RetrieveKnowledge401JSONResponse) VisitRetrieveKnowledgeResponse(
 	return json.NewEncoder(w).Encode(response.Body)
 }
 
-type RetrieveKnowledge403JSONResponse struct {
-	ScopeOverrideForbiddenJSONResponse
-}
+type RetrieveKnowledge403JSONResponse struct{ ScopeForbiddenJSONResponse }
 
 func (response RetrieveKnowledge403JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
@@ -1306,10 +1350,11 @@ func (sh *strictHandler) IngestKnowledge(w http.ResponseWriter, r *http.Request)
 }
 
 // GetOperation operation middleware
-func (sh *strictHandler) GetOperation(w http.ResponseWriter, r *http.Request, operationId OperationID) {
+func (sh *strictHandler) GetOperation(w http.ResponseWriter, r *http.Request, operationId OperationID, params GetOperationParams) {
 	var request GetOperationRequestObject
 
 	request.OperationId = operationId
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.GetOperation(ctx, request.(GetOperationRequestObject))

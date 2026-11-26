@@ -1,0 +1,17 @@
+{
+  "legacy-ui.js": {
+    "revision": "7b79c7094b433bec68b86b2aeca2cf383cd70e6a",
+    "path": "internal/webui/assets/ui.js",
+    "sha256": "25a6779e32f54a774983aab31378601fae5c2e784b3a534881f471e0b55db55d"
+  },
+  "legacy-ui.css": {
+    "revision": "7b79c7094b433bec68b86b2aeca2cf383cd70e6a",
+    "path": "internal/webui/assets/ui.css",
+    "sha256": "eb8ab05774249e70dfe34c93285aa3a9edb87041c69b1cd3dae2b3b814ed88bd"
+  },
+  "stable-shell.html": {
+    "revision": "6097d85d53804e3e02250e33ae2531dd312ab1ab",
+    "path": "internal/webui/templates/shell.html",
+    "sha256": "254dd6137b80800c95ff49109548981e9bb990f1690b169dcd1803ee83cb307e"
+  }
+}

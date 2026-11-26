@@ -13,10 +13,12 @@ For another agent, see [Bring your own agent](agents.md).
 The default SQLite binary bundles native cosine SQL, including CGO-free builds;
 it needs no separately installed SQLite extension. Embeddings remain off until
 configured and still require their chosen provider. Native format upgrades run
-numbered Goose SQL on Open: stop old writers, migrate, rebuild and verify before
-resuming. See [search/recovery](search.md) and the
+numbered Goose migrations automatically during startup: stop old writers, start
+the matching binary, let startup rebuild and verify before resuming.
+See [search/recovery](search.md) and the
 [current and historical measurements](testing/native-vectors.md). For a PostgreSQL store,
-follow its separate [optional pgvector operator procedure](postgres.md).
+see [PostgreSQL setup](postgres.md): the operator provisions pgvector once when
+embeddings are enabled; Knowl manages application migrations at startup.
 
 ## Prepare a project
 
@@ -87,7 +89,7 @@ agent's installation, authentication or model selection before retrying. See
 ## Next steps
 
 - [Codex plugin](local-codex.md): connect Codex as a consumer of this knowledge.
-- [Web UI](web-ui.md): enable browser access with a fixed listener and operator token.
+- [Web UI](web-ui.md): enable optional public, direct-token, or proxy-authenticated browser access.
 - [Search](search.md): optionally add an embedding API or local TEI server.
 - [Knowl's own wiki](examples/own-docs-wiki.md): see this workflow applied to the repository's documentation.
 

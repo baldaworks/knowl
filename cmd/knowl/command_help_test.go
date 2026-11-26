@@ -74,7 +74,7 @@ func TestStoreDriverSelection(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "default", want: defaultStore},
+		{name: defaultScopeName, want: defaultStore},
 		{name: postgresStore, value: postgresStore, want: postgresStore},
 		{name: "unsupported", value: "mysql", wantErr: true},
 	} {
@@ -150,6 +150,7 @@ func TestRootHelpExplainsSupportedLocalWorkflow(t *testing.T) {
 		"Bootstrap creates a Knowl-owned workspace",
 		"retained loopback HTTP/OpenAPI service mode",
 		"same KISS contract for retrieve, ingest, operation, and health",
+		"--scope string",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("root help missing %q in output:\n%s", want, output)
@@ -273,7 +274,7 @@ func TestWorkflowCommandTreeCoversCurrentLocalSurface(t *testing.T) {
 			name:      hierarchyCommandName,
 			cmd:       newHierarchyCommand(),
 			wantShort: "Manage the canonical semantic wiki hierarchy",
-			wantSubs:  []string{hierarchyReconcileCommandName},
+			wantSubs:  []string{hierarchyReconcileCommandName, "retry"},
 		},
 		{
 			name:      retrieveCommandName,

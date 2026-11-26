@@ -31,6 +31,8 @@ type Options struct {
 type Host struct {
 	config           Config
 	workspace        *contentfs.Workspace
+	workspaces       *ScopeWorkspaceResolver
+	content          *ScopedContentStore
 	closer           io.Closer
 	maintainerCloser io.Closer
 	slots            *executionSlots
@@ -41,6 +43,7 @@ type Host struct {
 	sourceLifecycle     app.SourceLifecycleStore
 	retirementCommitter app.RetirementCommitter
 	retirementControl   *app.SourceRetirementCoordinator
+	retirementControls  map[domain.ScopeRef]*app.SourceRetirementCoordinator
 	sourceSync          *reconcile.Service
 	sources             []domain.Source
 	sourceByID          map[domain.SourceID]domain.Source

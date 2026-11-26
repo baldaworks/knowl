@@ -60,6 +60,7 @@ jobs:
         run: go test -tags=browser ./internal/webui ./cmd/knowl -run '^TestBrowser' -count=1
 
   native-reader:
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:

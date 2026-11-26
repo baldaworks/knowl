@@ -63,6 +63,11 @@ curl -fsS --get \
   http://127.0.0.1:8080/v1/retrieve
 ```
 
+On a host with multiple configured knowledge scopes, add a single public
+`scope` query parameter or omit it to use `default_scope`. See the
+[multi-scope operations guide](multi-scope.md) for configuration, MCP, CLI,
+readiness and backup behavior.
+
 Expect a non-empty `evidence` array with page identities, excerpts and source
 references. Read the generated wiki inside the persistent volume, or enable
 [browser access](#optional-browser-access) and open the page named in evidence.
@@ -81,9 +86,13 @@ Configure your client's Streamable HTTP connection with:
 }
 ```
 
-Adapt this shape to your client. Tools are `knowl_retrieve`, `knowl_ingest` and
-`knowl_operation`; the [OpenAPI contract](../api/openapi/knowl.yaml) describes the
-HTTP equivalents. See [Codex integration](local-codex.md) for local MCP stdio.
+Adapt this shape to your client. The safe default is read-only and publishes
+`knowl_retrieve` and `knowl_operation`. To retain `knowl_ingest`, configure
+`knowl.mcp.access_mode: read_write` explicitly; token authentication is
+required. The [access-control guide](access-control.md) covers native read-only,
+Pomerium/Keycloak and shared internal/external deployments. The
+[OpenAPI contract](../api/openapi/knowl.yaml) describes the HTTP equivalents.
+See [Codex integration](local-codex.md) for local MCP stdio.
 
 ## Optional browser access
 
@@ -94,6 +103,8 @@ In a copy of the profile's complete configuration, add:
 knowl:
   web:
     enabled: true
+    auth_mode: token
+    access_mode: read_only
 ```
 
 Retain provider, sources, storage, server and operator settings. Mount that

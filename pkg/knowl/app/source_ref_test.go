@@ -160,3 +160,34 @@ func FuzzSourceRefCodecRoundTrip(f *testing.F) {
 		}
 	})
 }
+
+func TestAcceptedProvenanceKeepsConfiguredOwnershipStrict(t *testing.T) {
+	tests := []struct {
+		name, adapter string
+		document      bool
+		valid         bool
+	}{
+		{"inline without configured owner", "inline", false, true},
+		{"inline with genuine document", "inline", true, true},
+		{"filesystem missing document", string(knowl.SourceAdapterFilesystem), false, false},
+		{"git missing document", "git", false, false},
+		{"git with document", "git", true, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := retirementAccepted(test.adapter, "source", "note", "v1", "text/plain")
+			if !test.document {
+				source.SourceDocument = knowl.SourceDocument{}
+			}
+			err := app.ValidateAcceptedProvenanceDescriptor(source)
+			if test.valid && err != nil || !test.valid && !errors.Is(err, app.ErrSourceInvalid) {
+				t.Fatalf("validation = %v; valid %t", err, test.valid)
+			}
+		})
+	}
+	source := retirementAccepted("inline", "source", "note", "v1", "text/plain")
+	source.SourceDocument.Revision = "forged"
+	if err := app.ValidateAcceptedProvenanceDescriptor(source); !errors.Is(err, app.ErrSourceInvalid) {
+		t.Fatalf("forged inline document = %v", err)
+	}
+}

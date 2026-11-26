@@ -52,3 +52,6 @@ temp/
 .dolt/
 .beads-credential-key
 .beads/proxieddb/
+
+# Local SearchTome data, stores and run artifacts
+/.searchtome-benchmark/

@@ -64,6 +64,8 @@ func TestSupportedLocalWorkflowSmoke(t *testing.T) {
 	if config.StorePath != wantStorePath {
 		t.Fatalf("host config store path = %q, want %q", config.StorePath, wantStorePath)
 	}
+	config.OperatorToken = "smoke-write-token"
+	config.API = knowl.FacadeConfig{AuthMode: knowl.AuthModeToken, AccessMode: knowl.AccessModeReadWrite}
 
 	content, err := contentfs.New(config.Workspace)
 	if err != nil {
@@ -206,6 +208,7 @@ func doLiveHostRequest(client *http.Client, baseURL, method, path string, body [
 	if err != nil {
 		return nil, 0, err
 	}
+	request.Header.Set("Authorization", "Bearer smoke-write-token")
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, 0, err

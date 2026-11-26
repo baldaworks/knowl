@@ -17,7 +17,7 @@ const sourceLifecycleColumns = `scope, adapter, source_id, state, config_digest,
 authority_generation, authority_epoch, activated_generation, activated_epoch,
 retirement_generation, retirement_epoch, scan_cursor,
 scan_round_matches, scan_complete, ready, replacement_pending, blocker_code, activated_at, retiring_at,
-deleted_at, updated_at`
+deleted_at, updated_at, recovery_proof_digest, recovery_proof_payload`
 
 func (store *Store) ReconcileSourceLifecycles(ctx context.Context, request app.SourceLifecycleReconcileRequest) error {
 	normalized, err := app.NormalizeSourceLifecycleReconcile(request)
@@ -172,6 +172,7 @@ WHERE scope = ? AND state = 'retiring' AND retirement_epoch = ?`, updatedAt, nor
 			}
 			next := current
 			next.State, next.ConfigDigest = knowl.SourceLifecycleActive, item.ConfigDigest
+			next.RecoveryProofDigest = ""
 			next.AuthorityGeneration, next.AuthorityEpoch = normalized.AuthorityGeneration, nextEpoch
 			next.ActivatedGeneration, next.ActivatedEpoch = normalized.AuthorityGeneration, nextEpoch
 			next.ScanCursor, next.ScanRoundMatches, next.ScanComplete, next.Ready, next.ReplacementPending, next.BlockerCode = "", 0, false, false, 0, ""
@@ -180,7 +181,7 @@ WHERE scope = ? AND state = 'retiring' AND retirement_epoch = ?`, updatedAt, nor
 				return app.ErrSourceLifecycleInvalid
 			}
 			result, execErr := sourceExec(ctx, tx, `UPDATE knowl_source_lifecycle SET
-state = 'active', config_digest = ?, authority_generation = ?, authority_epoch = ?, activated_generation = ?, activated_epoch = ?,
+state = 'active', config_digest = ?, recovery_proof_digest = '', authority_generation = ?, authority_epoch = ?, activated_generation = ?, activated_epoch = ?,
 scan_cursor = '', scan_round_matches = 0, scan_complete = FALSE, ready = FALSE, replacement_pending = 0, blocker_code = '',
 activated_at = ?, retiring_at = NULL, deleted_at = NULL, updated_at = ?
 WHERE scope = ? AND adapter = ? AND source_id = ? AND state = ? AND authority_epoch = ?`, item.ConfigDigest, normalized.AuthorityGeneration,
@@ -488,6 +489,7 @@ type lifecycleScanner interface{ Scan(dest ...any) error }
 
 func scanPostgresSourceLifecycle(scanner lifecycleScanner) (knowl.SourceLifecycle, error) {
 	var state knowl.SourceLifecycle
+	var recoveryPayload string
 	var adapter, sourceID, lifecycleState string
 	var authorityEpoch, activatedEpoch, retirementEpoch int64
 	var retiringAt, deletedAt sql.NullTime
@@ -495,7 +497,7 @@ func scanPostgresSourceLifecycle(scanner lifecycleScanner) (knowl.SourceLifecycl
 		&state.AuthorityGeneration, &authorityEpoch, &state.ActivatedGeneration, &activatedEpoch,
 		&state.RetirementGeneration, &retirementEpoch, &state.ScanCursor,
 		&state.ScanRoundMatches, &state.ScanComplete, &state.Ready, &state.ReplacementPending, &state.BlockerCode, &state.ActivatedAt,
-		&retiringAt, &deletedAt, &state.UpdatedAt)
+		&retiringAt, &deletedAt, &state.UpdatedAt, &state.RecoveryProofDigest, &recoveryPayload)
 	if err != nil {
 		return knowl.SourceLifecycle{}, err
 	}
@@ -512,7 +514,7 @@ func scanPostgresSourceLifecycle(scanner lifecycleScanner) (knowl.SourceLifecycl
 	if deletedAt.Valid {
 		state.DeletedAt = deletedAt.Time.UTC()
 	}
-	if app.ValidateSourceLifecycle(state) != nil {
+	if app.ValidateSourceLifecycle(state) != nil || app.ValidateSourceLifecycleRecoveryPayload(state, recoveryPayload) != nil {
 		return knowl.SourceLifecycle{}, app.ErrSourceLifecycleInvalid
 	}
 	return state, nil

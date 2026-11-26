@@ -1,10 +1,19 @@
 # Read your wiki in a browser
 
 Knowl's optional web UI lets you read published knowledge, inspect its saved
-sources, search for evidence, and follow processing. It shares the Go service's
-HTTP listener and persistent workspace. Four server-rendered screens use
+sources, search for evidence, follow processing, and inspect current database
+statistics. It shares the Go service's HTTP listener and persistent workspace.
+Five server-rendered screens use
 bundled, pinned local assets; a normal Go build needs no Node runtime or
-frontend tooling.
+frontend tooling. All five screens use the same bundled AdminLTE/Bootstrap
+shell, typography, sidebar, cards and controls; changing sections keeps that
+visual system.
+
+The shell references Knowl's own CSS and JavaScript through content-derived
+URLs. After an application update, opening or reloading the page requests the
+matching resources even when a proxy still caches the previous stable URLs.
+These matching assets can be cached immutably; HTML and authenticated fragments
+remain uncached. The bundled vendor assets and theme are unchanged.
 
 ## Connect
 
@@ -15,42 +24,90 @@ Knowl configuration:
 knowl:
   web:
     enabled: true
+    auth_mode: token
+    access_mode: read_only
   operator:
     token: ${KNOWL_OPERATOR_TOKEN}
 ```
 
 Set the named environment variable to your operator secret and restart
-`knowl start`. Enabled web access requires a nonempty token. With the default
+`knowl start`. Token-mode web access requires a nonempty token. With the default
 listener, open `http://127.0.0.1:8080/ui/`, enter the token, and select
 **Connect**. The token stays in memory for the current document; reload or
 **Disconnect** clears it. Navigation within the connected UI keeps the session.
 The shell and assets are public, while workspace reads require authentication.
 
 Use HTTPS through a trusted proxy for access beyond loopback. The token also
-permits ingestion through the existing agent API, even though the UI only reads.
+permits ingestion only on API/MCP facades explicitly configured read-write; the
+UI itself only reads. Public and proxy-authenticated Web profiles are described
+in the [access-control guide](access-control.md).
 Keep local secret overrides out of Git. See
 [configuration and security](operations.md#optional-web-ui-and-operator-reads)
 and [container setup](service.md#optional-browser-access).
 
 ## Knowledge
 
-Knowledge opens the canonical wiki root and renders its actual `index.md` body.
-Follow catalog and page links, or use the breadcrumb to return through verified
-catalogs. Direct links and reload use the root and any verified current catalog;
-deeper catalog ancestry is not inferred from file paths.
+Knowledge opens the published root page. **Home** in the sidebar returns to it.
+The sidebar preserves the permitted published groups, their names and nesting.
+These names follow the workspace's organization; they are not restricted to the
+starter directories or frontmatter types. Select a real page title to open its
+article. A directory without an index remains a labeled group with no article
+action or invented page ID. A readable `index.md` makes that directory one real
+parent page, without a second index row. Empty groups remain visible.
 
-**All pages** opens a file tree grouped by wiki directory paths. Expand folders
-to load their children as needed, and use **More files** when a branch has additional
-files. Each `index.md` appears as an ordinary file in this tree. Select a file
-explicitly to open its article. Browser Back restores the loaded, expanded tree
-within the same connected tab while its bounded in-memory view is retained.
-Reload or disconnect clears that view.
+A separate caret appears only when a page or group has actual permitted
+immediate children. Expanding or collapsing it leaves the article selected.
+A leaf, including an index page or empty group, has no disclosure caret.
 
-**Details** starts closed and contains page identity, digest/version, and
-available type, description, tags, status, trust and stale metadata.
-**Page sources** starts closed at every screen width; open it explicitly to
-inspect saved revisions supporting a leaf page. A leaf with no references says
-so. Catalog indexes have no source panel.
+The tree is independent of links in page content. An index can contain an
+authored table of contents, additional prose, or no body at all and still have
+children. Its complete permitted Markdown body renders once in the article;
+only an exact leading title already shown in the article header is omitted.
+The UI does not add another directory or member list to that body. Published
+empty and prose indexes are readable under the existing structural safety
+checks; strict OKF publication and maintenance validation remain unchanged.
+A page readable in the browser can therefore still fail strict publish
+validation.
+
+Breadcrumbs preserve the verified navigation context selected when following a
+page-tree or authored index-page link. The same article can have different valid
+contexts. A link's `parent_id` and bounded `trail` of page IDs retain that context
+on direct opening, reload and browser Back/Forward. Each supplied relationship
+must be a verified forward tree relationship through existing groups or an
+actual safe local link in its parent page. Groups never become breadcrumb page
+IDs; a real intervening index page cannot be skipped. Titles come from the saved pages. Selecting an ancestor opens it
+and shortens the trail. Physical filename ancestry does not replace a selected
+context. Without trustworthy context, the article stays readable with a shorter
+root/current breadcrumb; invalid or unavailable context does not hide it. No
+whole-wiki parent search is needed.
+
+Branches load lazily. **More** loads another bounded window, **Retry** repeats
+the failed branch read, and a changed continuation restarts that branch without
+replacing the article. Broad or deep branches can reach a read limit. Pending
+windows reserve space within the 1,000-node browser tree limit, counting groups
+and pages alike; reconnect to
+start a new tree if that limit is reached. Completed branches, expansion, and
+tree scroll remain in the connected tab across page and screen navigation.
+Reload, disconnect, or rejected authorization clears protected page/tree state
+and cancels pending reads. Credentials, content, and tree state are not saved in
+browser storage; HTMX retains its existing session URL path/query marker.
+
+The page context has **Contents**, **Sources**, and **Details** tabs, with
+Contents selected initially. Contents lists the displayed second- and third-level headings;
+selecting a heading scrolls and focuses it without reloading the page. Details
+shows identity, digest/version, and available type, description, tags, status,
+trust and stale metadata. Sources lists the page's saved references, or states
+that none are recorded, including for an index page.
+
+At widths of at least 1200px, context stays beside the article in a sticky card.
+Below 1200px, **About this page** opens the same context in a drawer. Below
+992px, the main navigation and page tree use the navigation drawer. Close or
+Escape returns focus to the opener; selecting a page on mobile closes navigation
+and focuses its title. Wide tables and code scroll locally without widening the
+page.
+
+The sidebar supplies wiki page navigation. Historical `view=all` bookmarks now
+open the ordinary root or requested article rather than a separate file view.
 
 Select **Read saved source** to read immutable accepted text with its digest
 and media type. This uses Knowl's saved revision and does not fetch upstream.
@@ -128,6 +185,35 @@ deletion; omission from a bounded page does not. Use **Next** controls for more
 rows. General lists start at 50 rows, Operations at 10; continuation is bounded
 and may need a refresh when the workspace changes or the service restarts.
 
+## Statistics
+
+Statistics reads the database when the page is opened and presents the current
+state from one consistent, read-only database view. It does not save a copy,
+record history, draw time-series charts, or poll in the background. Select
+**Refresh snapshot**, reload, or open the page again to take another reading.
+
+The knowledge section is limited to the selected authorized scope. A
+multi-scope host preserves a public `?scope=<name>` selector through UI
+navigation and shows the current name in the shell; it does not expose a scope
+directory. It reports pages,
+links, configured sources, accepted source documents, operations grouped by
+lifecycle status, projection cursors, and embedding coverage. Embedding
+statistics validate the configured model identity and dimensions without
+loading vector values.
+
+The storage section is deployment-wide rather than scope-bound. It identifies
+the backend, reports the database size when the backend exposes it, and gives
+exact row counts and available size facts for a fixed allowlist of Knowl tables.
+There is no table-name selector or scope directory. SQLite reports the main database
+allocation; optional `dbstat` details are shown only when the SQLite build
+provides them. PostgreSQL reports database and relation sizes when its catalog
+permissions allow those reads. An unavailable optional metric is labeled with
+its reason and does not prevent the remaining statistics from rendering.
+
+The page uses the same public, token, or proxy authentication mode as the rest
+of the enabled Web UI and is always read-only. Enabling it adds no API or MCP
+endpoint and requires no database migration.
+
 ## Source-to-wiki walkthrough
 
 This walkthrough uses one checked-in source document in a fresh temporary
@@ -203,10 +289,11 @@ Keep the service running and open `http://127.0.0.1:8086/ui/`:
 2. In **Sources**, select `engineering-docs`. Check the accepted revision and
    completed processing for `authentication-service.md`. If processing failed,
    inspect the associated operation before proceeding.
-3. In **Knowledge**, open **All pages**, expand the directory containing a
-   generated authentication page, and select that file. Open **Page sources**,
-   then **Read saved source**. The text is the accepted authentication document;
-   it remains immutable if the source changes.
+3. In **Knowledge**, select a generated authentication page in the sidebar tree,
+   using the separate carets and **More** as needed. Select the **Sources** tab;
+   on a narrow screen, first open **About this page**. Select **Read saved
+   source**. The text is the accepted authentication document; it remains
+   immutable if the source changes.
 4. In **Search**, submit `session revocation JWT` across the wiki. Inspect the
    evidence and **View JSON**. With embeddings disabled, this query is searched
    locally. Follow an evidence title to read its current page, then use browser

@@ -10,6 +10,10 @@ excludeFiles:
 components:
   cli:
     in: cmd/knowl
+  benchmarkcli:
+    in: cmd/knowl-searchtome
+  searchtome:
+    in: pkg/knowl/store/eval/searchtome
   host:
     in: pkg/knowl
   fx:
@@ -62,6 +66,16 @@ components:
     in: examples/**
 
 deps:
+  benchmarkcli:
+    mayDependOn:
+      - searchtome
+  searchtome:
+    mayDependOn:
+      - app
+      - types
+      - content
+      - provider
+      - store
   wiki:
     mayDependOn:
       - types

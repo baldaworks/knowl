@@ -40,6 +40,42 @@ and prefixes with the values required by that deployment. For local TEI, use
 the pinned reference configuration below. See [measurements](testing.md#real-cpu-embedding-quality-gate)
 for evaluated quality and resource use.
 
+## Wiki location in page embeddings
+
+Indexing prepends canonical wiki-location context to the existing page inputs:
+wiki catalog titles, page metadata, local heading ancestry, then source text.
+Membership follows links in `index.md` catalogs, not filesystem directories.
+The root catalog title is included; shared pages include every distinct semantic
+placement in stable order. Legacy pages without a placement have no wiki-path
+prefix. Queries still use the same hybrid retrieval pipeline and query embedding;
+there is no catalog-routing model call or additional vector index.
+
+Catalog titles are indexing context, not source evidence. Returned snippets still
+come from the original page. Renaming or moving a catalog changes the inputs of
+its affected pages even when those page bytes do not change. Normal publication
+recomputes those vectors and reuses unchanged authenticated inputs; explicit
+rebuild recomputes the projection. Reordering catalog links does not change the
+semantic input. SQLite and PostgreSQL persist the path context with the page so
+evidence validation and reuse reconstruct the same input that was embedded.
+
+All distinct placements must fit the existing source/semantic limits and the
+384-rune input prefix budget alongside metadata and local headings. Escaping
+catalog targets, cycles or oversized path context are rejected, rather than
+silently choosing a parent or dropping a path. The existing embedding failure
+policy applies when semantic preparation cannot fit the input. Unresolved catalog links add no
+embedding context and remain visible to the existing lint/publication checks,
+so snapshots used for diagnostics and repair retain their previous behavior. More context
+leaves less room for body text in each chunk and can increase the chunk count.
+
+The wiki-path preprocessing version changes model-space identity. Upgrade with
+writers stopped, apply automatic Goose migration **27** on both backends, and
+let the matching binary rebuild the dense projection once at startup. No new
+configuration or canonical-page rewrite is required. Afterwards normal
+publication can reuse unchanged inputs. For rollback, use the matching schema
+and binary and rebuild derived projections from the canonical workspace; a
+schema downgrade removes the stored path context. Existing benchmark results
+predate this preprocessing change and do not establish its search quality.
+
 ## Configure an embedding API
 
 Embeddings are off by default. Disabled configuration creates no embedding
@@ -136,8 +172,9 @@ An explicit rebuild replaces lexical state and computes every page vector again
 in batches of at most 16 without holding SQL locks during inference. Dense
 publication checks the current snapshot and complete page coverage; a
 conflicting update discards a stale build. A classified failure saves degraded
-state even under strict policy. With lexical fallback, startup may be ready
-while semantic retrieval is degraded; `/readyz` alone is not a hybrid guarantee.
+state even under strict policy. After successful required schema initialization,
+lexical fallback allows startup to be ready while semantic retrieval is degraded;
+`/readyz` alone is not a hybrid guarantee.
 Read the retrieval status. Invalid input and caller cancellation never return
 successful fallback.
 
@@ -159,15 +196,18 @@ bundled native capability, including `CGO_ENABLED=0`; no extension installation,
 shared-library load path or external model process is needed for its SQL math.
 Inference still uses the configured provider.
 
-Stop old writers, migrate with the matching binary, rebuild, verify actual
-semantic retrieval and only then resume. Format/preprocessing changes require
+Stop old writers, start the matching binary to apply migrations automatically,
+let startup rebuild, verify actual semantic retrieval and only then resume.
+Format/preprocessing changes require
 fresh dense publication; do not treat legacy state as ready. PostgreSQL's base
 stream stays extension-free and its additional optional Goose SQL migration 1 converts
-derived vectors to native pgvector only when capability/authority permit.
-See [PostgreSQL deployment and recovery](postgres.md) for two histories,
-provision/reopen/rebuild, runtime grants, corrupt empty history and optional-first
-Down. All new application schema changes are Goose SQL; normal Goose-on-Open
-and historical Go migration 19 remain, not a blanket ban on migration DDL at startup.
+derived vectors to native pgvector when embeddings are enabled. Missing required
+extension capability, migration authority or valid schema stops startup even
+with lexical fallback configured. See [PostgreSQL deployment and recovery](postgres.md)
+for extension provisioning, runtime grants and corrupt-history recovery, and
+[optional database-only Up/Down](operations.md#database-schema-migrations).
+All new application schema changes are Goose SQL; automatic startup migrations
+and historical Go migration 19 remain supported.
 Down invalidates derived native state; pair schema and compatible binary and
 rebuild before resuming. Disabling embeddings retains default lexical behavior and
 ignores derived vectors. See [pending-operation recovery](operations.md#upgrading-pending-operations)

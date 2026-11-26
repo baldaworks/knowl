@@ -5,8 +5,8 @@ info:
   description: |
     Canonical public HTTP contract for Knowl.
 
-    The host owns the trusted knowledge scope. Any non-empty `scope` query
-    override on `/v1/*` is rejected with `scope_override_forbidden`.
+    Requests may select one configured public knowledge scope. Omitting
+    `scope` selects the configured default.
 servers:
   - url: http://127.0.0.1:8080
     description: Default local listener
@@ -53,14 +53,15 @@ paths:
       description: |
         Returns bounded grounded evidence and provenance for one query.
 
-        When the host configures an operator token, callers must send it as a
-        bearer token. Trusted in-process operator workflows bypass HTTP auth.
+        When `knowl.api.auth_mode` resolves to `token`, callers must send the
+        configured operator bearer. Trusted in-process operator workflows
+        bypass HTTP auth.
 
-        Supplying a non-empty `scope` query parameter is forbidden and yields
-        `scope_override_forbidden`.
+        The optional `scope` selects one configured, authorized scope.
       parameters:
         - $ref: '#/components/parameters/RetrieveQuery'
         - $ref: '#/components/parameters/RetrieveSource'
+        - $ref: '#/components/parameters/Scope'
       security:
         - {}
         - bearerAuth: []
@@ -76,7 +77,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/ScopeOverrideForbidden'
+          $ref: '#/components/responses/ScopeForbidden'
         '422':
           $ref: '#/components/responses/OperationFailed'
         '503':
@@ -97,8 +98,7 @@ paths:
         processed by the maintenance worker; poll `/v1/operations/{id}` for the
         terminal outcome.
 
-        Supplying a non-empty `scope` query parameter is forbidden and yields
-        `scope_override_forbidden`.
+        The optional body `scope` selects one configured, authorized scope.
       security:
         - {}
         - bearerAuth: []
@@ -120,7 +120,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/ScopeOverrideForbidden'
+          $ref: '#/components/responses/IngestForbidden'
         '422':
           $ref: '#/components/responses/OperationFailed'
         '503':
@@ -134,10 +134,10 @@ paths:
         Returns the public operation status model compatible with
         `queued -> running -> completed | failed`.
 
-        Supplying a non-empty `scope` query parameter is forbidden and yields
-        `scope_override_forbidden`.
+        The optional `scope` selects one configured, authorized scope.
       parameters:
         - $ref: '#/components/parameters/OperationID'
+        - $ref: '#/components/parameters/Scope'
       security:
         - {}
         - bearerAuth: []
@@ -153,7 +153,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/ScopeOverrideForbidden'
+          $ref: '#/components/responses/ScopeForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '422':
@@ -165,8 +165,16 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: Required for business endpoints when `knowl.operator.token` is configured.
+      description: Required on an API facade when `knowl.api.auth_mode` resolves to `token`.
   parameters:
+    Scope:
+      name: scope
+      in: query
+      required: false
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+      description: Configured public scope name. Omission selects the default scope.
     RetrieveQuery:
       name: query
       in: query
@@ -234,14 +242,27 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             error: operation_id_invalid
-    ScopeOverrideForbidden:
-      description: Caller attempted to override the trusted host scope.
+    ScopeForbidden:
+      description: The selected scope is invalid, unavailable, unknown, or unauthorized.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           example:
-            error: scope_override_forbidden
+            error: scope_forbidden
+    IngestForbidden:
+      description: Ingest is disabled by read-only facade policy or the selected scope is forbidden.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            read_only:
+              value:
+                error: read_only
+            scope_forbidden:
+              value:
+                error: scope_forbidden
     Unauthorized:
       description: The configured operator bearer token is missing or invalid.
       headers:
@@ -310,8 +331,23 @@ components:
           enum: [ready, not_ready]
         scope:
           type: string
-          description: Trusted scope reported only when the host is ready.
-          example: local
+          description: Public default scope name reported only when the host is ready.
+          example: default
+        scopes:
+          type: array
+          description: Bounded public per-scope readiness without durable identities or paths.
+          items:
+            $ref: '#/components/schemas/ScopeReadiness'
+    ScopeReadiness:
+      type: object
+      required: [name, ready]
+      properties:
+        name:
+          type: string
+        ready:
+          type: boolean
+        reason:
+          type: string
     ErrorResponse:
       type: object
       required: [error]
@@ -544,6 +580,10 @@ components:
     IngestRequest:
       type: object
       properties:
+        scope:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+          description: Configured public scope name. Omission selects the default scope.
         content:
           type: string
           description: Text already obtained by the caller. Supply exactly one of content or uri.

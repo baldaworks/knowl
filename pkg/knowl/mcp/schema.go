@@ -7,6 +7,8 @@ const (
 	schemaPropertiesKey  = "properties"
 	schemaDescriptionKey = "description"
 	inlineSourceAdapter  = "inline"
+	scopeDescription     = "Optional configured public scope name."
+	scopeKey             = "scope"
 )
 
 func objectSchema(required string) map[string]any {
@@ -15,6 +17,7 @@ func objectSchema(required string) map[string]any {
 		"required":    []string{required},
 		schemaPropertiesKey: map[string]any{
 			required: map[string]any{schemaTypeKey: schemaStringType},
+			scopeKey: map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: scopeDescription},
 		},
 	}
 }
@@ -24,7 +27,8 @@ func retrieveSchema() map[string]any {
 		schemaTypeKey: schemaObjectType,
 		"required":    []string{"query"},
 		schemaPropertiesKey: map[string]any{
-			"query": map[string]any{schemaTypeKey: schemaStringType},
+			"query":  map[string]any{schemaTypeKey: schemaStringType},
+			scopeKey: map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: scopeDescription},
 			"sources": map[string]any{
 				schemaTypeKey: "array",
 				"items":       map[string]any{schemaTypeKey: schemaStringType},
@@ -38,6 +42,7 @@ func ingestSchema() map[string]any {
 		schemaTypeKey: schemaObjectType,
 		schemaPropertiesKey: map[string]any{
 			"content":         map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: "Text already obtained by the caller. Supply exactly one of content or uri."},
+			scopeKey:          map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: scopeDescription},
 			"uri":             map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: "URI string stored as reference text, without downloading the document. Use content for document text; supply exactly one of content or uri."},
 			"media_type":      map[string]any{schemaTypeKey: schemaStringType},
 			"origin":          map[string]any{schemaTypeKey: schemaStringType, schemaDescriptionKey: "Source identity hint for supplied content, such as its original URL. Not fetched."},

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	types "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/spf13/cobra"
 )
 
@@ -48,6 +49,10 @@ func newJSONBodyWorkflowCommand[T any](use, short, requestPath string) *cobra.Co
 			if err != nil {
 				return fmt.Errorf("decode %s input: %w", cmd.CommandPath(), err)
 			}
+			normalized, err = addWorkflowScope(normalized, cliScopeName(cmd.Context()))
+			if err != nil {
+				return err
+			}
 			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
 				Method:    http.MethodPost,
 				Path:      requestPath,
@@ -78,6 +83,9 @@ func newRetrieveCommand() *cobra.Command {
 			for _, source := range sources {
 				parameters.Add("source", source)
 			}
+			if scope := cliScopeName(cmd.Context()); scope != "" {
+				parameters.Set("scope", string(scope))
+			}
 			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
 				Method: http.MethodGet,
 				Path:   publicRetrievePath + "?" + parameters.Encode(),
@@ -101,12 +109,36 @@ func newOperationReadCommand() *cobra.Command {
 			if operationID == "" {
 				return fmt.Errorf("operation ID is required")
 			}
+			parameters := url.Values{}
+			if scope := cliScopeName(cmd.Context()); scope != "" {
+				parameters.Set("scope", string(scope))
+			}
+			path := "/v1/operations/" + url.PathEscape(operationID)
+			if encoded := parameters.Encode(); encoded != "" {
+				path += "?" + encoded
+			}
 			return executeLocalWorkflowCommand(cmd, localWorkflowRequest{
 				Method: http.MethodGet,
-				Path:   "/v1/operations/" + url.PathEscape(operationID),
+				Path:   path,
 			})
 		},
 	}
+}
+
+func addWorkflowScope(body []byte, scope types.ScopeName) ([]byte, error) {
+	if scope == "" {
+		return body, nil
+	}
+	var value map[string]any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return nil, fmt.Errorf("decode normalized workflow input: %w", err)
+	}
+	value["scope"] = string(scope)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode scoped workflow input: %w", err)
+	}
+	return encoded, nil
 }
 
 func executeLocalWorkflowCommand(cmd *cobra.Command, request localWorkflowRequest) error {

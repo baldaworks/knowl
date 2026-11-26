@@ -38,6 +38,8 @@ type retirementContentFixture struct {
 	afterRead      func()
 }
 
+const retirementUnsupportedMedia = "application/octet-stream"
+
 func (fixture *retirementContentFixture) ResolveAcceptedSources(ctx context.Context, scope knowl.ScopeRef, refs []string) (map[string]knowl.AcceptedSource, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -281,6 +283,25 @@ func TestRetirementPlannerSuppliesOnlySortedActiveEvidenceAndValidatesReplacemen
 	}
 }
 
+func TestRetirementPlannerPreservesAcceptedInlineEvidenceWithoutLifecycle(t *testing.T) {
+	fixture, active, retiring, _ := mixedRetirementFixture(t)
+	inline := retirementAccepted("inline", "application", "note", "v1", "text/plain")
+	inline.SourceDocument = knowl.SourceDocument{}
+	refs := []string{app.SourceRefKey(active), app.SourceRefKey(inline)}
+	slices.Sort(refs)
+	fixture.page = retirementPage(t, "concepts/mixed", append(slices.Clone(refs), app.SourceRefKey(retiring)), "Mixed facts.")
+	fixture.content.raw[app.SourceRefKey(inline)] = []byte("application evidence")
+	fixture.maintainer.result = replacementRetirementPlan(fixture.page, fixture.schema.Digest, refs)
+	request := fixture.request([]knowl.AcceptedSource{retiring, active, inline}, retirementOwner(retiring))
+	result, err := fixture.planner().PlanRetirement(t.Context(), request)
+	if err != nil || result.Action != knowl.RetirementReplace || !slices.Equal(result.SourceRefs, refs) {
+		t.Fatalf("inline-supported replacement = %#v, %v", result, err)
+	}
+	if !slices.Equal(fixture.content.readRefs, refs) || len(fixture.maintainer.inputs) != 1 || len(fixture.maintainer.inputs[0].Evidence) != 2 {
+		t.Fatalf("inline evidence not read and supplied: reads=%#v inputs=%#v", fixture.content.readRefs, fixture.maintainer.inputs)
+	}
+}
+
 func TestRetirementPlannerDeletesZeroActiveSupportWithoutProviderOrRawReads(t *testing.T) {
 	fixture := newRetirementFixture(t)
 	first := retirementAccepted("wiki-filesystem", "legacy-a", "a", "one", "text/markdown")
@@ -372,7 +393,7 @@ func TestRetirementPlannerFailsClosedForEvidenceAndLifecycleProblems(t *testing.
 			name: "unsupported raw evidence", wantError: app.ErrRetirementEvidenceUnsupported, wantCode: app.RetirementEvidenceUnsupportedCode,
 			mutate: func(fixture *retirementFixture, _ *app.RetirementPlanningRequest, active, _ knowl.AcceptedSource) {
 				source := fixture.content.accepted[app.SourceRefKey(active)]
-				source.MediaType = "application/octet-stream"
+				source.MediaType = retirementUnsupportedMedia
 				fixture.content.accepted[app.SourceRefKey(active)] = source
 			},
 			wantTarget: func(active, _ knowl.AcceptedSource) string { return app.SourceRefKey(active) },
@@ -1073,4 +1094,32 @@ func cloneRetirementModelPlan(plan knowl.RetirementModelPlan) knowl.RetirementMo
 		plan.Pages[index].Content = slices.Clone(plan.Pages[index].Content)
 	}
 	return plan
+}
+
+func TestRetirementPlannerAuthenticatesInlineRawAndMedia(t *testing.T) {
+	for _, test := range []struct {
+		name, media string
+		raw         []byte
+		want        error
+	}{
+		{"missing raw", "text/plain", nil, app.ErrRetirementEvidenceUnavailable},
+		{"unsupported media", retirementUnsupportedMedia, []byte("binary"), app.ErrRetirementEvidenceUnsupported},
+		{"invalid utf8", "text/plain", []byte{0xff}, app.ErrRetirementEvidenceUnsupported},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, active, retiring, _ := mixedRetirementFixture(t)
+			inline := retirementAccepted("inline", "application", "note", "v1", test.media)
+			inline.SourceDocument = knowl.SourceDocument{}
+			ref := app.SourceRefKey(inline)
+			fixture.page = retirementPage(t, "concepts/mixed", []string{app.SourceRefKey(active), app.SourceRefKey(retiring), ref}, "Mixed")
+			if test.raw != nil {
+				fixture.content.raw[ref] = test.raw
+			}
+			request := fixture.request([]knowl.AcceptedSource{active, retiring, inline}, retirementOwner(retiring))
+			_, err := fixture.planner().PlanRetirement(t.Context(), request)
+			if !errors.Is(err, test.want) || len(fixture.maintainer.inputs) != 0 {
+				t.Fatalf("evidence failure = %v, provider calls %d", err, len(fixture.maintainer.inputs))
+			}
+		})
+	}
 }

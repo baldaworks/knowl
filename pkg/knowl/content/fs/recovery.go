@@ -30,12 +30,12 @@ func (workspace *Workspace) Recover(ctx context.Context) ([]knowl.RecoveryResult
 		return nil, err
 	}
 	defer unlock()
-	recoveryRoot := filepath.Join(workspace.root, knowlDir, "recovery")
-	if err := rejectSymlinkPath(workspace.root, recoveryRoot); err != nil {
+	recoveryRoot := workspace.controlPath("recovery")
+	if err := rejectSymlinkPath(workspace.controlBoundary, recoveryRoot); err != nil {
 		return nil, err
 	}
-	stagingRoot := filepath.Join(workspace.root, knowlDir, "staging")
-	if err := rejectSymlinkPath(workspace.root, stagingRoot); err != nil {
+	stagingRoot := workspace.controlPath("staging")
+	if err := rejectSymlinkPath(workspace.controlBoundary, stagingRoot); err != nil {
 		return nil, err
 	}
 	entries, err := os.ReadDir(recoveryRoot)
@@ -222,7 +222,7 @@ func (workspace *Workspace) preflightPreparedRecovery(journal recoveryJournal, j
 	}
 	writer := manifestWriter(stageManifest{Writer: journal.Writer})
 	if writer == stageWriterMaintainer || writer == stageWriterSource || writer == stageWriterHierarchy || writer == stageWriterRetirement {
-		if err := rejectSymlinkPath(workspace.root, workspace.commitReceiptPath(writer, journal.Scope, journal.OperationID)); err != nil {
+		if err := rejectSymlinkPath(workspace.controlBoundary, workspace.commitReceiptPath(writer, journal.Scope, journal.OperationID)); err != nil {
 			return nil, err
 		}
 	}

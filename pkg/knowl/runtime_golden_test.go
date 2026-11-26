@@ -219,6 +219,7 @@ func newGoldenWorkspace(t *testing.T) (*contentfs.Workspace, knowl.Config) {
 		t.Fatalf("Init workspace: %v", err)
 	}
 	config := knowl.DefaultConfig()
+	enableFacadeWrites(&config)
 	config.Workspace = workspace.Root()
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
@@ -362,6 +363,7 @@ func (driver *goldenHTTPDriver) Retrieve(_ context.Context, query string, _ doma
 
 func doGoldenHTTPRequest(host *knowl.Host, method, path string, body []byte) ([]byte, int, error) {
 	request := httptest.NewRequest(method, "http://knowl"+path, bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+hostWriteToken)
 	response := httptest.NewRecorder()
 	host.Handler().ServeHTTP(response, request)
 	return response.Body.Bytes(), response.Code, nil

@@ -56,12 +56,14 @@ func (workspace *Workspace) Init() error {
 		filepath.Join(workspaceWikiDir, "entities"),
 		filepath.Join(workspaceWikiDir, "concepts"),
 		filepath.Join(workspaceWikiDir, "syntheses"),
-		filepath.Join(knowlDir, "staging"),
-		filepath.Join(knowlDir, "recovery"),
-		filepath.Join(knowlDir, "commits"),
 	} {
 		if err := os.MkdirAll(filepath.Join(workspace.root, relative), 0o700); err != nil {
 			return fmt.Errorf("create workspace directory %q: %w", relative, err)
+		}
+	}
+	for _, relative := range []string{"staging", "recovery", "commits"} {
+		if err := os.MkdirAll(workspace.controlPath(relative), 0o700); err != nil {
+			return fmt.Errorf("create workspace control directory %q: %w", relative, err)
 		}
 	}
 	files := map[string]string{
@@ -140,7 +142,7 @@ func (workspace *Workspace) validateLocked() error {
 			return fmt.Errorf("validate workspace root log: %w", errors.Join(ErrWorkspaceInvalid, parseErr))
 		}
 	}
-	for _, relative := range []string{workspaceRawDir, workspaceWikiDir, knowlDir} {
+	for _, relative := range []string{workspaceRawDir, workspaceWikiDir} {
 		path := filepath.Join(workspace.root, relative)
 		info, err := os.Stat(path)
 		if err != nil {
@@ -152,6 +154,16 @@ func (workspace *Workspace) validateLocked() error {
 		if err := rejectSymlinkPath(workspace.root, path); err != nil {
 			return err
 		}
+	}
+	controlInfo, err := os.Stat(workspace.controlRoot)
+	if err != nil {
+		return fmt.Errorf("required workspace control directory: %w", err)
+	}
+	if !controlInfo.IsDir() {
+		return fmt.Errorf("workspace control path is not a directory: %w", ErrWorkspaceInvalid)
+	}
+	if err := rejectSymlinkPath(workspace.controlBoundary, workspace.controlRoot); err != nil {
+		return err
 	}
 	return nil
 }

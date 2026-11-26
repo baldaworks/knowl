@@ -376,12 +376,21 @@ type ApplyCoordinator interface {
 	Acquire(ctx context.Context) (release func(), err error)
 }
 
-func acquireApply(ctx context.Context, coordinator ApplyCoordinator) (func(), error) {
+// ScopedApplyCoordinator allows one host coordinator to serialize publishers
+// per durable scope without serializing independent scopes.
+type ScopedApplyCoordinator interface {
+	AcquireScope(ctx context.Context, scope knowl.ScopeRef) (release func(), err error)
+}
+
+func acquireApplyScope(ctx context.Context, coordinator ApplyCoordinator, scope knowl.ScopeRef) (func(), error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
 	if coordinator == nil {
 		return func() {}, nil
+	}
+	if scoped, ok := coordinator.(ScopedApplyCoordinator); ok {
+		return scoped.AcquireScope(ctx, scope)
 	}
 	return coordinator.Acquire(ctx)
 }

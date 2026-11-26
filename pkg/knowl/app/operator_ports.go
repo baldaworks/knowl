@@ -48,6 +48,12 @@ type WikiDirectoryReader interface {
 	WikiDirectoryChildren(ctx context.Context, scope knowl.ScopeRef, directory string, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorWikiEntry], error)
 }
 
+// WikiPageTreeReader optionally projects immediate published pages and
+// structural groups, independently of authored links or page type names.
+type WikiPageTreeReader interface {
+	WikiPageChildren(ctx context.Context, scope knowl.ScopeRef, directory string, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorWikiPage], error)
+}
+
 // PageSummaryReader is an optional consistent factual-page inventory capability.
 type PageSummaryReader interface {
 	PageSummaries(ctx context.Context, scope knowl.ScopeRef, options OperatorReadOptions) (OperatorReadPage[knowl.OperatorPageSummary], error)
@@ -102,6 +108,12 @@ type OperatorSourceReader interface {
 	Source(ctx context.Context, scope knowl.ScopeRef, id knowl.SourceID) (knowl.OperatorSourceSummary, error)
 }
 
+// StatisticsReader returns one current, detached statistics snapshot for a
+// trusted scope. Implementations must not persist observations.
+type StatisticsReader interface {
+	Statistics(ctx context.Context, scope knowl.ScopeRef) (knowl.OperatorStatistics, error)
+}
+
 // OperatorReaders contains only independently optional read capabilities.
 type OperatorReaders struct {
 	Catalogs    CatalogReader
@@ -113,4 +125,5 @@ type OperatorReaders struct {
 	Documents   SourceDocumentLister
 	Operations  OperationLister
 	Retirements SourceRetirementReader
+	Statistics  StatisticsReader
 }

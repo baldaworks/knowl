@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru" data-bs-theme="light" data-lte-color-mode="off">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Wiki · Knowl — демонстрационный макет</title>
+  <link rel="icon" href="../web-ui/assets/knowl-logo.png">
+  <link rel="stylesheet" href="../web-ui/vendor/bootstrap.min.css">
+  <link rel="stylesheet" href="../web-ui/vendor/adminlte.min.css">
+  <link id="adminlte-reduce-motion" rel="stylesheet" href="reference.css">
+  <script src="../web-ui/vendor/bootstrap.bundle.min.js" defer></script>
+  <script src="../web-ui/vendor/adminlte.min.js" defer></script>
+  <script src="reference.js" defer></script>
+</head>
+<body class="layout-fixed sidebar-expand-lg bg-body-tertiary">
+<div class="app-wrapper">
+  <nav class="app-header navbar navbar-expand bg-body" aria-label="Панель приложения">
+    <div class="container-fluid gap-2">
+      <div class="d-flex align-items-center gap-3">
+        <button id="navigation-toggle" class="btn btn-outline-secondary d-lg-none" data-lte-toggle="sidebar" aria-label="Открыть навигацию" aria-controls="wiki-navigation" aria-expanded="false">☰</button>
+        <span>Knowledge</span>
+      </div>
+      <button id="context-toggle" class="btn btn-outline-secondary d-xl-none" data-bs-toggle="offcanvas" data-bs-target="#page-context" aria-controls="page-context">О странице</button>
+      <span class="badge text-bg-secondary d-none d-md-inline">Локальная демонстрация</span>
+    </div>
+  </nav>
+  <aside id="wiki-navigation" class="app-sidebar bg-dark" data-bs-theme="dark" aria-label="Навигация wiki">
+    <div class="sidebar-brand"><a href="index.html" class="brand-link"><span class="brand-symbol"><img class="brand-logo" src="../web-ui/assets/knowl-logo.png" alt="Knowl owl" width="1254" height="1254"></span><span class="brand-text">Knowl</span></a></div>
+    <div class="sidebar-wrapper d-flex flex-column">
+      <button id="navigation-close" class="btn btn-outline-secondary d-lg-none mb-2" data-lte-toggle="sidebar">Закрыть навигацию</button>
+      <nav aria-label="Разделы приложения"><ul class="nav sidebar-menu nav-compact flex-column">
+        <li class="nav-item"><a class="nav-link active" href="index.html"><p>Knowledge</p></a></li>
+        <li class="nav-item"><span class="nav-link disabled" aria-disabled="true" title="Вне демонстрации"><p>Search</p></span></li>
+        <li class="nav-item"><span class="nav-link disabled" aria-disabled="true" title="Вне демонстрации"><p>Operations</p></span></li>
+        <li class="nav-item"><span class="nav-link disabled" aria-disabled="true" title="Вне демонстрации"><p>Sources</p></span></li>
+        <li class="nav-item"><span class="nav-link disabled" aria-disabled="true" title="Вне демонстрации"><p>Statistics</p></span></li>
+      </ul></nav>
+      <div class="border-top mt-3 pt-3 px-2"><strong class="text-light">Wiki</strong></div>
+      <nav id="tree-scroll" class="mt-2 flex-grow-1 overflow-y-auto" aria-label="Категории wiki"><ul id="wiki-tree" class="nav sidebar-menu flex-column"></ul></nav>
+      <p class="px-2 pt-3 mb-0 text-body-secondary">Остальные разделы вне демонстрации</p>
+    </div>
+  </aside>
+  <main class="app-main">
+    <div class="app-content pt-3"><div class="container-fluid">
+      <div class="mb-3" role="note">
+        <details><summary><span class="badge text-bg-secondary">Демонстрационный макет</span> Сценарии</summary><p class="mt-2 mb-2">Локальные примеры wiki, без подключения к рабочим данным.</p><div class="d-flex flex-wrap align-items-center gap-2"><label for="branch-scenario">Пример категории</label><select id="branch-scenario" class="form-select w-auto"><option value="normal">Без примера</option><option value="demo">Обычная категория · пример</option><option value="nested">Вложенные категории · пример</option><option value="empty">Пустая</option><option value="loading">Загрузка</option><option value="failed">Ошибка</option><option value="more">Продолжение</option></select><button id="reset-demo" class="btn btn-outline-secondary">Сбросить</button></div></details>
+      </div>
+      <nav aria-label="Путь страницы"><ol id="page-path" class="breadcrumb text-break"></ol></nav>
+      <p id="demo-feedback" role="status" hidden></p>
+      <div class="wiki-grid align-items-start">
+        <article id="article" class="card" data-page-id="index">
+          <div class="card-header"><h1 id="article-title" class="card-title float-none" tabindex="-1">Knowl Index</h1></div>
+          <div id="article-body" class="card-body"></div>
+        </article>
+        <aside id="page-context" class="offcanvas-xl offcanvas-end" tabindex="-1" aria-labelledby="context-title">
+          <div class="offcanvas-header"><h2 id="context-title" class="offcanvas-title">О странице</h2><button class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#page-context" aria-label="Закрыть сведения"></button></div>
+          <div class="offcanvas-body p-xl-0"><div class="card w-100 mb-0">
+            <div class="card-header p-0"><ul class="nav nav-tabs card-header-tabs m-0" role="tablist" aria-label="Контекст страницы">
+              <li class="nav-item" role="presentation"><button id="contents-tab" class="nav-link active px-2" data-bs-toggle="tab" data-bs-target="#contents" type="button" role="tab" aria-controls="contents" aria-selected="true">Содержание</button></li>
+              <li class="nav-item" role="presentation"><button id="sources-tab" class="nav-link px-2" data-bs-toggle="tab" data-bs-target="#sources" type="button" role="tab" aria-controls="sources" aria-selected="false">Источники</button></li>
+              <li class="nav-item" role="presentation"><button id="details-tab" class="nav-link px-2" data-bs-toggle="tab" data-bs-target="#details" type="button" role="tab" aria-controls="details" aria-selected="false">Сведения</button></li>
+            </ul></div>
+            <div class="card-body tab-content">
+              <div id="contents" class="tab-pane fade show active" role="tabpanel" aria-labelledby="contents-tab" tabindex="0"><nav aria-label="Содержание статьи"><ul id="outline" class="list-unstyled mb-0"><li class="mb-2"><a href="#overview">Как устроена база знаний</a></li><li class="mb-2"><a href="#workflow">Рабочий цикл</a></li><li class="mb-2"><a href="#reading">Чтение и происхождение</a></li><li class="mb-2"><a href="#reliability">Состояния и восстановление</a></li><li><a href="#next">Дальнейшее чтение</a></li></ul></nav></div>
+              <div id="sources" class="tab-pane fade" role="tabpanel" aria-labelledby="sources-tab" tabindex="0"><p>Демонстрационные источники поддерживают страницу целиком, без привязки к отдельным утверждениям.</p><div id="source-records"><h3 class="h6">docs/workspace.md</h3><p>Принятая ревизия: <code>demo-r1</code></p><details><summary>Сохранённый текст · демо</summary><pre class="text-wrap mt-2">Команда публикует знания после проверки. Принятые ревизии источников сохраняются отдельно.</pre></details></div></div>
+              <div id="details" class="tab-pane fade" role="tabpanel" aria-labelledby="details-tab" tabindex="0"><dl id="page-details" class="mb-0 text-break"><dt>PageID</dt><dd><code>demo:root</code></dd><dt>Путь</dt><dd>index.md</dd><dt>Данные</dt><dd>Локальный пример</dd></dl></div>
+            </div>
+          </div></div>
+        </aside>
+      </div>
+    </div></div>
+  </main>
+</div>
+</body>
+</html>

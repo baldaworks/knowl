@@ -17,7 +17,7 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range []string{"/ui/", "/ui/knowledge", "/ui/search", "/ui/operations", "/ui/sources"} {
+	for _, route := range []string{"/ui/", "/ui/knowledge", "/ui/search", "/ui/operations", "/ui/sources", "/ui/statistics"} {
 		r := httptest.NewRecorder()
 		h.ServeHTTP(r, httptest.NewRequest(http.MethodGet, route, nil))
 		if r.Code != 200 {
@@ -58,7 +58,7 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 				favicon++
 			}
 		})
-		if logo != 2 || favicon != 1 || connect != 1 || navigation != 4 || !guestMenu || !guestToggle {
+		if logo != 2 || favicon != 1 || connect != 1 || navigation != 5 || !guestMenu || !guestToggle {
 			t.Fatalf("%s logo=%d favicon=%d connect=%d navigation=%d", route, logo, favicon, connect, navigation)
 		}
 	}
@@ -78,6 +78,19 @@ func TestShellRoutesAndFiniteAssets(t *testing.T) {
 		}
 	}
 }
+
+func TestFragmentsCarryTrustedResponseMarker(t *testing.T) {
+	h, err := New(Dependencies{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.Fragments(w, httptest.NewRequest(http.MethodGet, "/ui/fragments/unknown", nil))
+	if w.Header().Get(FragmentHeader) != "1" {
+		t.Fatal("fragment response marker missing")
+	}
+}
+
 func walk(n *html.Node, visit func(*html.Node)) {
 	visit(n)
 	for c := n.FirstChild; c != nil; c = c.NextSibling {

@@ -50,6 +50,7 @@ func (workspace *Workspace) snapshot(ctx context.Context, scope knowl.ScopeRef, 
 	}
 	digests := make(map[string]string)
 	pages := make([]knowl.PageSnapshot, 0)
+	catalogs := make([]knowl.PageSnapshot, 0)
 	links := make([]knowl.LinkReference, 0)
 	capturedAt := workspace.now().UTC()
 	wikiRoot := filepath.Join(workspace.root, workspaceWikiDir)
@@ -82,6 +83,10 @@ func (workspace *Workspace) snapshot(ctx context.Context, scope knowl.ScopeRef, 
 		formatLimits := okfLimits(workspace.maxSourceBytes)
 		switch kind {
 		case okf.DocumentIndex:
+			if len(catalogs) >= maxCatalogSnapshots {
+				return ErrWorkspaceInvalid
+			}
+			catalogs = append(catalogs, knowl.PageSnapshot{Path: relative, Title: markdownTitle(content), Content: string(content)})
 			if _, validateErr := okf.ValidateIndex(bundleRelative, content, formatLimits); validateErr != nil {
 				return validateErr
 			}
@@ -137,6 +142,9 @@ func (workspace *Workspace) snapshot(ctx context.Context, scope knowl.ScopeRef, 
 	})
 	if err != nil {
 		return knowl.WorkspaceSnapshot{}, fmt.Errorf("snapshot wiki: %w", err)
+	}
+	if err := captureWikiPaths(ctx, pages, catalogs, workspace.maxSourceBytes); err != nil {
+		return knowl.WorkspaceSnapshot{}, err
 	}
 	sort.Slice(pages, func(left, right int) bool { return pages[left].Path < pages[right].Path })
 	sort.Slice(links, func(left, right int) bool {
