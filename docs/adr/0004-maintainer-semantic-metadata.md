@@ -6,7 +6,7 @@
 - Owners: Knowl maintainers
 - Decision scope: semantic metadata produced by ordinary source maintenance
 - Supersedes: none
-- Related: ADR 0003 proposes a separate portable provenance contract
+- Related: portable provenance remains a separate future decision
 
 ## Context
 
@@ -74,8 +74,9 @@ resulting replacement must satisfy this decision.
 
 This decision does not introduce verification or review operations, a trust
 lifecycle, `status` or `stale_after` management, or generated metadata. It does
-not convert `knowl.source_refs` into OKF `sources[]`; ADR 0003 separately
-proposes a dual provenance model. It does not establish a global tag registry,
+not convert `knowl.source_refs` into OKF `sources[]`; a separate future
+decision must define any portable provenance model. It does not establish a
+global tag registry,
 perform mass metadata reconciliation or backfill, add UI filtering or tag
 pages, or change public APIs.
 
