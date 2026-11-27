@@ -256,6 +256,7 @@ async function verifyStagedMCP(launcher, fixtureRoot, isolatedEnv) {
     assert.deepEqual(tools, [
       { name: 'knowl_ingest', readOnly: false },
       { name: 'knowl_operation', readOnly: true },
+      { name: 'knowl_page', readOnly: true },
       { name: 'knowl_retrieve', readOnly: true },
     ]);
 
