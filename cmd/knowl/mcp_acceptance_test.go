@@ -489,6 +489,7 @@ func assertExactMCPTools(t *testing.T, session *sdkmcp.ClientSession) {
 	want := []toolContract{
 		{Name: mcpIngestToolName, ReadOnly: false},
 		{Name: mcpOperationToolName, ReadOnly: true},
+		{Name: mcpPageToolName, ReadOnly: true},
 		{Name: mcpRetrieveToolName, ReadOnly: true},
 	}
 	sort.Slice(got, func(left, right int) bool { return got[left].Name < got[right].Name })

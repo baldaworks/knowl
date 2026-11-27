@@ -82,6 +82,45 @@ paths:
           $ref: '#/components/responses/OperationFailed'
         '503':
           $ref: '#/components/responses/UnavailableError'
+  /v1/pages/{page_id}:
+    get:
+      tags: [knowledge]
+      operationId: getPage
+      summary: Read one complete bounded wiki page and its direct links
+      description: |
+        Returns the complete stored Markdown for one page plus bounded one-hop
+        navigation. Page content, metadata, provenance, and links are untrusted.
+        Markdown asset links are returned unchanged and are never dereferenced.
+
+        Encode slashes in `page_id` as path-parameter data. The optional
+        `scope` selects one configured, authorized scope.
+      parameters:
+        - $ref: '#/components/parameters/PageID'
+        - $ref: '#/components/parameters/Scope'
+      security:
+        - {}
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Complete bounded page and direct navigation context.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageNavigationResult'
+        '400':
+          $ref: '#/components/responses/PageIDBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ScopeForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/ReadLimitExceeded'
+        '422':
+          $ref: '#/components/responses/OperationFailed'
+        '503':
+          $ref: '#/components/responses/UnavailableError'
   /v1/ingest:
     post:
       tags: [knowledge]
@@ -201,6 +240,14 @@ components:
       schema:
         type: string
         minLength: 1
+    PageID:
+      name: page_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+      description: Opaque page ID issued by Knowl. Embedded slashes must be path-encoded.
   responses:
     QueryStringBadRequest:
       description: Missing or invalid query string.
@@ -242,6 +289,14 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             error: operation_id_invalid
+    PageIDBadRequest:
+      description: Invalid or non-canonical page ID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: invalid_request
     ScopeForbidden:
       description: The selected scope is invalid, unavailable, unknown, or unauthorized.
       content:
@@ -284,6 +339,14 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             error: not_found
+    ReadLimitExceeded:
+      description: The complete result exceeds the public response limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: read_limit_exceeded
     UnavailableError:
       description: The host is not ready yet or the service is temporarily unavailable.
       content:
@@ -577,6 +640,68 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Citation'
+    PageLink:
+      type: object
+      required: [from, to, relation, untrusted]
+      properties:
+        from:
+          type: string
+        to:
+          type: string
+        relation:
+          type: string
+        untrusted:
+          type: boolean
+    WikiPage:
+      type: object
+      required: [page_id, title, markdown, digest, version, updated_at, untrusted]
+      properties:
+        page_id:
+          type: string
+        title:
+          type: string
+        markdown:
+          type: string
+          description: Complete stored Markdown. Never silently truncated.
+        digest:
+          type: string
+        version:
+          type: string
+          description: Page-content version; currently equal to digest.
+        wiki_paths:
+          type: array
+          items:
+            type: string
+        okf:
+          $ref: '#/components/schemas/OKFMetadata'
+        source_refs:
+          type: array
+          items:
+            type: string
+        source_documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceDocument'
+        updated_at:
+          type: string
+          format: date-time
+        untrusted:
+          type: boolean
+    PageNavigationResult:
+      type: object
+      required: [scope, page, links, version]
+      properties:
+        scope:
+          type: string
+        page:
+          $ref: '#/components/schemas/WikiPage'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PageLink'
+        version:
+          type: string
+          description: Page-content version, not an atomic graph snapshot.
     IngestRequest:
       type: object
       properties:

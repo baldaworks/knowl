@@ -506,6 +506,24 @@ type OperationResult struct {
 // OperationResultStatus defines model for OperationResult.Status.
 type OperationResultStatus string
 
+// PageLink defines model for PageLink.
+type PageLink struct {
+	From      string `json:"from"`
+	Relation  string `json:"relation"`
+	To        string `json:"to"`
+	Untrusted bool   `json:"untrusted"`
+}
+
+// PageNavigationResult defines model for PageNavigationResult.
+type PageNavigationResult struct {
+	Links []PageLink `json:"links"`
+	Page  WikiPage   `json:"page"`
+	Scope string     `json:"scope"`
+
+	// Version Page-content version, not an atomic graph snapshot.
+	Version string `json:"version"`
+}
+
 // ReadyResponse defines model for ReadyResponse.
 type ReadyResponse struct {
 	// Scope Public default scope name reported only when the host is ready.
@@ -590,8 +608,30 @@ type VectorProjectionStatus struct {
 // VectorProjectionStatusState defines model for VectorProjectionStatus.State.
 type VectorProjectionStatusState string
 
+// WikiPage defines model for WikiPage.
+type WikiPage struct {
+	Digest string `json:"digest"`
+
+	// Markdown Complete stored Markdown. Never silently truncated.
+	Markdown        string            `json:"markdown"`
+	Okf             *OKFMetadata      `json:"okf,omitempty"`
+	PageId          string            `json:"page_id"`
+	SourceDocuments *[]SourceDocument `json:"source_documents,omitempty"`
+	SourceRefs      *[]string         `json:"source_refs,omitempty"`
+	Title           string            `json:"title"`
+	Untrusted       bool              `json:"untrusted"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+
+	// Version Page-content version; currently equal to digest.
+	Version   string    `json:"version"`
+	WikiPaths *[]string `json:"wiki_paths,omitempty"`
+}
+
 // OperationID defines model for OperationID.
 type OperationID = string
+
+// PageID defines model for PageID.
+type PageID = string
 
 // RetrieveQuery defines model for RetrieveQuery.
 type RetrieveQuery = string
@@ -617,8 +657,14 @@ type OperationFailed = ErrorResponse
 // OperationIDBadRequest defines model for OperationIDBadRequest.
 type OperationIDBadRequest = ErrorResponse
 
+// PageIDBadRequest defines model for PageIDBadRequest.
+type PageIDBadRequest = ErrorResponse
+
 // QueryStringBadRequest defines model for QueryStringBadRequest.
 type QueryStringBadRequest = ErrorResponse
+
+// ReadLimitExceeded defines model for ReadLimitExceeded.
+type ReadLimitExceeded = ErrorResponse
 
 // ScopeForbidden defines model for ScopeForbidden.
 type ScopeForbidden = ErrorResponse
@@ -631,6 +677,12 @@ type UnavailableError = ErrorResponse
 
 // GetOperationParams defines parameters for GetOperation.
 type GetOperationParams struct {
+	// Scope Configured public scope name. Omission selects the default scope.
+	Scope *Scope `form:"scope,omitempty" json:"scope,omitempty"`
+}
+
+// GetPageParams defines parameters for GetPage.
+type GetPageParams struct {
 	// Scope Configured public scope name. Omission selects the default scope.
 	Scope *Scope `form:"scope,omitempty" json:"scope,omitempty"`
 }
@@ -664,6 +716,9 @@ type ServerInterface interface {
 	// Read one durable Knowl operation status
 	// (GET /v1/operations/{operation_id})
 	GetOperation(w http.ResponseWriter, r *http.Request, operationId OperationID, params GetOperationParams)
+	// Read one complete bounded wiki page and its direct links
+	// (GET /v1/pages/{page_id})
+	GetPage(w http.ResponseWriter, r *http.Request, pageId PageID, params GetPageParams)
 	// Retrieve bounded evidence from the trusted Knowl scope
 	// (GET /v1/retrieve)
 	RetrieveKnowledge(w http.ResponseWriter, r *http.Request, params RetrieveKnowledgeParams)
@@ -759,6 +814,48 @@ func (siw *ServerInterfaceWrapper) GetOperation(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetOperation(w, r, operationId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetPage operation middleware
+func (siw *ServerInterfaceWrapper) GetPage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "page_id" -------------
+	var pageId PageID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "page_id", r.PathValue("page_id"), &pageId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetPageParams
+
+	// ------------- Optional query parameter "scope" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "scope", r.URL.Query(), &params.Scope)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "scope", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPage(w, r, pageId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -948,6 +1045,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("GET "+options.BaseURL+"/readyz", wrapper.GetReady)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/ingest", wrapper.IngestKnowledge)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/operations/{operation_id}", wrapper.GetOperation)
+	m.HandleFunc("GET "+options.BaseURL+"/v1/pages/{page_id}", wrapper.GetPage)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/retrieve", wrapper.RetrieveKnowledge)
 
 	return m
@@ -963,7 +1061,11 @@ type OperationFailedJSONResponse ErrorResponse
 
 type OperationIDBadRequestJSONResponse ErrorResponse
 
+type PageIDBadRequestJSONResponse ErrorResponse
+
 type QueryStringBadRequestJSONResponse ErrorResponse
+
+type ReadLimitExceededJSONResponse ErrorResponse
 
 type ScopeForbiddenJSONResponse ErrorResponse
 
@@ -1157,6 +1259,88 @@ func (response GetOperation503JSONResponse) VisitGetOperationResponse(w http.Res
 	return json.NewEncoder(w).Encode(response)
 }
 
+type GetPageRequestObject struct {
+	PageId PageID `json:"page_id"`
+	Params GetPageParams
+}
+
+type GetPageResponseObject interface {
+	VisitGetPageResponse(w http.ResponseWriter) error
+}
+
+type GetPage200JSONResponse PageNavigationResult
+
+func (response GetPage200JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetPage400JSONResponse struct{ PageIDBadRequestJSONResponse }
+
+func (response GetPage400JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetPage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetPage401JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("WWW-Authenticate", fmt.Sprint(response.Headers.WWWAuthenticate))
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetPage403JSONResponse struct{ ScopeForbiddenJSONResponse }
+
+func (response GetPage403JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetPage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetPage404JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetPage413JSONResponse struct{ ReadLimitExceededJSONResponse }
+
+func (response GetPage413JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetPage422JSONResponse struct{ OperationFailedJSONResponse }
+
+func (response GetPage422JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetPage503JSONResponse struct{ UnavailableErrorJSONResponse }
+
+func (response GetPage503JSONResponse) VisitGetPageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type RetrieveKnowledgeRequestObject struct {
 	Params RetrieveKnowledgeParams
 }
@@ -1236,6 +1420,9 @@ type StrictServerInterface interface {
 	// Read one durable Knowl operation status
 	// (GET /v1/operations/{operation_id})
 	GetOperation(ctx context.Context, request GetOperationRequestObject) (GetOperationResponseObject, error)
+	// Read one complete bounded wiki page and its direct links
+	// (GET /v1/pages/{page_id})
+	GetPage(ctx context.Context, request GetPageRequestObject) (GetPageResponseObject, error)
 	// Retrieve bounded evidence from the trusted Knowl scope
 	// (GET /v1/retrieve)
 	RetrieveKnowledge(ctx context.Context, request RetrieveKnowledgeRequestObject) (RetrieveKnowledgeResponseObject, error)
@@ -1369,6 +1556,33 @@ func (sh *strictHandler) GetOperation(w http.ResponseWriter, r *http.Request, op
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetOperationResponseObject); ok {
 		if err := validResponse.VisitGetOperationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPage operation middleware
+func (sh *strictHandler) GetPage(w http.ResponseWriter, r *http.Request, pageId PageID, params GetPageParams) {
+	var request GetPageRequestObject
+
+	request.PageId = pageId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPage(ctx, request.(GetPageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPageResponseObject); ok {
+		if err := validResponse.VisitGetPageResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -39,21 +39,24 @@ control plane.
 
 ### Public business contract
 
-The contract has exactly three business operations:
+The contract has four business operations:
 
 - retrieve bounded evidence;
+- read one complete bounded wiki page and its direct links;
 - ingest one source;
 - read one durable operation status.
 
 MCP is the primary agent-facing interface:
 
 - `knowl_retrieve`
+- `knowl_page`
 - `knowl_ingest`
 - `knowl_operation`
 
 HTTP/OpenAPI provides the same deterministic contract:
 
 - `GET /v1/retrieve`
+- `GET /v1/pages/{page_id}`
 - `POST /v1/ingest`
 - `GET /v1/operations/{operation_id}`
 

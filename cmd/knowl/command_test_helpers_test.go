@@ -33,6 +33,7 @@ const (
 	sourceNamespacePattern    = "wiki/sources/<source_id>/**"
 	operatorTokenEnvName      = "KNOWL_OPERATOR_TOKEN"
 	mcpRetrieveToolName       = "knowl_retrieve"
+	mcpPageToolName           = "knowl_page"
 	mcpIngestToolName         = "knowl_ingest"
 	mcpOperationToolName      = "knowl_operation"
 	testContentArgument       = "content"

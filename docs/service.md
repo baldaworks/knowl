@@ -69,7 +69,9 @@ On a host with multiple configured knowledge scopes, add a single public
 readiness and backup behavior.
 
 Expect a non-empty `evidence` array with page identities, excerpts and source
-references. Read the generated wiki inside the persistent volume, or enable
+references. Read a selected page through `GET /v1/pages/{page_id}` (with `/` in
+the ID path-encoded as `%2F`) or `knowl_page`; both return the same complete
+bounded page and one-hop links under the selected scope. You can also enable
 [browser access](#optional-browser-access) and open the page named in evidence.
 The source revision is preserved under `raw/`; the agent writes a separate
 semantic wiki under `wiki/`. Preserve both with the operational state.
@@ -87,9 +89,9 @@ Configure your client's Streamable HTTP connection with:
 ```
 
 Adapt this shape to your client. The safe default is read-only and publishes
-`knowl_retrieve` and `knowl_operation`. To retain `knowl_ingest`, configure
-`knowl.mcp.access_mode: read_write` explicitly; token authentication is
-required. The [access-control guide](access-control.md) covers native read-only,
+`knowl_retrieve`, `knowl_page` and `knowl_operation`. To retain `knowl_ingest`,
+configure `knowl.mcp.access_mode: read_write` explicitly; token authentication
+is required. The [access-control guide](access-control.md) covers native read-only,
 Pomerium/Keycloak and shared internal/external deployments. The
 [OpenAPI contract](../api/openapi/knowl.yaml) describes the HTTP equivalents.
 See [Codex integration](local-codex.md) for local MCP stdio.

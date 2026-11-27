@@ -112,6 +112,11 @@ curl -fsS --get \
   --data-urlencode 'query=database recovery' \
   http://127.0.0.1:8080/v1/retrieve
 
+curl -fsS --get \
+  -H "Authorization: Bearer ${KNOWL_OPERATOR_TOKEN}" \
+  --data-urlencode 'scope=infrastructure' \
+  http://127.0.0.1:8080/v1/pages/concepts%2Fdatabase-recovery
+
 curl -fsS \
   -H "Authorization: Bearer ${KNOWL_OPERATOR_TOKEN}" \
   -H 'Content-Type: application/json' \
@@ -124,9 +129,9 @@ curl -fsS --get \
   http://127.0.0.1:8080/v1/operations/OPERATION_ID
 ```
 
-The three MCP tools accept the same optional public `scope` field. Operation
-status is always read through the selected scope, so an ID from another scope
-is not disclosed. Supplying malformed, unknown, disabled or unauthorized scope
+The four MCP tools accept the same optional public `scope` field. Page and
+operation status are always read through the selected scope, so an ID from
+another scope is not disclosed. Supplying malformed, unknown, disabled or unauthorized scope
 names returns the bounded `scope_forbidden` class before scoped data is read.
 
 The Web UI keeps one scope in its URL and protected fragment requests. Open,

@@ -45,9 +45,11 @@ knowl:
     access_mode: read_only
 ```
 
-Native MCP read-only mode registers only `knowl_retrieve` and
+Native MCP read-only mode registers only `knowl_retrieve`, `knowl_page` and
 `knowl_operation`. `knowl_ingest` is absent from `tools/list` and cannot be
-called directly. Set MCP to explicit `token` plus `read_write` for a trusted
+called directly. `knowl_page` uses the same read authorization and selected
+scope as retrieve; a page ID does not grant cross-scope access. Set MCP to
+explicit `token` plus `read_write` for a trusted
 internal client that must ingest.
 
 ### Shared external MCP through Pomerium

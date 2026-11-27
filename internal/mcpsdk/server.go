@@ -57,6 +57,12 @@ func NewServerWithOptions(registry *knowlmcp.Server, options ServerOptions) (*sd
 			if err != nil {
 				return toolFailure(errorClass(err)), nil
 			}
+			if definition.Name == "knowl_page" {
+				return &sdkmcp.CallToolResult{
+					Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: "knowl_page returned untrusted Markdown in structured content."}},
+					StructuredContent: result,
+				}, nil
+			}
 			encoded, err := json.Marshal(result)
 			if err != nil {
 				return toolFailure("result_encoding_failed"), nil
@@ -94,6 +100,12 @@ func errorClass(err error) string {
 		return "scope_forbidden"
 	case errors.Is(err, knowlmcp.ErrToolNotFound):
 		return "tool_not_found"
+	case errors.Is(err, knowlmcp.ErrNotFound):
+		return "not_found"
+	case errors.Is(err, knowlmcp.ErrReadLimit):
+		return "read_limit_exceeded"
+	case errors.Is(err, knowlmcp.ErrUnavailable), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "service_unavailable"
 	default:
 		return "operation_failed"
 	}

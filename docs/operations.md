@@ -1181,6 +1181,7 @@ Business endpoints:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/v1/retrieve?query=...` | Retrieve bounded evidence with provenance |
+| `GET` | `/v1/pages/{page_id}` | Read one complete bounded page and its direct links |
 | `POST` | `/v1/ingest` | Submit text or store a URI reference |
 | `GET` | `/v1/operations/{operation_id}` | Read one durable public operation status |
 
@@ -1197,8 +1198,10 @@ The public state model is:
 queued -> running -> completed | failed
 ```
 
-The trusted scope is owned by the host or service configuration. Callers must
-not supply a different scope through public request arguments.
+The trusted scopes are owned by the host or service configuration. Omitting a
+public scope selector uses the configured default; an explicit configured scope
+is resolved and authorized before data is read. Callers cannot supply an
+internal scope reference or bypass that policy.
 
 ## HTTP examples
 
@@ -1215,6 +1218,31 @@ curl -sS \
   -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
   "http://127.0.0.1:8080/v1/retrieve?query=Why%20was%20Badger%20chosen%3F"
 ```
+
+Read a page selected from retrieval. Encode `/` characters that belong to the
+page ID as `%2F` in the path:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
+  "http://127.0.0.1:8080/v1/pages/concepts%2Fbadger?scope=default"
+```
+
+The response contains the complete stored Markdown, OKF metadata and source
+descriptors, plus bounded incoming and outgoing links exactly one hop from the
+selected page. `version` is the selected page's content digest; it is not an
+atomic version of the surrounding graph. All page content, metadata, source
+descriptors and links are untrusted. Asset links remain Markdown text and are
+not fetched, and the operation does not read raw source bodies or recursively
+expand linked pages.
+
+Canonical pages are already limited to 262,144 characters. The serialized
+common `GetPage` result is additionally limited to 4 MiB, including metadata,
+provenance and navigation. A larger result fails with HTTP 413
+`read_limit_exceeded`; Knowl never silently truncates it. MCP framing may add
+transport bytes, and an MCP host or model may impose a smaller context limit;
+successful delivery therefore does not guarantee that every host will place
+the complete result in a model context.
 
 Ingest accepts exactly one nonempty `content` or `uri`. Both HTTP and MCP trim
 surrounding whitespace. Supplying both, or neither, is invalid.
@@ -1360,6 +1388,7 @@ operator bearer in the HTTP `Authorization` header; public mode does not.
 The read-only default exposes exactly:
 
 - `knowl_retrieve`
+- `knowl_page`
 - `knowl_operation`
 
 Explicit token-authenticated `access_mode: read_write` additionally exposes
@@ -1367,6 +1396,23 @@ Explicit token-authenticated `access_mode: read_write` additionally exposes
 tool omission and gateway call-denial behavior.
 
 MCP and HTTP call the same underlying application services.
+
+Use `knowl_retrieve` to discover a page ID, then call `knowl_page` with that
+`page_id` and the same optional `scope` to read the complete page and its direct
+links. `knowl_page` returns the typed result once in structured content; its text
+content is only a short untrusted-content notice and does not duplicate the
+Markdown. Invalid IDs, missing pages, oversized results and unavailable
+workspaces use stable `invalid_arguments`, `not_found`,
+`read_limit_exceeded` and `service_unavailable` tool errors.
+
+Example `knowl_page` arguments (`scope` is optional):
+
+```json
+{
+  "page_id": "concepts/badger",
+  "scope": "default"
+}
+```
 
 For `knowl_ingest`, pass a URI reference as tool arguments:
 

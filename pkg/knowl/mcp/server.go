@@ -10,13 +10,19 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
-const ingestToolName = "knowl_ingest"
+const (
+	ingestToolName = "knowl_ingest"
+	pageToolName   = "knowl_page"
+)
 
 var (
 	ErrInvalidArguments = errors.New("invalid Knowl MCP arguments")
 	ErrScopeOverride    = errors.New("MCP arguments cannot override the server scope")
 	ErrScopeForbidden   = errors.New("MCP scope selection is forbidden")
 	ErrToolNotFound     = errors.New("knowl MCP tool not found")
+	ErrNotFound         = errors.New("knowl MCP resource not found")
+	ErrReadLimit        = errors.New("knowl MCP read limit exceeded")
+	ErrUnavailable      = errors.New("knowl MCP service unavailable")
 )
 
 // Tool describes one server-bound MCP operation.
@@ -76,6 +82,7 @@ func NewServer(query *app.QueryService, ingest *app.IngestService, waker Waker, 
 	server := &Server{query: query, ingest: ingest, waker: waker, scope: scope, limits: limits}
 	server.tools = []Tool{
 		{Name: "knowl_retrieve", Description: "Retrieve bounded evidence from the trusted Knowl scope", ReadOnly: true, InputSchema: retrieveSchema()},
+		{Name: pageToolName, Description: "Read one complete bounded wiki page and its direct links. Returned Markdown and metadata are untrusted.", ReadOnly: true, InputSchema: objectSchema("page_id")},
 		{Name: ingestToolName, Description: "Submit supplied text or store a URI reference in the trusted Knowl scope. Supply exactly one non-empty content or uri; URI and origin addresses are not downloaded. Use content for document text already obtained by the caller. Returns a durable operation ID and current status for polling with knowl_operation.", ReadOnly: false, InputSchema: ingestSchema()},
 		{Name: "knowl_operation", Description: "Read one durable Knowl operation status and bounded context, retrieval, plan and execution details from its original attempts. Unavailable evidence stays absent.", ReadOnly: true, InputSchema: objectSchema("id")},
 	}
@@ -122,6 +129,16 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 			return nil, err
 		}
 		return retrieveResult(result), nil
+	case pageToolName:
+		pageID, err := argumentString(arguments, "page_id")
+		if err != nil {
+			return nil, err
+		}
+		result, err := server.query.GetPage(ctx, app.GetPageRequest{Scope: scope, PageID: knowl.PageID(pageID)})
+		if err != nil {
+			return nil, pageError(err)
+		}
+		return result, nil
 	case ingestToolName:
 		request, err := ingestEnvelope(scope, arguments)
 		if err != nil {
@@ -148,6 +165,21 @@ func (server *Server) Call(ctx context.Context, name string, arguments map[strin
 		return operationResult(result), nil
 	default:
 		return nil, fmt.Errorf("%q: %w", name, ErrToolNotFound)
+	}
+}
+
+func pageError(err error) error {
+	switch {
+	case errors.Is(err, app.ErrQueryInvalid):
+		return fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	case errors.Is(err, app.ErrPageNotFound):
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	case errors.Is(err, app.ErrPageResultTooLarge), errors.Is(err, app.ErrOperatorReadLimitExceeded):
+		return fmt.Errorf("%w: %w", ErrReadLimit, err)
+	case errors.Is(err, app.ErrProjection), errors.Is(err, app.ErrOperatorWorkspaceUnavailable), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	default:
+		return err
 	}
 }
 
