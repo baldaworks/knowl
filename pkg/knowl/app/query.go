@@ -11,18 +11,25 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 var (
-	ErrQueryInvalid      = errors.New("invalid Knowl query")
-	ErrPageNotFound      = errors.New("knowl page not found")
-	ErrOperationNotFound = errors.New("knowl operation not found")
-	ErrFilingInvalid     = errors.New("invalid explicit wiki filing")
+	ErrQueryInvalid       = errors.New("invalid Knowl query")
+	ErrPageNotFound       = errors.New("knowl page not found")
+	ErrPageResultTooLarge = errors.New("knowl page result exceeds limit")
+	ErrPageResultEncoding = errors.New("knowl page result encoding failed")
+	ErrOperationNotFound  = errors.New("knowl operation not found")
+	ErrFilingInvalid      = errors.New("invalid explicit wiki filing")
 )
 
-const maxSourcesFilter = 16
+const (
+	maxSourcesFilter      = 16
+	MaxGetPageResultBytes = 4 << 20
+)
 
 // QueryOptions configures bounded wiki-first reads.
 type QueryOptions struct {
@@ -47,6 +54,37 @@ type QueryResult struct {
 	Pages     []knowl.PageReference  `json:"pages"`
 	Links     []knowl.LinkReference  `json:"links"`
 	Citations []Citation             `json:"citations"`
+}
+
+// GetPageRequest identifies one canonical page in a resolved scope.
+type GetPageRequest struct {
+	Scope  knowl.ScopeRef `json:"scope"`
+	PageID knowl.PageID   `json:"page_id"`
+}
+
+// PageResult is the detached public representation of one canonical page.
+// Markdown is the sole complete page-content field.
+type PageResult struct {
+	PageID          knowl.PageID           `json:"page_id"`
+	Title           string                 `json:"title"`
+	Markdown        string                 `json:"markdown"`
+	Digest          string                 `json:"digest"`
+	Version         string                 `json:"version"`
+	WikiPaths       []string               `json:"wiki_paths,omitempty"`
+	OKF             *okf.Metadata          `json:"okf,omitempty"`
+	SourceRefs      []string               `json:"source_refs,omitempty"`
+	SourceDocuments []knowl.SourceDocument `json:"source_documents,omitempty"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+	Untrusted       bool                   `json:"untrusted"`
+}
+
+// GetPageResult contains one complete page and its bounded direct links.
+// Version identifies the page content, not an atomic graph snapshot.
+type GetPageResult struct {
+	Scope   knowl.ScopeRef        `json:"scope"`
+	Page    PageResult            `json:"page"`
+	Links   []knowl.LinkReference `json:"links"`
+	Version string                `json:"version"`
 }
 
 // FilingRequest explicitly submits a query result and typed edit plan to the normal filing gate.
@@ -105,6 +143,153 @@ func (service *QueryService) Page(ctx context.Context, scope knowl.ScopeRef, id 
 	page := pages[0]
 	page.Untrusted = true
 	return page, nil
+}
+
+// GetPage returns one complete detached page and its direct navigation context.
+func (service *QueryService) GetPage(ctx context.Context, request GetPageRequest) (GetPageResult, error) {
+	ctx = nonNilContext(ctx)
+	if strings.TrimSpace(string(request.Scope)) == "" || !validRetirementPageID(request.PageID) {
+		return GetPageResult{}, ErrQueryInvalid
+	}
+	readCtx, cancel := boundedReadContext(ctx, service.limits)
+	defer cancel()
+	page, err := service.Page(readCtx, request.Scope, request.PageID, service.limits)
+	if err != nil {
+		return GetPageResult{}, err
+	}
+	if page.ID != request.PageID {
+		return GetPageResult{}, fmt.Errorf("page identity mismatch: %w", ErrOperatorWorkspaceUnavailable)
+	}
+	links, err := service.Links(readCtx, request.Scope, request.PageID, service.limits)
+	if err != nil {
+		return GetPageResult{}, err
+	}
+	metadata, err := detachedOKFMetadata(page.OKF)
+	if err != nil {
+		return GetPageResult{}, err
+	}
+	result := GetPageResult{
+		Scope: request.Scope,
+		Page: PageResult{
+			PageID: request.PageID, Title: page.Title, Markdown: page.Content,
+			Digest: page.Digest, Version: page.Digest, WikiPaths: append([]string(nil), page.WikiPaths...),
+			OKF: metadata, SourceRefs: append([]string(nil), page.SourceRefs...),
+			SourceDocuments: sortedSourceDocuments(page.SourceDocuments), UpdatedAt: page.UpdatedAt, Untrusted: true,
+		},
+		Links: append([]knowl.LinkReference(nil), links...), Version: page.Digest,
+	}
+	if page.SourceDocument != nil && len(result.Page.SourceDocuments) == 0 {
+		result.Page.SourceDocuments = []knowl.SourceDocument{*page.SourceDocument}
+	}
+	for index := range result.Links {
+		result.Links[index].Untrusted = true
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return GetPageResult{}, fmt.Errorf("encode GetPage result: %w: %w", err, ErrPageResultEncoding)
+	}
+	if len(encoded) > MaxGetPageResultBytes {
+		return GetPageResult{}, fmt.Errorf("GetPage result bytes %d exceed %d: %w", len(encoded), MaxGetPageResultBytes, ErrPageResultTooLarge)
+	}
+	return result, nil
+}
+
+func detachedOKFMetadata(metadata *okf.Metadata) (*okf.Metadata, error) {
+	if metadata == nil {
+		return nil, nil
+	}
+	result := *metadata
+	result.Tags = append([]string(nil), metadata.Tags...)
+	result.Sources = append([]okf.Source(nil), metadata.Sources...)
+	for index := range result.Sources {
+		result.Sources[index].UsageCount = cloneUint64(metadata.Sources[index].UsageCount)
+		result.Sources[index].LastModified = cloneTime(metadata.Sources[index].LastModified)
+		result.Sources[index].Extensions = cloneMetadataExtensions(metadata.Sources[index].Extensions)
+		result.Sources[index].UsageWindow = cloneUsageWindow(metadata.Sources[index].UsageWindow)
+	}
+	result.UsageWindow = cloneUsageWindow(metadata.UsageWindow)
+	if metadata.Generated != nil {
+		generated := *metadata.Generated
+		generated.At = cloneTime(metadata.Generated.At)
+		generated.Extensions = cloneMetadataExtensions(metadata.Generated.Extensions)
+		result.Generated = &generated
+	}
+	result.Verified = append([]okf.Verification(nil), metadata.Verified...)
+	for index := range result.Verified {
+		result.Verified[index].Extensions = cloneMetadataExtensions(metadata.Verified[index].Extensions)
+	}
+	if metadata.StaleAfter != nil {
+		staleAfter := *metadata.StaleAfter
+		result.StaleAfter = &staleAfter
+	}
+	result.Parameters = append([]okf.Parameter(nil), metadata.Parameters...)
+	for index := range result.Parameters {
+		result.Parameters[index].Extensions = cloneMetadataExtensions(metadata.Parameters[index].Extensions)
+	}
+	if metadata.Executor != nil {
+		executor := *metadata.Executor
+		executor.Receipt = append([]string(nil), metadata.Executor.Receipt...)
+		executor.Extensions = cloneMetadataExtensions(metadata.Executor.Extensions)
+		result.Executor = &executor
+	}
+	if metadata.Attester != nil {
+		attester := *metadata.Attester
+		attester.Extensions = cloneMetadataExtensions(metadata.Attester.Extensions)
+		result.Attester = &attester
+	}
+	result.Extensions = cloneMetadataExtensions(metadata.Extensions)
+	return &result, nil
+}
+
+func cloneUint64(input *uint64) *uint64 {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	return &result
+}
+
+func cloneTime(input *time.Time) *time.Time {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	return &result
+}
+
+func cloneUsageWindow(input *okf.UsageWindow) *okf.UsageWindow {
+	if input == nil {
+		return nil
+	}
+	result := *input
+	result.Extensions = cloneMetadataExtensions(input.Extensions)
+	return &result
+}
+
+func cloneMetadataExtensions(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	result := make(map[string]any, len(input))
+	for key, value := range input {
+		result[key] = cloneMetadataValue(value)
+	}
+	return result
+}
+
+func cloneMetadataValue(input any) any {
+	switch value := input.(type) {
+	case map[string]any:
+		return cloneMetadataExtensions(value)
+	case []any:
+		result := make([]any, len(value))
+		for index := range value {
+			result[index] = cloneMetadataValue(value[index])
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 func reservedOKFPage(id knowl.PageID) bool {

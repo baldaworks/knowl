@@ -93,9 +93,9 @@ configuration, offline use, and supported scope.
 ### MCP and HTTP
 
 Connect other agents to the self-hosted service over MCP. The read-only default
-exposes `knowl_retrieve` for evidence and `knowl_operation` for operation
-status. Explicit token-authenticated read-write mode also exposes
-`knowl_ingest` for durable inputs.
+exposes `knowl_retrieve` for evidence, `knowl_page` for complete bounded page
+reads and `knowl_operation` for operation status. Explicit token-authenticated
+read-write mode also exposes `knowl_ingest` for durable inputs.
 
 The same capabilities are available through HTTP. See
 [service connection guide](docs/service.md#connect-an-mcp-client),

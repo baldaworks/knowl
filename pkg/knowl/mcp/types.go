@@ -8,6 +8,9 @@ import (
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
+// PageResult is the shared complete page and one-hop navigation payload.
+type PageResult = app.GetPageResult
+
 // RetrieveResult is the bounded evidence payload returned by knowl_retrieve.
 type RetrieveResult struct {
 	Retrieval *knowl.RetrievalStatus `json:"retrieval,omitempty"`

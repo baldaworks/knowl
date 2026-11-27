@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +45,7 @@ const hostPageID = "entities/one"
 const hostQuery = "One"
 const hostQueryKey = "query"
 const hostRetrieveToolName = "knowl_retrieve"
+const hostPageToolName = "knowl_page"
 const hostIngestToolName = "knowl_ingest"
 const hostOperationToolName = "knowl_operation"
 const hostProviderID = "provider"
@@ -362,11 +364,11 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	config.StorePath = filepath.Join(workspace.Root(), ".knowl", "state.db")
 	config.ListenAddr = hostListenAddr
 	config.IngestOptions.AutoApply = false
-	maintainer := provider.Fixture{Result: domain.ModelEditPlan{
+	maintainer := &runtimeCountingMaintainer{delegate: provider.Fixture{Result: domain.ModelEditPlan{
 		SchemaDigest: schema.Digest,
 		SourceRefs:   []string{hostSourceRef},
 		Edits:        []domain.FileEdit{{Path: hostPagePath, Content: []byte(hostPageContent)}},
-	}}
+	}}}
 
 	host, err := knowl.NewHost(ctx, config, maintainer)
 	if err != nil {
@@ -446,6 +448,36 @@ func TestHostHTTPAndMCPSharePublicContractBehavior(t *testing.T) {
 	}
 	if mcpRetrieve.Evidence[0].PageID != domain.PageID(httpRetrieve.Evidence[0].PageID) {
 		t.Fatalf("retrieve page mismatch: mcp=%q http=%q", mcpRetrieve.Evidence[0].PageID, httpRetrieve.Evidence[0].PageID)
+	}
+
+	maintainerCalls := maintainer.callCount()
+	mcpPageValue, err := host.MCP().Call(ctx, hostPageToolName, map[string]any{"page_id": hostPageID})
+	if err != nil {
+		t.Fatalf("mcp page: %v", err)
+	}
+	mcpPage, ok := mcpPageValue.(mcp.PageResult)
+	if !ok {
+		t.Fatalf("mcp page type = %T, want mcp.PageResult", mcpPageValue)
+	}
+	body, status, err = doHostRequest(t, host, http.MethodGet, "/v1/pages/"+url.PathEscape(hostPageID), nil)
+	if err != nil {
+		t.Fatalf("http page: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("http page status = %d, body %s", status, body)
+	}
+	var httpPage app.GetPageResult
+	if err := json.Unmarshal(body, &httpPage); err != nil {
+		t.Fatalf("decode http page: %v", err)
+	}
+	if !reflect.DeepEqual(httpPage, mcpPage) {
+		t.Fatalf("page mismatch: HTTP=%#v MCP=%#v", httpPage, mcpPage)
+	}
+	if httpPage.Page.Markdown != hostPageContent || httpPage.Page.Version != httpPage.Page.Digest || httpPage.Version != httpPage.Page.Digest || !httpPage.Page.Untrusted {
+		t.Fatalf("page contract = %#v", httpPage)
+	}
+	if maintainer.callCount() != maintainerCalls {
+		t.Fatalf("page reads invoked maintainer: before=%d after=%d", maintainerCalls, maintainer.callCount())
 	}
 
 	mcpOperationValue, err := host.MCP().Call(ctx, "knowl_operation", map[string]any{"id": string(mcpIngest.OperationID)})
@@ -812,6 +844,25 @@ type blockingMaintainer struct {
 	started chan struct{}
 	release <-chan struct{}
 	once    sync.Once
+}
+
+type runtimeCountingMaintainer struct {
+	delegate app.Maintainer
+	mu       sync.Mutex
+	calls    int
+}
+
+func (maintainer *runtimeCountingMaintainer) Plan(ctx context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
+	maintainer.mu.Lock()
+	maintainer.calls++
+	maintainer.mu.Unlock()
+	return maintainer.delegate.Plan(ctx, input)
+}
+
+func (maintainer *runtimeCountingMaintainer) callCount() int {
+	maintainer.mu.Lock()
+	defer maintainer.mu.Unlock()
+	return maintainer.calls
 }
 
 func (maintainer *blockingMaintainer) Plan(ctx context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {

@@ -119,8 +119,8 @@ func TestHTTPMCPReadOnlyModesHideWriteTools(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(listed.Tools) != 2 {
-				t.Fatalf("tool count = %d, want 2", len(listed.Tools))
+			if len(listed.Tools) != 3 {
+				t.Fatalf("tool count = %d, want 3", len(listed.Tools))
 			}
 			for _, tool := range listed.Tools {
 				if tool.Name == hostIngestToolName {
@@ -235,6 +235,7 @@ func TestHostServesMCPContract(t *testing.T) {
 	}
 	wantNames := map[string]bool{
 		hostRetrieveToolName:  false,
+		hostPageToolName:      false,
 		hostIngestToolName:    false,
 		hostOperationToolName: false,
 	}

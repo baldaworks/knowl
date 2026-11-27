@@ -218,7 +218,7 @@ func writeOperatorError(w http.ResponseWriter, err error) {
 	}{
 		{app.ErrOperatorInvalidRequest, 400, invalidRequestCode}, {app.ErrOperatorLimitInvalid, 400, "limit_invalid"}, {app.ErrOperatorCursorInvalid, 400, "cursor_invalid"},
 		{app.ErrOperatorCatalogNotFound, 404, "catalog_not_found"}, {app.ErrPageNotFound, 404, "page_not_found"}, {app.ErrOperatorSourceRevisionNotFound, 404, "source_revision_not_found"}, {app.ErrSourceNotFound, 404, "source_not_found"}, {app.ErrSourceLifecycleUnowned, 404, "source_retirement_not_found"}, {app.ErrOperationNotFound, 404, "operation_not_found"},
-		{app.ErrOperatorSnapshotChanged, 409, "snapshot_changed"}, {app.ErrOperatorReadLimitExceeded, 413, "read_limit_exceeded"}, {app.ErrOperatorUnsupportedFormat, 415, "unsupported_format"},
+		{app.ErrOperatorSnapshotChanged, 409, "snapshot_changed"}, {app.ErrOperatorReadLimitExceeded, 413, readLimitExceededCode}, {app.ErrOperatorUnsupportedFormat, 415, "unsupported_format"},
 		{app.ErrOperatorCapabilityUnavailable, 503, "capability_unavailable"}, {app.ErrOperatorNotReady, 503, "not_ready"}, {app.ErrOperatorWorkspaceUnavailable, 503, operatorWorkspaceUnavailableCode},
 		{context.Canceled, 503, operatorWorkspaceUnavailableCode}, {context.DeadlineExceeded, 503, operatorWorkspaceUnavailableCode},
 	} {

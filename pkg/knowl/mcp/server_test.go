@@ -28,6 +28,9 @@ const (
 	testTransportQuery    = "transportbeacon"
 	testQueryArgument     = "query"
 	testSourcesArgument   = "sources"
+	testPageArgument      = "page_id"
+	testPageTool          = "knowl_page"
+	testPageID            = "entities/one"
 )
 
 func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
@@ -69,13 +72,13 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 		t.Fatalf("new MCP server: %v", err)
 	}
 	tools := server.Tools()
-	if len(tools) != 3 {
-		t.Fatalf("tool count = %d, want 3", len(tools))
+	if len(tools) != 4 {
+		t.Fatalf("tool count = %d, want 4", len(tools))
 	}
-	if tools[0].Name != "knowl_retrieve" || tools[1].Name != "knowl_ingest" || tools[2].Name != "knowl_operation" {
+	if tools[0].Name != "knowl_retrieve" || tools[1].Name != testPageTool || tools[2].Name != "knowl_ingest" || tools[3].Name != "knowl_operation" {
 		t.Fatalf("tool names = %#v", tools)
 	}
-	if tools[0].ReadOnly != true || tools[1].ReadOnly != false || tools[2].ReadOnly != true {
+	if !tools[0].ReadOnly || !tools[1].ReadOnly || tools[2].ReadOnly || !tools[3].ReadOnly {
 		t.Fatalf("read-only flags = %#v", tools)
 	}
 	properties, ok := tools[0].InputSchema["properties"].(map[string]any)
@@ -123,6 +126,17 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	if result, err := ingest.RunToTerminal(ctx, claim); err != nil || result.Operation.Status != knowl.StatusCommitted {
 		t.Fatalf("run submitted operation = %#v, err = %v", result, err)
 	}
+	pageValue, err := server.Call(ctx, testPageTool, map[string]any{testPageArgument: testPageID})
+	if err != nil {
+		t.Fatalf("knowl_page: %v", err)
+	}
+	pageResult, ok := pageValue.(mcp.PageResult)
+	if !ok || pageResult.Page.PageID != testPageID || pageResult.Page.Markdown == "" || pageResult.Page.Version != pageResult.Version || !pageResult.Page.Untrusted {
+		t.Fatalf("knowl_page result = %#v", pageValue)
+	}
+	if _, err := server.Call(ctx, testPageTool, map[string]any{}); !errors.Is(err, mcp.ErrInvalidArguments) {
+		t.Fatalf("empty knowl_page error = %v, want invalid arguments", err)
+	}
 	value, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testRetrieveQuery})
 	if err != nil {
 		t.Fatalf("knowl_retrieve: %v", err)
@@ -154,6 +168,9 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 	}
 	if _, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testRetrieveQuery, "scope": "other"}); !errors.Is(err, mcp.ErrScopeOverride) {
 		t.Fatalf("scope override error = %v, want scope override", err)
+	}
+	if _, err := server.Call(ctx, testPageTool, map[string]any{testPageArgument: testPageID, "scope": "other"}); !errors.Is(err, mcp.ErrScopeOverride) {
+		t.Fatalf("page scope override error = %v, want scope override", err)
 	}
 	polled, err := server.Call(ctx, "knowl_operation", map[string]any{"id": string(ingestResult.OperationID)})
 	if err != nil {

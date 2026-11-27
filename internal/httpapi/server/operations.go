@@ -87,6 +87,26 @@ func (handler *handler) RetrieveKnowledge(response http.ResponseWriter, request 
 	_ = knowlapi.RetrieveKnowledge200JSONResponse(transport).VisitRetrieveKnowledgeResponse(response)
 }
 
+func (handler *handler) GetPage(response http.ResponseWriter, request *http.Request, pageID knowlapi.PageID, params knowlapi.GetPageParams) {
+	scope, err := handler.requestScope(request, scopeValue(params.Scope), app.OperationRead)
+	if err != nil {
+		writeScopeError(response)
+		return
+	}
+	id := domain.PageID(strings.TrimSpace(pageID))
+	if id == "" {
+		writeHTTPError(response, http.StatusBadRequest, invalidRequestCode)
+		return
+	}
+	result, err := handler.dependencies.Query.GetPage(request.Context(), app.GetPageRequest{Scope: scope, PageID: id})
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	transport := mustConvertJSON[knowlapi.PageNavigationResult](result)
+	_ = knowlapi.GetPage200JSONResponse(transport).VisitGetPageResponse(response)
+}
+
 func (handler *handler) IngestKnowledge(response http.ResponseWriter, request *http.Request) {
 	var ingestRequest knowlapi.IngestRequest
 	if err := decodeJSON(response, request, &ingestRequest); err != nil {
