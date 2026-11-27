@@ -103,6 +103,7 @@ func TestHTTPGetPageErrorClassification(t *testing.T) {
 		{app.ErrQueryInvalid, http.StatusBadRequest, invalidRequestCode},
 		{app.ErrPageNotFound, http.StatusNotFound, notFoundCode},
 		{app.ErrPageResultTooLarge, http.StatusRequestEntityTooLarge, readLimitExceededCode},
+		{app.ErrPublicRetrieveResultTooLarge, http.StatusRequestEntityTooLarge, readLimitExceededCode},
 		{app.ErrOperatorReadLimitExceeded, http.StatusRequestEntityTooLarge, readLimitExceededCode},
 		{app.ErrOperatorWorkspaceUnavailable, http.StatusServiceUnavailable, serviceUnavailableCode},
 		{context.DeadlineExceeded, http.StatusServiceUnavailable, serviceUnavailableCode},

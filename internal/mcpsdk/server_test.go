@@ -18,6 +18,8 @@ const (
 	sdkPageMarkdown = "# SDK Page\n\nComplete untrusted Markdown.\n"
 	sdkPageTool     = "knowl_page"
 	sdkPageArgument = "page_id"
+	sdkRetrieveTool = "knowl_retrieve"
+	sdkSnippet      = "compact structured evidence"
 )
 
 type sdkPageContent struct{ app.ContentStore }
@@ -36,6 +38,10 @@ func (sdkPageContent) ReadPages(_ context.Context, _ domain.ScopeRef, ids []doma
 }
 
 type sdkPageIndex struct{ app.SearchIndex }
+
+func (sdkPageIndex) Search(context.Context, domain.ScopeRef, string, domain.ReadLimits, []domain.SourceID) ([]domain.PageReference, error) {
+	return []domain.PageReference{{ID: sdkPageID, Title: "SDK Page", Snippet: sdkSnippet, SourceRefs: []string{"raw:sdk@1"}}}, nil
+}
 
 func (sdkPageIndex) Links(context.Context, domain.ScopeRef, domain.PageID, domain.ReadLimits) ([]domain.LinkReference, error) {
 	return []domain.LinkReference{}, nil
@@ -90,6 +96,23 @@ func TestPageToolKeepsMarkdownOnlyInStructuredContent(t *testing.T) {
 	}
 	if !foundPage {
 		t.Fatal("read-only SDK server did not expose read-only knowl_page")
+	}
+
+	retrieved, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: sdkRetrieveTool, Arguments: map[string]any{"query": "sdk"}})
+	if err != nil || retrieved.IsError || len(retrieved.Content) != 1 {
+		t.Fatalf("knowl_retrieve = %#v, %v", retrieved, err)
+	}
+	retrieveText, ok := retrieved.Content[0].(*sdkmcp.TextContent)
+	if !ok || retrieveText.Text == "" || strings.Contains(retrieveText.Text, sdkSnippet) {
+		t.Fatalf("knowl_retrieve text duplicated evidence: %#v", retrieved.Content)
+	}
+	retrieveStructured, ok := retrieved.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("knowl_retrieve structured content type = %T", retrieved.StructuredContent)
+	}
+	evidence, ok := retrieveStructured["evidence"].([]any)
+	if !ok || len(evidence) != 1 || evidence[0].(map[string]any)["snippet"] != sdkSnippet {
+		t.Fatalf("knowl_retrieve structured content = %#v", retrieved.StructuredContent)
 	}
 
 	result, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: sdkPageTool, Arguments: map[string]any{sdkPageArgument: string(sdkPageID)}})

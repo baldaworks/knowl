@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	contentfs "github.com/baldaworks/knowl/pkg/knowl/content/fs"
+	knowlmcp "github.com/baldaworks/knowl/pkg/knowl/mcp"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/provider"
 	"github.com/baldaworks/knowl/pkg/knowl/store/sqlite"
@@ -26,6 +28,8 @@ const (
 	httpTestEngineering = "engineering"
 	httpTestOperations  = "operations"
 	httpTransportQuery  = "transportbeacon"
+	httpSharedPageID    = "shared"
+	httpQueryArgument   = "query"
 )
 
 func TestHTTPIngestWakesNewAndNonTerminalReplayOnly(t *testing.T) {
@@ -135,12 +139,45 @@ func TestHTTPRetrieveBindsRepeatableSourceFilterAndMapsEvidence(t *testing.T) {
 		t.Fatalf("filtered HTTP evidence = %#v", result.Evidence)
 	}
 	shared := result.Evidence[0]
-	if shared.SourceDocuments == nil || len(*shared.SourceDocuments) != 2 || (*shared.SourceDocuments)[0].SourceId != httpTestEngineering || (*shared.SourceDocuments)[1].SourceId != httpTestOperations {
+	if shared.PageId != httpSharedPageID || shared.Citation == nil || *shared.Citation != "raw:engineering@1" || !shared.Untrusted {
 		t.Fatalf("filtered HTTP evidence = %#v", result.Evidence)
 	}
-	metadata := shared.Okf
-	if metadata == nil || metadata.Type != "Reference" || metadata.Executor == nil || metadata.Attester == nil || metadata.Extensions == nil || (*metadata.Extensions)["unknown_nested"] == nil || !shared.Untrusted {
-		t.Fatalf("HTTP OKF evidence = %#v", shared)
+	var compactShape struct {
+		Evidence  []map[string]json.RawMessage `json:"evidence"`
+		Citations json.RawMessage              `json:"citations"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &compactShape); err != nil {
+		t.Fatal(err)
+	}
+	if compactShape.Citations != nil {
+		t.Fatal("compact HTTP response exposed aggregate citations")
+	}
+	for _, removed := range []string{"source_documents", "source_refs", "okf"} {
+		if _, present := compactShape.Evidence[0][removed]; present {
+			t.Fatalf("compact HTTP evidence exposed rich field %q", removed)
+		}
+	}
+	registry, err := knowlmcp.NewServer(query, ingest, &httpRecordingWaker{}, httpTestScope, domain.ReadLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpValue, err := registry.Call(ctx, "knowl_retrieve", map[string]any{httpQueryArgument: httpTransportQuery, "sources": []any{httpTestOperations, httpTestEngineering}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpJSON, err := json.Marshal(mcpValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restShape, mcpShape any
+	if err := json.Unmarshal(response.Body.Bytes(), &restShape); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(mcpJSON, &mcpShape); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(restShape, mcpShape) {
+		t.Fatalf("REST/MCP compact retrieve mismatch\nREST: %s\nMCP:  %s", response.Body.Bytes(), mcpJSON)
 	}
 
 	invalid := httptest.NewRequest(http.MethodGet, "/v1/retrieve?query=transportbeacon&source=Engineering", nil)
@@ -165,7 +202,7 @@ func httpTransportSearchSnapshot() domain.WorkspaceSnapshot {
 	}
 	return domain.WorkspaceSnapshot{Scope: httpTestScope, Pages: []domain.PageSnapshot{
 		{ID: "curated", Path: "wiki/curated.md", Title: "Transportbeacon Curated", Content: httpTransportQuery, Digest: "curated"},
-		{ID: "shared", Path: "wiki/entities/shared.md", Title: "Transportbeacon Shared", Content: body, Body: body, OKF: metadata, Digest: "shared", SourceRefs: []string{"raw:engineering@1", "raw:operations@1"}, SourceDocuments: []domain.SourceDocument{document(httpTestEngineering), document(httpTestOperations)}},
+		{ID: httpSharedPageID, Path: "wiki/entities/shared.md", Title: "Transportbeacon Shared", Content: body, Body: body, OKF: metadata, Digest: httpSharedPageID, SourceRefs: []string{"raw:engineering@1", "raw:operations@1"}, SourceDocuments: []domain.SourceDocument{document(httpTestEngineering), document(httpTestOperations)}},
 	}}
 }
 

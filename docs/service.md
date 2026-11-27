@@ -68,8 +68,9 @@ On a host with multiple configured knowledge scopes, add a single public
 [multi-scope operations guide](multi-scope.md) for configuration, MCP, CLI,
 readiness and backup behavior.
 
-Expect a non-empty `evidence` array with page identities, excerpts and source
-references. Read a selected page through `GET /v1/pages/{page_id}` (with `/` in
+Expect up to three compact evidence cards with page identities, extractive
+snippets and at most one citation each. Read a selected page through
+`GET /v1/pages/{page_id}` (with `/` in
 the ID path-encoded as `%2F`) or `knowl_page`; both return the same complete
 bounded page and one-hop links under the selected scope. You can also enable
 [browser access](#optional-browser-access) and open the page named in evidence.

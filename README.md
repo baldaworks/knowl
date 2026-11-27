@@ -93,7 +93,7 @@ configuration, offline use, and supported scope.
 ### MCP and HTTP
 
 Connect other agents to the self-hosted service over MCP. The read-only default
-exposes `knowl_retrieve` for evidence, `knowl_page` for complete bounded page
+exposes `knowl_retrieve` for compact evidence cards, `knowl_page` for complete bounded page
 reads and `knowl_operation` for operation status. Explicit token-authenticated
 read-write mode also exposes `knowl_ingest` for durable inputs.
 

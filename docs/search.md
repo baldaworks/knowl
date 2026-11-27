@@ -143,6 +143,13 @@ ready page projections have zero omissions. Lexical full-field indexing and
 maintenance's complete-page/request limits still apply. Larger corpora require a
 separately evaluated capacity design; these bounds are not throughput promises.
 
+Public HTTP/MCP retrieve returns at most three ranked compact cards. Each card
+contains `page_id`, title, an extractive snippet of at most 800 Unicode code
+points, one optional supporting citation and `untrusted: true`; the common JSON
+is limited to 8 KiB. This is only the public delivery shape: ranking and rich
+operator/internal search retain their own evidence models. Read complete page
+content and provenance with `GET /v1/pages/{page_id}` or `knowl_page`.
+
 HTTP/MCP results optionally include, for example:
 
 ```json

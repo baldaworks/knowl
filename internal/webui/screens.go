@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
@@ -186,7 +185,7 @@ type searchView struct {
 	Embeddings bool
 }
 type searchResults struct {
-	Result knowlapi.RetrieveResult
+	Result RetrieveResult
 	JSON   string
 }
 

@@ -4,35 +4,14 @@ import (
 	"time"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
-	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 // PageResult is the shared complete page and one-hop navigation payload.
 type PageResult = app.GetPageResult
 
-// RetrieveResult is the bounded evidence payload returned by knowl_retrieve.
-type RetrieveResult struct {
-	Retrieval *knowl.RetrievalStatus `json:"retrieval,omitempty"`
-	Query     string                 `json:"query"`
-	Evidence  []EvidenceItem         `json:"evidence"`
-	Citations []app.Citation         `json:"citations,omitempty"`
-}
-
-// EvidenceItem is one bounded page-derived evidence record.
-type EvidenceItem struct {
-	PageID          knowl.PageID           `json:"page_id"`
-	Title           string                 `json:"title"`
-	Snippet         string                 `json:"snippet"`
-	SourceRefs      []string               `json:"source_refs,omitempty"`
-	SourceDocuments []knowl.SourceDocument `json:"source_documents,omitempty"`
-	SourceID        string                 `json:"source_id,omitempty"`
-	DocumentID      string                 `json:"document_id,omitempty"`
-	Revision        string                 `json:"revision,omitempty"`
-	URI             string                 `json:"uri,omitempty"`
-	OKF             *okf.Metadata          `json:"okf,omitempty"`
-	Untrusted       bool                   `json:"untrusted"`
-}
+// RetrieveResult is the shared compact public evidence payload.
+type RetrieveResult = app.PublicRetrieveResult
 
 // IngestResult is the simplified MCP-facing write response.
 type IngestResult struct {

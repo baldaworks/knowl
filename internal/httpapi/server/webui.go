@@ -36,9 +36,9 @@ func NewWebHandler(service *app.OperatorService, dependencies Dependencies, opti
 			return existing, nil
 		}
 		ui, err := webui.New(webui.Dependencies{AuthMode: webui.AuthMode(options.AuthMode), ScopeName: name, Operator: operator, OperationStatus: httpOperationStatus, EmbeddingsEnabled: dependencies.EmbeddingsEnabled,
-			Retrieve: func(ctx context.Context, query string, sources []string) (knowlapi.RetrieveResult, error) {
+			Retrieve: func(ctx context.Context, query string, sources []string) (webui.RetrieveResult, error) {
 				if dependencies.Query == nil {
-					return knowlapi.RetrieveResult{}, app.ErrOperatorCapabilityUnavailable
+					return webui.RetrieveResult{}, app.ErrOperatorCapabilityUnavailable
 				}
 				ids := make([]domain.SourceID, len(sources))
 				for i, source := range sources {
@@ -117,20 +117,32 @@ func cloneRequestWithoutScope(request *http.Request) *http.Request {
 	cloned.URL.RawQuery = query.Encode()
 	return cloned
 }
-func safeUIRetrieve(result app.QueryResult) knowlapi.RetrieveResult {
-	mapped := httpRetrieveResult(result)
-	for i := range mapped.Citations {
-		mapped.Citations[i].Path = ""
-	}
-	for i := range mapped.Evidence {
-		item := &mapped.Evidence[i]
-		item.URI = webui.SafeURI(item.URI)
-		item.OKF = nil
-		for j := range item.SourceDocuments {
-			item.SourceDocuments[j].URI = webui.SafeURI(item.SourceDocuments[j].URI)
+func safeUIRetrieve(result app.QueryResult) webui.RetrieveResult {
+	mapped := webui.RetrieveResult{Retrieval: app.PublicRetrievalStatus(result.Retrieval), Query: result.Query, Evidence: make([]webui.RetrieveEvidence, 0, len(result.Pages)), Citations: make([]webui.RetrieveCitation, 0, len(result.Citations))}
+	for _, page := range result.Pages {
+		item := webui.RetrieveEvidence{PageId: string(page.ID), Title: page.Title, Snippet: page.Snippet, SourceRefs: append([]string(nil), page.SourceRefs...), Untrusted: page.Untrusted}
+		documents := append([]domain.SourceDocument(nil), page.SourceDocuments...)
+		if len(documents) == 0 && page.SourceDocument != nil {
+			documents = append(documents, *page.SourceDocument)
 		}
+		for _, document := range documents {
+			item.SourceDocuments = append(item.SourceDocuments, webui.RetrieveSourceDocument{SourceId: string(document.SourceID), DocumentId: string(document.DocumentID), Revision: document.Revision, Uri: webui.SafeURI(document.URI)})
+		}
+		mapped.Evidence = append(mapped.Evidence, item)
 	}
-	return mustConvertJSON[knowlapi.RetrieveResult](mapped)
+	for _, citation := range result.Citations {
+		item := webui.RetrieveCitation{Kind: citation.Kind, Reference: citation.Reference, Untrusted: citation.Untrusted}
+		if citation.PageID != "" {
+			value := string(citation.PageID)
+			item.PageId = &value
+		}
+		if citation.SourceRef != "" {
+			value := citation.SourceRef
+			item.SourceRef = &value
+		}
+		mapped.Citations = append(mapped.Citations, item)
+	}
+	return mapped
 }
 func safeUIOperation(result domain.Operation) knowlapi.OperationResult {
 	mapped := httpOperationResult(result)

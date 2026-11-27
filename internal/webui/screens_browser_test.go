@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
@@ -57,14 +56,13 @@ func TestBrowserKnowledgeSearch(t *testing.T) {
 	ui.dependencies.Operator = operator
 	var calls atomic.Int64
 	ui.dependencies.EmbeddingsEnabled = true
-	ui.dependencies.Retrieve = func(_ context.Context, query string, _ []string) (knowlapi.RetrieveResult, error) {
+	ui.dependencies.Retrieve = func(_ context.Context, query string, _ []string) (RetrieveResult, error) {
 		calls.Add(1)
 		time.Sleep(150 * time.Millisecond)
-		reason := knowlapi.RetrievalStatusReason("unavailable")
 		refs := []string{"git:docs/" + strings.Repeat("long-identity", 30) + "@" + screenSnapshot}
-		result := knowlapi.RetrieveResult{Query: query, Evidence: []knowlapi.EvidenceItem{{PageId: "concepts/other", Title: "Second", SourceRefs: &refs, Snippet: strings.Repeat("Exact ordered snippet. ", 80)}, {PageId: screenArticleID, Title: "First", Snippet: "Another exact snippet."}}}
+		result := RetrieveResult{Query: query, Evidence: []RetrieveEvidence{{PageId: "concepts/other", Title: "Second", SourceRefs: refs, Snippet: strings.Repeat("Exact ordered snippet. ", 80)}, {PageId: screenArticleID, Title: "First", Snippet: "Another exact snippet."}}}
 		if query != "unreported" {
-			result.Retrieval = &knowlapi.RetrievalStatus{Effective: knowlapi.RetrievalStatusEffective(query), Reason: &reason}
+			result.Retrieval = &domain.RetrievalStatus{Effective: domain.RetrievalMode(query), Reason: domain.RetrievalUnavailable}
 		}
 		return result, nil
 	}

@@ -49,9 +49,12 @@ paths:
     get:
       tags: [knowledge]
       operationId: retrieveKnowledge
-      summary: Retrieve bounded evidence from the trusted Knowl scope
+      summary: Retrieve compact evidence cards from the trusted Knowl scope
       description: |
-        Returns bounded grounded evidence and provenance for one query.
+        Returns up to three ranked evidence cards. Each snippet is at most 800
+        Unicode code points, and the complete application result is at most
+        8 KiB. Use `GET /v1/pages/{page_id}` for complete page content and
+        provenance.
 
         When `knowl.api.auth_mode` resolves to `token`, callers must send the
         configured operator bearer. Trusted in-process operator workflows
@@ -78,6 +81,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/ScopeForbidden'
+        '413':
+          $ref: '#/components/responses/ReadLimitExceeded'
         '422':
           $ref: '#/components/responses/OperationFailed'
         '503':
@@ -444,24 +449,8 @@ components:
           type: string
         snippet:
           type: string
-        source_refs:
-          type: array
-          items:
-            type: string
-        source_documents:
-          type: array
-          items:
-            $ref: '#/components/schemas/SourceDocument'
-        source_id:
+        citation:
           type: string
-        document_id:
-          type: string
-        revision:
-          type: string
-        uri:
-          type: string
-        okf:
-          $ref: '#/components/schemas/OKFMetadata'
         untrusted:
           type: boolean
     SourceDocument:
@@ -636,10 +625,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EvidenceItem'
-        citations:
-          type: array
-          items:
-            $ref: '#/components/schemas/Citation'
     PageLink:
       type: object
       required: [from, to, relation, untrusted]
