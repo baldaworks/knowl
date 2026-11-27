@@ -456,6 +456,13 @@ func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.Wor
 			}
 		}
 	case errors.Is(loadErr, ErrStageNotFound) && operation.Status == knowl.StatusReceived:
+		superseded, current, supersedeErr := service.supersedeChangedSchema(ctx, result, submission)
+		if supersedeErr != nil {
+			return result, supersedeErr
+		}
+		if superseded {
+			return current, nil
+		}
 		planned, planErr := service.prepareStage(ctx, submission, nil)
 		result.withPreparation(planned, operation.WorkAttempt)
 		if planErr != nil {
@@ -474,6 +481,42 @@ func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.Wor
 	result.Operation = applied.Operation
 	result.Commit = applied.Commit
 	return result, err
+}
+
+func (service *IngestService) supersedeChangedSchema(
+	ctx context.Context,
+	result IngestResult,
+	submission IngestSubmission,
+) (bool, IngestResult, error) {
+	schema, generation, err := service.CurrentMaintenancePolicy(ctx, submission.accepted.Scope)
+	if err != nil {
+		return false, result, err
+	}
+	if schema.Digest == submission.schema.Digest {
+		return false, result, nil
+	}
+	successor, err := service.submitAcceptedWithSchema(ctx, submission.accepted, schema, generation)
+	if err != nil {
+		return false, result, fmt.Errorf("reserve current-schema operation: %w", err)
+	}
+	if successor.Operation.ID == result.Operation.ID {
+		return false, result, ErrExecutionDescriptorUnavailable
+	}
+	failure := knowl.Failure{
+		Class:       "maintenance_policy",
+		Reason:      "superseded",
+		OperationID: string(result.Operation.ID),
+	}
+	stateCtx := durableContext(ctx)
+	if err := service.operations.Fail(stateCtx, result.Operation.ID, failure); err != nil {
+		return false, result, fmt.Errorf("supersede stale-schema operation: %w", err)
+	}
+	operation, err := service.operations.Operation(stateCtx, result.Operation.Key.Scope, result.Operation.ID)
+	if err != nil {
+		return false, result, fmt.Errorf("read superseded operation: %w", err)
+	}
+	result.Operation = operation
+	return true, result, nil
 }
 
 // FailSubmission records a failure after durable submission could not be scheduled.

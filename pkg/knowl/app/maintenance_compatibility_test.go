@@ -61,6 +61,97 @@ func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
 	}
 }
 
+func TestQueuedSchemaChangeSupersedesBeforeInference(t *testing.T) {
+	workspace, store, _, _ := newWorkflow(t, true, nil)
+	maintainer := &schemaCallMaintainer{calls: make(map[string]int)}
+	service, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{AutoApply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := sourceEnvelope([]byte("queued schema change"))
+	stale, err := service.Submit(t.Context(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaA, err := workspace.Schema(t.Context(), stale.Operation.Key.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaPath := filepath.Join(workspace.Root(), "schema.md")
+	if err := os.WriteFile(schemaPath, append(schemaA.Content, []byte("\ncurrent schema B\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	schemaB, err := workspace.Schema(t.Context(), stale.Operation.Key.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schemaA.Digest == schemaB.Digest {
+		t.Fatal("schema change retained digest")
+	}
+
+	staleResult, err := service.RunToTerminal(t.Context(), claimReady(t, store, stale.Operation.Key.Scope))
+	if err != nil {
+		t.Fatalf("supersede stale operation: %v", err)
+	}
+	if staleResult.Operation.Status != knowl.StatusFailed || staleResult.Operation.Failure == nil ||
+		staleResult.Operation.Failure.Class != "maintenance_policy" || staleResult.Operation.Failure.Reason != "superseded" {
+		t.Fatalf("stale operation = %#v", staleResult.Operation)
+	}
+	if maintainer.calls[schemaA.Digest] != 0 || maintainer.calls[schemaB.Digest] != 0 {
+		t.Fatalf("model calls before current claim = %#v", maintainer.calls)
+	}
+
+	currentResult, err := service.RunToTerminal(t.Context(), claimReady(t, store, stale.Operation.Key.Scope))
+	if err != nil {
+		t.Fatalf("run current operation: %v", err)
+	}
+	if currentResult.Operation.Status != knowl.StatusCommitted {
+		t.Fatalf("current operation status = %q", currentResult.Operation.Status)
+	}
+	if maintainer.calls[schemaA.Digest] != 0 || maintainer.calls[schemaB.Digest] != 1 {
+		t.Fatalf("model calls = %#v", maintainer.calls)
+	}
+
+	replayed, err := service.Submit(t.Context(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Operation.ID != currentResult.Operation.ID || replayed.NeedsExecution() {
+		t.Fatalf("repeat sync reserved %#v, want committed operation %q", replayed.Operation, currentResult.Operation.ID)
+	}
+	restarted, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{AutoApply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedReplay, err := restarted.Submit(t.Context(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restartedReplay.Operation.ID != currentResult.Operation.ID || restartedReplay.NeedsExecution() {
+		t.Fatalf("worker restart reserved %#v, want committed operation %q", restartedReplay.Operation, currentResult.Operation.ID)
+	}
+	ready, err := store.ResumeReady(t.Context(), stale.Operation.Key.Scope, 10)
+	if err != nil || len(ready) != 0 || maintainer.calls[schemaB.Digest] != 1 {
+		t.Fatalf("post-replay state: ready=%v calls=%#v err=%v", ready, maintainer.calls, err)
+	}
+}
+
+type schemaCallMaintainer struct {
+	calls map[string]int
+}
+
+func (maintainer *schemaCallMaintainer) Plan(_ context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
+	maintainer.calls[input.Schema.Digest]++
+	return withRootCatalog(input, knowl.ModelEditPlan{
+		SchemaDigest: input.Schema.Digest,
+		SourceRefs:   []string{testSourceRef},
+		Edits: []knowl.FileEdit{{
+			Path:    testPagePath,
+			Content: planPageContent,
+		}},
+	}), nil
+}
+
 func TestExecuteRejectsChangedPolicyBeforeInference(t *testing.T) {
 	for _, tampered := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unchanged submission", true: "tampered generation"}[tampered], func(t *testing.T) {
