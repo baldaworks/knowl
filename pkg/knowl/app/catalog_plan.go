@@ -40,8 +40,17 @@ func ValidateMaintenancePlan(ctx context.Context, input knowl.MaintenanceInput, 
 		candidates[edit.Path] = document
 	}
 	existing := make(map[string]bool, len(inspection.Snapshot.Pages))
+	pageTitles := make(map[string]string, len(inspection.Snapshot.Pages)+len(candidates))
 	for _, page := range inspection.Snapshot.Pages {
 		existing[page.Path] = true
+		if title := strings.TrimSpace(page.Title); title != "" {
+			pageTitles[page.Path] = title
+		}
+	}
+	for pagePath, candidate := range candidates {
+		if title := strings.TrimSpace(candidate.Metadata.Title); title != "" {
+			pageTitles[pagePath] = title
+		}
 	}
 	included := make(map[string]knowl.PageSnapshot, len(input.Pages))
 	for _, page := range input.Pages {
@@ -176,7 +185,9 @@ func ValidateMaintenancePlan(ctx context.Context, input knowl.MaintenanceInput, 
 				return knowl.ValidatedEditPlan{}, ErrPlanInvalid
 			}
 			label := strings.TrimSuffix(path.Base(child), ".md")
-			if node, ok := originals[child]; ok && node.Title != "" {
+			if title := pageTitles[child]; title != "" {
+				label = title
+			} else if node, ok := originals[child]; ok && node.Title != "" {
 				label = node.Title
 			} else if node, ok := additions[child]; ok {
 				label = node.Title

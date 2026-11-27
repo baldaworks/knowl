@@ -27,6 +27,7 @@ const (
 	hierarchySourceCatalog   = "wiki/sources/source-a/index.md"
 	hierarchySourceTerm      = "fastronome-wiki"
 	hierarchyArchitectureTag = "Architecture"
+	hierarchyProductTitle    = "Product"
 )
 
 func TestValidateHierarchyPlanRendersDeterministicSemanticCatalogs(t *testing.T) {
@@ -109,6 +110,36 @@ func TestValidateHierarchyPlanProducesNoOpForMatchingCatalogDigests(t *testing.T
 	}
 	if len(replayed.Mutations) != 0 {
 		t.Fatalf("replayed mutations = %#v, want no-op", replayed.Mutations)
+	}
+}
+
+func TestValidateHierarchyPlanRebuildsSlugLabelWithPageTitle(t *testing.T) {
+	t.Parallel()
+
+	input, model := hierarchyFixture()
+	input.Pages[0].Title = "Product roadmap"
+	input.Catalogs = append(input.Catalogs, knowl.HierarchyCatalog{
+		Path: hierarchyProductCat, Digest: strings.Repeat("4", 64), Title: hierarchyProductTitle,
+		Children: []string{hierarchyRoadmap, hierarchyGlossary},
+	})
+
+	validated, err := ValidateHierarchyPlan(context.Background(), input, model, HierarchyValidationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := parsedCatalogLinks(hierarchyMutationContents(validated.Mutations)[hierarchyProductCat])
+	count := 0
+	for _, link := range links {
+		if link.destination != "../../concepts/roadmap.md" {
+			continue
+		}
+		count++
+		if link.label != "Product roadmap" {
+			t.Fatalf("roadmap label = %q, want page title", link.label)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("roadmap destination count = %d, want 1; links=%#v", count, links)
 	}
 }
 
@@ -427,7 +458,7 @@ func hierarchyFixture() (knowl.HierarchyInput, knowl.HierarchyModelPlan) {
 		MinRootCatalogs: 2,
 		Limits:          DefaultHierarchyLimits(),
 		Pages: []knowl.HierarchyPage{
-			{ID: "concepts/roadmap", Path: hierarchyRoadmap, Digest: strings.Repeat("1", 64), Type: "Product", Title: "Roadmap", Tags: []string{"planning", "product"}, Excerpt: "Milestones", Catalogs: []string{hierarchyRootPath}},
+			{ID: "concepts/roadmap", Path: hierarchyRoadmap, Digest: strings.Repeat("1", 64), Type: hierarchyProductTitle, Title: "Roadmap", Tags: []string{"planning", "product"}, Excerpt: "Milestones", Catalogs: []string{hierarchyRootPath}},
 			{ID: "concepts/architecture", Path: hierarchyArchitecture, Digest: strings.Repeat("2", 64), Type: hierarchyArchitectureTag, Title: hierarchyArchitectureTag, Tags: []string{"system", "architecture"}, Excerpt: "Components", Catalogs: []string{hierarchyRootPath}},
 			{ID: "concepts/glossary", Path: hierarchyGlossary, Digest: strings.Repeat("3", 64), Type: "Reference", Title: "Глоссарий проекта", Tags: []string{"product", "terms"}, Excerpt: "Термины", Catalogs: []string{hierarchyRootPath}},
 		},
@@ -439,7 +470,7 @@ func hierarchyFixture() (knowl.HierarchyInput, knowl.HierarchyModelPlan) {
 		SchemaDigest:   hierarchySchemaDigest,
 		SnapshotDigest: hierarchySnapshotDigest,
 		Catalogs: []knowl.HierarchyCatalogSpec{
-			{Path: hierarchyProductCat, Title: "Product", Children: []string{hierarchyGlossary, hierarchyRoadmap}},
+			{Path: hierarchyProductCat, Title: hierarchyProductTitle, Children: []string{hierarchyGlossary, hierarchyRoadmap}},
 			{Path: hierarchyRootPath, Title: hierarchyRootTitle, Children: []string{hierarchyProductCat, hierarchyArchitectureCat}},
 			{Path: hierarchyArchitectureCat, Title: hierarchyArchitectureTag, Children: []string{hierarchyArchitecture}},
 		},

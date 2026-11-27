@@ -2,10 +2,14 @@ package app
 
 import (
 	"errors"
-	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
-	"github.com/baldaworks/knowl/pkg/knowl/wiki"
+	"reflect"
 	"strings"
 	"testing"
+
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/parser"
 )
 
 const navigationExistingPath = "wiki/entities/existing.md"
@@ -69,6 +73,43 @@ func TestMaintenancePlanPreservesOriginalAndAddsNestedNavigation(t *testing.T) {
 	limits.MaxFiles = 2
 	if _, err := ValidateMaintenancePlan(t.Context(), input, model, inspection, DefaultCatalogLimits(), limits); !errors.Is(err, ErrPlanLimitExceeded) {
 		t.Fatalf("combined file bound=%v", err)
+	}
+}
+
+func TestMaintenancePlanCatalogLinksUsePageTitles(t *testing.T) {
+	input, model, inspection := navigationFixture()
+	inspection.Snapshot.Pages[0].Title = "Existing human title"
+	const (
+		newPage    = "wiki/entities/generated-page-slug.md"
+		newCatalog = "wiki/catalogs/generated/index.md"
+	)
+	model.Edits = []knowl.FileEdit{{
+		Path:    newPage,
+		Content: []byte(maintainedPageMarkdown("topic", "Generated human title", "Generated page description.", []string{"generated"})),
+	}}
+	model.CatalogAdditions = []knowl.CatalogAddition{
+		{Path: newCatalog, Title: "Generated", Children: []string{navigationExistingPath, newPage}},
+		{Path: rootCatalogPath, ExpectedDigest: inspection.Catalogs[0].Digest, Children: []string{newCatalog}},
+	}
+
+	validated, err := ValidateMaintenancePlan(t.Context(), input, model, inspection, DefaultCatalogLimits(), DefaultPlanLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var content []byte
+	for _, edit := range validated.Edits {
+		if edit.Path == newCatalog {
+			content = edit.Content
+			break
+		}
+	}
+	links := parsedCatalogLinks(content)
+	want := []catalogLink{
+		{label: "Existing human title", destination: "../../entities/existing.md"},
+		{label: "Generated human title", destination: "../../entities/generated-page-slug.md"},
+	}
+	if !reflect.DeepEqual(links, want) {
+		t.Fatalf("catalog links = %#v, want %#v", links, want)
 	}
 }
 
@@ -144,4 +185,29 @@ func TestMaintenancePlanRejectsUnreachableNewCatalog(t *testing.T) {
 	if _, err := ValidateMaintenancePlan(t.Context(), input, model, inspection, DefaultCatalogLimits(), DefaultPlanLimits()); !errors.Is(err, ErrPlanInvalid) {
 		t.Fatalf("unreachable catalog=%v", err)
 	}
+}
+
+type catalogLink struct {
+	label       string
+	destination string
+}
+
+func parsedCatalogLinks(content []byte) []catalogLink {
+	document := parser.New().Parse(content)
+	result := make([]catalogLink, 0)
+	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		link, ok := node.(*ast.Link)
+		if !entering || !ok {
+			return ast.WalkContinue, nil
+		}
+		var label strings.Builder
+		for child := link.FirstChild(); child != nil; child = child.NextSibling() {
+			if text, ok := child.(*ast.Text); ok {
+				label.Write(text.Value.Bytes(content))
+			}
+		}
+		result = append(result, catalogLink{label: label.String(), destination: link.Destination.Value(content)})
+		return ast.WalkSkipChildren, nil
+	})
+	return result
 }
