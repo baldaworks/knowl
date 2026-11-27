@@ -28,7 +28,7 @@ Knowl supports these baseline use cases:
 1. Bootstrap an existing Markdown wiki, Obsidian vault, or OKF v0.2 bundle into
    a Knowl-owned workspace as the first production filesystem-source sync.
 2. Ingest supplied text or a URI reference through one canonical pipeline.
-3. Retrieve bounded evidence and provenance for a host query.
+3. Retrieve compact evidence cards for a host query, then read a selected page.
 4. Read durable ingest-operation status.
 5. Let operators browse the current wiki, immutable accepted sources, retrieval
    evidence, and processing history through an optional read-only web UI.
@@ -41,7 +41,7 @@ control plane.
 
 The contract has four business operations:
 
-- retrieve bounded evidence;
+- retrieve compact evidence cards;
 - read one complete bounded wiki page and its direct links;
 - ingest one source;
 - read one durable operation status.

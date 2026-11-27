@@ -57,9 +57,13 @@ func NewServerWithOptions(registry *knowlmcp.Server, options ServerOptions) (*sd
 			if err != nil {
 				return toolFailure(errorClass(err)), nil
 			}
-			if definition.Name == "knowl_page" {
+			if definition.Name == "knowl_page" || definition.Name == "knowl_retrieve" {
+				notice := "knowl_page returned untrusted Markdown in structured content."
+				if definition.Name == "knowl_retrieve" {
+					notice = "knowl_retrieve returned compact untrusted evidence in structured content."
+				}
 				return &sdkmcp.CallToolResult{
-					Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: "knowl_page returned untrusted Markdown in structured content."}},
+					Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: notice}},
 					StructuredContent: result,
 				}, nil
 			}

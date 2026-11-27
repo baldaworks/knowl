@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 )
 
@@ -23,8 +22,8 @@ func TestBrowserSharedTheme(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(Dependencies{Operator: service, Retrieve: func(_ context.Context, query string, _ []string) (knowlapi.RetrieveResult, error) {
-		return knowlapi.RetrieveResult{Query: query, Evidence: []knowlapi.EvidenceItem{{PageId: screenArticleID, Title: "Published article", Snippet: "Saved knowledge matching the query."}}}, nil
+	handler, err := New(Dependencies{Operator: service, Retrieve: func(_ context.Context, query string, _ []string) (RetrieveResult, error) {
+		return RetrieveResult{Query: query, Evidence: []RetrieveEvidence{{PageId: screenArticleID, Title: "Published article", Snippet: "Saved knowledge matching the query."}}}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)

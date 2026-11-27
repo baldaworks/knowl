@@ -1,5 +1,20 @@
 # Unreleased
 
+## Compact public retrieve
+
+`GET /v1/retrieve` and MCP `knowl_retrieve` now return the same compact result:
+at most three ranked cards, each with a stable `page_id`, title, extractive
+snippet of at most 800 Unicode code points, one optional citation and an
+untrusted marker. The complete application JSON is limited to 8 KiB and MCP no
+longer duplicates it in text content. Follow `page_id` with `GET
+/v1/pages/{page_id}` or `knowl_page` for full content and provenance.
+
+This intentionally replaces the old rich public response in place. There is no
+legacy endpoint, tool, feature flag or parallel API version. Clients using
+`source_refs`, `source_documents`, `okf` or aggregate `citations` from public
+retrieve must migrate to the page-reading operation. The Operator Web UI keeps
+its private rich search view.
+
 ## Configurable source inventory limits
 
 The v0.9.0 feature release adds the optional per-source

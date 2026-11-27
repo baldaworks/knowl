@@ -11,7 +11,6 @@ import (
 
 	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
-	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
@@ -72,18 +71,14 @@ func (handler *handler) RetrieveKnowledge(response http.ResponseWriter, request 
 			sources[index] = domain.SourceID(source)
 		}
 	}
-	result, err := handler.dependencies.Query.Query(
-		request.Context(),
-		scope,
-		strings.TrimSpace(params.Query),
-		domain.ReadLimits{},
-		sources,
-	)
+	result, err := handler.dependencies.Query.RetrievePublic(request.Context(), app.PublicRetrieveRequest{
+		Scope: scope, Query: strings.TrimSpace(params.Query), Sources: sources,
+	})
 	if err != nil {
 		writeServiceError(response, err)
 		return
 	}
-	transport := mustConvertJSON[knowlapi.RetrieveResult](httpRetrieveResult(result))
+	transport := mustConvertJSON[knowlapi.RetrieveResult](result)
 	_ = knowlapi.RetrieveKnowledge200JSONResponse(transport).VisitRetrieveKnowledgeResponse(response)
 }
 
@@ -189,27 +184,6 @@ func writeScopeError(response http.ResponseWriter) {
 	writeHTTPError(response, http.StatusForbidden, "scope_forbidden")
 }
 
-type httpEvidenceItem struct {
-	PageID          domain.PageID           `json:"page_id"`
-	Title           string                  `json:"title"`
-	Snippet         string                  `json:"snippet"`
-	SourceRefs      []string                `json:"source_refs,omitempty"`
-	SourceDocuments []domain.SourceDocument `json:"source_documents,omitempty"`
-	SourceID        string                  `json:"source_id,omitempty"`
-	DocumentID      string                  `json:"document_id,omitempty"`
-	Revision        string                  `json:"revision,omitempty"`
-	URI             string                  `json:"uri,omitempty"`
-	OKF             *okf.Metadata           `json:"okf,omitempty"`
-	Untrusted       bool                    `json:"untrusted"`
-}
-
-type httpRetrieveResponse struct {
-	Retrieval *domain.RetrievalStatus `json:"retrieval,omitempty"`
-	Query     string                  `json:"query"`
-	Evidence  []httpEvidenceItem      `json:"evidence"`
-	Citations []app.Citation          `json:"citations,omitempty"`
-}
-
 type httpIngestResponse struct {
 	Retrieval   *domain.RetrievalStatus `json:"retrieval,omitempty"`
 	OperationID domain.OperationID      `json:"operation_id"`
@@ -223,40 +197,6 @@ type httpOperationResponse struct {
 	Status    string                   `json:"status"`
 	UpdatedAt time.Time                `json:"updated_at"`
 	Failure   *domain.Failure          `json:"failure,omitempty"`
-}
-
-func httpRetrieveResult(result app.QueryResult) httpRetrieveResponse {
-	evidence := make([]httpEvidenceItem, 0, len(result.Pages))
-	for _, page := range result.Pages {
-		sourceDocuments := append([]domain.SourceDocument(nil), page.SourceDocuments...)
-		if len(sourceDocuments) == 0 && page.SourceDocument != nil {
-			sourceDocuments = append(sourceDocuments, *page.SourceDocument)
-		}
-		item := httpEvidenceItem{
-			PageID:          page.ID,
-			Title:           page.Title,
-			Snippet:         page.Snippet,
-			SourceRefs:      append([]string(nil), page.SourceRefs...),
-			SourceDocuments: sourceDocuments,
-			OKF:             page.OKF,
-			Untrusted:       page.Untrusted,
-		}
-		if page.SourceDocument != nil {
-			item.SourceID = string(page.SourceDocument.SourceID)
-			item.DocumentID = string(page.SourceDocument.DocumentID)
-			item.Revision = page.SourceDocument.Revision
-			item.URI = page.SourceDocument.URI
-		}
-		evidence = append(evidence, item)
-	}
-	citations := make([]app.Citation, len(result.Citations))
-	copy(citations, result.Citations)
-	return httpRetrieveResponse{
-		Retrieval: app.PublicRetrievalStatus(result.Retrieval),
-		Query:     result.Query,
-		Evidence:  evidence,
-		Citations: citations,
-	}
 }
 
 func httpIngestResult(operation domain.Operation) httpIngestResponse {

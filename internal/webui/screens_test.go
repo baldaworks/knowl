@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/baldaworks/knowl/internal/httpapi/knowlapi"
 	"github.com/baldaworks/knowl/pkg/knowl/app"
 	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"golang.org/x/net/html"
@@ -19,8 +18,8 @@ import (
 
 func TestSearchExplicitSubmissionSharesResult(t *testing.T) {
 	calls := 0
-	want := knowlapi.RetrieveResult{Query: "source lifecycle", Evidence: []knowlapi.EvidenceItem{{PageId: "concepts/second", Title: "Second", Snippet: "Exact second snippet"}, {PageId: "concepts/first", Title: "First", Snippet: "Exact first snippet"}}}
-	h, err := New(Dependencies{Retrieve: func(_ context.Context, query string, sources []string) (knowlapi.RetrieveResult, error) {
+	want := RetrieveResult{Query: "source lifecycle", Evidence: []RetrieveEvidence{{PageId: "concepts/second", Title: "Second", Snippet: "Exact second snippet"}, {PageId: "concepts/first", Title: "First", Snippet: "Exact first snippet"}}}
+	h, err := New(Dependencies{Retrieve: func(_ context.Context, query string, sources []string) (RetrieveResult, error) {
 		calls++
 		if query != want.Query || !reflect.DeepEqual(sources, []string{activitySourceID}) {
 			t.Errorf("input %q %v", query, sources)
@@ -44,7 +43,7 @@ func TestSearchExplicitSubmissionSharesResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got knowlapi.RetrieveResult
+	var got RetrieveResult
 	var snippets []string
 	walk(doc, func(n *html.Node) {
 		for _, a := range n.Attr {
@@ -180,9 +179,8 @@ func nodeText(n *html.Node) string {
 }
 
 func TestSearchFailedDiagnosticsArePreserved(t *testing.T) {
-	reason := knowlapi.RetrievalStatusReason("unavailable")
-	h, err := New(Dependencies{Retrieve: func(context.Context, string, []string) (knowlapi.RetrieveResult, error) {
-		return knowlapi.RetrieveResult{Evidence: []knowlapi.EvidenceItem{}, Retrieval: &knowlapi.RetrievalStatus{Effective: retrievalFailed, Reason: &reason}}, &app.EmbeddingError{Code: domain.RetrievalUnavailable}
+	h, err := New(Dependencies{Retrieve: func(context.Context, string, []string) (RetrieveResult, error) {
+		return RetrieveResult{Evidence: []RetrieveEvidence{}, Retrieval: &domain.RetrievalStatus{Effective: domain.RetrievalFailed, Reason: domain.RetrievalUnavailable}}, &app.EmbeddingError{Code: domain.RetrievalUnavailable}
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -318,9 +316,9 @@ func screenHandler(t *testing.T, f *screenReader) *Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := New(Dependencies{Operator: service, Retrieve: func(context.Context, string, []string) (knowlapi.RetrieveResult, error) {
+	h, err := New(Dependencies{Operator: service, Retrieve: func(context.Context, string, []string) (RetrieveResult, error) {
 		t.Error("browse invoked retrieval")
-		return knowlapi.RetrieveResult{}, nil
+		return RetrieveResult{}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)

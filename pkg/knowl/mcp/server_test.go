@@ -156,7 +156,7 @@ func TestServerExposesKISSToolsAndPinsScope(t *testing.T) {
 		t.Fatalf("filtered knowl_retrieve: %v", err)
 	}
 	filteredResult, ok := filtered.(mcp.RetrieveResult)
-	if !ok || len(filteredResult.Evidence) != 1 || len(filteredResult.Evidence[0].SourceDocuments) != 2 || filteredResult.Evidence[0].SourceDocuments[0].SourceID != testEngineeringSource || !filteredResult.Evidence[0].Untrusted {
+	if !ok || len(filteredResult.Evidence) != 1 || filteredResult.Evidence[0].Citation == nil || *filteredResult.Evidence[0].Citation != "raw:engineering@1" || !filteredResult.Evidence[0].Untrusted {
 		t.Fatalf("filtered knowl_retrieve result = %#v", filtered)
 	}
 	unknown, err := server.Call(ctx, "knowl_retrieve", map[string]any{testQueryArgument: testTransportQuery, testSourcesArgument: []string{"ghost"}})

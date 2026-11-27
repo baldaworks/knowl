@@ -1166,9 +1166,10 @@ generation columns and historical operations are safe to retain; do not remove
 them while a newer writer may still create generation-bearing operations.
 
 The maintainer builds one root-reachable semantic OKF wiki. Related evidence
-from different sources may support the same page; retrieve returns all resolved
-`source_documents`, and a source filter matches when any supporting document
-belongs to that configured source. Legacy derived
+from different sources may support the same page. Rich internal and operator
+search retains all resolved `source_documents`; public retrieve returns one
+optional deterministic citation per compact card. A source filter matches when
+any supporting document belongs to that configured source. Legacy derived
 `wiki/sources/<source_id>/**` trees are removed on that source's next successful
 reconciliation without deleting raw history or curated pages.
 
@@ -1180,7 +1181,7 @@ Business endpoints:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/retrieve?query=...` | Retrieve bounded evidence with provenance |
+| `GET` | `/v1/retrieve?query=...` | Retrieve up to three compact evidence cards |
 | `GET` | `/v1/pages/{page_id}` | Read one complete bounded page and its direct links |
 | `POST` | `/v1/ingest` | Submit text or store a URI reference |
 | `GET` | `/v1/operations/{operation_id}` | Read one durable public operation status |
@@ -1218,6 +1219,15 @@ curl -sS \
   -H "Authorization: Bearer $KNOWL_OPERATOR_TOKEN" \
   "http://127.0.0.1:8080/v1/retrieve?query=Why%20was%20Badger%20chosen%3F"
 ```
+
+The response contains at most three ranked cards. Each card has `page_id`,
+`title`, an extractive `snippet` of at most 800 Unicode code points, one
+optional `citation`, and `untrusted: true`. The complete serialized application
+result is limited to 8 KiB; lower-ranked cards are removed first, and an
+oversized highest-ranked card fails with HTTP 413 `read_limit_exceeded`.
+The former rich public fields are intentionally removed. Use `page_id` with
+`GET /v1/pages/{page_id}` for full Markdown, metadata, provenance and one-hop
+links.
 
 Read a page selected from retrieval. Encode `/` characters that belong to the
 page ID as `%2F` in the path:
@@ -1399,9 +1409,9 @@ MCP and HTTP call the same underlying application services.
 
 Use `knowl_retrieve` to discover a page ID, then call `knowl_page` with that
 `page_id` and the same optional `scope` to read the complete page and its direct
-links. `knowl_page` returns the typed result once in structured content; its text
-content is only a short untrusted-content notice and does not duplicate the
-Markdown. Invalid IDs, missing pages, oversized results and unavailable
+links. Both tools return their typed result once in structured content; text
+content is only a short untrusted-content notice and does not duplicate snippets
+or Markdown. Invalid IDs, missing pages, oversized results and unavailable
 workspaces use stable `invalid_arguments`, `not_found`,
 `read_limit_exceeded` and `service_unavailable` tool errors.
 

@@ -285,9 +285,17 @@ func (driver *goldenMCPDriver) Retrieve(ctx context.Context, query string, _ dom
 	}
 	references := make([]domain.PageReference, len(result.Evidence))
 	for index, evidence := range result.Evidence {
+		pageValue, err := driver.host.MCP().Call(ctx, "knowl_page", map[string]any{"page_id": string(evidence.PageID)})
+		if err != nil {
+			return nil, fmt.Errorf("MCP page %q: %w", evidence.PageID, err)
+		}
+		page, ok := pageValue.(mcp.PageResult)
+		if !ok {
+			return nil, fmt.Errorf("MCP page type = %T", pageValue)
+		}
 		references[index] = domain.PageReference{
 			ID: evidence.PageID, Title: evidence.Title, Snippet: evidence.Snippet,
-			SourceRefs: append([]string(nil), evidence.SourceRefs...), Untrusted: evidence.Untrusted,
+			SourceRefs: append([]string(nil), page.Page.SourceRefs...), Untrusted: evidence.Untrusted,
 		}
 	}
 	return references, nil
@@ -341,11 +349,10 @@ func (driver *goldenHTTPDriver) Retrieve(_ context.Context, query string, _ doma
 	}
 	var result struct {
 		Evidence []struct {
-			PageID     domain.PageID `json:"page_id"`
-			Title      string        `json:"title"`
-			Snippet    string        `json:"snippet"`
-			SourceRefs []string      `json:"source_refs"`
-			Untrusted  bool          `json:"untrusted"`
+			PageID    domain.PageID `json:"page_id"`
+			Title     string        `json:"title"`
+			Snippet   string        `json:"snippet"`
+			Untrusted bool          `json:"untrusted"`
 		} `json:"evidence"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -353,9 +360,21 @@ func (driver *goldenHTTPDriver) Retrieve(_ context.Context, query string, _ doma
 	}
 	references := make([]domain.PageReference, len(result.Evidence))
 	for index, evidence := range result.Evidence {
+		pageBody, pageStatus, err := doGoldenHTTPRequest(driver.host, http.MethodGet, "/v1/pages/"+url.PathEscape(string(evidence.PageID)), nil)
+		if err != nil || pageStatus != http.StatusOK {
+			return nil, fmt.Errorf("HTTP page %q = status %d, err %v, body %s", evidence.PageID, pageStatus, err, pageBody)
+		}
+		var page struct {
+			Page struct {
+				SourceRefs []string `json:"source_refs"`
+			} `json:"page"`
+		}
+		if err := json.Unmarshal(pageBody, &page); err != nil {
+			return nil, fmt.Errorf("unmarshal HTTP page: %w", err)
+		}
 		references[index] = domain.PageReference{
 			ID: evidence.PageID, Title: evidence.Title, Snippet: evidence.Snippet,
-			SourceRefs: append([]string(nil), evidence.SourceRefs...), Untrusted: evidence.Untrusted,
+			SourceRefs: append([]string(nil), page.Page.SourceRefs...), Untrusted: evidence.Untrusted,
 		}
 	}
 	return references, nil

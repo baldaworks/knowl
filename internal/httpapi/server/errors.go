@@ -28,7 +28,7 @@ func classifyServiceError(err error) (int, string) {
 		return http.StatusNotFound, notFoundCode
 	case errors.Is(err, app.ErrQueryInvalid), errors.Is(err, app.ErrFilingInvalid):
 		return http.StatusBadRequest, invalidRequestCode
-	case errors.Is(err, app.ErrPageResultTooLarge), errors.Is(err, app.ErrOperatorReadLimitExceeded):
+	case errors.Is(err, app.ErrPageResultTooLarge), errors.Is(err, app.ErrPublicRetrieveResultTooLarge), errors.Is(err, app.ErrOperatorReadLimitExceeded):
 		return http.StatusRequestEntityTooLarge, readLimitExceededCode
 	case errors.Is(err, app.ErrSourceInvalid):
 		return http.StatusBadRequest, "invalid_source_filter"

@@ -2,16 +2,16 @@ package mcp
 
 import (
 	"encoding/json"
-	"github.com/baldaworks/knowl/pkg/knowl/app"
-	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"reflect"
 	"testing"
+
+	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 func TestRetrievalTransportPublishesOnlySafeStatus(t *testing.T) {
 	report := &knowl.RetrievalReport{Requested: knowl.RetrievalHybrid, Effective: knowl.RetrievalDegraded, Reason: knowl.RetrievalUnavailable, ModelSpace: "0123456789abcdef", ScannedChunks: 42}
 	operation := knowl.Operation{Retrieval: report}
-	values := []any{retrieveResult(app.QueryResult{Retrieval: report}), operationResult(operation)}
+	values := []any{operationResult(operation)}
 	for _, value := range values {
 		encoded, err := json.Marshal(value)
 		if err != nil {

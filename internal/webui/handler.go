@@ -40,9 +40,42 @@ type Dependencies struct {
 	EmbeddingsEnabled bool
 	ScopeName         domain.ScopeName
 	Operator          *app.OperatorService
-	Retrieve          func(context.Context, string, []string) (knowlapi.RetrieveResult, error)
+	Retrieve          func(context.Context, string, []string) (RetrieveResult, error)
 	OperationStatus   func(domain.OperationStatus) string
 	Operation         func(context.Context, string) (knowlapi.OperationResult, error)
+}
+
+// RetrieveResult is the operator UI's private rich search view. Public REST and
+// MCP use the compact app.PublicRetrieveResult contract instead.
+type RetrieveResult struct {
+	Retrieval *domain.RetrievalStatus `json:"retrieval,omitempty"`
+	Query     string                  `json:"query"`
+	Evidence  []RetrieveEvidence      `json:"evidence"`
+	Citations []RetrieveCitation      `json:"citations,omitempty"`
+}
+
+type RetrieveEvidence struct {
+	PageId          string                   `json:"page_id"`
+	Title           string                   `json:"title"`
+	Snippet         string                   `json:"snippet"`
+	SourceRefs      []string                 `json:"source_refs,omitempty"`
+	SourceDocuments []RetrieveSourceDocument `json:"source_documents,omitempty"`
+	Untrusted       bool                     `json:"untrusted"`
+}
+
+type RetrieveSourceDocument struct {
+	SourceId   string `json:"source_id"`
+	DocumentId string `json:"document_id"`
+	Revision   string `json:"revision"`
+	Uri        string `json:"uri"`
+}
+
+type RetrieveCitation struct {
+	Kind      string  `json:"kind"`
+	Reference string  `json:"reference"`
+	PageId    *string `json:"page_id,omitempty"`
+	SourceRef *string `json:"source_ref,omitempty"`
+	Untrusted bool    `json:"untrusted"`
 }
 type Handler struct {
 	templates    *template.Template

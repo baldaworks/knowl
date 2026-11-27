@@ -2,16 +2,17 @@ package server
 
 import (
 	"encoding/json"
-	"github.com/baldaworks/knowl/pkg/knowl/app"
-	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 	"reflect"
 	"testing"
+
+	"github.com/baldaworks/knowl/pkg/knowl/app"
+	domain "github.com/baldaworks/knowl/pkg/knowl/types"
 )
 
 func TestRetrievalTransportPublishesOnlySafeStatus(t *testing.T) {
 	report := &domain.RetrievalReport{Requested: domain.RetrievalHybrid, Effective: domain.RetrievalDegraded, Reason: domain.RetrievalUnavailable, ModelSpace: "0123456789abcdef", ScannedChunks: 42}
 	operation := domain.Operation{Retrieval: report}
-	values := []any{httpRetrieveResult(app.QueryResult{Retrieval: report}), httpOperationResult(operation), httpIngestResult(operation)}
+	values := []any{app.PublicRetrieveResult{Retrieval: app.PublicRetrievalStatus(report)}, httpOperationResult(operation), httpIngestResult(operation)}
 	for _, value := range values {
 		encoded, err := json.Marshal(value)
 		if err != nil {

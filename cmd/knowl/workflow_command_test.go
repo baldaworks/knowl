@@ -152,7 +152,7 @@ func TestReadCommandsReturnStructuredJSON(t *testing.T) {
 				if err := json.Unmarshal([]byte(output), &result); err != nil {
 					t.Fatalf("decode retrieve output: %v", err)
 				}
-				if result.Query != smokeQueryText || len(result.Evidence) == 0 || result.Evidence[0].PageId != smokePageID || result.Evidence[0].Okf == nil || result.Evidence[0].Okf.Type != "entity" || !result.Evidence[0].Untrusted {
+				if result.Query != smokeQueryText || len(result.Evidence) == 0 || result.Evidence[0].PageId != smokePageID || result.Evidence[0].Citation == nil || *result.Evidence[0].Citation != smokeSourceRef || !result.Evidence[0].Untrusted {
 					t.Fatalf("retrieve result = %#v", result)
 				}
 			},

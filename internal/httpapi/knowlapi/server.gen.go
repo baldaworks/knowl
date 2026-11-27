@@ -20,12 +20,6 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
-// Defines values for CitationKind.
-const (
-	Raw  CitationKind = "raw"
-	Wiki CitationKind = "wiki"
-)
-
 // Defines values for ContextPageDisposition.
 const (
 	BudgetOmitted ContextPageDisposition = "budget_omitted"
@@ -194,19 +188,6 @@ const (
 	VectorReady      VectorProjectionStatusState = "ready"
 )
 
-// Citation defines model for Citation.
-type Citation struct {
-	Kind      CitationKind `json:"kind"`
-	PageId    *string      `json:"page_id,omitempty"`
-	Path      *string      `json:"path,omitempty"`
-	Reference string       `json:"reference"`
-	SourceRef *string      `json:"source_ref,omitempty"`
-	Untrusted bool         `json:"untrusted"`
-}
-
-// CitationKind defines model for Citation.Kind.
-type CitationKind string
-
 // ContextBudget defines model for ContextBudget.
 type ContextBudget struct {
 	IncludedCount DiagnosticCount `json:"included_count"`
@@ -246,17 +227,11 @@ type ErrorResponse struct {
 
 // EvidenceItem defines model for EvidenceItem.
 type EvidenceItem struct {
-	DocumentId      *string           `json:"document_id,omitempty"`
-	Okf             *OKFMetadata      `json:"okf,omitempty"`
-	PageId          string            `json:"page_id"`
-	Revision        *string           `json:"revision,omitempty"`
-	Snippet         string            `json:"snippet"`
-	SourceDocuments *[]SourceDocument `json:"source_documents,omitempty"`
-	SourceId        *string           `json:"source_id,omitempty"`
-	SourceRefs      *[]string         `json:"source_refs,omitempty"`
-	Title           string            `json:"title"`
-	Untrusted       bool              `json:"untrusted"`
-	Uri             *string           `json:"uri,omitempty"`
+	Citation  *string `json:"citation,omitempty"`
+	PageId    string  `json:"page_id"`
+	Snippet   string  `json:"snippet"`
+	Title     string  `json:"title"`
+	Untrusted bool    `json:"untrusted"`
 }
 
 // Failure defines model for Failure.
@@ -578,7 +553,6 @@ type RetrievalStatusReason string
 
 // RetrieveResult defines model for RetrieveResult.
 type RetrieveResult struct {
-	Citations *[]Citation      `json:"citations,omitempty"`
 	Evidence  []EvidenceItem   `json:"evidence"`
 	Query     string           `json:"query"`
 	Retrieval *RetrievalStatus `json:"retrieval,omitempty"`
@@ -719,7 +693,7 @@ type ServerInterface interface {
 	// Read one complete bounded wiki page and its direct links
 	// (GET /v1/pages/{page_id})
 	GetPage(w http.ResponseWriter, r *http.Request, pageId PageID, params GetPageParams)
-	// Retrieve bounded evidence from the trusted Knowl scope
+	// Retrieve compact evidence cards from the trusted Knowl scope
 	// (GET /v1/retrieve)
 	RetrieveKnowledge(w http.ResponseWriter, r *http.Request, params RetrieveKnowledgeParams)
 }
@@ -1388,6 +1362,15 @@ func (response RetrieveKnowledge403JSONResponse) VisitRetrieveKnowledgeResponse(
 	return json.NewEncoder(w).Encode(response)
 }
 
+type RetrieveKnowledge413JSONResponse struct{ ReadLimitExceededJSONResponse }
+
+func (response RetrieveKnowledge413JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type RetrieveKnowledge422JSONResponse struct{ OperationFailedJSONResponse }
 
 func (response RetrieveKnowledge422JSONResponse) VisitRetrieveKnowledgeResponse(w http.ResponseWriter) error {
@@ -1423,7 +1406,7 @@ type StrictServerInterface interface {
 	// Read one complete bounded wiki page and its direct links
 	// (GET /v1/pages/{page_id})
 	GetPage(ctx context.Context, request GetPageRequestObject) (GetPageResponseObject, error)
-	// Retrieve bounded evidence from the trusted Knowl scope
+	// Retrieve compact evidence cards from the trusted Knowl scope
 	// (GET /v1/retrieve)
 	RetrieveKnowledge(ctx context.Context, request RetrieveKnowledgeRequestObject) (RetrieveKnowledgeResponseObject, error)
 }
