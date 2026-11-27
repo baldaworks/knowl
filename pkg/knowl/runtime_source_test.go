@@ -643,7 +643,7 @@ func (runtimeSharedAtlasMaintainer) Plan(_ context.Context, input domain.Mainten
 	}
 	sort.Strings(refs)
 	refs = uniqueRuntimeRefs(refs)
-	content := "---\nid: " + string(runtimeSharedAtlasPageID) + "\ntitle: Project Atlas\ntype: entity\nsource_refs:\n  - " +
+	content := "---\nid: " + string(runtimeSharedAtlasPageID) + "\ntitle: Project Atlas\ntype: entity\ndescription: Shared Project Atlas runtime knowledge.\ntags: [project-atlas, runtime]\nsource_refs:\n  - " +
 		strings.Join(refs, "\n  - ") + "\n---\n# Project Atlas\n\nAtlasintegrationbeacon uses PostgreSQL for durable state; recovery rebuilds projections.\n"
 	plan := domain.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest,

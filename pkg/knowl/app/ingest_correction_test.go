@@ -19,6 +19,98 @@ type validatingFixtureMaintainer struct {
 	alwaysInvalid, skipCallback, returnInvalid bool
 }
 
+type semanticCorrectionMaintainer struct {
+	validations      int
+	alwaysInvalid    bool
+	beforeCorrection func()
+}
+
+func (*semanticCorrectionMaintainer) Plan(context.Context, knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
+	return knowl.ModelEditPlan{}, errors.New("unexpected unvalidated semantic plan")
+}
+
+func (m *semanticCorrectionMaintainer) PlanValidated(_ context.Context, input knowl.MaintenanceInput, limits knowl.OutputCorrectionLimits, validate func(knowl.ModelEditPlan) error) (knowl.ModelEditPlan, knowl.OperationCorrectionReport, error) {
+	ref := app.SourceRefKey(input.Source)
+	bad := withRootCatalog(input, knowl.ModelEditPlan{
+		SchemaDigest: input.Schema.Digest,
+		SourceRefs:   []string{ref},
+		Edits:        []knowl.FileEdit{{Path: testPagePath, Content: []byte("---\ntype: entity\ntitle: One\nknowl:\n  id: entities/one\n  source_refs: [" + ref + "]\n---\n# One\n")}},
+	})
+	m.validations++
+	if err := validate(bad); !errors.Is(err, app.ErrPlanInvalid) {
+		return knowl.ModelEditPlan{}, knowl.OperationCorrectionReport{}, errors.New("semantic metadata violation did not use ErrPlanInvalid")
+	}
+	if m.beforeCorrection != nil {
+		m.beforeCorrection()
+	}
+	if limits.MaxCorrections == 0 {
+		return knowl.ModelEditPlan{}, fixtureCorrectionReport(limits, 1, knowl.CorrectionExhausted, knowl.SourcePlanInvalid, bad), app.ErrOutputCorrectionExhausted
+	}
+	if m.alwaysInvalid {
+		m.validations++
+		_ = validate(bad)
+		return knowl.ModelEditPlan{}, fixtureCorrectionReport(limits, 2, knowl.CorrectionExhausted, knowl.SourcePlanInvalid, bad), app.ErrOutputCorrectionExhausted
+	}
+	good := withRootCatalog(input, knowl.ModelEditPlan{
+		SchemaDigest: input.Schema.Digest,
+		SourceRefs:   []string{ref},
+		Edits:        []knowl.FileEdit{{Path: testPagePath, Content: planPageContent}},
+	})
+	m.validations++
+	if err := validate(good); err != nil {
+		return knowl.ModelEditPlan{}, knowl.OperationCorrectionReport{}, err
+	}
+	return good, fixtureCorrectionReport(limits, 2, knowl.CorrectionAccepted, knowl.SourcePlanInvalid, bad, good), nil
+}
+
+func TestSemanticMetadataUsesExistingCorrectionLifecycle(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		maxCorrections *int
+		alwaysInvalid  bool
+		wantTurns      int
+		wantStatus     knowl.OperationStatus
+		wantErr        error
+	}{
+		{name: "corrected", wantTurns: 2, wantStatus: knowl.StatusCommitted},
+		{name: "disabled", maxCorrections: intPointer(0), wantTurns: 1, wantStatus: knowl.StatusFailed, wantErr: app.ErrOutputCorrectionExhausted},
+		{name: "exhausted", alwaysInvalid: true, wantTurns: 2, wantStatus: knowl.StatusFailed, wantErr: app.ErrOutputCorrectionExhausted},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workspace, store, _, _ := newBaselineIngest(t)
+			maintainer := &semanticCorrectionMaintainer{alwaysInvalid: test.alwaysInvalid}
+			service, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{
+				AutoApply: true,
+				Output:    knowl.OutputSettings{MaxCorrections: test.maxCorrections},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			submission, err := service.Submit(t.Context(), sourceEnvelope([]byte("semantic metadata evidence")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			maintainer.beforeCorrection = func() {
+				if _, loadErr := workspace.LoadStage(t.Context(), testSourceScope, submission.Operation.ID); !errors.Is(loadErr, app.ErrStageNotFound) {
+					t.Fatalf("invalid semantic candidate reached stage: %v", loadErr)
+				}
+			}
+			result, err := service.Execute(t.Context(), submission)
+			if !errors.Is(err, test.wantErr) || result.Operation.Status != test.wantStatus {
+				t.Fatalf("Execute() status = %q, error = %v", result.Operation.Status, err)
+			}
+			if result.Operation.Correction == nil || result.Operation.Correction.Turns == nil || *result.Operation.Correction.Turns != test.wantTurns || result.Operation.Correction.ValidationCode != knowl.SourcePlanInvalid {
+				t.Fatalf("correction report = %#v", result.Operation.Correction)
+			}
+			if maintainer.validations != test.wantTurns {
+				t.Fatalf("validation calls = %d, want %d", maintainer.validations, test.wantTurns)
+			}
+		})
+	}
+}
+
+func intPointer(value int) *int { return &value }
+
 func (m *validatingFixtureMaintainer) Plan(ctx context.Context, input knowl.MaintenanceInput) (knowl.ModelEditPlan, error) {
 	m.baseCalls++
 	return m.baselineMaintainer.Plan(ctx, input)

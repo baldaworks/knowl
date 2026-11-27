@@ -103,7 +103,7 @@ func (maintainer *updateExistingMaintainer) Plan(_ context.Context, input knowl.
 	refs = append(refs, sourceRef)
 	sort.Strings(refs)
 	refs = uniqueTestRefs(refs)
-	content := []byte(fmt.Sprintf("---\nid: decisions/badger\ntitle: Badger Session Decision\ntype: decision\nsource_refs:\n  - %s\n---\n# Badger Session Decision\n\nBadger session memory now uses crash-safe recovery.\n", strings.Join(refs, "\n  - ")))
+	content := []byte(fmt.Sprintf("---\nid: decisions/badger\ntitle: Badger Session Decision\ntype: decision\ndescription: Decision governing Badger session recovery.\ntags: [badger, recovery]\nsource_refs:\n  - %s\n---\n# Badger Session Decision\n\nBadger session memory now uses crash-safe recovery.\n", strings.Join(refs, "\n  - ")))
 	return withRootCatalog(input, knowl.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest,
 		SourceRefs:   refs,

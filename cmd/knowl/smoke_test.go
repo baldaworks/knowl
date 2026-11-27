@@ -27,7 +27,7 @@ const (
 	smokeQueryText     = "One"
 	smokePageID        = "entities/one"
 	smokePagePath      = "wiki/entities/one.md"
-	smokePageContent   = "---\nid: " + smokePageID + "\ntitle: " + smokeQueryText + "\ntype: entity\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# " + smokeQueryText + "\n"
+	smokePageContent   = "---\nid: " + smokePageID + "\ntitle: " + smokeQueryText + "\ntype: entity\ndescription: Smoke-test knowledge page.\ntags: [smoke-test]\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# " + smokeQueryText + "\n"
 )
 
 func TestSupportedLocalWorkflowSmoke(t *testing.T) {

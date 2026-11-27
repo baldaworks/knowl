@@ -88,6 +88,24 @@ func TestMaintenancePolicyGenerationChangesWithEffectivePolicy(t *testing.T) {
 	}
 }
 
+func TestSourceMaintenanceV7GenerationDiffersFromV6(t *testing.T) {
+	t.Parallel()
+	policy := SourceMaintenancePolicy(strings.Repeat("a", 64), DefaultReadLimits(), DefaultPlanLimits())
+	current, err := MaintenancePolicyGeneration(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.ContractVersion = "source-maintenance-v6"
+	previous, err := MaintenancePolicyGeneration(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := MaintenancePolicyGeneration(policy)
+	if err != nil || previous != repeated || previous == current {
+		t.Fatalf("v6=%q repeated=%q v7=%q err=%v", previous, repeated, current, err)
+	}
+}
+
 func TestMaintenancePolicyGenerationPreservesNoDeadlineSemantics(t *testing.T) {
 	t.Parallel()
 	policy := SourceMaintenancePolicy(strings.Repeat("a", 64), DefaultReadLimits(), DefaultPlanLimits())

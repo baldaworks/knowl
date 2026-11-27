@@ -23,8 +23,8 @@ func TestHierarchyReconcileCommandBuildsValidHierarchyAndReplaysAsNoOp(t *testin
 	fixture := newCommandWorkflowFixture(t, true)
 	secondPagePath := "wiki/entities/two.md"
 	fixture.maintainer.Result.Edits = []knowl.FileEdit{
-		{Path: smokePagePath, Content: []byte("---\nid: entities/one\ntitle: Architecture\ntype: Architecture\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# Architecture\n\nSystem components.\n")},
-		{Path: secondPagePath, Content: []byte("---\nid: entities/two\ntitle: Roadmap\ntype: Product\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# Roadmap\n\nProduct milestones.\n")},
+		{Path: smokePagePath, Content: []byte("---\nid: entities/one\ntitle: Architecture\ntype: Architecture\ndescription: System architecture overview.\ntags:\n  - architecture\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# Architecture\n\nSystem components.\n")},
+		{Path: secondPagePath, Content: []byte("---\nid: entities/two\ntitle: Roadmap\ntype: Product\ndescription: Product roadmap and milestones.\ntags:\n  - roadmap\nsource_refs:\n  - " + smokeSourceRef + "\n---\n# Roadmap\n\nProduct milestones.\n")},
 	}
 	withLocalWorkflowSessionFactory(t, fixture.newSessionFactory(t))
 	inputPath := writeJSONFixture(t, knowlapi.IngestRequest{

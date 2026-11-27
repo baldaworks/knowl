@@ -40,7 +40,7 @@ func (showcaseTestMaintainer) Plan(_ context.Context, input domain.MaintenanceIn
 
 	title := strings.ReplaceAll(baseName, "-", " ")
 	body := fmt.Sprintf("# %s\n\nSynthesized knowledge from %s for session revocation JWT failover.\n", title, doc.DocumentID)
-	frontmatter := fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\nversion: \"0.2\"\nparent: catalogs/engineering\nsource_refs:\n  - %s\n---\n", pageID, title, strings.Join(refs, "\n  - "))
+	frontmatter := fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\ndescription: Synthesized engineering knowledge for %s.\ntags: [engineering, showcase]\nversion: \"0.2\"\nparent: catalogs/engineering\nsource_refs:\n  - %s\n---\n", pageID, title, doc.DocumentID, strings.Join(refs, "\n  - "))
 	content := frontmatter + body
 
 	plan := domain.ModelEditPlan{

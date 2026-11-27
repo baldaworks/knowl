@@ -35,6 +35,9 @@ Create ordinary pages below wiki/ with complete Markdown content using this exac
 ---
 type: topic
 title: Human title
+description: Concise description of the page subject.
+tags:
+  - meaningful-subject-tag
 knowl:
   id: path/without-wiki-or-extension
   source_refs:
@@ -44,9 +47,10 @@ knowl:
 
 Factual content.
 The frontmatter knowl.id must match the page path. Every factual page edit must cite required_source_ref in knowl.source_refs.
-When updating a page, preserve every unrelated existing source ref. An older ref may be replaced only by required_source_ref for the same source/document lineage.
+Every ordinary page must have a concise nonblank description of its subject and between one and six nonblank semantic tags relevant to that subject. Tags use a free vocabulary; do not invent or assume a controlled registry.
+When updating a page, preserve every unrelated existing metadata field, extension, and source ref. An older ref may be replaced only by required_source_ref for the same source/document lineage.
 When replacing an existing page, copy its digest to expected_digest. Omit expected_digest for a new page.
-input.contract_version identifies source-maintenance-v6. input.pages contains complete Content once, without a separate Body; only these retained factual pages may be updated. Copy the exact retained snapshot digest to expected_digest. Do not update existing pages omitted from input.pages. input.input_limits.max_request_bytes bounds the complete current request; pages may be omitted to fit, while source text, schema and catalogs remain complete. input.catalogs contains the complete bounded root-first path/digest/title/children graph, without catalog Markdown. input.catalog_limits bounds navigation independently of input.limits for factual pages. Every new or edited ordinary page must be reachable from wiki/index.md through catalog links.
+input.contract_version identifies source-maintenance-v7. input.pages contains complete Content once, without a separate Body; only these retained factual pages may be updated. Copy the exact retained snapshot digest to expected_digest. Do not update existing pages omitted from input.pages. input.input_limits.max_request_bytes bounds the complete current request; pages may be omitted to fit, while source text, schema and catalogs remain complete. input.catalogs contains the complete bounded root-first path/digest/title/children graph, without catalog Markdown. input.catalog_limits bounds navigation independently of input.limits for factual pages. Every new or edited ordinary page must be reachable from wiki/index.md through catalog links.
 Use catalog_additions to add child memberships: each entry contains path, expected_digest, optional title, and children (canonical wiki/ Markdown paths). Existing catalogs require their exact input digest and no title. New index.md catalogs require an empty expected_digest, a nonempty single-line title, and children. Link new catalogs from existing reachable navigation. Never return an index.md FileEdit or catalog Markdown; the application renders additive links from authoritative originals. Targets must exist or be created by the same plan, stay inside wiki/, and remain acyclic.
 Ordinary-page cross-references must use standard Markdown links with explicit .md destinations relative to the originating page, such as [Related](related.md) or [Other](../entities/other.md). URL-encode path characters when needed. Do not emit navigational double-bracket links or bundle-root paths. Literal code examples may retain their syntax. Link only to confirmed ordinary pages in input.pages or created by the same plan; use plain text when no confirmed target exists.
 Additive catalog maintenance must preserve every unrelated existing child link; the current source does not authorize removing other pages from navigation.

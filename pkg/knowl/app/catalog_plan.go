@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
+	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
 
 // ValidateMaintenancePlan renders bounded navigation intents from authoritative
@@ -29,6 +31,14 @@ func ValidateMaintenancePlan(ctx context.Context, input knowl.MaintenanceInput, 
 	if err != nil {
 		return knowl.ValidatedEditPlan{}, err
 	}
+	candidates := make(map[string]okf.Document, len(ordinary.Edits))
+	for _, edit := range ordinary.Edits {
+		document, err := validateMaintainedPageMetadata(edit.Path, edit.Content)
+		if err != nil {
+			return knowl.ValidatedEditPlan{}, err
+		}
+		candidates[edit.Path] = document
+	}
 	existing := make(map[string]bool, len(inspection.Snapshot.Pages))
 	for _, page := range inspection.Snapshot.Pages {
 		existing[page.Path] = true
@@ -47,6 +57,13 @@ func ValidateMaintenancePlan(ctx context.Context, input knowl.MaintenanceInput, 
 		}
 		if snapshot.Digest == "" || edit.ExpectedDigest != snapshot.Digest {
 			return knowl.ValidatedEditPlan{}, ErrPlanInvalid
+		}
+		baseline, err := okf.ParseConcept(strings.TrimPrefix(edit.Path, "wiki/"), []byte(snapshot.Content), okf.DefaultLimits())
+		if err != nil {
+			return knowl.ValidatedEditPlan{}, fmt.Errorf("retained page metadata: %w", ErrPlanInvalid)
+		}
+		if err := validateMaintainedPagePreservation(baseline.Metadata, candidates[edit.Path].Metadata); err != nil {
+			return knowl.ValidatedEditPlan{}, err
 		}
 	}
 	graph, err := catalogGraph(inspection.Catalogs, limits)
@@ -231,4 +248,101 @@ func ValidateMaintenancePlan(ctx context.Context, input knowl.MaintenanceInput, 
 		}
 	}
 	return ValidatePlan(ctx, input, combined, planLimits)
+}
+
+func validateMaintainedPageMetadata(pagePath string, content []byte) (okf.Document, error) {
+	relative := strings.TrimPrefix(pagePath, "wiki/")
+	document, err := okf.ParseConcept(relative, content, okf.DefaultLimits())
+	if err != nil {
+		return okf.Document{}, fmt.Errorf("maintained page metadata: %w", ErrPlanInvalid)
+	}
+	metadata := document.Metadata
+	if strings.TrimSpace(metadata.Type) == "" || strings.TrimSpace(metadata.Title) == "" || strings.TrimSpace(metadata.Description) == "" {
+		return okf.Document{}, fmt.Errorf("maintained page metadata: %w", ErrPlanInvalid)
+	}
+	if len(metadata.Tags) < 1 || len(metadata.Tags) > 6 {
+		return okf.Document{}, fmt.Errorf("maintained page metadata: %w", ErrPlanInvalid)
+	}
+	for _, tag := range metadata.Tags {
+		if strings.TrimSpace(tag) == "" {
+			return okf.Document{}, fmt.Errorf("maintained page metadata: %w", ErrPlanInvalid)
+		}
+	}
+	return document, nil
+}
+
+type protectedMaintainedMetadata struct {
+	Metadata       okf.Metadata
+	ID             string
+	SourceDocument *knowl.SourceDocument
+}
+
+func validateMaintainedPagePreservation(before, after okf.Metadata) error {
+	baseline, err := protectedMetadata(before)
+	if err != nil {
+		return fmt.Errorf("retained page metadata: %w", ErrPlanInvalid)
+	}
+	candidate, err := protectedMetadata(after)
+	if err != nil {
+		return fmt.Errorf("maintained page metadata: %w", ErrPlanInvalid)
+	}
+	if !reflect.DeepEqual(baseline, candidate) {
+		return fmt.Errorf("maintained page protected metadata: %w", ErrPlanInvalid)
+	}
+	return nil
+}
+
+func protectedMetadata(metadata okf.Metadata) (protectedMaintainedMetadata, error) {
+	frontmatter, err := wiki.FrontmatterFromMetadata(metadata)
+	if err != nil {
+		return protectedMaintainedMetadata{}, err
+	}
+	metadata.Type = ""
+	metadata.Title = ""
+	metadata.Description = ""
+	metadata.Tags = nil
+	metadata.TrustTier = ""
+	metadata.ResolvedStatus = ""
+	metadata.Stale = false
+	metadata.Extensions = protectedExtensions(metadata.Extensions)
+	var sourceDocument *knowl.SourceDocument
+	if frontmatter.SourceDocument != nil {
+		document := *frontmatter.SourceDocument
+		sourceDocument = &document
+	}
+	return protectedMaintainedMetadata{Metadata: metadata, ID: frontmatter.ID, SourceDocument: sourceDocument}, nil
+}
+
+func protectedExtensions(extensions map[string]any) map[string]any {
+	if len(extensions) == 0 {
+		return nil
+	}
+	protected := make(map[string]any, len(extensions))
+	for key, value := range extensions {
+		protected[key] = value
+	}
+	for _, key := range []string{"id", "source_refs", "source_document"} {
+		delete(protected, key)
+	}
+	if raw, ok := protected["knowl"]; ok {
+		fields, mapping := raw.(map[string]any)
+		if mapping {
+			knowlFields := make(map[string]any, len(fields))
+			for key, value := range fields {
+				knowlFields[key] = value
+			}
+			for _, key := range []string{"id", "source_refs", "source_document"} {
+				delete(knowlFields, key)
+			}
+			if len(knowlFields) == 0 {
+				delete(protected, "knowl")
+			} else {
+				protected["knowl"] = knowlFields
+			}
+		}
+	}
+	if len(protected) == 0 {
+		return nil
+	}
+	return protected
 }

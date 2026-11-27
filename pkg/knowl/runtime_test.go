@@ -837,7 +837,7 @@ func (factory *validatingRuntimeFactory) Build(context.Context, agentfactory.Bui
 	return nil, errors.New("provider build should remain lazy")
 }
 
-const hostPageContent = "---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + hostSourceRef + "\n---\n# One\n"
+const hostPageContent = "---\nid: entities/one\ntitle: One\ntype: entity\ndescription: Host runtime fixture page.\ntags: [runtime]\nsource_refs:\n  - " + hostSourceRef + "\n---\n# One\n"
 const hostQueuedStatus = "queued"
 
 func doHostRequest(t *testing.T, host *knowl.Host, method, path string, body []byte) ([]byte, int, error) {

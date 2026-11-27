@@ -36,7 +36,7 @@ func (s *correctionPlanFailureOperations) SaveOperationCorrectionReport(ctx cont
 	return s.OperationStore.(app.OperationCorrectionReportStore).SaveOperationCorrectionReport(ctx, scope, id, attempt, report)
 }
 
-func TestSourceCorrectionPolicyRejectsOldUnplannedAndRecoversOldStage(t *testing.T) {
+func TestSourceCorrectionPolicyRejectsOldUnplannedAndStagedWork(t *testing.T) {
 	for _, staged := range []bool{false, true} {
 		workspace, store, _, _ := newBaselineIngest(t)
 		m := &validatingFixtureMaintainer{}
@@ -74,8 +74,8 @@ func TestSourceCorrectionPolicyRejectsOldUnplannedAndRecoversOldStage(t *testing
 		}
 		result, err := current.RunToTerminal(t.Context(), claimReady(t, store, "local"))
 		if staged {
-			if err != nil || result.Operation.Status != knowl.StatusCommitted || m.validations != 2 || !reflect.DeepEqual(result.Operation.Correction, before.Correction) || result.Operation.Correction.WorkAttempt != 1 {
-				t.Fatalf("old stage required new inference: %+v %v validations=%d", result.Operation, err, m.validations)
+			if !errors.Is(err, app.ErrMaintenancePolicyMismatch) || result.Operation.Status != knowl.StatusFailed || m.validations != 2 || !reflect.DeepEqual(result.Operation.Correction, before.Correction) {
+				t.Fatalf("old staged policy was reinterpreted: %+v %v validations=%d", result.Operation, err, m.validations)
 			}
 		} else if !errors.Is(err, app.ErrMaintenancePolicyMismatch) || m.validations != 0 || result.Operation.Correction != nil {
 			t.Fatalf("old unplanned policy was reinterpreted: %+v %v", result.Operation, err)

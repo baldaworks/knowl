@@ -32,7 +32,8 @@ func TestMaintenancePlanPreservesOriginalAndAddsNestedNavigation(t *testing.T) {
 	input, model, inspection := navigationFixture()
 	const nested = "wiki/topic/index.md"
 	const newPage = "wiki/entities/odd `name [draft].md"
-	model.Edits = []knowl.FileEdit{{Path: newPage, Content: []byte("new factual content")}}
+	newPageContent := maintainedPageMarkdown("topic", "New factual page", "A newly maintained factual page.", []string{"facts"})
+	model.Edits = []knowl.FileEdit{{Path: newPage, Content: []byte(newPageContent)}}
 	model.CatalogAdditions = []knowl.CatalogAddition{
 		{Path: nested, Title: "Topic `draft [A] & B", Children: []string{newPage}},
 		{Path: rootCatalogPath, ExpectedDigest: inspection.Catalogs[0].Digest, Children: []string{nested, navigationExistingPath, nested}},
@@ -61,7 +62,7 @@ func TestMaintenancePlanPreservesOriginalAndAddsNestedNavigation(t *testing.T) {
 		t.Fatalf("escaped target=%q", target)
 	}
 	// New page bytes are passed through unchanged, and the caller's model is not rewritten.
-	if string(byPath[newPage].Content) != "new factual content" || len(model.Edits) != 1 {
+	if string(byPath[newPage].Content) != newPageContent || len(model.Edits) != 1 {
 		t.Fatal("factual content or caller mutated")
 	}
 	limits := DefaultPlanLimits()

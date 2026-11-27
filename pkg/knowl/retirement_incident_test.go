@@ -234,7 +234,7 @@ func incidentAccept(t *testing.T, content *hostMaintenanceContent, adapter strin
 	return accepted
 }
 func incidentMarkdown(id domain.PageID, refs []string, body string) []byte {
-	return []byte("---\nid: " + string(id) + "\ntitle: Runtime contribution catalog\ntype: concept\nsource_refs:\n  - " + strings.Join(refs, "\n  - ") + "\n---\n# Runtime contribution catalog\n\n" + body + "\n")
+	return []byte("---\nid: " + string(id) + "\ntitle: Runtime contribution catalog\ntype: concept\ndescription: Runtime contribution knowledge.\ntags:\n  - runtime\nsource_refs:\n  - " + strings.Join(refs, "\n  - ") + "\n---\n# Runtime contribution catalog\n\n" + body + "\n")
 }
 func incidentClaim(t *testing.T, store *sqlite.Store, id domain.OperationID, token string) domain.WorkClaim {
 	t.Helper()

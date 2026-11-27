@@ -173,5 +173,5 @@ func contractLease(token string) domain.WorkLease {
 }
 
 func contractPage(id, title, sourceRef string) []byte {
-	return []byte(fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\nsource_refs:\n  - %s\n---\n# %s\n", id, title, sourceRef, title))
+	return []byte(fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\ndescription: Durable runner fixture for %s.\ntags: [runner]\nsource_refs:\n  - %s\n---\n# %s\n", id, title, title, sourceRef, title))
 }

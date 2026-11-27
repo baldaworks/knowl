@@ -36,7 +36,7 @@ type scopePageMaintainer struct{}
 func (scopePageMaintainer) Plan(_ context.Context, input domain.MaintenanceInput) (domain.ModelEditPlan, error) {
 	const pagePath = "wiki/concepts/shared.md"
 	ref := app.SourceRefKey(input.Source)
-	content := fmt.Sprintf("---\nid: concepts/shared\ntitle: Shared identity\ntype: topic\nsource_refs:\n  - %s\n---\n# Shared identity\n\n%s\n", ref, input.SourceText)
+	content := fmt.Sprintf("---\nid: concepts/shared\ntitle: Shared identity\ntype: topic\ndescription: Scope-isolated shared identity.\ntags:\n  - identity\nsource_refs:\n  - %s\n---\n# Shared identity\n\n%s\n", ref, input.SourceText)
 	plan := domain.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest,
 		SourceRefs:   []string{ref},

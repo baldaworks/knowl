@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/baldaworks/knowl/pkg/knowl/app"
+	"github.com/baldaworks/knowl/pkg/knowl/okf"
 	knowl "github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/baldaworks/runtime/v2/agentfactory"
 	adkagent "google.golang.org/adk/v2/agent"
@@ -82,6 +83,44 @@ func TestRuntimeMaintainerPlanUsesSelectedRuntime(t *testing.T) {
 	}
 	if !factory.closed.Load() {
 		t.Fatal("provider agent was not closed")
+	}
+}
+
+func TestRuntimeMaintainerEffectiveInstructionDeclaresSemanticMetadata(t *testing.T) {
+	factory := &fakeRuntimeFactory{agent: newCapturingOutputAgent(t, nil, testSourcePlanJSON)}
+	maintainer, err := newRuntimeMaintainer(factory, "codex", t.TempDir(), runtimeMaintainerOptions{})
+	if err != nil {
+		t.Fatalf("new maintainer: %v", err)
+	}
+	t.Cleanup(func() { _ = maintainer.Close() })
+
+	if _, err := maintainer.Plan(context.Background(), testMaintenanceInput()); err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+	instruction := factory.request.Instruction
+	const frontmatterStart = "---\ntype: topic\n"
+	start := strings.Index(instruction, frontmatterStart)
+	if start < 0 {
+		t.Fatal("effective instruction has no ordinary-page frontmatter example")
+	}
+	endOffset := strings.Index(instruction[start+len(frontmatterStart):], "\n---\n# Human title")
+	if endOffset < 0 {
+		t.Fatal("effective instruction has no complete ordinary-page frontmatter example")
+	}
+	end := start + len(frontmatterStart) + endOffset + len("\n---")
+	document, err := okf.ParseConcept("concepts/example.md", []byte(instruction[start:end]+"\nBody.\n"), okf.DefaultLimits())
+	if err != nil {
+		t.Fatalf("parse effective frontmatter example: %v", err)
+	}
+	if document.Metadata.Type != "topic" || document.Metadata.Title == "" || document.Metadata.Description == "" {
+		t.Fatalf("effective metadata = %#v, want type, title, and description", document.Metadata)
+	}
+	if len(document.Metadata.Tags) != 1 || strings.TrimSpace(document.Metadata.Tags[0]) == "" {
+		t.Fatalf("effective tags = %#v, want a nonblank semantic tag", document.Metadata.Tags)
+	}
+	if !strings.Contains(instruction, "between one and six nonblank semantic tags relevant to that subject") ||
+		!strings.Contains(instruction, "Tags use a free vocabulary") {
+		t.Fatal("effective instruction does not declare tag cardinality, relevance, and free-vocabulary obligations")
 	}
 }
 

@@ -347,7 +347,7 @@ func encodedAcceptancePlan(t *testing.T, project acceptanceProject, origin, vers
 		Edits: []acceptancePlanEdit{
 			{
 				Path:    "wiki/" + pageID + ".md",
-				Content: fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\nsource_refs:\n  - %s\n---\n# %s\n", pageID, title, sourceRef, title),
+				Content: fmt.Sprintf("---\nid: %s\ntitle: %s\ntype: entity\ndescription: Knowledge about %s.\ntags:\n  - acceptance\nsource_refs:\n  - %s\n---\n# %s\n", pageID, title, title, sourceRef, title),
 			},
 		},
 	}

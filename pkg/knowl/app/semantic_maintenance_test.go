@@ -59,7 +59,7 @@ func (sharedAtlasMaintainer) Plan(_ context.Context, input knowl.MaintenanceInpu
 	}
 	sort.Strings(refs)
 	refs = uniqueTestRefs(refs)
-	content := fmt.Sprintf("---\nid: %s\ntitle: Project Atlas\ntype: entity\nsource_refs:\n  - %s\n---\n# Project Atlas\n\nPostgreSQL provides durable state and recovery uses projection rebuild.\n", sharedAtlasID, strings.Join(refs, "\n  - "))
+	content := fmt.Sprintf("---\nid: %s\ntitle: Project Atlas\ntype: entity\ndescription: Architecture and recovery knowledge for Project Atlas.\ntags: [project-atlas, architecture]\nsource_refs:\n  - %s\n---\n# Project Atlas\n\nPostgreSQL provides durable state and recovery uses projection rebuild.\n", sharedAtlasID, strings.Join(refs, "\n  - "))
 	return withRootCatalog(input, knowl.ModelEditPlan{
 		SchemaDigest: input.Schema.Digest, SourceRefs: refs,
 		Edits:     []knowl.FileEdit{{Path: sharedAtlasPath, ExpectedDigest: expectedDigest, Content: []byte(content)}},

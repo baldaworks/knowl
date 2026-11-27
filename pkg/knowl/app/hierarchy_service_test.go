@@ -312,8 +312,8 @@ func hierarchyWorkflow(t *testing.T) (*contentfs.Workspace, *sqlite.Store) {
 			SchemaDigest: schema.Digest,
 			SourceRefs:   []string{testSourceRef},
 			Edits: []knowl.FileEdit{
-				{Path: testPagePath, Content: []byte("---\nid: entities/one\ntitle: One\ntype: architecture\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\nArchitecture body.\n")},
-				{Path: testPageTwoPath, Content: []byte("---\nid: entities/two\ntitle: Two\ntype: product\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n\nProduct body.\n")},
+				{Path: testPagePath, Content: []byte("---\nid: entities/one\ntitle: One\ntype: architecture\ndescription: Architecture fixture.\ntags: [architecture]\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\nArchitecture body.\n")},
+				{Path: testPageTwoPath, Content: []byte("---\nid: entities/two\ntitle: Two\ntype: product\ndescription: Product fixture.\ntags: [product]\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n\nProduct body.\n")},
 			},
 		}
 	})
