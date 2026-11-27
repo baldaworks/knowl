@@ -32,7 +32,7 @@ func (m *portableMaintainer) Plan(context.Context, knowl.MaintenanceInput) (know
 func (m *portableMaintainer) PlanValidated(_ context.Context, input knowl.MaintenanceInput, limits knowl.OutputCorrectionLimits, validate func(knowl.ModelEditPlan) error) (knowl.ModelEditPlan, knowl.OperationCorrectionReport, error) {
 	ref := app.SourceRefKey(input.Source)
 	page := func(body string) []byte {
-		return []byte(fmt.Sprintf("---\ntype: Reference\ntitle: Portable\nknowl:\n  id: concepts/portable\n  source_refs: [%s]\n---\n%s\n", ref, body))
+		return []byte(fmt.Sprintf("---\ntype: Reference\ntitle: Portable\ndescription: Portable navigation example.\ntags: [navigation]\nknowl:\n  id: concepts/portable\n  source_refs: [%s]\n---\n%s\n", ref, body))
 	}
 	plan := knowl.ModelEditPlan{SchemaDigest: input.Schema.Digest, SourceRefs: []string{ref}, Edits: []knowl.FileEdit{{Path: "wiki/concepts/portable.md", Content: page("[[concepts/portable]]")}}, CatalogAdditions: []knowl.CatalogAddition{{Path: testRootCatalogPath, ExpectedDigest: input.Catalogs[0].Digest, Children: []string{"wiki/concepts/portable.md"}}}}
 	m.validations++

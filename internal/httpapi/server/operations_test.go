@@ -51,7 +51,7 @@ func TestHTTPIngestWakesNewAndNonTerminalReplayOnly(t *testing.T) {
 		SourceRefs:   []string{"inline:source-1@1"},
 		Edits: []domain.FileEdit{{
 			Path:    "wiki/entities/one.md",
-			Content: []byte("---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - inline:source-1@1\n---\n# One\n"),
+			Content: []byte("---\nid: entities/one\ntitle: One\ntype: entity\ndescription: HTTP operation fixture page.\ntags: [http]\nsource_refs:\n  - inline:source-1@1\n---\n# One\n"),
 		}},
 	}}
 	ingest, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{})

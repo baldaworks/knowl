@@ -21,7 +21,7 @@ import (
 const legacyUncommittedMode = "uncommitted"
 const legacyManifestMode = "manifest"
 
-func TestLegacyCommittedOrdinaryUpgradeFinishesOutcome(t *testing.T) {
+func TestLegacyCommittedOrdinaryUpgradeCompletesProjectionAcrossGenerationFence(t *testing.T) {
 	for _, state := range []domain.SourceLifecycleState{domain.SourceLifecycleActive, domain.SourceLifecycleRetiring, domain.SourceLifecycleDeleted} {
 		t.Run(string(state), func(t *testing.T) {
 			content, plan, reader := ordinaryAuthorityFixture(t)
@@ -81,15 +81,15 @@ func TestLegacyCommittedOrdinaryUpgradeFinishesOutcome(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = service.RunToTerminal(t.Context(), claim)
+			result, err := service.RunToTerminal(t.Context(), claim)
 			if err != nil {
-				t.Fatalf("already committed legacy canonical work cannot finish projection/outcome: %v", err)
+				t.Fatalf("legacy committed replay: %v", err)
 			}
 			operation, err := store.Operation(t.Context(), testScope, reservation.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if operation.Status != domain.StatusCommitted {
+			if operation.Status != domain.StatusCommitted || result.Operation.Status != domain.StatusCommitted || result.Commit == nil {
 				t.Fatalf("operation status=%s", operation.Status)
 			}
 
@@ -97,8 +97,8 @@ func TestLegacyCommittedOrdinaryUpgradeFinishesOutcome(t *testing.T) {
 			if err != nil || len(projected) != 1 || projected[0].ID != "entities/late" {
 				t.Fatalf("projection=%#v,%v", projected, err)
 			}
-			if _, err := service.Apply(t.Context(), testScope, reservation.ID); err != nil {
-				t.Fatal(err)
+			if replay, err := service.Apply(t.Context(), testScope, reservation.ID); err != nil || replay.Operation.Status != domain.StatusCommitted || replay.Commit != nil {
+				t.Fatalf("apply committed legacy operation=%#v,%v", replay, err)
 			}
 			if after := mustReadHierarchyFile(t, content, plan.Edits[0].Path); !bytes.Equal(after, pageBefore) {
 				t.Fatal("legacy replay changed page")

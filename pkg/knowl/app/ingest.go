@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/baldaworks/knowl/pkg/knowl/internal/maintenanceauthority"
 	"github.com/baldaworks/knowl/pkg/knowl/types"
 	"github.com/baldaworks/knowl/pkg/knowl/wiki"
 )
@@ -447,6 +448,9 @@ func (service *IngestService) RunToTerminal(ctx context.Context, claim knowl.Wor
 	}
 	submission := IngestSubmission{Operation: operation, accepted: descriptor.Source, schema: descriptor.Schema}
 	staged, loadErr := service.content.LoadStage(ctx, operation.Key.Scope, id)
+	if err := service.requireCurrentGenerationOrCommittedReplay(ctx, operation, submission.schema, staged, loadErr); err != nil {
+		return service.failIngest(ctx, result, failureClass(err), err)
+	}
 	switch {
 	case loadErr == nil:
 		result.Staged = staged
@@ -583,6 +587,9 @@ func (service *IngestService) execute(ctx context.Context, submission IngestSubm
 	submission.schema = descriptor.Schema
 	var prepared preparedStage
 	staged, loadErr := service.content.LoadStage(ctx, operation.Key.Scope, operation.ID)
+	if err := service.requireCurrentGenerationOrCommittedReplay(ctx, operation, submission.schema, staged, loadErr); err != nil {
+		return service.failIngest(ctx, result, failureClass(err), err)
+	}
 	switch {
 	case loadErr == nil:
 		prepared.Staged = staged
@@ -893,6 +900,19 @@ func (service *IngestService) Apply(ctx context.Context, scope knowl.ScopeRef, i
 	if operation.Status == knowl.StatusFailed {
 		return ApplyResult{Operation: operation}, fmt.Errorf("operation %q failed: %w", id, ErrOperationNotApplyable)
 	}
+	descriptor, err := service.operations.Execution(ctx, scope, id)
+	if err != nil {
+		return ApplyResult{Operation: operation}, fmt.Errorf("read operation execution: %w", err)
+	}
+	if err := ValidateExecutionDescriptor(operation.Key, descriptor); err != nil {
+		return ApplyResult{Operation: operation}, err
+	}
+	if generationErr := service.requireCurrentMaintenanceGeneration(operation, descriptor.Schema); generationErr != nil {
+		staged, loadErr := service.content.LoadStage(ctx, scope, id)
+		if err := service.requireCurrentGenerationOrCommittedReplay(ctx, operation, descriptor.Schema, staged, loadErr); err != nil {
+			return service.failApply(durableContext(ctx), scope, id, operation, failureClass(err), err, nil)
+		}
+	}
 	return service.apply(ctx, scope, id, knowl.StagedChange{OperationID: string(id)})
 }
 
@@ -1055,6 +1075,47 @@ func (service *IngestService) requireMaintainer() error {
 		return ErrMaintainerUnavailable
 	}
 	return nil
+}
+
+func (service *IngestService) requireCurrentMaintenanceGeneration(operation knowl.Operation, schema knowl.SchemaDocument) error {
+	generation, err := service.maintenanceGeneration(schema)
+	if err != nil {
+		return err
+	}
+	if operation.Key.MaintenanceGeneration != generation {
+		return ErrMaintenancePolicyMismatch
+	}
+	return nil
+}
+
+type maintenanceStageInspector interface {
+	InspectMaintenanceStage(ctx context.Context, request maintenanceauthority.InspectRequest) (maintenanceauthority.Inspection, error)
+}
+
+// requireCurrentGenerationOrCommittedReplay fences obsolete work before it can
+// invoke a maintainer or publish a stage. The sole exception is an exact,
+// authenticated canonical commit: it must be allowed to finish projection and
+// durable outcome recovery without rewriting canonical content.
+func (service *IngestService) requireCurrentGenerationOrCommittedReplay(
+	ctx context.Context,
+	operation knowl.Operation,
+	schema knowl.SchemaDocument,
+	staged knowl.StagedChange,
+	loadErr error,
+) error {
+	generationErr := service.requireCurrentMaintenanceGeneration(operation, schema)
+	if generationErr == nil || !errors.Is(generationErr, ErrMaintenancePolicyMismatch) {
+		return generationErr
+	}
+	inspector, ok := service.content.(maintenanceStageInspector)
+	if loadErr != nil || !ok {
+		return generationErr
+	}
+	inspection, err := inspector.InspectMaintenanceStage(ctx, maintenanceauthority.NewInspectRequest(staged, false))
+	if err == nil && inspection.Committed != nil {
+		return nil
+	}
+	return generationErr
 }
 
 func durableContext(ctx context.Context) context.Context {

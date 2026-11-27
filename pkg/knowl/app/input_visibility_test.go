@@ -44,7 +44,7 @@ func TestFilePlanRequiresIncludedCompleteExistingSnapshot(t *testing.T) {
 			}
 			original := pages[0]
 			// Keep unrelated prose and the old citation while adding independently accepted evidence.
-			content := strings.Replace(original.Content, "source_refs: [fixture:baseline-seed@1]", "source_refs: [fixture:baseline-seed@1, "+testSourceRef+"]", 1) + "\nNew independently accepted evidence.\n"
+			content := strings.Replace(original.Content, "source_refs: [fixture:baseline-seed@1]", "description: Storage requirements and accepted evidence.\ntags: [storage]\nsource_refs: [fixture:baseline-seed@1, "+testSourceRef+"]", 1) + "\nNew independently accepted evidence.\n"
 			schema, err := workspace.Schema(t.Context(), "local")
 			if err != nil {
 				t.Fatal(err)

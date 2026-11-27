@@ -159,7 +159,7 @@ func TestExplicitQueryFilingUsesTheStandardPlanApplyGate(t *testing.T) {
 		Query:  "file this result",
 		Result: app.QueryResult{Scope: testSourceScope, Query: "file this result", Pages: []knowl.PageReference{{ID: "entities/source", Path: "wiki/entities/source.md", Title: "Source", Untrusted: true}}, Citations: []app.Citation{{Kind: "raw", Reference: testSourceRef, SourceRef: testSourceRef, Untrusted: true}}},
 		Plan: knowl.ModelEditPlan{SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef}, Edits: []knowl.FileEdit{
-			{Path: "wiki/entities/filed.md", Content: []byte("---\nid: entities/filed\ntitle: Filed\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Filed\n")},
+			{Path: "wiki/entities/filed.md", Content: []byte("---\nid: entities/filed\ntitle: Filed\ntype: entity\ndescription: Explicitly filed query result.\ntags: [filed]\nsource_refs:\n  - " + testSourceRef + "\n---\n# Filed\n")},
 		}, CatalogAdditions: []knowl.CatalogAddition{{Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Children: []string{"wiki/entities/filed.md"}}}},
 	}
 	planned, err := queryService.File(ctx, "local", request)

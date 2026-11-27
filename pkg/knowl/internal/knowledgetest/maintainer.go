@@ -157,7 +157,7 @@ func runbookMarkdown(refs []string) string {
 
 func frontmatter(id, title, pageType string, refs []string) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "---\nid: %s\ntitle: %s\ntype: %s\nsource_refs:\n", id, title, pageType)
+	fmt.Fprintf(&builder, "---\nid: %s\ntitle: %s\ntype: %s\ndescription: Curated knowledge about %s.\ntags:\n  - session-memory\nsource_refs:\n", id, title, pageType, title)
 	for _, ref := range refs {
 		fmt.Fprintf(&builder, "  - %s\n", ref)
 	}

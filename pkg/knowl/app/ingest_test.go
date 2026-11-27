@@ -381,12 +381,12 @@ func TestConcurrentReviewReplayConvergesToOneOperation(t *testing.T) {
 
 func TestIngestRejectsStaleReviewedPlan(t *testing.T) {
 	ctx := context.Background()
-	before := []byte("---\nid: entities/stale\ntitle: Stale\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Stale\n\nbefore\n")
+	before := []byte("---\nid: entities/stale\ntitle: Stale\ntype: entity\ndescription: Stale fixture page.\ntags: [stale]\nsource_refs:\n  - " + testSourceRef + "\n---\n# Stale\n\nbefore\n")
 	workspace, store, service, _ := newWorkflow(t, false, nil, func(schema knowl.SchemaDocument) knowl.ModelEditPlan {
 		return knowl.ModelEditPlan{
 			SchemaDigest: schema.Digest,
 			SourceRefs:   []string{testSourceRef},
-			Edits:        []knowl.FileEdit{{Path: "wiki/entities/stale.md", ExpectedDigest: digest(before), Content: []byte("---\nid: entities/stale\ntitle: Stale\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Stale\n\nafter\n")}},
+			Edits:        []knowl.FileEdit{{Path: "wiki/entities/stale.md", ExpectedDigest: digest(before), Content: []byte("---\nid: entities/stale\ntitle: Stale\ntype: entity\ndescription: Stale fixture page.\ntags: [stale]\nsource_refs:\n  - " + testSourceRef + "\n---\n# Stale\n\nafter\n")}},
 		}
 	})
 	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "stale.md"), before, 0o600); err != nil {
@@ -407,7 +407,7 @@ func TestIngestRejectsStaleReviewedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ingest stale plan: %v", err)
 	}
-	humanEdit := []byte("---\nid: entities/stale\ntitle: Human edit\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Human edit\n")
+	humanEdit := []byte("---\nid: entities/stale\ntitle: Human edit\ntype: entity\ndescription: Concurrent human edit.\ntags: [human-edit]\nsource_refs:\n  - " + testSourceRef + "\n---\n# Human edit\n")
 	if err := os.WriteFile(filepath.Join(workspace.Root(), "wiki", "entities", "stale.md"), humanEdit, 0o600); err != nil {
 		t.Fatalf("write human edit: %v", err)
 	}
@@ -820,8 +820,8 @@ func TestAutoApplyCommitsValidSubsetAndPersistsDiagnostics(t *testing.T) {
 			SchemaDigest: schema.Digest,
 			SourceRefs:   []string{testSourceRef, "fixture:missing@1"},
 			Edits: []knowl.FileEdit{
-				{Path: testGoodPagePath, ExpectedDigest: digest(goodBefore), Content: []byte("---\nid: entities/good\ntitle: Good\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Good\n\nupdated\n")},
-				{Path: testRejectedPagePath, ExpectedDigest: digest(rejectedBefore), Content: []byte("---\nid: entities/rejected\ntitle: Rejected\ntype: entity\nsource_refs:\n  - fixture:missing@1\n---\n# Rejected\n\nmust not publish\n")},
+				{Path: testGoodPagePath, ExpectedDigest: digest(goodBefore), Content: []byte("---\nid: entities/good\ntitle: Good\ntype: entity\ndescription: Valid maintained page.\ntags: [good]\nsource_refs:\n  - " + testSourceRef + "\n---\n# Good\n\nupdated\n")},
+				{Path: testRejectedPagePath, ExpectedDigest: digest(rejectedBefore), Content: []byte("---\nid: entities/rejected\ntitle: Rejected\ntype: entity\ndescription: Candidate with unavailable evidence.\ntags: [rejected]\nsource_refs:\n  - fixture:missing@1\n---\n# Rejected\n\nmust not publish\n")},
 			},
 		}
 	})
@@ -883,7 +883,7 @@ func TestIngestReportsDiagnosticsWhenEveryEditIsRejected(t *testing.T) {
 		return knowl.ModelEditPlan{
 			SchemaDigest: schema.Digest,
 			SourceRefs:   []string{testSourceRef, "fixture:missing@1"},
-			Edits:        []knowl.FileEdit{{Path: testRejectedPagePath, Content: []byte("---\nid: entities/rejected\ntitle: Rejected\ntype: entity\nsource_refs:\n  - fixture:missing@1\n---\n# Rejected\n\nmust not publish\n")}},
+			Edits:        []knowl.FileEdit{{Path: testRejectedPagePath, Content: []byte("---\nid: entities/rejected\ntitle: Rejected\ntype: entity\ndescription: Candidate with unavailable evidence.\ntags: [rejected]\nsource_refs:\n  - fixture:missing@1\n---\n# Rejected\n\nmust not publish\n")}},
 		}
 	})
 	want := []knowl.MaintenanceDiagnostic{
@@ -1292,8 +1292,8 @@ const (
 )
 
 var (
-	planPageContent       = []byte("---\nid: entities/one\ntitle: One\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[Two](two.md)\n")
-	planSupportingContent = []byte("---\nid: entities/two\ntitle: Two\ntype: entity\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n")
+	planPageContent       = []byte("---\nid: entities/one\ntitle: One\ntype: entity\ndescription: Primary fixture entity.\ntags: [fixture]\nsource_refs:\n  - " + testSourceRef + "\n---\n# One\n\n[Two](two.md)\n")
+	planSupportingContent = []byte("---\nid: entities/two\ntitle: Two\ntype: entity\ndescription: Supporting fixture entity.\ntags: [fixture]\nsource_refs:\n  - " + testSourceRef + "\n---\n# Two\n")
 )
 
 type countingMaintainer struct {

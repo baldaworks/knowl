@@ -328,7 +328,14 @@ func TestQueuedOrdinaryMaintenancePersistsRetiringDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	generation := strings.Repeat("c", 64)
+	service, err := app.NewIngestService(workspace, store, store, unexpectedMaintenancePlanner{t: t}, app.IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, generation, err := service.CurrentMaintenancePolicy(t.Context(), testScope)
+	if err != nil {
+		t.Fatal(err)
+	}
 	key := knowl.OperationKey{Scope: testScope, Source: source.Source, Version: source.Version, MaintenanceGeneration: generation}
 	reservation, err := store.Reserve(t.Context(), key, knowl.OperationMeta{Key: key, AcceptedSource: source, Schema: schema, SchemaDigest: schema.Digest, MaintenanceGeneration: generation, CreatedAt: time.Now().UTC()})
 	if err != nil {
@@ -341,10 +348,6 @@ func TestQueuedOrdinaryMaintenancePersistsRetiringDiagnostic(t *testing.T) {
 	for owner, state := range reader.states {
 		state.State = knowl.SourceLifecycleRetiring
 		reader.states[owner] = state
-	}
-	service, err := app.NewIngestService(workspace, store, store, unexpectedMaintenancePlanner{t: t}, app.IngestOptions{})
-	if err != nil {
-		t.Fatal(err)
 	}
 	claim, err := store.ClaimReady(t.Context(), testScope, knowl.WorkLease{Token: "authority-test", ExpiresAt: time.Now().Add(time.Minute)})
 	if err != nil {

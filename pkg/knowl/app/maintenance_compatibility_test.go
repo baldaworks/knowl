@@ -20,9 +20,10 @@ const historicContractV2 = "source-maintenance-v2"
 const historicContractV3 = "source-maintenance-v3"
 const historicContractV4 = "source-maintenance-v4"
 const historicContractV5 = "source-maintenance-v5"
+const historicContractV6 = "source-maintenance-v6"
 
 func TestQueuedIncompatiblePolicyNeverInvokesMaintainer(t *testing.T) {
-	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, historicContractV5, ""} {
+	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, historicContractV5, historicContractV6, ""} {
 		t.Run("old contract "+version, func(t *testing.T) {
 			workspace, store, _, maintainer := newWorkflow(t, false, nil)
 			index := &historicalInferenceIndex{SearchIndex: store}
@@ -187,8 +188,8 @@ func TestExecuteRejectsChangedPolicyBeforeInference(t *testing.T) {
 	}
 }
 
-func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
-	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, historicContractV5} {
+func TestIncompatibleStageCannotCommitAcrossPolicyChange(t *testing.T) {
+	for _, version := range []string{historicContractV1, historicContractV2, historicContractV3, historicContractV4, historicContractV5, historicContractV6} {
 		for _, scheduled := range []bool{false, true} {
 			t.Run(version+"/"+map[bool]string{false: "synchronous", true: "scheduled"}[scheduled], func(t *testing.T) {
 				workspace, store, _, maintainer := newWorkflow(t, false, nil)
@@ -222,10 +223,8 @@ func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				bounds := app.DefaultCatalogLimits()
-				bounds.MaxCatalogs++
 				index := &historicalInferenceIndex{SearchIndex: store}
-				current, err := app.NewIngestService(workspace, store, index, maintainer, app.IngestOptions{CatalogLimits: bounds, InputLimits: knowl.MaintenanceInputLimits{MaxRequestBytes: 100}, AutoApply: true})
+				current, err := app.NewIngestService(workspace, store, index, maintainer, app.IngestOptions{AutoApply: true})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -235,15 +234,122 @@ func TestLegacyStageResumesWithoutInferenceAcrossPolicyChange(t *testing.T) {
 				} else {
 					result, err = current.Execute(t.Context(), submission)
 				}
-				if err != nil || result.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 || index.inferenceCalls != 0 {
-					t.Fatalf("stage replanned: status=%s calls=%d err=%v", result.Operation.Status, maintainer.calls(), err)
+				if !errors.Is(err, app.ErrMaintenancePolicyMismatch) || result.Operation.Status != knowl.StatusFailed || maintainer.calls() != 0 || index.inferenceCalls != 0 {
+					t.Fatalf("incompatible stage ran: status=%s calls=%d inference=%d err=%v", result.Operation.Status, maintainer.calls(), index.inferenceCalls, err)
+				}
+				if result.Operation.Failure == nil || result.Operation.Failure.Reason != "maintenance_policy_mismatch" {
+					t.Fatalf("safe mismatch diagnostics=%v", result.Operation.Failure)
+				}
+				snapshot, snapshotErr := workspace.Snapshot(t.Context(), submission.Operation.Key.Scope)
+				if snapshotErr != nil || len(snapshot.Pages) != 0 {
+					t.Fatalf("obsolete stage changed canonical pages=%v err=%v", snapshot.Pages, snapshotErr)
 				}
 				replay, err := current.Execute(t.Context(), app.IngestSubmission{Operation: result.Operation})
-				if err != nil || replay.Operation.Status != knowl.StatusCommitted || maintainer.calls() != 0 || index.inferenceCalls != 0 {
+				if err != nil || replay.Operation.Status != knowl.StatusFailed || maintainer.calls() != 0 || index.inferenceCalls != 0 {
 					t.Fatalf("terminal replay=%s %v", replay.Operation.Status, err)
 				}
 			})
 		}
+	}
+}
+
+func TestV6MismatchResynchronizationIsIdempotentAcrossRestart(t *testing.T) {
+	workspace, store, _, maintainer := newWorkflow(t, false, nil)
+	envelope := sourceEnvelope([]byte("v6 staged resynchronization"))
+	accepted, err := workspace.AcceptSource(t.Context(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := workspace.Schema(t.Context(), accepted.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v6Generation := historicalPolicyGeneration(t, historicContractV6, schema.Digest)
+	key := knowl.OperationKey{Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version, MaintenanceGeneration: v6Generation}
+	reservation, err := store.Reserve(t.Context(), key, knowl.OperationMeta{Key: key, AcceptedSource: accepted, Schema: schema, SchemaDigest: schema.Digest, MaintenanceGeneration: v6Generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := workspace.Inspect(t.Context(), accepted.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.StagePlan(t.Context(), knowl.ValidatedEditPlan{
+		OperationID: string(reservation.ID), Scope: accepted.Scope, SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef},
+		Edits: []knowl.FileEdit{{Path: testPagePath, Content: planPageContent}, {Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [One](entities/one.md)\n")}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := current.RunToTerminal(t.Context(), claimReady(t, store, accepted.Scope))
+	if !errors.Is(err, app.ErrMaintenancePolicyMismatch) || result.Operation.Status != knowl.StatusFailed || maintainer.calls() != 0 {
+		t.Fatalf("v6 stage mismatch result=%+v calls=%d err=%v", result.Operation, maintainer.calls(), err)
+	}
+	currentSubmission, err := current.Submit(t.Context(), envelope)
+	if err != nil || currentSubmission.Operation.ID == reservation.ID || !currentSubmission.NeedsExecution() {
+		t.Fatalf("current submission=%+v err=%v", currentSubmission.Operation, err)
+	}
+	restarted, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := restarted.Submit(t.Context(), envelope)
+	if err != nil || replay.Operation.ID != currentSubmission.Operation.ID {
+		t.Fatalf("restart replay=%+v err=%v", replay.Operation, err)
+	}
+	ready, err := store.ResumeReady(t.Context(), accepted.Scope, 10)
+	if err != nil || len(ready) != 1 || ready[0] != currentSubmission.Operation.ID {
+		t.Fatalf("ready operations=%+v err=%v", ready, err)
+	}
+}
+
+func TestReviewedV6StageCannotApplyUnderV7(t *testing.T) {
+	workspace, store, _, maintainer := newWorkflow(t, false, nil)
+	accepted, err := workspace.AcceptSource(t.Context(), sourceEnvelope([]byte("reviewed v6 stage")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := workspace.Schema(t.Context(), accepted.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := historicalPolicyGeneration(t, historicContractV6, schema.Digest)
+	key := knowl.OperationKey{Scope: accepted.Scope, Source: accepted.Source, Version: accepted.Version, MaintenanceGeneration: generation}
+	reservation, err := store.Reserve(t.Context(), key, knowl.OperationMeta{Key: key, AcceptedSource: accepted, Schema: schema, SchemaDigest: schema.Digest, MaintenanceGeneration: generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := workspace.Inspect(t.Context(), accepted.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := workspace.StagePlan(t.Context(), knowl.ValidatedEditPlan{
+		OperationID: string(reservation.ID), Scope: accepted.Scope, SchemaDigest: schema.Digest, SourceRefs: []string{testSourceRef},
+		Edits: []knowl.FileEdit{{Path: testPagePath, Content: planPageContent}, {Path: testRootCatalogPath, ExpectedDigest: inspection.Index.Digest, Content: []byte(inspection.Index.Content + "\n* [One](entities/one.md)\n")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SavePlan(t.Context(), reservation.ID, knowl.PlanSummary{OperationID: string(reservation.ID), Digest: staged.Digest, FileCount: len(staged.Files)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAwaitingReview(t.Context(), reservation.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := app.NewIngestService(workspace, store, store, maintainer, app.IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := current.Apply(t.Context(), accepted.Scope, reservation.ID)
+	if !errors.Is(err, app.ErrMaintenancePolicyMismatch) || result.Operation.Status != knowl.StatusFailed {
+		t.Fatalf("reviewed v6 apply=%+v err=%v", result.Operation, err)
+	}
+	snapshot, snapshotErr := workspace.Snapshot(t.Context(), accepted.Scope)
+	if snapshotErr != nil || len(snapshot.Pages) != 0 {
+		t.Fatalf("reviewed v6 stage changed canonical pages=%v err=%v", snapshot.Pages, snapshotErr)
 	}
 }
 
@@ -271,6 +377,15 @@ func TestCatalogPolicyGenerationChangesWithEveryEffectiveLimit(t *testing.T) {
 // (v1), fddb1a3 (v2), 0a1d133 (v3), and c929d69 (v4). Never retrofit them through current policy.
 func historicalPolicyGeneration(t *testing.T, version, schemaDigest string) string {
 	t.Helper()
+	if version == historicContractV6 {
+		policy := app.SourceMaintenancePolicy(schemaDigest, app.DefaultReadLimits(), app.DefaultPlanLimits())
+		policy.ContractVersion = historicContractV6
+		generation, err := app.MaintenancePolicyGeneration(policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return generation
+	}
 	filename := map[string]string{historicContractV1: "v1.json", historicContractV2: "v2.json", historicContractV3: "v3.json", historicContractV4: "v4.json", historicContractV5: "v5.json"}[version]
 	encoded, err := os.ReadFile(filepath.Join("testdata", "maintenance-policy", filename))
 	if err != nil {

@@ -370,7 +370,7 @@ func (maintainer applyFactMaintainer) Plan(_ context.Context, input knowl.Mainte
 	}
 	id := input.Source.Source.ID
 	ref := app.SourceRefKey(input.Source)
-	content := fmt.Sprintf("---\ntype: entity\ntitle: %s\nknowl:\n  id: entities/%s\n  source_refs: [%s]\n---\n# %s\n\nRecorded fact.\n", id, id, ref, id)
+	content := fmt.Sprintf("---\ntype: entity\ntitle: %s\ndescription: Recorded fact for %s.\ntags: [recorded-fact]\nknowl:\n  id: entities/%s\n  source_refs: [%s]\n---\n# %s\n\nRecorded fact.\n", id, id, id, ref, id)
 	plan := knowl.ModelEditPlan{SchemaDigest: input.Schema.Digest, SourceRefs: []string{ref}, Edits: []knowl.FileEdit{{Path: "wiki/entities/" + id + ".md", Content: []byte(content)}}}
 	return withRootCatalog(input, plan), nil
 }

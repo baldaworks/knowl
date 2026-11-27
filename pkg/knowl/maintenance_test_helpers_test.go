@@ -63,7 +63,7 @@ func (reader maintenanceLifecycleReader) SourceLifecycle(ctx context.Context, sc
 }
 func digestBytes(content []byte) string { return fmt.Sprintf("%x", sha256.Sum256(content)) }
 func validWorkspacePage(id, title, ref, body string) []byte {
-	return []byte("---\nid: " + id + "\ntitle: " + title + "\ntype: entity\nsource_refs:\n  - " + ref + "\n---\n# " + title + "\n\n" + body + "\n")
+	return []byte("---\nid: " + id + "\ntitle: " + title + "\ntype: entity\ndescription: Maintained fixture page for " + title + ".\ntags: [fixture]\nsource_refs:\n  - " + ref + "\n---\n# " + title + "\n\n" + body + "\n")
 }
 func acceptStructuredWorkspaceSource(t *testing.T, workspace *hostMaintenanceContent, sourceID knowl.SourceID, documentID knowl.DocumentID, revision string) string {
 	t.Helper()
