@@ -1,5 +1,26 @@
 # Unreleased
 
+## MCP usage skill
+
+Knowl now publishes one canonical usage skill for compatible MCP hosts through
+the `io.modelcontextprotocol/skills` extension. `skills/list`, `skills/get` and
+`resources/read` expose the repository-authored
+[`SKILL.md`](../../internal/mcpsdk/skills/knowl/SKILL.md) with its complete
+manifest, byte size and SHA-256 digest. Read-only and read-write facades serve
+identical bytes; ingestion guidance remains conditional on `knowl_ingest`
+appearing in ordinary tool discovery.
+
+The same skill can be installed directly from Git through the root
+[`skills.sh.json`](../../skills.sh.json), preferably from a pinned release tag
+that contains the skill or, until such a tag exists, a full 40-character commit
+SHA for a commit that contains it. Git installation does not configure or
+authorize a Knowl MCP server, MCP discovery does not install host files, and
+clients without Skills Extension support retain their existing tool behavior.
+This skill is separate from the local Codex plugin's `$knowl:setup` and
+`$knowl:run` maintenance workflows. See
+[operations](../operations.md#mcp-usage-skill) for installation and trust
+details.
+
 ## Compact public retrieve
 
 `GET /v1/retrieve` and MCP `knowl_retrieve` now return the same compact result:
