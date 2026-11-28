@@ -39,6 +39,7 @@ const (
 	acceptanceStatusQueued    = "queued"
 	acceptanceStatusCompleted = "completed"
 	acceptanceStatusFailed    = "failed"
+	acceptanceAbsentQuery     = "absent"
 )
 
 type acceptanceProject struct {
@@ -112,6 +113,43 @@ type mcpAcceptanceProcess struct {
 	waited  bool
 }
 
+type acceptanceListSkillsParams struct {
+	sdkmcp.ParamsBase
+	Cursor string `json:"cursor,omitempty"`
+}
+
+type acceptanceGetSkillParams struct {
+	sdkmcp.ParamsBase
+	URI string `json:"uri"`
+}
+
+type acceptanceSkillResource struct {
+	URI    string `json:"uri"`
+	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
+}
+
+type acceptanceSkillEntry struct {
+	URI         string                    `json:"uri"`
+	Frontmatter map[string]any            `json:"frontmatter"`
+	Resources   []acceptanceSkillResource `json:"resources"`
+}
+
+type acceptanceListSkillsResult struct {
+	sdkmcp.ResultBase
+	sdkmcp.Cacheable
+	ResultType string                 `json:"resultType"`
+	Skills     []acceptanceSkillEntry `json:"skills"`
+	NextCursor string                 `json:"nextCursor,omitempty"`
+}
+
+type acceptanceGetSkillResult struct {
+	sdkmcp.ResultBase
+	sdkmcp.Cacheable
+	ResultType string               `json:"resultType"`
+	Skill      acceptanceSkillEntry `json:"skill"`
+}
+
 func TestMCPStdioRealBinaryAcceptance(t *testing.T) {
 	clearKnowlEnv(t)
 	binaryDir := t.TempDir()
@@ -125,10 +163,28 @@ func TestMCPStdioRealBinaryAcceptance(t *testing.T) {
 		assertExactMCPTools(t, process.session)
 		assertNoTCPListener(t, project.listen)
 
-		result := callAcceptanceTool[knowlmcp.RetrieveResult](t, process.session, mcpRetrieveToolName, map[string]any{acceptanceQueryArgument: "absent"})
-		if result.Query != "absent" || len(result.Evidence) != 0 {
+		result := callAcceptanceTool[knowlmcp.RetrieveResult](t, process.session, mcpRetrieveToolName, map[string]any{acceptanceQueryArgument: acceptanceAbsentQuery})
+		if result.Query != acceptanceAbsentQuery || len(result.Evidence) != 0 {
 			t.Fatalf("retrieve result = %#v", result)
 		}
+		process.closeEOF(t)
+		process.assertStdoutFrames(t)
+		if process.stderr.Len() != 0 {
+			t.Fatalf("stdio stderr = %q, want empty", process.stderr.Bytes())
+		}
+	})
+
+	t.Run("skills extension", func(t *testing.T) {
+		project := newAcceptanceProject(t, fixtureBinary)
+		process := startMCPAcceptanceSkillsProcess(t, knowlBinary, project)
+		assertInitializedServer(t, process.session)
+		assertExactMCPTools(t, process.session)
+		assertStdioSkillSurface(t, process.session)
+		result := callAcceptanceTool[knowlmcp.RetrieveResult](t, process.session, mcpRetrieveToolName, map[string]any{acceptanceQueryArgument: acceptanceAbsentQuery})
+		if result.Query != acceptanceAbsentQuery || len(result.Evidence) != 0 {
+			t.Fatalf("retrieve result = %#v", result)
+		}
+		assertNoTCPListener(t, project.listen)
 		process.closeEOF(t)
 		process.assertStdoutFrames(t)
 		if process.stderr.Len() != 0 {
@@ -360,6 +416,14 @@ func encodedAcceptancePlan(t *testing.T, project acceptanceProject, origin, vers
 }
 
 func startMCPAcceptanceProcess(t *testing.T, binary string, project acceptanceProject, extraEnv []string) *mcpAcceptanceProcess {
+	return startMCPAcceptanceProcessWithSkills(t, binary, project, extraEnv, false)
+}
+
+func startMCPAcceptanceSkillsProcess(t *testing.T, binary string, project acceptanceProject) *mcpAcceptanceProcess {
+	return startMCPAcceptanceProcessWithSkills(t, binary, project, nil, true)
+}
+
+func startMCPAcceptanceProcessWithSkills(t *testing.T, binary string, project acceptanceProject, extraEnv []string, skills bool) *mcpAcceptanceProcess {
 	t.Helper()
 	process := &mcpAcceptanceProcess{}
 	process.command = exec.Command(binary, mcpCommandName, mcpStdioCommandName)
@@ -390,16 +454,72 @@ func startMCPAcceptanceProcess(t *testing.T, binary string, project acceptancePr
 		Reader: capturedReadCloser{Reader: io.TeeReader(stdout, &process.stdout), Closer: stdout},
 		Writer: stdin,
 	}
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "knowl-acceptance", Version: "1.0.0"}, nil)
+	var clientOptions *sdkmcp.ClientOptions
+	if skills {
+		capabilities := &sdkmcp.ClientCapabilities{}
+		capabilities.AddExtension("io.modelcontextprotocol/skills", nil)
+		clientOptions = &sdkmcp.ClientOptions{Capabilities: capabilities}
+	}
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "knowl-acceptance", Version: "1.0.0"}, clientOptions)
+	if skills {
+		if err := sdkmcp.AddSendingCustomMethod[*acceptanceListSkillsParams, *acceptanceListSkillsResult](client, "skills/list"); err != nil {
+			t.Fatal(err)
+		}
+		if err := sdkmcp.AddSendingCustomMethod[*acceptanceGetSkillParams, *acceptanceGetSkillResult](client, "skills/get"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), acceptanceTimeout)
 	defer cancel()
-	process.session, err = client.Connect(ctx, transport, nil)
+	var sessionOptions *sdkmcp.ClientSessionOptions
+	if skills {
+		sessionOptions = &sdkmcp.ClientSessionOptions{ProtocolVersion: "2026-07-28"}
+	}
+	process.session, err = client.Connect(ctx, transport, sessionOptions)
 	if err != nil {
 		_ = process.command.Process.Kill()
 		process.wait(t, false)
 		t.Fatalf("initialize MCP process: %v; stderr=%s", err, process.stderr.Bytes())
 	}
 	return process
+}
+
+func assertStdioSkillSurface(t *testing.T, session *sdkmcp.ClientSession) {
+	t.Helper()
+	const skillURI = "skill://knowl/SKILL.md"
+	capabilities := session.InitializeResult().Capabilities
+	settings, ok := capabilities.Extensions["io.modelcontextprotocol/skills"].(map[string]any)
+	if !ok || len(settings) != 0 || capabilities.Resources == nil {
+		t.Fatalf("stdio MCP capabilities = %#v", capabilities)
+	}
+	canonical, err := os.ReadFile(filepath.Join(testRepoRoot(t), "internal", "mcpsdk", "skills", "knowl", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := sdkmcp.CallCustomMethod[*acceptanceListSkillsParams, *acceptanceListSkillsResult](
+		t.Context(), session, "skills/list", &acceptanceListSkillsParams{})
+	if err != nil || listed.ResultType != "complete" || listed.CacheScope != "public" ||
+		listed.NextCursor != "" || len(listed.Skills) != 1 {
+		t.Fatalf("stdio skills/list = %#v, %v", listed, err)
+	}
+	entry := listed.Skills[0]
+	if entry.URI != skillURI || len(entry.Resources) != 1 || entry.Resources[0].URI != skillURI ||
+		entry.Frontmatter["name"] != appName || entry.Frontmatter["description"] == "" {
+		t.Fatalf("stdio skill entry = %#v", entry)
+	}
+	digest := sha256.Sum256(canonical)
+	if entry.Resources[0].Digest != "sha256:"+hex.EncodeToString(digest[:]) || entry.Resources[0].Size != int64(len(canonical)) {
+		t.Fatalf("stdio skill resource = %#v", entry.Resources[0])
+	}
+	got, err := sdkmcp.CallCustomMethod[*acceptanceGetSkillParams, *acceptanceGetSkillResult](
+		t.Context(), session, "skills/get", &acceptanceGetSkillParams{URI: skillURI})
+	if err != nil || got.Skill.Resources[0] != entry.Resources[0] || got.Skill.URI != entry.URI {
+		t.Fatalf("stdio skills/get = %#v, %v", got, err)
+	}
+	read, err := session.ReadResource(t.Context(), &sdkmcp.ReadResourceParams{URI: skillURI})
+	if err != nil || len(read.Contents) != 1 || read.Contents[0].Text != string(canonical) {
+		t.Fatalf("stdio resources/read = %#v, %v", read, err)
+	}
 }
 
 func (process *mcpAcceptanceProcess) closeEOF(t *testing.T) {

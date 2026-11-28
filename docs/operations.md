@@ -1405,6 +1405,59 @@ Explicit token-authenticated `access_mode: read_write` additionally exposes
 `knowl_ingest`. See [HTTP facade access control](access-control.md) for native
 tool omission and gateway call-denial behavior.
 
+### MCP usage skill
+
+Knowl publishes one server-authored usage skill for agents that support the MCP
+Skills Extension. The server advertises `io.modelcontextprotocol/skills` and
+serves `skill://knowl/SKILL.md`; compatible hosts can discover its manifest with
+`skills/list`, refresh it with `skills/get`, and load the Markdown through
+`resources/read`. Hosts still decide whether to load it, label its server
+origin, verify its digest, and obtain any required approval. The skill is
+instructional content, not authorization.
+
+Read-only and read-write servers expose the same skill manifest and bytes. Its
+ingest workflow is conditional on `knowl_ingest` being present in ordinary
+`tools/list` discovery. Loading the skill cannot add that tool or bypass the
+configured MCP authentication, access mode, or scope. Clients that do not
+support the Skills Extension continue to use the existing MCP tools unchanged.
+MCP discovery reads the server resource; it does not install files on the host.
+
+The sole authored source is
+[`internal/mcpsdk/skills/knowl/SKILL.md`](../internal/mcpsdk/skills/knowl/SKILL.md).
+The release binary embeds those exact bytes. Root
+[`skills.sh.json`](../skills.sh.json) also makes the same directory discoverable
+to compatible Git skill installers:
+
+```bash
+npx skills add baldaworks/knowl --skill knowl
+```
+
+For reproducible installation before a release containing this skill is
+published, pin the full 40-character commit SHA of a commit that contains the
+canonical skill:
+
+```bash
+npx skills add baldaworks/knowl@<full-40-character-commit-sha> --skill knowl
+```
+
+After a release tag containing the skill is published, that tag can be used in
+place of the commit SHA. Do not assume that an older published tag includes it.
+
+If an installer does not read `skills.sh.json` but accepts GitHub tree URLs,
+use the canonical directory directly:
+
+```bash
+npx skills add https://github.com/baldaworks/knowl/tree/<tag-containing-the-skill-or-full-40-character-commit-sha>/internal/mcpsdk/skills/knowl
+```
+
+Installing the Git skill neither installs nor configures the Knowl MCP server
+and does not grant credentials; configure the MCP connection separately.
+
+This usage skill is distinct from the local Codex plugin's `$knowl:setup` and
+`$knowl:run` workflow skills. Those release-pinned workflows configure and run
+project-local Knowl maintenance; they are not copies or alternate delivery
+paths for the MCP usage skill. See the [Codex plugin guide](local-codex.md).
+
 MCP and HTTP call the same underlying application services.
 
 Use `knowl_retrieve` to discover a page ID, then call `knowl_page` with that
